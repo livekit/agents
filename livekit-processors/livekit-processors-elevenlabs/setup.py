@@ -51,7 +51,11 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.processors"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit >= 0.4.6", "numpy >= 1.24.0"
+        "livekit >= 0.4.6",
+        "numpy >= 1.24.0",
+        "elevenlabs >= 0.2.26",
+        "websockets >= 11.0.0",
+        "aiohttp >= 3.8.5"
     ],
     package_data={},
     project_urls={
