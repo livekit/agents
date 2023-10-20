@@ -51,7 +51,7 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.processors"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit >= 0.4.6", "torch >= 2.0.0", "numpy >= 1.24.0"
+        "livekit >= 0.4.6", "torch >= 2.0.0", "numpy >= 1.24.0", "openai >= 0.28.0"
     ],
     package_data={},
     project_urls={

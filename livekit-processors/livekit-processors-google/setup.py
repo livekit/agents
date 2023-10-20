@@ -51,7 +51,15 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.processors"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit >= 0.4.6", "numpy >= 1.24.0"
+        "livekit >= 0.4.6",
+        "numpy >= 1.24.0",
+        "google-api-core >= 2.11.1",
+        "google-auth >= 2.23.0",
+        "google-cloud-core >= 2.3.3",
+        "google-cloud-speech >= 2.21.0",
+        "google-cloud-texttospeech >= 2.14.1",
+        "google-cloud-translate >= 3.12.0",
+        "googleapis-common-protos >= 1.60.0",
     ],
     package_data={},
     project_urls={
