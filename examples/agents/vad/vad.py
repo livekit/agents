@@ -1,42 +1,11 @@
-# python-agents
-
-As we've introduced more client SDKs meant to be run in a server-side environment, we've noticed common patterns and use cases emerge. To tackle these common patterns and to reduce boilerplate, we've introduced Agents. 
-
-Agents are LiveKit participants that can be used without having to manually wire up things like selective track subscription, track subscribed callbacks, etc.
-
-This repo also contains common processors that are useful for agent developers. For example, many agents will need VAD (Voice Activity Detection) so we've made a processor for that.
-
-## Getting Started
-
-To install the core agent library:
-
-```bash
-pip install livekit-agents
-```
-
-Processors can be installed one-by-one depending on what your agent needs:
-
-```bash
-pip install livekit-processors-vad livekit-processors-openai
-```
-
-## Creating An Agent
-
-An agent is a class that sub-classes `Agent`.
-
-The following agent listens to audio tracks and
-sends a DataChannel into the room whenever speaking has been detected.
-
-```python
 import asyncio
 from typing import AsyncIterator
-
 from livekit.rtc as rtc
 from livekit.agents import Agent, Processor
 from livekit.processors.vad import VAD
 
 
-class MyAgent(Agent):
+class VADAgent(Agent):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.vad = VAD(silence_threshold_ms=250)
@@ -61,15 +30,3 @@ class MyAgent(Agent):
 
     def should_process(self, track: rtc.TrackPublication, participant: rtc.Participant) -> bool:
         return track.kind == rtc.TrackKind.Audio
-```
-
-## More Examples
-
-Examples can be found in the `examples/` repo.
-
-Examples coming soon:
-- Siri-like
-- Audio-to-Audio Language Translation
-- Transcribtion
-- Face-Detection
-- Voice-to-Image
