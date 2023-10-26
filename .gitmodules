@@ -1,0 +1,3 @@
+[submodule "livekit-agents/protocol"]
+	path = livekit-agents/protocol
+	url = git@github.com:livekit/protocol.git
