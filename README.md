@@ -28,10 +28,12 @@ The following agent listens to audio tracks and
 sends a DataChannel into the room whenever speaking has been detected.
 
 ```python
+import asyncio
+from typing import AsyncIterator
+
 from livekit.rtc as rtc
 from livekit.agents import Agent, Processor
 from livekit.processors.vad import VAD
-from typing import AsyncIterator
 
 
 class MyAgent(Agent):
