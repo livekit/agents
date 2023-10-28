@@ -1,11 +1,24 @@
 aiohttp==3.8.6
 aiohttp-cors==0.7.0
 aiosignal==1.3.1
+astroid==3.0.1
 async-timeout==4.0.3
 attrs==23.1.0
 charset-normalizer==3.3.1
+dill==0.3.7
 frozenlist==1.4.0
 idna==3.4
+isort==5.12.0
+-e git+ssh://git@github.com/livekit/python-sdks.git@fbc38231c7210b43a8aa6d7f6e413a4907cd262a#egg=livekit&subdirectory=livekit-rtc
+-e git+ssh://git@github.com/livekit/python-agents.git@49eea7535cd868cf6e2bd05543c91ce5a3d67276#egg=livekit_agents&subdirectory=livekit-agents
+-e git+ssh://git@github.com/livekit/python-sdks.git@fbc38231c7210b43a8aa6d7f6e413a4907cd262a#egg=livekit_api&subdirectory=livekit-api
+mccabe==0.7.0
 multidict==6.0.4
+platformdirs==3.11.0
+protobuf==4.24.4
+PyJWT==2.8.0
+pylint==3.0.2
 python-dotenv==1.0.0
+tomlkit==0.12.1
+types-protobuf==4.24.0.3
 yarl==1.9.2

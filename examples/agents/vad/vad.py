@@ -15,7 +15,8 @@ def vad_agent(room: rtc.Room, participant: rtc.RemoteParticipant):
                 if event.type == "voice_started":
                     print("VAD - Voice Started")
                 elif event.type == "voice_finished":
-                    print(f"VAD - Voice Finished. Frame Count: {len(event.frames)}")
+                    print(
+                        f"VAD - Voice Finished. Frame Count: {len(event.frames)}")
 
         asyncio.create_task(vad_result_loop(vad.stream()))
 

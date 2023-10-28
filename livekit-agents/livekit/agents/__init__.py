@@ -12,5 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .agent import Agent
+from ._proto.livekit_agent_pb2 import JobType
 from .processor import Processor
+from .worker.worker import Worker, Job, ManualWorker, SFUTriggeredWorker
