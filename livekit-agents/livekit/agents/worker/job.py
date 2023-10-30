@@ -32,7 +32,7 @@ class Job:
         await self._worker_accept_cb(self)
 
         try:
-            await self._room.connect(self._ws_url, self._token)
+            await self._room.connect(url=self._ws_url, token=self._token, options=rtc.RoomOptions(auto_subscribe=False))
         except Exception as e:
             logging.error(
                 "Error connecting to room, cancelling job.accept(): %s", e)

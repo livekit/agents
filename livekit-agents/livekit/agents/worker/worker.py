@@ -53,26 +53,26 @@ class Worker(ABC):
 
         job = Job(job_id=job.id,
                   ws_url=self._ws_url,
-                  token=self.generate_token(
-                      identity=job.id, room=job.room.name),
+                  token=self.generate_token(job.room.name),
                   participant_sid=job.participant.sid,
                   worker_accept_cb=worker_accept_cb)
         await self._handler.job_available_cb(self, job)
 
-    def generate_token(self, *, identity: str, room: str):
-        identity = [uuid.uuid4(
-        ) if self._handler.agent_identity_generator is None else self._handler.agent_identity_generator(room)]
+    def generate_token(self, room: str):
+        identity = uuid.uuid4(
+        ) if self._handler.agent_identity_generator is None else self._handler.agent_identity_generator(room)
 
         grants = api.VideoGrants(
             room=room,
             can_publish=True,
             can_subscribe=True,
             room_join=True,
+            room_create=True,
             can_publish_data=True)
         t = api.AccessToken(api_key=self._api_key, api_secret=self._api_secret).with_identity(
             identity).with_grants(grants=grants)
         print(
-            f"Generated token: {t.to_jwt()}, {self._api_key} {self._api_secret} {self._ws_url}")
+            f"Generated token: {identity} {t.to_jwt()}, {self._api_key} {self._api_secret} {self._ws_url}")
         return t.to_jwt()
 
     @abstractmethod
