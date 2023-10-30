@@ -1,6 +1,6 @@
 import asyncio
 import livekit.rtc as rtc
-from livekit.processors.vad import VAD
+from livekit.processors.vad import VAD, VADProcessor
 from livekit import agents
 from typing import AsyncIterator
 
@@ -9,8 +9,7 @@ async def vad_agent(params: agents.Job.AgentParams):
 
     async def process_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        vad = VAD(silence_threshold_ms=250)
-        vad_processor = agents.Processor(process=vad.push_frame)
+        vad_processor = VADProcessor(silence_threshold_ms=250)
 
         async def vad_result_loop(queue: AsyncIterator[VAD.Event]):
             async for event in queue:
