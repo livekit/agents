@@ -38,5 +38,15 @@ class Job:
                 "Error connecting to room, cancelling job.accept(): %s", e)
             raise e
 
+        participant = None
+        if self._participant_sid is not None:
+            try:
+                participant = await self._room.get_participant(
+                    self._participant_sid)
+            except Exception as e:
+                logging.error(
+                    "Error getting participant '%s', cancelling job.accept(): %s", self._participant_sid, e)
+                raise e
+
         asyncio.create_task(agent(Job.AgentParams(
-            room=self._room, participant=self._participant_sid)))
+            room=self._room, participant=participant)))

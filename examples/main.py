@@ -55,6 +55,8 @@ async def add_agent(request):
     await workers[agent_type].simulate_job(
         job_type=lkagents.JobType.JT_ROOM, room=data.get("room"))
 
+    return aiohttp.web.json_response({})
+
 
 async def generate_connection_details(request):
     data = await request.json()
