@@ -21,7 +21,7 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, 'livekit', 'agents', 'version.py'), 'r') as f:
+with open(os.path.join(here, 'livekit', 'processors', 'vad', 'version.py'), 'r') as f:
     exec(f.read(), about)
 
 
@@ -48,10 +48,11 @@ setuptools.setup(
     ],
     keywords=["webrtc", "realtime", "audio", "video", "livekit"],
     license="Apache-2.0",
-    packages=setuptools.find_namespace_packages(include=["livekit.processors"]),
+    packages=setuptools.find_namespace_packages(
+        include=["livekit.processors"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit >= 0.4.6", "torch >= 2.0.0", "numpy >= 1.24.0"
+        "livekit-rtc", "livekit-agents", "torch >= 2.0.0", "torchaudio", "numpy >= 1.24.0"
     ],
     package_data={},
     project_urls={

@@ -28,6 +28,6 @@ python main.py
 
 After calling `main.py` a website will be running where you can interact with the various agents found in `agents/`
 
-This will do 3 things:
+This will:
 - Spin up a web-frontend on localhost:3000
 - Spin up a python backend that instantiates and runs the agents (running on localhost:8000)
