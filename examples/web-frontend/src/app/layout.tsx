@@ -21,7 +21,7 @@ export default function RootLayout({
         <div className="absolute top-0 left-0 right-0 h-[50px]">
           <Header />
         </div>
-        <div className="mt-[50px]">{children}</div>
+        <div className="mt-[60px]">{children}</div>
       </body>
     </html>
   );

@@ -2,16 +2,18 @@
 
 import { Room } from "@/components/Room";
 import { Backend } from "@/lib/backend";
+import toast, { Toaster } from "react-hot-toast";
 import {
   ParticipantLoop,
   ParticipantName,
   useConnectionState,
+  useDataChannel,
   useRemoteParticipants,
   useRoomInfo,
   useTrackToggle,
 } from "@livekit/components-react";
 import { Track } from "livekit-client";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { v4 } from "uuid";
 
 export default function VADPage() {
@@ -25,15 +27,33 @@ export default function VADPage() {
 
 function VAD() {
   const state = useConnectionState();
+  const { message } = useDataChannel();
+  const [agentAdding, setAgentAdding] = useState(false);
   const room = useRoomInfo();
   const remoteParticpants = useRemoteParticipants();
   const { toggle, enabled, pending } = useTrackToggle({
     source: Track.Source.Microphone,
   });
 
+  useEffect(() => {
+    if (!message) {
+      return;
+    }
+    const strMessage = new TextDecoder().decode(message.payload);
+    toast.success(strMessage);
+  }, [message]);
+
   const addAgent = useCallback(async () => {
-    await Backend.addAgent({ type: "vad", room: room.name });
-  }, [room.name]);
+    if (agentAdding) {
+      return;
+    }
+    setAgentAdding(true);
+    try {
+      await Backend.addAgent({ type: "vad", room: room.name });
+    } finally {
+      setAgentAdding(false);
+    }
+  }, [agentAdding, room.name]);
 
   const micText = useMemo(() => {
     if (pending) {
@@ -48,16 +68,19 @@ function VAD() {
   }
 
   return (
-    <div>
+    <div className="flex flex-col w-full items-center">
+      <Toaster />
       <div className="flex space-x-2">
         <button
+          className="p-2 rounded-sm border hover:bg-gray-800"
           onClick={async () => {
             await addAgent();
           }}
         >
-          Add Agent
+          {agentAdding ? "..." : "Add Agent"}
         </button>
         <button
+          className="p-2 rounded-sm border hover:bg-gray-800"
           onClick={async () => {
             await toggle();
           }}
@@ -65,10 +88,10 @@ function VAD() {
           {micText}
         </button>
       </div>
-      <div className="flex flex-col">
+      <div className="flex flex-col p-2">
         Remote Participants:
         <ParticipantLoop participants={remoteParticpants}>
-          <ParticipantName />
+          <ParticipantName className="py-1" />
         </ParticipantLoop>
       </div>
     </div>

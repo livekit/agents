@@ -17,6 +17,8 @@ async def vad_agent(params: agents.Job.AgentParams):
                 if event.type == "voice_started":
                     print("VAD - Voice Started")
                 elif event.type == "voice_finished":
+                    asyncio.create_task(params.room.local_participant.publish_data(
+                        f"Voice Detected For: {len(event.frames) * 10.0 / 1000.0} seconds"))
                     print(
                         f"VAD - Voice Finished. Frame Count: {len(event.frames)}")
 
