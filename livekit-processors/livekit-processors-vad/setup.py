@@ -52,7 +52,7 @@ setuptools.setup(
         include=["livekit.processors"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit-rtc", "torch >= 2.0.0", "numpy >= 1.24.0"
+        "livekit-rtc", "livekit-agents", "torch >= 2.0.0", "torchaudio", "numpy >= 1.24.0"
     ],
     package_data={},
     project_urls={

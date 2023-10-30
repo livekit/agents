@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass
-import livekit.rtc as rtc
+from livekit import rtc
+from livekit import agents
 import torch
 import numpy as np
 

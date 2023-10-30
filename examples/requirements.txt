@@ -6,19 +6,31 @@ async-timeout==4.0.3
 attrs==23.1.0
 charset-normalizer==3.3.1
 dill==0.3.7
+filelock==3.13.0
 frozenlist==1.4.0
+fsspec==2023.10.0
 idna==3.4
 isort==5.12.0
+Jinja2==3.1.2
 -e git+ssh://git@github.com/livekit/python-sdks.git@fbc38231c7210b43a8aa6d7f6e413a4907cd262a#egg=livekit&subdirectory=livekit-rtc
--e git+ssh://git@github.com/livekit/python-agents.git@49eea7535cd868cf6e2bd05543c91ce5a3d67276#egg=livekit_agents&subdirectory=livekit-agents
+-e git+ssh://git@github.com/livekit/python-agents.git@124ba8431028563ff3857b1ae58c0073bbcad88a#egg=livekit_agents&subdirectory=livekit-agents
 -e git+ssh://git@github.com/livekit/python-sdks.git@fbc38231c7210b43a8aa6d7f6e413a4907cd262a#egg=livekit_api&subdirectory=livekit-api
+-e git+ssh://git@github.com/livekit/python-agents.git@124ba8431028563ff3857b1ae58c0073bbcad88a#egg=livekit_processors_vad&subdirectory=livekit-processors/livekit-processors-vad
+MarkupSafe==2.1.3
 mccabe==0.7.0
+mpmath==1.3.0
 multidict==6.0.4
+networkx==3.2.1
+numpy==1.26.1
 platformdirs==3.11.0
 protobuf==4.24.4
 PyJWT==2.8.0
 pylint==3.0.2
 python-dotenv==1.0.0
+sympy==1.12
 tomlkit==0.12.1
+torch==2.1.0
+torchaudio==2.1.0
 types-protobuf==4.24.0.3
+typing_extensions==4.8.0
 yarl==1.9.2
