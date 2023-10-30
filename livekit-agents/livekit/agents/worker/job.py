@@ -19,12 +19,11 @@ class Job:
                  job_id: str,
                  ws_url: str,
                  token: str,
-                 room: rtc.Room,
                  participant_sid: Optional[str],
                  worker_accept_cb: Callable[["Job"], None]):
         self._worker_accept_cb = worker_accept_cb
         self._job_id = job_id
-        self._room = room
+        self._room = rtc.Room()
         self._participant_sid = participant_sid
         self._ws_url = ws_url
         self._token = token

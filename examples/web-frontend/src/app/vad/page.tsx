@@ -1,3 +1,5 @@
+"use client";
+
 import { Room } from "@/components/Room";
 import { Backend } from "@/lib/backend";
 import { useConnectionState, useRoomInfo } from "@livekit/components-react";

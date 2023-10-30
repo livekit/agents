@@ -43,17 +43,17 @@ class ConnectionDetails:
 
 def start_web_frontend():
     def start_process():
-        subprocess.Popen(["npm install && npm run dev"],
+        subprocess.Popen(["yarn && yarn dev"],
                          shell=True, cwd="./web-frontend")
     threading.Thread(target=start_process, daemon=True).start()
 
 
 async def add_agent(request):
     data = await request.json()
-    agent_type = data['agent']
+    agent_type = data['type']
 
     await workers[agent_type].simulate_job(
-        lkagents.JobType.JT_ROOM, data.get("room"))
+        job_type=lkagents.JobType.JT_ROOM, room=data.get("room"))
 
 
 async def generate_connection_details(request):

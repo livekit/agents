@@ -30,7 +30,10 @@ class Worker(ABC):
 
     async def simulate_job(self, *, job_type: proto.JobType, room: str, participant_sid: Optional[str] = None):
         job_id = f"simulated-{uuid.uuid4()}"
-        job = proto.Job(id=job_id, type=type, room=room)
+        proto_room = model_proto.Room(sid="", name=room, empty_timeout=0, max_participants=0, creation_time=0, turn_password="",
+                                      enabled_codecs=None, metadata="", num_participants=0, num_publishers=0, active_recording=False)
+        job = proto.Job(id=job_id, type=job_type,
+                        room=proto_room, participant=None)
 
         if job_type == proto.JobType.JT_ROOM:
             if participant_sid is not None:
@@ -44,24 +47,23 @@ class Worker(ABC):
         await self._on_job_available(job)
 
     async def _on_job_available(self, job: proto.Job):
-        async def worker_accept_cb():
+        async def worker_accept_cb(job: proto.Job):
             await self._accept_job(job)
             self._active_jobs.append(job)
 
         job = Job(job_id=job.id,
                   ws_url=self._ws_url,
                   token=self.generate_token(
-                      identity=job.id, room=job.room),
-                  room=job.room,
+                      identity=job.id, room=job.room.name),
                   participant_sid=job.participant.sid,
                   worker_accept_cb=worker_accept_cb)
-        self._handler.job_available_cb(self, job)
+        await self._handler.job_available_cb(self, job)
 
     def generate_token(self, *, identity: str, room: str):
         identity = [uuid.uuid4(
         ) if self._handler.agent_identity_generator is None else self._handler.agent_identity_generator(room)]
 
-        grants = api.VideoGrant(
+        grants = api.VideoGrants(
             room=room,
             can_publish=True,
             can_subscribe=True,
@@ -69,7 +71,9 @@ class Worker(ABC):
             can_publish_data=True)
         t = api.AccessToken(api_key=self._api_key, api_secret=self._api_secret).with_identity(
             identity).with_grants(grants=grants)
-        return t.to_jwt(ttl=3600)
+        print(
+            f"Generated token: {t.to_jwt()}, {self._api_key} {self._api_secret} {self._ws_url}")
+        return t.to_jwt()
 
     @abstractmethod
     async def _accept_job(self, job: Job):
