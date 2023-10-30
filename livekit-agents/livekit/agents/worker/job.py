@@ -41,11 +41,16 @@ class Job:
         participant = None
         if self._participant_sid is not None:
             try:
-                participant = await self._room.get_participant(
-                    self._participant_sid)
+                participant = await self._room.participants[self._participant_sid]
             except Exception as e:
                 logging.error(
-                    "Error getting participant '%s', cancelling job.accept(): %s", self._participant_sid, e)
+                    "Error getting participant '%s' - did they leave the room?, cancelling job.accept(): %s", self._participant_sid, e)
+                try:
+                    await self._room.disconnect()
+                except Exception as room_disconnect_error:
+                    logging.error(
+                        "Error disconnecting from room after participant error: %s", room_disconnect_error)
+                    raise room_disconnect_error
                 raise e
 
         asyncio.create_task(agent(Job.AgentParams(

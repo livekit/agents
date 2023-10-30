@@ -54,7 +54,7 @@ class Worker(ABC):
         job = Job(job_id=job.id,
                   ws_url=self._ws_url,
                   token=self.generate_token(job.room.name),
-                  participant_sid=job.participant.sid,
+                  participant_sid=job.participant.sid if job.type == proto.JobType.JT_PARTICIPANT else None,
                   worker_accept_cb=worker_accept_cb)
         await self._handler.job_available_cb(self, job)
 
