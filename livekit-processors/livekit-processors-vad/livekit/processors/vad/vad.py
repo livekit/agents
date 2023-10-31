@@ -89,3 +89,9 @@ class VAD:
         tensor = torch.from_numpy(self._window_buffer)
         speech_prob = self._model(tensor, VAD_SAMPLE_RATE).item()
         return speech_prob > 0.5
+
+
+class VADProcessor(agents.Processor):
+    def __init__(self, silence_threshold_ms=250):
+        self.vad = VAD(silence_threshold_ms=silence_threshold_ms)
+        super().__init__(process=self.vad.push_frame)

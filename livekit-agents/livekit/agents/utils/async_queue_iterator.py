@@ -14,7 +14,12 @@
 
 import asyncio
 
+
 class AsyncQueueIterator:
+
+    class EOS:
+        pass
+
     def __init__(self, queue: asyncio.Queue):
         self.queue = queue
 
@@ -22,7 +27,10 @@ class AsyncQueueIterator:
         return self
 
     async def __anext__(self):
-        try:
-            return await self.queue.get()
-        except asyncio.CancelledError:
+        item = await self.queue.get()
+        if item is AsyncQueueIterator.EOS:
             raise StopAsyncIteration
+        return item
+
+    async def aclose(self):
+        await self.queue.put(AsyncQueueIterator.EOS())
