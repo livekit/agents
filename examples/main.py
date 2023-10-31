@@ -6,6 +6,7 @@ import livekit.agents as lkagents
 import livekit.api as lkapi
 from dataclasses import dataclass
 from agents.vad.vad import vad_agent
+from agents.stt.stt import stt_agent
 import dotenv
 import uuid
 import aiohttp
@@ -24,6 +25,11 @@ async def vad_job_available_cb(worker, job):
     print("Accepting vad job")
     await job.accept(agent=vad_agent)
 
+
+async def stt_job_available_cb(worker, job):
+    print("Accepting stt job")
+    await job.accept(agent=stt_agent)
+
 workers = {
     "vad": lkagents.ManualWorker(ws_url=ws_url,
                                  api_key=api_key,
@@ -31,7 +37,14 @@ workers = {
                                  handler=lkagents.Worker.Handler(
                                      agent_identity_generator=lambda room: f"vad-{uuid.uuid4()}",
                                      job_available_cb=vad_job_available_cb,
-                                 ))
+                                 )),
+    "stt": lkagents.ManualWorker(ws_url=ws_url,
+                                 api_key=api_key,
+                                 api_secret=api_secret,
+                                 handler=lkagents.Worker.Handler(
+                                     agent_identity_generator=lambda room: f"stt-{uuid.uuid4()}",
+                                     job_available_cb=stt_job_available_cb,
+                                 )),
 }
 
 

@@ -56,7 +56,7 @@ class VAD:
             if talking_detected:
                 self._talking_state = True
                 self._voice_frames.extend(frame_queue_copy)
-                return VAD.Event(type="voice_started", frames=frame_queue_copy)
+                return VAD.Event(type="voice_started", frames=self._voice_frames)
             else:
                 # if silent and not in the talking state, do nothing
                 pass

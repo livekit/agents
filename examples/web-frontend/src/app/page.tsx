@@ -6,6 +6,7 @@ export default function Home() {
     <div>
       <div className="flex flex-col">
         <Link href={"/vad"}>VAD</Link>
+        <Link href={"/stt"}>Speech-to-text</Link>
       </div>
     </div>
   );

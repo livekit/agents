@@ -14,20 +14,22 @@
 
 import asyncio
 from typing import AsyncIterator, Awaitable, Callable, TypeVar, Generic
-from .utils.async_queue_iterator import AsyncQueueIterator
+from ..utils.async_queue_iterator import AsyncQueueIterator
 
 T = TypeVar('T')
 U = TypeVar('U')
+
 
 class Processor(Generic[T, U]):
     def __init__(self, process: Callable[[T], Awaitable[U]]) -> None:
         self._process = process
         self.input_queue = asyncio.Queue()
         self.output_queue = asyncio.Queue()
+        self.output_iterator = AsyncQueueIterator(self.output_queue)
         asyncio.create_task(self._process_loop())
 
     def stream(self) -> AsyncIterator[U]:
-        return AsyncQueueIterator(self.output_queue)
+        return self.output_iterator
 
     def push(self, data: T) -> None:
         self.input_queue.put_nowait(data)

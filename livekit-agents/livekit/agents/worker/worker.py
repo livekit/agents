@@ -71,8 +71,6 @@ class Worker(ABC):
             can_publish_data=True)
         t = api.AccessToken(api_key=self._api_key, api_secret=self._api_secret).with_identity(
             identity).with_grants(grants=grants)
-        print(
-            f"Generated token: {identity} {t.to_jwt()}, {self._api_key} {self._api_secret} {self._ws_url}")
         return t.to_jwt()
 
     @abstractmethod

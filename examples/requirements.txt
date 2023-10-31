@@ -4,18 +4,30 @@ aiosignal==1.3.1
 astroid==3.0.1
 async-timeout==4.0.3
 attrs==23.1.0
+cachetools==5.3.2
+certifi==2023.7.22
 charset-normalizer==3.3.1
 dill==0.3.7
 filelock==3.13.0
 frozenlist==1.4.0
 fsspec==2023.10.0
+google-api-core==2.12.0
+google-auth==2.23.3
+google-cloud-core==2.3.3
+google-cloud-speech==2.21.1
+google-cloud-texttospeech==2.14.2
+google-cloud-translate==3.12.1
+googleapis-common-protos==1.61.0
+grpcio==1.59.0
+grpcio-status==1.59.0
 idna==3.4
 isort==5.12.0
 Jinja2==3.1.2
 livekit==0.5.0
--e git+ssh://git@github.com/livekit/python-agents.git@0df338e69b9c5ef60dce88d5078a2f81caf151d2#egg=livekit_agents&subdirectory=livekit-agents
+-e git+ssh://git@github.com/livekit/python-agents.git@e811029e70a895730f1c8134f557a135a36ea792#egg=livekit_agents&subdirectory=livekit-agents
 livekit-api==0.1.1
--e git+ssh://git@github.com/livekit/python-agents.git@0df338e69b9c5ef60dce88d5078a2f81caf151d2#egg=livekit_processors_vad&subdirectory=livekit-processors/livekit-processors-vad
+-e git+ssh://git@github.com/livekit/python-agents.git@e811029e70a895730f1c8134f557a135a36ea792#egg=livekit_processors_google&subdirectory=livekit-processors/livekit-processors-google
+-e git+ssh://git@github.com/livekit/python-agents.git@e811029e70a895730f1c8134f557a135a36ea792#egg=livekit_processors_vad&subdirectory=livekit-processors/livekit-processors-vad
 MarkupSafe==2.1.3
 mccabe==0.7.0
 mpmath==1.3.0
@@ -23,14 +35,20 @@ multidict==6.0.4
 networkx==3.2.1
 numpy==1.26.1
 platformdirs==3.11.0
+proto-plus==1.22.3
 protobuf==4.24.4
+pyasn1==0.5.0
+pyasn1-modules==0.3.0
 PyJWT==2.8.0
 pylint==3.0.2
 python-dotenv==1.0.0
+requests==2.31.0
+rsa==4.9
 sympy==1.12
 tomlkit==0.12.1
 torch==2.1.0
 torchaudio==2.1.0
 types-protobuf==4.24.0.3
 typing_extensions==4.8.0
+urllib3==2.0.7
 yarl==1.9.2
