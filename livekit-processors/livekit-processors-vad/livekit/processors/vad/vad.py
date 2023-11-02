@@ -17,7 +17,7 @@ class VAD:
         type: str
         frames: [rtc.AudioFrame]
 
-    def __init__(self, silence_threshold_ms: int):
+    def __init__(self, *, silence_threshold_ms: int):
         self._silence_threshold_ms = silence_threshold_ms
         self._window_buffer = np.zeros(512, dtype=np.float32)
         self._window_buffer_scratch = np.zeros(512, dtype=np.float32)

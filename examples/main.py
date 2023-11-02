@@ -34,17 +34,11 @@ workers = {
     "vad": lkagents.ManualWorker(ws_url=ws_url,
                                  api_key=api_key,
                                  api_secret=api_secret,
-                                 handler=lkagents.Worker.Handler(
-                                     agent_identity_generator=lambda room: f"vad-{uuid.uuid4()}",
-                                     job_available_cb=vad_job_available_cb,
-                                 )),
+                                 job_available_cb=vad_job_available_cb),
     "stt": lkagents.ManualWorker(ws_url=ws_url,
                                  api_key=api_key,
                                  api_secret=api_secret,
-                                 handler=lkagents.Worker.Handler(
-                                     agent_identity_generator=lambda room: f"stt-{uuid.uuid4()}",
-                                     job_available_cb=stt_job_available_cb,
-                                 )),
+                                 job_available_cb=stt_job_available_cb),
 }
 
 

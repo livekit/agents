@@ -12,21 +12,16 @@ import livekit.agents._proto.livekit_models_pb2 as model_proto
 
 class Worker(ABC):
 
-    @dataclass
-    class Handler:
-        agent_identity_generator: Optional[Callable[[str], str]]
-        job_available_cb: Callable[["Worker", Job], Awaitable[None]]
-
     def __init__(self, *,
                  ws_url: str,
                  api_key: str,
                  api_secret: str,
-                 handler: Handler):
+                 job_available_cb: Callable[["Worker", Job], Awaitable[None]]):
         self._active_jobs: [Job] = []
         self._ws_url = ws_url
         self._api_key = api_key
         self._api_secret = api_secret
-        self._handler = handler
+        self._job_available_cb = job_available_cb
 
     async def simulate_job(self, *, job_type: proto.JobType, room: str, participant_sid: Optional[str] = None):
         job_id = f"simulated-{uuid.uuid4()}"
@@ -46,32 +41,18 @@ class Worker(ABC):
 
         await self._on_job_available(job)
 
-    async def _on_job_available(self, job: proto.Job):
-        async def worker_accept_cb(job: proto.Job):
+    async def _on_job_available(self, job_proto: proto.Job):
+        async def worker_accept_cb(job: Job):
             await self._accept_job(job)
             self._active_jobs.append(job)
 
-        job = Job(job_id=job.id,
+        job = Job(job_proto=job_proto,
+                  api_key=self._api_key,
+                  api_secret=self._api_secret,
                   ws_url=self._ws_url,
-                  token=self.generate_token(job.room.name),
-                  participant_sid=job.participant.sid if job.type == proto.JobType.JT_PARTICIPANT else None,
+                  participant_sid=job_proto.participant.sid if job_proto.type == proto.JobType.JT_PARTICIPANT else None,
                   worker_accept_cb=worker_accept_cb)
-        await self._handler.job_available_cb(self, job)
-
-    def generate_token(self, room: str):
-        identity = uuid.uuid4(
-        ) if self._handler.agent_identity_generator is None else self._handler.agent_identity_generator(room)
-
-        grants = api.VideoGrants(
-            room=room,
-            can_publish=True,
-            can_subscribe=True,
-            room_join=True,
-            room_create=True,
-            can_publish_data=True)
-        t = api.AccessToken(api_key=self._api_key, api_secret=self._api_secret).with_identity(
-            identity).with_grants(grants=grants)
-        return t.to_jwt()
+        await self._job_available_cb(self, job)
 
     @abstractmethod
     async def _accept_job(self, job: Job):

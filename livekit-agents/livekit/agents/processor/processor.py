@@ -14,13 +14,16 @@
 
 import asyncio
 from typing import AsyncIterator, Awaitable, Callable, TypeVar, Generic
+from abc import abstractclassmethod, abstractmethod
 from ..utils.async_queue_iterator import AsyncQueueIterator
+from ..worker.job import Job
 
 T = TypeVar('T')
 U = TypeVar('U')
 
 
 class Processor(Generic[T, U]):
+
     def __init__(self, process: Callable[[T], Awaitable[U]]) -> None:
         self._process = process
         self.input_queue = asyncio.Queue()
@@ -28,11 +31,19 @@ class Processor(Generic[T, U]):
         self.output_iterator = AsyncQueueIterator(self.output_queue)
         asyncio.create_task(self._process_loop())
 
+    @abstractmethod
+    async def close(self) -> None:
+        pass
+
     def stream(self) -> AsyncIterator[U]:
         return self.output_iterator
 
     def push(self, data: T) -> None:
         self.input_queue.put_nowait(data)
+
+    async def _close(self) -> None:
+        await self.output_iterator.aclose()
+        await self.close()
 
     async def _process_loop(self):
         while True:

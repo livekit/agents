@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import uuid
 from typing import Optional, Callable, Awaitable
 from dataclasses import dataclass
 import livekit.api as api
@@ -7,32 +8,49 @@ import livekit.rtc as rtc
 import livekit.agents._proto.livekit_agent_pb2 as proto
 
 
-class Job:
+@dataclass
+class JobContext:
+    job: "Job"
+    room: rtc.Room
+    participant: Optional[rtc.RemoteParticipant]
 
-    @dataclass
-    class AgentParams:
-        room: rtc.Room
-        participant: Optional[rtc.RemoteParticipant]
+
+@dataclass
+class AgentParticipantInfo:
+    identity: str
+    metadata: str
+
+
+class Job:
 
     def __init__(self,
                  *,
-                 job_id: str,
+                 job_proto: proto.Job,
                  ws_url: str,
-                 token: str,
+                 api_key: str,
+                 api_secret: str,
                  participant_sid: Optional[str],
                  worker_accept_cb: Callable[["Job"], None]):
         self._worker_accept_cb = worker_accept_cb
-        self._job_id = job_id
+        self._processors = []
+        self._job_proto = job_proto
         self._room = rtc.Room()
         self._participant_sid = participant_sid
+        self._api_key = api_key
+        self._api_secret = api_secret
         self._ws_url = ws_url
-        self._token = token
 
-    async def accept(self, agent: Callable[[AgentParams], Awaitable[None]]):
+    def link_processor(self, processor):
+        self._processors.append(processor)
+
+    async def accept(self, *, agent: Callable[[JobContext], Awaitable[None]], agent_participant_info: Optional[AgentParticipantInfo] = None):
+        identity = agent_participant_info.identity if agent_participant_info is not None else f"agent-{self._job_proto.id}"
+        token = self._generate_token(
+            room=self._job_proto.room.name, identity=identity)
         await self._worker_accept_cb(self)
 
         try:
-            await self._room.connect(url=self._ws_url, token=self._token, options=rtc.RoomOptions(auto_subscribe=True))
+            await self._room.connect(url=self._ws_url, token=token, options=rtc.RoomOptions(auto_subscribe=True))
         except Exception as e:
             logging.error(
                 "Error connecting to room, cancelling job.accept(): %s", e)
@@ -53,5 +71,17 @@ class Job:
                     raise room_disconnect_error
                 raise e
 
-        asyncio.create_task(agent(Job.AgentParams(
-            room=self._room, participant=participant)))
+        asyncio.create_task(
+            agent(JobContext(job=self, room=self._room, participant=participant)))
+
+    def _generate_token(self, room: str, identity: str):
+        grants = api.VideoGrants(
+            room=room,
+            can_publish=True,
+            can_subscribe=True,
+            room_join=True,
+            room_create=True,
+            can_publish_data=True)
+        t = api.AccessToken(api_key=self._api_key, api_secret=self._api_secret).with_identity(
+            identity).with_grants(grants=grants)
+        return t.to_jwt()

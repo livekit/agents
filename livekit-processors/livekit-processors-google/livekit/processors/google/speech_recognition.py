@@ -42,7 +42,6 @@ class SpeechRecognition:
             for f in frames:
                 resampled = f.remix_and_resample(48000, 1)
                 yield cloud_speech.StreamingRecognizeRequest(audio=resampled.data.tobytes())
-                await asyncio.sleep(0)
 
         res_generator = await client.streaming_recognize(requests=req_iterator())
         asyncio.create_task(self.iterate_results(res_generator))
@@ -50,9 +49,9 @@ class SpeechRecognition:
 
     async def iterate_results(self, generator):
         async for res in generator:
-            await self._result_queue.put(res.results[0].alternatives[0].transcript)
-
-        print("NEIL got here")
+            event = agents.STTProcessor.Event(
+                text=res.results[0].alternatives[0].transcript)
+            await self._result_queue.put(event)
 
 
 class SpeechRecognitionProcessor(agents.STTProcessor):

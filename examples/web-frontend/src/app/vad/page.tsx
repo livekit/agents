@@ -4,12 +4,16 @@ import { Room } from "@/components/Room";
 import { Backend } from "@/lib/backend";
 import toast, { Toaster } from "react-hot-toast";
 import {
+  ParticipantAudioTile,
   ParticipantLoop,
   ParticipantName,
+  ParticipantTile,
+  TrackLoop,
   useConnectionState,
   useDataChannel,
   useRemoteParticipants,
   useRoomInfo,
+  useStartAudio,
   useTrackToggle,
 } from "@livekit/components-react";
 import { Track } from "livekit-client";
@@ -91,7 +95,9 @@ function VAD() {
       <div className="flex flex-col p-2">
         Remote Participants:
         <ParticipantLoop participants={remoteParticpants}>
-          <ParticipantName className="py-1" />
+          <>
+            <ParticipantTile />
+          </>
         </ParticipantLoop>
       </div>
     </div>

@@ -6,7 +6,7 @@ from livekit.processors.google import SpeechRecognitionProcessor
 from typing import AsyncIterator
 
 
-async def stt_agent(params: agents.Job.AgentParams):
+async def stt_agent(ctx: agents.JobContext):
 
     async def process_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
@@ -23,7 +23,8 @@ async def stt_agent(params: agents.Job.AgentParams):
         async def stt_result_loop(queue: AsyncIterator[AsyncIterator[agents.STTProcessor.Event]]):
             async for event_iterator in queue:
                 async for event in event_iterator:
-                    print(event)
+                    asyncio.create_task(
+                        ctx.room.local_participant.publish_data(event.text))
 
         asyncio.create_task(stt_result_loop(queue=stt_processor.stream()))
         asyncio.create_task(vad_result_loop(queue=vad_processor.stream()))
@@ -31,16 +32,16 @@ async def stt_agent(params: agents.Job.AgentParams):
         async for frame in audio_stream:
             vad_processor.push(frame)
 
-    @params.room.on("data_received")
+    @ctx.room.on("data_received")
     def on_data_received(data: str, participant: rtc.RemoteParticipant):
         print(f"Data Received: {data}")
 
-    @params.room.on("track_available")
+    @ctx.room.on("track_available")
     def on_track_available(publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
         if publication.kind == rtc.TrackKind.KIND_AUDIO:
             publication.set_subscribed(True)
 
-    @params.room.on("track_subscribed")
+    @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
         if publication.kind != rtc.TrackKind.KIND_AUDIO:
             return
