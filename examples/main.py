@@ -18,8 +18,6 @@ ws_url = os.environ.get("LIVEKIT_WS_URL")
 api_key = os.environ.get("LIVEKIT_API_KEY")
 api_secret = os.environ.get("LIVEKIT_API_SECRET")
 
-print(f"ws_url: {ws_url} - api_key{api_key} - api_secret{api_secret}")
-
 
 async def vad_job_available_cb(worker, job):
     print("Accepting vad job")

@@ -17,8 +17,9 @@ class VAD:
         type: str
         frames: [rtc.AudioFrame]
 
-    def __init__(self, *, silence_threshold_ms: int):
+    def __init__(self, *, left_padding_ms: int, silence_threshold_ms: int):
         self._silence_threshold_ms = silence_threshold_ms
+        self._left_padding_ms = left_padding_ms
         self._window_buffer = np.zeros(512, dtype=np.float32)
         self._window_buffer_scratch = np.zeros(512, dtype=np.float32)
         (self._model, _) = torch.hub.load(
@@ -27,6 +28,7 @@ class VAD:
         self._copy_float32 = np.zeros(1, dtype=np.float32)
         self._silent_frame_count_since_voice = 0
         self._voice_frames = []
+        self._left_padding_frames = []
         self._frame_queue = []
         self._talking_state = False
 
@@ -49,19 +51,36 @@ class VAD:
                 self._silent_frame_count_since_voice += len(frame_queue_copy)
                 if self._silent_frame_count_since_voice * 10 > self._silence_threshold_ms:
                     self._talking_state = False
-                    voice_frames_copy = self._voice_frames.copy()
-                    self._voice_frames = []
-                    return VAD.Event(type="voice_finished", frames=voice_frames_copy)
+                    result = []
+                    result.extend(self._left_padding_frames)
+                    result.extend(self._voice_frames)
+                    self._reset_frames()
+                    return VAD.Event(type="voice_finished", frames=result)
         else:
             if talking_detected:
                 self._talking_state = True
                 self._voice_frames.extend(frame_queue_copy)
                 return VAD.Event(type="voice_started", frames=self._voice_frames)
             else:
-                # if silent and not in the talking state, do nothing
-                pass
+                self._add_left_padding(frame_queue_copy)
 
         return None
+
+    def _add_left_padding(self, frames: [rtc.AudioFrame]):
+        current_padding_ms = 0
+        for f in self._left_padding_frames:
+            current_padding_ms += f.sample_rate * \
+                len(f.data) * 1000 / f.num_channels
+        ms_length = 0
+        for f in frames:
+            ms_length += f.sample_rate * len(f.data) * 1000 / f.num_channels
+            if ms_length + current_padding_ms > self._left_padding_ms:
+                return
+            self._left_padding_frames.append(f)
+
+    def _reset_frames(self):
+        self._left_padding_frames = []
+        self._voice_frames = []
 
     def _process_frames(self, frames: [rtc.AudioFrame]) -> bool:
         resampled = [f.remix_and_resample(VAD_SAMPLE_RATE, 1) for f in frames]
@@ -92,6 +111,7 @@ class VAD:
 
 
 class VADProcessor(agents.Processor):
-    def __init__(self, silence_threshold_ms=250):
-        self.vad = VAD(silence_threshold_ms=silence_threshold_ms)
+    def __init__(self, left_padding_ms=250, silence_threshold_ms=250):
+        self.vad = VAD(left_padding_ms=left_padding_ms,
+                       silence_threshold_ms=silence_threshold_ms)
         super().__init__(process=self.vad.push_frame)

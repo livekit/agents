@@ -3,6 +3,7 @@ import livekit.rtc as rtc
 from livekit import agents
 from livekit.processors.vad import VADProcessor, VAD
 from livekit.processors.google import SpeechRecognitionProcessor
+from livekit.processors.openai import WhisperOpenSourceTranscriberProcessor
 from typing import AsyncIterator
 
 
@@ -10,9 +11,11 @@ async def stt_agent(ctx: agents.JobContext):
 
     async def process_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        vad_processor = VADProcessor(silence_threshold_ms=250)
-        stt_processor = SpeechRecognitionProcessor(
-            google_credentials_filepath="google.json")
+        vad_processor = VADProcessor(
+            left_padding_ms=250, silence_threshold_ms=500)
+        # stt_processor = SpeechRecognitionProcessor(
+        # google_credentials_filepath="google.json")
+        stt_processor = WhisperOpenSourceTranscriberProcessor()
 
         async def vad_result_loop(queue: AsyncIterator[VAD.Event]):
             async for event in queue:

@@ -1,0 +1,1 @@
+from .whisper_open_source_transcriber import WhisperOpenSourceTranscriberProcessor

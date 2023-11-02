@@ -15,11 +15,11 @@ async def vad_agent(ctx: agents.JobContext):
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
     await ctx.room.local_participant.publish_track(track, options)
-    print("NEIL published")
 
     async def process_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        vad_processor = VADProcessor(silence_threshold_ms=250)
+        vad_processor = VADProcessor(
+            left_padding_ms=200, silence_threshold_ms=250)
         ctx.job.link_processor(vad_processor)
 
         async def vad_result_loop(queue: AsyncIterator[VAD.Event]):
