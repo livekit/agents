@@ -49,6 +49,6 @@ async def vad_agent(ctx: agents.JobContext):
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-        if publication.kind != rtc.TrackKind.KIND_AUDIO:
+        if publication.kind != rtc.TrackKind.KIND_AUDIO or track.name == "echo":
             return
         asyncio.create_task(process_track(track))

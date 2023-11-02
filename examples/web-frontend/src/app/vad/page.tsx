@@ -8,17 +8,25 @@ import {
   ParticipantLoop,
   ParticipantName,
   ParticipantTile,
+  RoomAudioRenderer,
   TrackLoop,
   useConnectionState,
   useDataChannel,
+  useLiveKitRoom,
+  useParticipantContext,
+  useParticipantInfo,
+  useRemoteParticipant,
   useRemoteParticipants,
+  useRoomContext,
   useRoomInfo,
   useStartAudio,
   useTrackToggle,
+  useTracks,
 } from "@livekit/components-react";
-import { Track } from "livekit-client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { AudioTrack, RemoteParticipant, Track } from "livekit-client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { v4 } from "uuid";
+import { AudioTrackRenderer } from "@/components/AudioTrackRenderer";
 
 export default function VADPage() {
   const room = `vad-${v4()}`;
@@ -92,12 +100,11 @@ function VAD() {
           {micText}
         </button>
       </div>
+      <RoomAudioRenderer />
       <div className="flex flex-col p-2">
         Remote Participants:
         <ParticipantLoop participants={remoteParticpants}>
-          <>
-            <ParticipantTile />
-          </>
+          <ParticipantName />
         </ParticipantLoop>
       </div>
     </div>
