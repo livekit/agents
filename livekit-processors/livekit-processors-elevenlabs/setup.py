@@ -21,12 +21,12 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, 'livekit', 'agents', 'version.py'), 'r') as f:
+with open(os.path.join(here, 'livekit', 'processors', 'elevenlabs', 'version.py'), 'r') as f:
     exec(f.read(), about)
 
 
 setuptools.setup(
-    name="livekit-processors-google",
+    name="livekit-processors-elevenlabs",
     version=about['__version__'],
     description="LiveKit Python Processor for ElevenLabs Services",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
@@ -46,9 +46,10 @@ setuptools.setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3 :: Only",
     ],
-    keywords=["webrtc", "realtime", "audio", "video", "livekit"],
+    keywords=["webrtc", "realtime", "audio", "video", "livekit", "elevenlabs"],
     license="Apache-2.0",
-    packages=setuptools.find_namespace_packages(include=["livekit.processors"]),
+    packages=setuptools.find_namespace_packages(
+        include=["livekit.processors"]),
     python_requires=">=3.7.0",
     install_requires=[
         "livekit >= 0.4.6",

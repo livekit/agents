@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import AsyncIterator
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
 from livekit import rtc
@@ -34,8 +35,12 @@ class SpeechRecognition:
         self._result_iterator = agents.utils.AsyncQueueIterator(
             self._result_queue)
 
-    async def push_frames(self, frames: [rtc.AudioFrame]):
+    def push_frames(self, frames: AsyncIterator[rtc.AudioFrame]) -> AsyncIterator[agents.SpeechToTextProcessor.Event]:
         client = SpeechAsyncClient.from_service_account_info(self._google_json)
+
+        resp_queue = asyncio.Queue[agents.common_processors.SpeechToTextProcessor.Event](
+        )
+        resp_iterator = agents.utils.AsyncQueueIterator(resp_queue)
 
         async def req_iterator():
             yield self._config_request
@@ -43,9 +48,14 @@ class SpeechRecognition:
                 resampled = f.remix_and_resample(48000, 1)
                 yield cloud_speech.StreamingRecognizeRequest(audio=resampled.data.tobytes())
 
-        res_generator = await client.streaming_recognize(requests=req_iterator())
-        asyncio.create_task(self.iterate_results(res_generator))
-        return self._result_iterator
+        async def resp_stream():
+            res_generator = await client.streaming_recognize(requests=req_iterator())
+            async for r in self.iterate_results(res_generator):
+                await resp_queue.put(r)
+
+        asyncio.create_task(resp_stream())
+
+        return resp_iterator
 
     async def iterate_results(self, generator):
         async for res in generator:
@@ -54,7 +64,7 @@ class SpeechRecognition:
             await self._result_queue.put(event)
 
 
-class SpeechRecognitionProcessor(agents.STTProcessor):
+class SpeechRecognitionProcessor(agents.SpeechToTextProcessor):
     def __init__(self, *, google_credentials_filepath: str):
         self._speech_recognition = SpeechRecognition(
             google_credentials_filepath=google_credentials_filepath)

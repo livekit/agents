@@ -39,11 +39,6 @@ async def stt_agent(ctx: agents.JobContext):
     def on_data_received(data: str, participant: rtc.RemoteParticipant):
         print(f"Data Received: {data}")
 
-    @ctx.room.on("track_available")
-    def on_track_available(publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-        if publication.kind == rtc.TrackKind.KIND_AUDIO:
-            publication.set_subscribed(True)
-
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
         if publication.kind != rtc.TrackKind.KIND_AUDIO:

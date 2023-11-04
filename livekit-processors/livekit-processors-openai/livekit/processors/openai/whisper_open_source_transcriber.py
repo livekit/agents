@@ -18,7 +18,7 @@ class WhisperOpenSourceTranscriber:
     def __init__(self):
         self._model = None
 
-    async def push_frames(self, frames: [rtc.AudioFrame]) -> AsyncIterator[agents.STTProcessor.Event]:
+    async def push_frames(self, frames: [rtc.AudioFrame]) -> AsyncIterator[agents.SpeechToTextProcessor.Event]:
         resampled = [
             frame.remix_and_resample(WHISPER_SAMPLE_RATE, WHISPER_CHANNELS) for frame in frames]
 
@@ -52,7 +52,7 @@ class WhisperOpenSourceTranscriber:
         return result
 
 
-class WhisperOpenSourceTranscriberProcessor(agents.STTProcessor):
+class WhisperOpenSourceTranscriberProcessor(agents.SpeechToTextProcessor):
     def __init__(self):
         self._whisper = WhisperOpenSourceTranscriber()
 
