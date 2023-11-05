@@ -54,13 +54,13 @@ class Worker:
         if scheme.startswith("http"):
             scheme = scheme.replace("http", "ws")
 
-        path = parse_res.path.rstrip("/")
-        url = f"{scheme}://{parse_res.netloc}/{path}"
+        url = f"{scheme}://{parse_res.netloc}/{parse_res.path}"
+        url = url.rstrip("/")
 
         self._lock = asyncio.Lock()
         self._available_cb = available_cb
         self._agent_url = url + "/agent"
-        self._rtc_url = url + "/rtc"
+        self._rtc_url = url
         self._wid = "AG-" + str(uuid.uuid4())[:12]
         self._worker_type = worker_type
         self._api_key = api_key
