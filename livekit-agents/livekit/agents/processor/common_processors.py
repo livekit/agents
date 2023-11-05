@@ -30,7 +30,7 @@ SpeechToTextProcessorEventType = Enum(
 @dataclass
 class SpeechToTextProcessorEvent:
     type: SpeechToTextProcessorEventType
-    frames: [rtc.AudioFrame]
+    text: str
 
 
 SpeechToTextProcessor = Processor[rtc.AudioFrame, SpeechToTextProcessorEvent]

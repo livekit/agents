@@ -17,9 +17,18 @@ class WhisperOpenSourceTranscriberProcessor(agents.SpeechToTextProcessor):
 
     def __init__(self):
         self._model = None
-        super().__init__(process=self.push_frames)
+        super().__init__(process=self.process)
 
-    async def push_frames(self, frames: [rtc.AudioFrame]) -> AsyncIterator[agents.Processor.Event[agents.SpeechToTextProcessorEvent]]:
+    def process(self, frames_iterator: AsyncIterator[[rtc.AudioFrame]]) -> AsyncIterator[agents.Processor.Event[agents.SpeechToTextProcessorEvent]]:
+        async def iterator():
+            async for frames in frames_iterator:
+                event = await self._push_frames(frames)
+                if event is not None:
+                    yield event
+
+        return iterator()
+
+    async def _push_frames(self, frames: [rtc.AudioFrame]) -> agents.Processor.Event[agents.SpeechToTextProcessorEvent]:
         resampled = [
             frame.remix_and_resample(WHISPER_SAMPLE_RATE, WHISPER_CHANNELS) for frame in frames]
 
@@ -37,7 +46,7 @@ class WhisperOpenSourceTranscriberProcessor(agents.SpeechToTextProcessor):
         result = await asyncio.get_event_loop().run_in_executor(None, self._transcribe, np_frames.astype(dtype=np.float32) / 32768.0)
         result_event = agents.Processor.Event(type=agents.ProcessorEventType.SUCCESS, data=agents.SpeechToTextProcessorEvent(
             type=agents.SpeechToTextProcessorEventType.DELTA_RESULT, text=result))
-        return agents.utils.AsyncIteratorList([result_event])
+        return result_event
 
     def _transcribe(self, buffer: np.array) -> str:
         # TODO: include this with the package

@@ -13,6 +13,7 @@ async def stt_agent(ctx: agents.JobContext):
         vad_processor = VADProcessor(
             left_padding_ms=250, silence_threshold_ms=500)
         stt_processor = WhisperOpenSourceTranscriberProcessor()
+
         vad_results = vad_processor\
             .start(audio_stream)\
             .filter(lambda data: data.type == agents.VoiceActivityDetectionProcessorEventType.FINISHED)\
@@ -22,11 +23,12 @@ async def stt_agent(ctx: agents.JobContext):
 
         print("NEIL stt_results:", stt_results)
 
-        async for stt_r in stt_results:
-            if stt_r.type == agents.ProcessorEventType.ERROR:
+        async for event in stt_results:
+            print("NEIL event", event)
+            if event.type == agents.ProcessorEventType.ERROR:
                 continue
 
-            text = stt_r.data.text
+            text = event.data.text
             asyncio.create_task(ctx.room.local_participant.publish_data(text))
 
     @ctx.room.on("track_subscribed")
