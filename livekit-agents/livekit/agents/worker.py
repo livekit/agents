@@ -40,7 +40,7 @@ class JobCancelledError(Exception):
 class Worker:
     def __init__(
         self,
-        available_cb: Callable[["Job"], Coroutine],
+        available_cb: Callable[["JobRequest"], Coroutine],
         worker_type: proto_agent.JobType.ValueType,
         ws_url: str,
         api_key: str,
@@ -61,15 +61,11 @@ class Worker:
         self._worker_type = worker_type
         self._api_key = api_key
         self._api_secret = api_secret
-        self._connected = False
+        self._running = False
         self._pending_jobs: Dict[str,
                                  asyncio.Future[proto_agent.JobAssignment]] = {}
 
     async def _connect(self) -> proto_agent.RegisterWorkerResponse:
-        if self._connected:
-            raise Exception("already connected")
-
-        self._connected = True
         join_jwt = (
             api.AccessToken(self._api_key, self._api_secret)
             .with_grants(api.VideoGrants(agent=True))
@@ -119,7 +115,7 @@ class Worker:
         msg.ParseFromString(bytes(message))
         return msg
 
-    async def _handle_new_job(self, job: "Job") -> None:
+    async def _handle_new_job(self, job: "JobRequest") -> None:
         """
         Execute the available callback, and automatically deny the job if the callback
         does not send an answer or raises an exception
@@ -141,7 +137,7 @@ class Worker:
         if which == "availability":
             # server is asking the worker if we are available for a job
             availability = msg.availability
-            job = Job(self, availability.job)
+            job = JobRequest(self, availability.job)
             asyncio.ensure_future(self._handle_new_job(job))
         elif which == "assignment":
             # server is assigning a job to the worker
@@ -155,7 +151,16 @@ class Worker:
 
             f.set_result(assignment)
 
+    @property
+    def id(self) -> str:
+        return self._wid
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
     async def run(self):
+        self._running = True
         reg = await self._connect()
         logging.info(f"worker successfully registered: {reg}")
 
@@ -167,21 +172,38 @@ class Worker:
             logging.error(f"connection closed: {e}")
 
     async def close(self) -> None:
-        if not self._connected:
+        if not self._running:
             return
 
-        self.connected = False
+        self._running = False
         await self._ws.close()
 
 
-@dataclass
 class JobContext:
-    job: "Job"
-    room: rtc.Room
-    participant: Optional[rtc.RemoteParticipant]
+    def __init__(self, id: str, worker: Worker, room: rtc.Room, participant: Optional[rtc.RemoteParticipant]) -> None:
+        self._id = id
+        self._worker = worker
+        self._room = room
+        self._participant = participant
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    @property
+    def room(self) -> rtc.Room:
+        return self._room
+
+    @property
+    def participant(self) -> Optional[rtc.RemoteParticipant]:
+        return self._participant
+
+    async def update_status(self, status: proto_agent.JobStatus.ValueType, error: str = "", user_data: str = "") -> None:
+        await self._worker._send_job_status(self._id, status, error, user_data)
 
 
-class Job:
+
+class JobRequest:
     def __init__(
         self,
         worker: Worker,
@@ -212,6 +234,9 @@ class Job:
             raise Exception("job already answered")
 
     async def reject(self) -> None:
+        """
+        Tell the server that we cannot handle the job
+        """
         async with self._lock:
             self._assert_not_answered()
             self._answered = True
@@ -224,6 +249,10 @@ class Job:
         identity: str = "",
         metadata: str = "",
     ):
+        """
+        Tell the server that we can handle the job, if the server then assigns the job to us,
+        we will connect to the room and call the agent callback
+        """
         async with self._lock:
             self._assert_not_answered()
             self._answered = True
