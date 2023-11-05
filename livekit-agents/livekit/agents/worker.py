@@ -66,8 +66,7 @@ class Worker:
         self._api_secret = api_secret
         self._running = False
         self._running_jobs: list["JobContext"] = []
-        self._pending_jobs: Dict[str,
-                                 asyncio.Future[proto_agent.JobAssignment]] = {}
+        self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
 
     async def _connect(self) -> proto_agent.RegisterWorkerResponse:
         join_jwt = (
@@ -87,7 +86,9 @@ class Worker:
         res = await self._recv()
         return res.register
 
-    async def _send_availability(self, job_id: str, available: bool) -> proto_agent.JobAssignment:
+    async def _send_availability(
+        self, job_id: str, available: bool
+    ) -> proto_agent.JobAssignment:
         """
         Send availability to the server, and wait for assignment
         """
@@ -102,10 +103,15 @@ class Worker:
         try:
             return await asyncio.wait_for(f, ASSIGNMENT_TIMEOUT)
         except asyncio.TimeoutError:
-            raise AssignmentTimeoutError(
-                f"assignment timeout for job {job_id}")
+            raise AssignmentTimeoutError(f"assignment timeout for job {job_id}")
 
-    async def _send_job_status(self, job_id: str, status: proto_agent.JobStatus.ValueType, error: str, user_data: str = "") -> None:
+    async def _send_job_status(
+        self,
+        job_id: str,
+        status: proto_agent.JobStatus.ValueType,
+        error: str,
+        user_data: str = "",
+    ) -> None:
         req = proto_agent.WorkerMessage()
         req.job_update.job_id = job_id
         req.job_update.status = status
@@ -140,7 +146,8 @@ class Worker:
 
         if not job._answered:
             logging.warn(
-                f"user did not answer availability for job {job.id}, rejecting")
+                f"user did not answer availability for job {job.id}, rejecting"
+            )
             await job.reject()
 
     async def _message_received(self, msg: proto_agent.ServerMessage) -> None:
@@ -156,8 +163,7 @@ class Worker:
             job_id = assignment.job.id
             f = self._pending_jobs.get(job_id)
             if f is None:
-                logging.error(
-                    f"received assignment for unknown job {job_id}")
+                logging.error(f"received assignment for unknown job {job_id}")
                 return
 
             f.set_result(assignment)
@@ -170,8 +176,7 @@ class Worker:
                 logging.info(f"worker successfully re-registered: {reg}")
                 return True
             except Exception as e:
-                logging.error(
-                    f"failed to reconnect, attempt {i}: {e}")
+                logging.error(f"failed to reconnect, attempt {i}: {e}")
                 await asyncio.sleep(RECONNECT_INTERVAL)
 
         return False
@@ -185,9 +190,9 @@ class Worker:
         return self._running
 
     async def _run(self) -> None:
-        reg = await self._connect() # initial connection 
+        reg = await self._connect()  # initial connection
         logging.info(f"worker successfully registered: {reg}")
-    
+
         while True:
             try:
                 while True:
@@ -201,9 +206,9 @@ class Worker:
     async def run(self):
         if self._running:
             raise Exception("worker is already running")
-        
+
         self._running = True
-        
+
         try:
             await self._run()
         except asyncio.CancelledError:
@@ -212,14 +217,13 @@ class Worker:
 
         await self.close()
 
-
     async def close(self) -> None:
         async with self._lock:
             if not self._running:
                 return
 
             logging.info(f"closing worker {self._wid}")
-            
+
             # close the websocket and all running jobs
             await self._ws.close()
             await asyncio.gather(*[job.close() for job in self._running_jobs])
@@ -228,7 +232,13 @@ class Worker:
 
 
 class JobContext:
-    def __init__(self, id: str, worker: Worker, room: rtc.Room, participant: Optional[rtc.RemoteParticipant]) -> None:
+    def __init__(
+        self,
+        id: str,
+        worker: Worker,
+        room: rtc.Room,
+        participant: Optional[rtc.RemoteParticipant],
+    ) -> None:
         self._id = id
         self._worker = worker
         self._room = room
@@ -277,7 +287,12 @@ class JobContext:
 
             self._worker._running_jobs.remove(self)
 
-    async def update_status(self, status: proto_agent.JobStatus.ValueType, error: str = "", user_data: str = "") -> None:
+    async def update_status(
+        self,
+        status: proto_agent.JobStatus.ValueType,
+        error: str = "",
+        user_data: str = "",
+    ) -> None:
         await self._worker._send_job_status(self._id, status, error, user_data)
 
 
@@ -343,8 +358,7 @@ class JobRequest:
             )
 
             jwt = (
-                api.AccessToken(self._worker._api_key,
-                                self._worker._api_secret)
+                api.AccessToken(self._worker._api_key, self._worker._api_secret)
                 .with_identity(identity)
                 .with_grants(grants)
                 .with_metadata(metadata)
@@ -360,8 +374,11 @@ class JobRequest:
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
                 logging.error(
-                    f"failed to connect to the room, cancelling job {self.id}: {e}")
-                await self._worker._send_job_status(self.id, proto_agent.JobStatus.JS_FAILED, str(e))
+                    f"failed to connect to the room, cancelling job {self.id}: {e}"
+                )
+                await self._worker._send_job_status(
+                    self.id, proto_agent.JobStatus.JS_FAILED, str(e)
+                )
                 raise e
 
             participant = None
@@ -371,13 +388,18 @@ class JobRequest:
                 participant = self._room.participants.get(self.participant.sid)
                 if participant is None:
                     logging.warn(
-                        f"participant '{self.participant.sid}' not found, cancelling job {self.id}")
-                    await self._worker._send_job_status(self.id, proto_agent.JobStatus.JS_FAILED, "participant not found")
+                        f"participant '{self.participant.sid}' not found, cancelling job {self.id}"
+                    )
+                    await self._worker._send_job_status(
+                        self.id,
+                        proto_agent.JobStatus.JS_FAILED,
+                        "participant not found",
+                    )
                     await self._room.disconnect()
                     raise JobCancelledError(
-                        f"participant '{self.participant.sid}' not found")
+                        f"participant '{self.participant.sid}' not found"
+                    )
 
             # start the agent
-            job_ctx = JobContext(self.id, self._worker,
-                                 self._room, participant)
+            job_ctx = JobContext(self.id, self._worker, self._room, participant)
             asyncio.ensure_future(agent(job_ctx))
