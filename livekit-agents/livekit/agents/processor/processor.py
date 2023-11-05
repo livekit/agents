@@ -16,7 +16,6 @@ import asyncio
 from typing import AsyncIterator, Awaitable, Callable, TypeVar, Generic
 from abc import abstractclassmethod, abstractmethod
 from ..utils.async_queue_iterator import AsyncQueueIterator
-from ..worker.job import Job
 
 T = TypeVar('T')
 U = TypeVar('U')

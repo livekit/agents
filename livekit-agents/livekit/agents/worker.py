@@ -23,6 +23,7 @@ from ._proto import livekit_agent_pb2 as proto_agent
 from ._proto import livekit_models_pb2 as proto_models
 from urllib.parse import urlparse
 import websockets
+import os
 
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_INTERVAL = 10
@@ -44,9 +45,9 @@ class Worker:
         self,
         available_cb: Callable[["JobRequest"], Coroutine],
         worker_type: proto_agent.JobType.ValueType,
-        ws_url: str,
-        api_key: str,
-        api_secret: str,
+        ws_url: str = os.environ.get("LIVEKIT_WS_URL", "http://localhost:7880"),
+        api_key: str = os.environ.get("LIVEKIT_API_KEY", ""),
+        api_secret: str = os.environ.get("LIVEKIT_API_SECRET", "")
     ) -> None:
         parse_res = urlparse(ws_url)
         scheme = parse_res.scheme

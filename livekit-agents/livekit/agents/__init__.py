@@ -12,9 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .version import __version__
 from . import utils
 from ._proto.livekit_agent_pb2 import JobType
 from .processor.processor import Processor
 from .processor.stt import STTProcessor
-from .worker.worker import Worker, Job
-from .worker.job import JobContext, AgentParticipantInfo
+from .worker import (
+        Worker,
+        JobRequest,
+        JobContext, 
+        JobCancelledError, 
+        AssignmentTimeoutError,
+        )
