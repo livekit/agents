@@ -21,24 +21,20 @@ async def vad_agent(ctx: agents.JobContext):
         vad_processor = VADProcessor(
             left_padding_ms=200, silence_threshold_ms=250)
 
-        vad_results = vad_processor.start(audio_stream)
+        vad_results = vad_processor.start(audio_stream)\
+            .filter(lambda data: data.type == agents.VoiceActivityDetectionProcessorEventType.FINISHED)\
+            .map(lambda data: data.frames)\
+            .unwrap()
 
-        async for processor_event in vad_results:
-            if processor_event.type == agents.ProcessorEventType.ERROR:
-                continue
-            event = processor_event.data
-            print(f"VAD Event: {event.type}")
-            if event.type == agents.VoiceActivityDetectionProcessorEventType.STARTED:
-                print("VAD - Voice Started")
-            elif event.type == agents.VoiceActivityDetectionProcessorEventType.FINISHED:
-                asyncio.create_task(ctx.room.local_participant.publish_data(
-                    f"Voice Detected For: {len(event.frames) * 10.0 / 1000.0} seconds"))
-                for frame in event.frames:
-                    resampled = frame.remix_and_resample(
-                        SAMPLE_RATE, NUM_CHANNELS)
-                    await source.capture_frame(resampled)
-                print(
-                    f"VAD - Voice Finished. Frame Count: {len(event.frames)}")
+        async for frames in vad_results:
+            asyncio.create_task(ctx.room.local_participant.publish_data(
+                f"Voice Detected For: {len(frames) * 10.0 / 1000.0} seconds"))
+            for frame in frames:
+                resampled = frame.remix_and_resample(
+                    SAMPLE_RATE, NUM_CHANNELS)
+                await source.capture_frame(resampled)
+            print(
+                f"VAD - Voice Finished. Frame Count: {len(frames)}")
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):

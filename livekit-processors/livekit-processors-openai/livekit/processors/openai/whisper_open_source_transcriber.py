@@ -13,12 +13,13 @@ WHISPER_SAMPLE_RATE = 16000
 WHISPER_CHANNELS = 1
 
 
-class WhisperOpenSourceTranscriber:
+class WhisperOpenSourceTranscriberProcessor(agents.SpeechToTextProcessor):
 
     def __init__(self):
         self._model = None
+        super().__init__(process=self.push_frames)
 
-    async def push_frames(self, frames: [rtc.AudioFrame]) -> AsyncIterator[agents.SpeechToTextProcessor.Event]:
+    async def push_frames(self, frames: [rtc.AudioFrame]) -> AsyncIterator[agents.Processor.Event[agents.SpeechToTextProcessorEvent]]:
         resampled = [
             frame.remix_and_resample(WHISPER_SAMPLE_RATE, WHISPER_CHANNELS) for frame in frames]
 
@@ -34,7 +35,9 @@ class WhisperOpenSourceTranscriber:
             write_index += len(resampled[i].data)
 
         result = await asyncio.get_event_loop().run_in_executor(None, self._transcribe, np_frames.astype(dtype=np.float32) / 32768.0)
-        return agents.utils.AsyncIteratorList([agents.STTProcessor.Event(text=result)])
+        result_event = agents.Processor.Event(type=agents.ProcessorEventType.SUCCESS, data=agents.SpeechToTextProcessorEvent(
+            type=agents.SpeechToTextProcessorEventType.DELTA_RESULT, text=result))
+        return agents.utils.AsyncIteratorList([result_event])
 
     def _transcribe(self, buffer: np.array) -> str:
         # TODO: include this with the package
@@ -50,10 +53,3 @@ class WhisperOpenSourceTranscriber:
                 result += segment["text"]
 
         return result
-
-
-class WhisperOpenSourceTranscriberProcessor(agents.SpeechToTextProcessor):
-    def __init__(self):
-        self._whisper = WhisperOpenSourceTranscriber()
-
-        super().__init__(process=self._whisper.push_frames)

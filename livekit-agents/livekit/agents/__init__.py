@@ -14,11 +14,15 @@
 
 from . import utils
 from ._proto.livekit_agent_pb2 import JobType
-from .processor.processor import Processor, ProcessorEventType
+from .processor.processor import Processor, ProcessorEventType, ProcessorResultIterator
 from .processor.common_processors import (VoiceActivityDetectionProcessor,
+                                          VoiceActivityDetectionProcessorEvent,
                                           VoiceActivityDetectionProcessorEventType,
                                           SpeechToTextProcessor,
+                                          SpeechToTextProcessorEvent,
+                                          SpeechToTextProcessorEventType,
                                           TextToSpeechProcessor,
-                                          TextToTextProcessor)
+                                          TextToTextProcessor
+                                          )
 from .worker.worker import Worker, Job, ManualWorker, SFUTriggeredWorker
 from .worker.job import JobContext, AgentParticipantInfo

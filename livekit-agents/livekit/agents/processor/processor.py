@@ -20,6 +20,7 @@ from abc import abstractmethod
 
 T = TypeVar('T')
 U = TypeVar('U')
+E = TypeVar('E')
 
 ProcessorEventType = Enum('ProcessorEventType', ['ERROR', 'SUCCESS'])
 
@@ -27,13 +28,58 @@ ProcessorEventType = Enum('ProcessorEventType', ['ERROR', 'SUCCESS'])
 class Processor(Generic[T, U]):
 
     @dataclass
-    class Event:
+    class Event(Generic[E]):
         type: ProcessorEventType
-        data: Optional[U] = None
+        data: Optional[E] = None
         error: Optional[Exception] = None
 
-    def __init__(self, process: Callable[[AsyncIterable[T]], AsyncIterable[Event]]) -> None:
+    def __init__(self, process: Callable[[AsyncIterable[T]], AsyncIterable[Event[U]]]) -> None:
         self._process = process
 
-    def start(self, data: AsyncIterable[T]) -> AsyncIterable[U]:
-        return self._process(data)
+    def start(self, data: AsyncIterable[T]) -> "ProcessorResultIterator[U]":
+        return ProcessorResultIterator(iterator=self._process(data))
+
+
+class ProcessorResultIterator(Generic[T]):
+
+    def __init__(self, iterator: AsyncIterable[Processor.Event[T]]) -> None:
+        self._iterator = iterator
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> Processor.Event[T]:
+        async for item in self._iterator:
+            return item
+
+    def filter(self, predicate: Callable[[T], bool]) -> "ProcessorResultIterator[T]":
+        async def iteratator() -> AsyncIterable[Processor.Event[T]]:
+            async for item in self._iterator:
+                if item.type == ProcessorEventType.ERROR:
+                    yield item
+                    continue
+
+                if predicate(item.data):
+                    yield item
+
+        return ProcessorResultIterator(iterator=iteratator())
+
+    def map(self, mapper: Callable[[T], U]) -> "ProcessorResultIterator[U]":
+        async def iteratator() -> AsyncIterable[Processor.Event[U]]:
+            async for item in self._iterator:
+                if item.type == ProcessorEventType.ERROR:
+                    yield item
+                    continue
+
+                yield Processor.Event(type=item.type, data=mapper(item.data))
+
+        return ProcessorResultIterator(iterator=iteratator())
+
+    def unwrap(self):
+        async def iteratator() -> AsyncIterable[T]:
+            async for item in self._iterator:
+                if item.type == ProcessorEventType.ERROR:
+                    continue
+                yield item.data
+
+        return iteratator()
