@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 import websockets
 
 MAX_RECONNECT_ATTEMPTS = 5
+RECONNECT_INTERVAL = 10
 ASSIGNMENT_TIMEOUT = 15
 
 
@@ -74,13 +75,13 @@ class Worker:
             .to_jwt()
         )
 
-        register_req = proto_agent.WorkerMessage()
-        register_req.register.worker_id = self._wid
-        register_req.register.type = self._worker_type
+        req = proto_agent.WorkerMessage()
+        req.register.worker_id = self._wid
+        req.register.type = self._worker_type
 
         headers = {"Authorization": f"Bearer {join_jwt}"}
         self._ws = await websockets.connect(self._agent_url, extra_headers=headers)
-        await self._ws.send(register_req.SerializeToString())
+        await self._send(req)
 
         res = await self._recv()
         return res.register
@@ -95,7 +96,7 @@ class Worker:
 
         f = asyncio.Future()
         self._pending_jobs[job_id] = f
-        await self._ws.send(req.SerializeToString())
+        await self._send(req)
 
         try:
             return await asyncio.wait_for(f, ASSIGNMENT_TIMEOUT)
@@ -116,6 +117,13 @@ class Worker:
         msg = proto_agent.ServerMessage()
         msg.ParseFromString(bytes(message))
         return msg
+
+    async def _send(self, msg: proto_agent.WorkerMessage) -> None:
+        try:
+            await self._ws.send(msg.SerializeToString())
+        except websockets.exceptions.ConnectionClosed:
+            # TODO: Implement JobStatus resuming after reconnection
+            pass
 
     async def _handle_new_job(self, job: "JobRequest") -> None:
         """
@@ -162,23 +170,45 @@ class Worker:
     def running(self) -> bool:
         return self._running
 
-    async def run(self):
-        self._running = True
-        reg = await self._connect()
-        logging.info(f"worker successfully registered: {reg}")
+    async def _reconnect(self) -> bool:
+        for i in range(MAX_RECONNECT_ATTEMPTS):
+            try:
+                reg = await self._connect()
+                logging.info(f"worker successfully re-registered: {reg}")
+                return True
+            except Exception as e:
+                logging.error(
+                    f"failed to reconnect, attempt {i}: {e}")
+                await asyncio.sleep(RECONNECT_INTERVAL)
 
-        try:
-            while True:
-                msg = await self._recv()
-                await self._message_received(msg)
-        except websockets.exceptions.ConnectionClosed as e:
-            if self._running:
-                logging.error(f"connection closed: {e}")
-                # Try to reconnect
+        return False
+
+
+    async def run(self):
+        if self._running:
+            raise Exception("worker is already running")
+
+        self._running = True
+        reg = await self._connect() # initial connection 
+        logging.info(f"worker successfully registered: {reg}")
+    
+        while True:
+            try:
+                while True:
+                    await self._message_received(await self._recv())
+            except websockets.exceptions.ConnectionClosed as e:
+                if self._running:
+                    logging.error(f"connection closed, trying to reconnect: {e}")
+                    if not await self._reconnect():
+                        break
+
+        await self.close()
 
     async def close(self) -> None:
         if not self._running:
             return
+
+        logging.info(f"closing worker {self._wid}")
 
         self._running = False
         await self._ws.close()
@@ -222,7 +252,7 @@ class JobContext:
 
     async def close(self) -> None:
         """
-        Close the job and cleanup resources (Close the linked processors & tasks)
+        Close the job and cleanup resources (linked processors & tasks)
         """
         async with self._lock:
             if self._closed:
