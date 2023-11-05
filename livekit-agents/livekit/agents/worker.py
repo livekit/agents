@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import asyncio
 from typing import AsyncGenerator, Coroutine, Dict, Optional, Callable, Awaitable
 from livekit import api, rtc
+from .processor.processor import Processor
 from ._proto import livekit_agent_pb2 as proto_agent
 from ._proto import livekit_models_pb2 as proto_models
 from urllib.parse import urlparse
@@ -62,6 +63,7 @@ class Worker:
         self._api_key = api_key
         self._api_secret = api_secret
         self._running = False
+        self._running_jobs: list["JobContext"] = []
         self._pending_jobs: Dict[str,
                                  asyncio.Future[proto_agent.JobAssignment]] = {}
 
@@ -150,6 +152,7 @@ class Worker:
                 return
 
             f.set_result(assignment)
+            del self._pending_jobs[job_id]
 
     @property
     def id(self) -> str:
@@ -169,7 +172,9 @@ class Worker:
                 msg = await self._recv()
                 await self._message_received(msg)
         except websockets.exceptions.ConnectionClosed as e:
-            logging.error(f"connection closed: {e}")
+            if self._running:
+                logging.error(f"connection closed: {e}")
+                # Try to reconnect
 
     async def close(self) -> None:
         if not self._running:
@@ -178,6 +183,9 @@ class Worker:
         self._running = False
         await self._ws.close()
 
+        # close running jobs
+        await asyncio.gather(*[job.close() for job in self._running_jobs])
+
 
 class JobContext:
     def __init__(self, id: str, worker: Worker, room: rtc.Room, participant: Optional[rtc.RemoteParticipant]) -> None:
@@ -185,6 +193,11 @@ class JobContext:
         self._worker = worker
         self._room = room
         self._participant = participant
+        self._close_event = asyncio.Event()
+        self._processors: list[Processor] = []
+        self._closed = False
+        self._lock = asyncio.Lock()
+        self._worker._running_jobs.append(self)
 
     @property
     def id(self) -> str:
@@ -198,9 +211,34 @@ class JobContext:
     def participant(self) -> Optional[rtc.RemoteParticipant]:
         return self._participant
 
+    def add_processor(self, processor: Processor) -> None:
+        self._processors.append(processor)
+
+    async def wait_close(self) -> None:
+        """
+        Wait until close is requested
+        """
+        await self._close_event.wait()
+
+    async def close(self) -> None:
+        """
+        Close the job and cleanup resources (Close the linked processors & tasks)
+        """
+        async with self._lock:
+            if self._closed:
+                return
+
+            self._closed = True
+            self._close_event.set()
+
+            # close all processors
+            for p in self._processors:
+                await p.close()
+
+            self._worker._running_jobs.remove(self)
+
     async def update_status(self, status: proto_agent.JobStatus.ValueType, error: str = "", user_data: str = "") -> None:
         await self._worker._send_job_status(self._id, status, error, user_data)
-
 
 
 class JobRequest:
@@ -300,6 +338,6 @@ class JobRequest:
                         f"participant '{self.participant.sid}' not found")
 
             # start the agent
-            job_ctx = JobContext(job=self, room=self._room,
-                                 participant=participant)
+            job_ctx = JobContext(self.id, self._worker,
+                                 self._room, participant)
             asyncio.ensure_future(agent(job_ctx))
