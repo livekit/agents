@@ -16,5 +16,5 @@ from . import utils
 from ._proto.livekit_agent_pb2 import JobType
 from .processor.processor import Processor
 from .processor.stt import STTProcessor
-from .worker.worker import Worker, Job, ManualWorker, SFUTriggeredWorker
+from .worker.worker import Worker, Job
 from .worker.job import JobContext, AgentParticipantInfo

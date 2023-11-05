@@ -36,5 +36,5 @@ protoc \
 touch -a "$API_OUT_PYTHON/__init__.py"
 
 for f in "$API_OUT_PYTHON"/*.py "$API_OUT_PYTHON"/*.pyi; do
-    perl -i -pe 's|^(import (livekit_egress_pb2\|livekit_room_pb2\|livekit_webhook_pb2\|livekit_ingress_pb2\|livekit_models_pb2))|from . $1|g' "$f"
+    perl -i -pe 's|^(import (livekit_egress_pb2\|livekit_room_pb2\|livekit_webhook_pb2\|livekit_ingress_pb2\|livekit_models_pb2\|livekit_agent_pb2))|from . $1|g' "$f"
 done
