@@ -56,6 +56,7 @@ class Worker:
         path = parse_res.path.rstrip("/")
         url = f"{scheme}://{parse_res.netloc}/{path}"
 
+        self._lock = asyncio.Lock()
         self._available_cb = available_cb
         self._agent_url = url + "/agent"
         self._rtc_url = url + "/rtc"
@@ -162,14 +163,6 @@ class Worker:
             f.set_result(assignment)
             del self._pending_jobs[job_id]
 
-    @property
-    def id(self) -> str:
-        return self._wid
-
-    @property
-    def running(self) -> bool:
-        return self._running
-
     async def _reconnect(self) -> bool:
         for i in range(MAX_RECONNECT_ATTEMPTS):
             try:
@@ -183,12 +176,15 @@ class Worker:
 
         return False
 
+    @property
+    def id(self) -> str:
+        return self._wid
 
-    async def run(self):
-        if self._running:
-            raise Exception("worker is already running")
+    @property
+    def running(self) -> bool:
+        return self._running
 
-        self._running = True
+    async def _run(self) -> None:
         reg = await self._connect() # initial connection 
         logging.info(f"worker successfully registered: {reg}")
     
@@ -202,19 +198,33 @@ class Worker:
                     if not await self._reconnect():
                         break
 
+    async def run(self):
+        if self._running:
+            raise Exception("worker is already running")
+        
+        self._running = True
+        
+        try:
+            await self._run()
+        except asyncio.CancelledError:
+            logging.info(f"cancel received for worker {self._wid}, closing...")
+            await asyncio.shield(self.close())
+
         await self.close()
 
+
     async def close(self) -> None:
-        if not self._running:
-            return
+        async with self._lock:
+            if not self._running:
+                return
 
-        logging.info(f"closing worker {self._wid}")
+            logging.info(f"closing worker {self._wid}")
+            
+            # close the websocket and all running jobs
+            await self._ws.close()
+            await asyncio.gather(*[job.close() for job in self._running_jobs])
 
-        self._running = False
-        await self._ws.close()
-
-        # close running jobs
-        await asyncio.gather(*[job.close() for job in self._running_jobs])
+            self._running = False
 
 
 class JobContext:
