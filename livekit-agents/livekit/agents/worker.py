@@ -31,9 +31,11 @@ class AssignmentTimeoutError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
 
+
 class JobCancelledError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
+
 
 class Worker:
     def __init__(
@@ -117,13 +119,30 @@ class Worker:
         msg.ParseFromString(bytes(message))
         return msg
 
+    async def _handle_new_job(self, job: "Job") -> None:
+        """
+        Execute the available callback, and automatically deny the job if the callback
+        does not send an answer or raises an exception
+        """
+
+        try:
+            await self._available_cb(job)
+        except Exception as e:
+            logging.error(f"available callback failed: {e}")
+            return
+
+        if not job._answered:
+            logging.warn(
+                f"user did not answer availability for job {job.id}, rejecting")
+            await job.reject()
+
     async def _message_received(self, msg: proto_agent.ServerMessage) -> None:
         which = msg.WhichOneof("message")
         if which == "availability":
             # server is asking the worker if we are available for a job
             availability = msg.availability
             job = Job(self, availability.job)
-            asyncio.ensure_future(self._available_cb(job))
+            asyncio.ensure_future(self._handle_new_job(job))
         elif which == "assignment":
             # server is assigning a job to the worker
             assignment = msg.assignment
@@ -171,6 +190,8 @@ class Job:
         self._worker = worker
         self._info = job_info
         self._room = rtc.Room()
+        self._answered = False
+        self._lock = asyncio.Lock()
 
     @property
     def id(self) -> str:
@@ -186,8 +207,15 @@ class Job:
             return self._info.participant
         return None
 
+    def _assert_not_answered(self) -> None:
+        if self._answered:
+            raise Exception("job already answered")
+
     async def reject(self) -> None:
-        await self._worker._send_availability(self.id, False)
+        async with self._lock:
+            self._assert_not_answered()
+            self._answered = True
+            await self._worker._send_availability(self.id, False)
 
     async def accept(
         self,
@@ -196,45 +224,53 @@ class Job:
         identity: str = "",
         metadata: str = "",
     ):
-        identity = identity or "agent-" + self.id
-        grants = api.VideoGrants(
-            room=self.room.name,
-            room_join=True,
-            agent=True,
-        )
+        async with self._lock:
+            self._assert_not_answered()
+            self._answered = True
 
-        jwt = (
-            api.AccessToken(self._worker._api_key, self._worker._api_secret)
-            .with_identity(identity)
-            .with_grants(grants)
-            .with_metadata(metadata)
-            .with_name(name)
-            .to_jwt()
-        )
+            identity = identity or "agent-" + self.id
+            grants = api.VideoGrants(
+                room=self.room.name,
+                room_join=True,
+                agent=True,
+            )
 
-        # raisa AssignmentTimeoutError if assignment times out
-        _ = await self._worker._send_availability(self.id, True)
+            jwt = (
+                api.AccessToken(self._worker._api_key,
+                                self._worker._api_secret)
+                .with_identity(identity)
+                .with_grants(grants)
+                .with_metadata(metadata)
+                .with_name(name)
+                .to_jwt()
+            )
 
-        try:
-            options = rtc.RoomOptions(auto_subscribe=True)
-            await self._room.connect(self._worker._rtc_url, jwt, options)
-        except rtc.ConnectError as e:
-            logging.error(
-                f"failed to connect to the room, cancelling job {self.id}: {e}")
-            await self._worker._send_job_status(self.id, proto_agent.JobStatus.JS_FAILED, str(e))
-            raise e
+            # raise AssignmentTimeoutError if assignment times out
+            _ = await self._worker._send_availability(self.id, True)
 
-        participant = None
-        if self.participant is not None:
-            # cancel the job if the participant cannot be found
-            # this can happen if the participant has left the room before the agent gets the job
-            participant = self._room.participants.get(self.participant.sid)
-            if participant is None:
-                logging.warn(
-                    f"participant '{self.participant.sid}' not found, cancelling job {self.id}")
-                await self._worker._send_job_status(self.id, proto_agent.JobStatus.JS_FAILED, "participant not found")
-                await self._room.disconnect()
-                raise JobCancelledError(
-                    f"participant '{self.participant.sid}' not found")
+            try:
+                options = rtc.RoomOptions(auto_subscribe=True)
+                await self._room.connect(self._worker._rtc_url, jwt, options)
+            except rtc.ConnectError as e:
+                logging.error(
+                    f"failed to connect to the room, cancelling job {self.id}: {e}")
+                await self._worker._send_job_status(self.id, proto_agent.JobStatus.JS_FAILED, str(e))
+                raise e
 
-        asyncio.ensure_future(agent(JobContext(job=self, room=self._room, participant=participant)))
+            participant = None
+            if self.participant is not None:
+                # cancel the job if the participant cannot be found
+                # this can happen if the participant has left the room before the agent gets the job
+                participant = self._room.participants.get(self.participant.sid)
+                if participant is None:
+                    logging.warn(
+                        f"participant '{self.participant.sid}' not found, cancelling job {self.id}")
+                    await self._worker._send_job_status(self.id, proto_agent.JobStatus.JS_FAILED, "participant not found")
+                    await self._room.disconnect()
+                    raise JobCancelledError(
+                        f"participant '{self.participant.sid}' not found")
+
+            # start the agent
+            job_ctx = JobContext(job=self, room=self._room,
+                                 participant=participant)
+            asyncio.ensure_future(agent(job_ctx))
