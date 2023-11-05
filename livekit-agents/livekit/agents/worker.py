@@ -202,6 +202,9 @@ class Worker:
                     logging.error(f"connection closed, trying to reconnect: {e}")
                     if not await self._reconnect():
                         break
+            except Exception as e:
+                logging.error(f"error while running worker: {e}")
+                break
 
     async def run(self):
         if self._running:
