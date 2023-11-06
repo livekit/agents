@@ -23,7 +23,7 @@ from typing import (
     Optional,
     Callable,
 )
-from .processor import Processor
+from .plugin import Plugin
 from ._proto import livekit_agent_pb2 as proto_agent
 from ._proto import livekit_models_pb2 as proto_models
 from dataclasses import dataclass
@@ -261,7 +261,7 @@ class JobContext:
         self._worker = worker
         self._room = room
         self._participant = participant
-        self._processors: list[Processor] = []
+        self._plugins: list[Plugin] = []
         self._closed = False
         self._lock = asyncio.Lock()
         self._worker._running_jobs.append(self)
@@ -278,20 +278,20 @@ class JobContext:
     def participant(self) -> Optional[rtc.RemoteParticipant]:
         return self._participant
 
-    def add_processor(self, processor: Processor) -> None:
-        self._processors.append(processor)
+    def add_plugin(self, plugin: Plugin) -> None:
+        self._plugins.append(plugin)
 
     async def shutdown(self) -> None:
         """
-        Shutdown the job and cleanup resources (linked processors & tasks)
+        Shutdown the job and cleanup resources (linked plugins & tasks)
         """
         async with self._lock:
             logging.info(f"shutting down job {self.id}")
             if self._closed:
                 return
 
-            # close all processors
-            for p in self._processors:
+            # close all plugins
+            for p in self._plugins:
                 await p.close()
 
             await self.room.disconnect()

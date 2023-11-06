@@ -1,0 +1,1 @@
+from .speech_recognition import SpeechRecognitionPlugin, SpeechRecognition

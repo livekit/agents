@@ -1,9 +1,9 @@
 import asyncio
 import livekit.rtc as rtc
 from livekit import agents
-from livekit.processors.vad import VADProcessor, VAD
-from livekit.processors.google import SpeechRecognitionProcessor
-from livekit.processors.openai import WhisperOpenSourceTranscriberProcessor, ChatGPTProcessor, ChatGPTMessage, ChatGPTMessageRole
+from livekit.plugins.vad import VADPlugin, VAD
+from livekit.plugins.google import SpeechRecognitionPlugin
+from livekit.plugins.openai import WhisperOpenSourceTranscriberPlugin, ChatGPTPlugin, ChatGPTMessage, ChatGPTMessageRole
 from typing import AsyncIterator
 
 PROMPT = "You are KITT, a voice assistant in a meeting created by LiveKit. \
@@ -15,21 +15,21 @@ async def kitt_agent(ctx: agents.JobContext):
 
     async def process_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        vad_processor = VADProcessor(
+        vad_plugin = VADPlugin(
             left_padding_ms=250, silence_threshold_ms=500)
-        stt_processor = WhisperOpenSourceTranscriberProcessor()
-        chatgpt_processor = ChatGPTProcessor(message_capacity=5, prompt=PROMPT)
+        stt_plugin = WhisperOpenSourceTranscriberPlugin()
+        chatgpt_plugin = ChatGPTPlugin(message_capacity=5, prompt=PROMPT)
 
         async def vad_result_loop(queue: AsyncIterator[VAD.Event]):
             async for event in queue:
                 if event.type == "voice_finished":
                     frames = event.frames
-                    stt_processor.push(frames)
+                    stt_plugin.push(frames)
 
-        async def stt_result_loop(queue: AsyncIterator[AsyncIterator[agents.STTProcessor.Event]]):
+        async def stt_result_loop(queue: AsyncIterator[AsyncIterator[agents.STTPlugin.Event]]):
             async for event_iterator in queue:
                 async for event in event_iterator:
-                    chatgpt_processor.push(ChatGPTMessage(
+                    chatgpt_plugin.push(ChatGPTMessage(
                         content=event.text, role=ChatGPTMessageRole.user))
 
         async def chatgpt_result_loop(queue: AsyncIterator[AsyncIterator[str]]):
@@ -43,13 +43,13 @@ async def kitt_agent(ctx: agents.JobContext):
                 async for event in event_iterator:
                     pass
 
-        asyncio.create_task(stt_result_loop(queue=stt_processor.stream()))
-        asyncio.create_task(vad_result_loop(queue=vad_processor.stream()))
+        asyncio.create_task(stt_result_loop(queue=stt_plugin.stream()))
+        asyncio.create_task(vad_result_loop(queue=vad_plugin.stream()))
         asyncio.create_task(chatgpt_result_loop(
-            queue=chatgpt_processor.stream()))
+            queue=chatgpt_plugin.stream()))
 
         async for frame in audio_stream:
-            vad_processor.push(frame)
+            vad_plugin.push(frame)
 
     @ctx.room.on("data_received")
     def on_data_received(data: str, participant: rtc.RemoteParticipant):

@@ -1,6 +1,6 @@
 import asyncio
 import livekit.rtc as rtc
-from livekit.processors.vad import VAD, VADProcessor
+from livekit.plugins.vad import VAD, VADPlugin
 from livekit import agents
 from typing import AsyncIterator
 
@@ -18,11 +18,11 @@ async def vad_agent(ctx: agents.JobContext):
 
     async def process_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        vad_processor = VADProcessor(
+        vad_plugin = VADPlugin(
             left_padding_ms=200, silence_threshold_ms=250)
 
-        vad_results = vad_processor.start(audio_stream)\
-            .filter(lambda data: data.type == agents.VADProcessorEventType.FINISHED)\
+        vad_results = vad_plugin.start(audio_stream)\
+            .filter(lambda data: data.type == agents.VADPluginEventType.FINISHED)\
             .map(lambda data: data.frames)\
             .unwrap()
 

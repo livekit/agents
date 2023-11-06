@@ -1,8 +1,8 @@
 import json
 import asyncio
 from livekit import rtc
-from livekit.processors.vad import VAD, VADProcessor
-from livekit.processors.elevenlabs import ElevenLabsTTSProcessor
+from livekit.plugins.vad import VAD, VADPlugin
+from livekit.plugins.elevenlabs import ElevenLabsTTSPlugin
 from livekit import agents
 from typing import AsyncIterator
 
@@ -11,7 +11,7 @@ NUM_CHANNELS = 1
 
 
 async def tts_agent(ctx: agents.JobContext):
-    tts = ElevenLabsTTSProcessor()
+    tts = ElevenLabsTTSPlugin()
     source = rtc.AudioSource(SAMPLE_RATE, NUM_CHANNELS)
     track = rtc.LocalAudioTrack.create_audio_track("echo", source)
     options = rtc.TrackPublishOptions()
