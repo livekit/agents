@@ -17,6 +17,7 @@ import uuid
 import os
 import asyncio
 import signal
+import argparse
 from typing import (
     Any,
     AsyncGenerator,
@@ -95,9 +96,7 @@ class Worker:
         req.register.type = self._worker_type
 
         headers = {"Authorization": f"Bearer {join_jwt}"}
-        self._ws = await websockets.connect(
-            self._agent_url, extra_headers=headers
-        )
+        self._ws = await websockets.connect(self._agent_url, extra_headers=headers)
         await self._send(req)
         res = await self._recv()
         return res.register
@@ -197,20 +196,11 @@ class Worker:
 
         return False
 
-    @property
-    def id(self) -> str:
-        return self._wid
-
-    @property
-    def running(self) -> bool:
-        return self._running
-
     async def _run(self) -> None:
         try:
             while True:
                 try:
                     while True:
-                        print("waiting for message")
                         await self._message_received(await self._recv())
                 except websockets.exceptions.ConnectionClosed as e:
                     if self._running:
@@ -224,7 +214,15 @@ class Worker:
         except asyncio.CancelledError:
             await self._ws.close_transport()
 
-    async def start(self):
+    @property
+    def id(self) -> str:
+        return self._wid
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    async def start(self) -> None:
         async with self._lock:
             if self._running:
                 raise Exception("worker is already running")
@@ -334,18 +332,17 @@ class JobRequest:
             return self._info.participant
         return None
 
-    def _assert_not_answered(self) -> None:
-        if self._answered:
-            raise Exception("job already answered")
-
     async def reject(self) -> None:
         """
         Tell the server that we cannot handle the job
         """
         async with self._lock:
-            self._assert_not_answered()
+            if self._answered:
+                raise Exception("job already answered")
             self._answered = True
             await self._worker._send_availability(self.id, False)
+
+        logging.info(f"rejected job {self.id}")
 
     async def accept(
         self,
@@ -353,13 +350,15 @@ class JobRequest:
         name: str = "",
         identity: str = "",
         metadata: str = "",
-    ):
+    ) -> None:
         """
         Tell the server that we can handle the job, if the server then assigns the job to us,
         we will connect to the room and call the agent callback
         """
         async with self._lock:
-            self._assert_not_answered()
+            if self._answered:
+                raise Exception("job already answered")
+
             self._answered = True
 
             identity = identity or "agent-" + self.id
@@ -393,66 +392,66 @@ class JobRequest:
                 )
                 raise e
 
-            participant = None
-            if self.participant is not None:
+            sid = self._info.participant.sid
+            participant = self._room.participants.get(sid)
+            if self.participant is None and sid:
                 # cancel the job if the participant cannot be found
                 # this can happen if the participant has left the room before the agent gets the job
-                participant = self._room.participants.get(self.participant.sid)
-                if participant is None:
-                    logging.warn(
-                        f"participant '{self.participant.sid}' not found, cancelling job {self.id}"
-                    )
-                    await self._worker._send_job_status(
-                        self.id,
-                        proto_agent.JobStatus.JS_FAILED,
-                        "participant not found",
-                    )
-                    await self._room.disconnect()
-                    raise JobCancelledError(
-                        f"participant '{self.participant.sid}' not found"
-                    )
+                logging.warn(f"participant '{sid}' not found, cancelling job {self.id}")
+                await self._worker._send_job_status(
+                    self.id,
+                    proto_agent.JobStatus.JS_FAILED,
+                    "participant not found",
+                )
+                await self._room.disconnect()
+                raise JobCancelledError(f"participant '{sid}' not found")
 
             # start the agent
             job_ctx = JobContext(self.id, self._worker, self._room, participant)
             self._worker._loop.create_task(agent(job_ctx))
 
-
-class GracefulShutdown(SystemExit):
-    code = 1
+        logging.info(f"accepted job {self.id}")
 
 
-async def _run_worker(worker: Worker):
-    try:
-        await worker.start()
-        logging.info(f"worker started, press Ctrl+C to stop (worker id: {worker.id})")
-
-        while True:
-            await asyncio.sleep(3600)
-    except asyncio.CancelledError:
-        pass
-    finally:
-        logging.info(f"shutting down worker {worker._wid}")
-        await worker.shutdown()
-        logging.info(f"worker {worker._wid} shutdown")
-
-
-def run_worker(worker: Worker, loop: Optional[asyncio.AbstractEventLoop] = None):
+def run_worker(
+    worker: Worker, loop: Optional[asyncio.AbstractEventLoop] = None
+) -> None:
     """
     Run the specified worker and handle graceful shutdown
     """
 
-    loop = loop or asyncio.get_event_loop()
+    class GracefulShutdown(SystemExit):
+        code = 1
 
-    def _signal_handler():
-        raise GracefulShutdown()
+    loop = loop or asyncio.get_event_loop()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
+
+            def _signal_handler():
+                raise GracefulShutdown()
+
             loop.add_signal_handler(sig, _signal_handler)
         except NotImplementedError:
             pass
 
-    main_task = loop.create_task(_run_worker(worker))
+    async def _main_task(worker: Worker) -> None:
+        try:
+            await worker.start()
+            logging.info(
+                f"worker started, press Ctrl+C to stop (worker id: {worker.id})"
+            )
+
+            while True:
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            logging.info(f"shutting down worker {worker._wid}")
+            await worker.shutdown()
+            logging.info(f"worker {worker._wid} shutdown")
+
+    main_task = loop.create_task(_main_task(worker))
     try:
         asyncio.set_event_loop(loop)
         loop.run_until_complete(main_task)
@@ -460,9 +459,6 @@ def run_worker(worker: Worker, loop: Optional[asyncio.AbstractEventLoop] = None)
         pass
     finally:
         main_task.cancel()
-
-        # the main task will perform a graceful shutdown of jobs.
-        # so wait for it to finish before closing the other tasks
         loop.run_until_complete(main_task)
 
         tasks = asyncio.all_tasks(loop)
@@ -471,14 +467,24 @@ def run_worker(worker: Worker, loop: Optional[asyncio.AbstractEventLoop] = None)
 
         loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
         loop.run_until_complete(loop.shutdown_asyncgens())
-
         loop.close()
         asyncio.set_event_loop(None)
 
 
-def run_app(worker: Worker):
+def run_app(worker: Worker) -> None:
     """
-    Run the specified worker and enable the CLI
+    Run the CLI to interact with the worker
     """
+
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="set the logging level",
+    )
+
+    args = arg_parser.parse_args()
+    logging.basicConfig(level=args.log_level)
 
     run_worker(worker)
