@@ -17,16 +17,11 @@ import uuid
 import os
 import asyncio
 import signal
-import argparse
 from typing import (
-    Any,
-    AsyncGenerator,
     Coroutine,
     Dict,
     Optional,
     Callable,
-    Awaitable,
-    Set,
 )
 from .processor.processor import Processor
 from ._proto import livekit_agent_pb2 as proto_agent
@@ -63,6 +58,20 @@ class Worker:
         api_key: str = os.environ.get("LIVEKIT_API_KEY", ""),
         api_secret: str = os.environ.get("LIVEKIT_API_SECRET", ""),
     ) -> None:
+        self._set_url(ws_url)
+
+        self._loop = event_loop or asyncio.get_event_loop()
+        self._lock = asyncio.Lock()
+        self._available_cb = available_cb
+        self._wid = "AG-" + str(uuid.uuid4())[:12]
+        self._worker_type = worker_type
+        self._api_key = api_key
+        self._api_secret = api_secret
+        self._running = False
+        self._running_jobs: list["JobContext"] = []
+        self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
+
+    def _set_url(self, ws_url: str) -> None:
         parse_res = urlparse(ws_url)
         scheme = parse_res.scheme
         if scheme.startswith("http"):
@@ -71,18 +80,8 @@ class Worker:
         url = f"{scheme}://{parse_res.netloc}/{parse_res.path}"
         url = url.rstrip("/")
 
-        self._loop = event_loop or asyncio.get_event_loop()
-        self._lock = asyncio.Lock()
-        self._available_cb = available_cb
         self._agent_url = url + "/agent"
         self._rtc_url = url
-        self._wid = "AG-" + str(uuid.uuid4())[:12]
-        self._worker_type = worker_type
-        self._api_key = api_key
-        self._api_secret = api_secret
-        self._running = False
-        self._running_jobs: list["JobContext"] = []
-        self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
 
     async def _connect(self) -> proto_agent.RegisterWorkerResponse:
         join_jwt = (
@@ -310,6 +309,7 @@ class JobRequest:
     """
     Represents a new job from the server, this worker can either accept or reject it.
     """
+
     def __init__(
         self,
         worker: Worker,
@@ -415,7 +415,7 @@ class JobRequest:
         logging.info(f"accepted job {self.id}")
 
 
-def run_worker(
+def _run_worker(
     worker: Worker, loop: Optional[asyncio.AbstractEventLoop] = None
 ) -> None:
     """
@@ -429,6 +429,7 @@ def run_worker(
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
+
             def _signal_handler():
                 raise GracefulShutdown()
 
@@ -477,15 +478,38 @@ def run_app(worker: Worker) -> None:
     Run the CLI to interact with the worker
     """
 
-    arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument(
+    import click
+
+    @click.group()
+    @click.option(
         "--log-level",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         default="INFO",
-        help="set the logging level",
+        type=click.Choice(
+            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
+        ),
+        help="Set the logging level",
     )
+    @click.option(
+        "--url",
+        help="The websocket URL",
+    )
+    @click.option("--api-key", help="The API key")
+    @click.option("--api-secret", help="The API secret")
+    def cli(log_level: str, url: str, api_key: str, api_secret: str) -> None:
+        logging.basicConfig(level=log_level)
+        if url:
+            worker._set_url(url)
+        if api_key:
+            worker._api_key = api_key
+        if api_secret:
+            worker._api_secret = api_secret
 
-    args = arg_parser.parse_args()
-    logging.basicConfig(level=args.log_level)
+    @cli.command(help="Start the worker")
+    def start() -> None:
+        _run_worker(worker)
 
-    run_worker(worker)
+    @cli.command(help="Start a worker and simulate a job, useful for testing")
+    def simulate_job() -> None:
+        _run_worker(worker)
+
+    cli()

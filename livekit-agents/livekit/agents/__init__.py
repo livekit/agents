@@ -24,5 +24,4 @@ from .worker import (
     JobCancelledError,
     AssignmentTimeoutError,
     run_app,
-    run_worker
 )
