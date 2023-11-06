@@ -12,8 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .version import __version__
 from . import utils
 from ._proto.livekit_agent_pb2 import JobType
+from .processor.processor import Processor
+from .worker import (
+    Worker,
+    JobRequest,
+    JobContext,
+    JobCancelledError,
+    AssignmentTimeoutError,
+    run_app,
+)
 from .processor.processor import Processor, ProcessorEventType, ProcessorResultIterator
 from .processor.common_processors import (VoiceActivityDetectionProcessor,
                                           VoiceActivityDetectionProcessorEvent,
@@ -24,5 +34,3 @@ from .processor.common_processors import (VoiceActivityDetectionProcessor,
                                           TextToSpeechProcessor,
                                           TextToTextProcessor
                                           )
-from .worker.worker import Worker, Job, ManualWorker, SFUTriggeredWorker
-from .worker.job import JobContext, AgentParticipantInfo
