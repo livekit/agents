@@ -1,8 +1,8 @@
 import asyncio
 import livekit.rtc as rtc
 from livekit import agents
-from livekit.processors.vad import VADProcessor, VAD
-from livekit.processors.openai import WhisperOpenSourceTranscriberProcessor
+from livekit.plugins.vad import VADPlugin, VAD
+from livekit.plugins.openai import WhisperOpenSourceTranscriberPlugin
 from typing import AsyncIterator
 
 
@@ -10,22 +10,22 @@ async def stt_agent(ctx: agents.JobContext):
 
     async def process_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        vad_processor = VADProcessor(
+        vad_plugin = VADPlugin(
             left_padding_ms=250, silence_threshold_ms=500)
-        stt_processor = WhisperOpenSourceTranscriberProcessor()
+        stt_plugin = WhisperOpenSourceTranscriberPlugin()
 
-        vad_results = vad_processor\
+        vad_results = vad_plugin\
             .start(audio_stream)\
-            .filter(lambda data: data.type == agents.VADProcessorEventType.FINISHED)\
+            .filter(lambda data: data.type == agents.VADPluginEventType.FINISHED)\
             .map(lambda data: data.frames)\
             .unwrap()
-        stt_results = stt_processor.start(vad_results)
+        stt_results = stt_plugin.start(vad_results)
 
         print("NEIL stt_results:", stt_results)
 
         async for event in stt_results:
             print("NEIL event", event)
-            if event.type == agents.ProcessorEventType.ERROR:
+            if event.type == agents.PluginEventType.ERROR:
                 continue
 
             text = event.data.text
