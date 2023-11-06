@@ -4,7 +4,7 @@ import os
 from livekit import rtc
 from livekit import agents
 import numpy as np
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional, AsyncIterable
 import websockets.client as wsclient
 import websockets.exceptions
 import aiohttp
@@ -12,48 +12,64 @@ import json
 import base64
 
 
-class ElevenLabsTTS:
+class _WSWrapper:
     def __init__(self):
+        self.ws: Optional[wsclient.WebSocketClientProtocol] = None
         self._voice_id = ""
-        self._ws: wsclient.WebSocketClientProtocol = None
 
-    async def _connect_ws(self) -> wsclient.WebSocketClientProtocol:
+    async def wait_for_connected(self):
+        while self.ws is None or self.ws.closed:
+            await asyncio.sleep(0.1)
+
+    async def connect(self) -> wsclient.WebSocketClientProtocol:
         await self._get_voice_id_if_needed()
         uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream-input?model_id=eleven_monolingual_v1&output_format=pcm_44100&optimize_streaming_latency=2"
-        ws = await wsclient.connect(uri)
+        self.ws = await wsclient.connect(uri)
         bos_message = {"text": " ",
                        "xi_api_key": os.environ["ELEVENLABS_API_KEY"]}
-        await ws.send(json.dumps(bos_message))
-        return ws
+        await self.ws.send(json.dumps(bos_message))
 
-    async def push_text_iterator(self, text_iterator: AsyncIterator[str]) -> AsyncIterator[agents.TTSPlugin.Event]:
-        print("push")
-        ws = await self._connect_ws()
-        print("ELE Connected")
-        result_queue = asyncio.Queue()
+    async def _get_voice_id_if_needed(self):
+        if self._voice_id == "":
+            voices_url = "https://api.elevenlabs.io/v1/voices"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(voices_url) as resp:
+                    json_resp = await resp.json()
+                    voice = json_resp.get('voices', [])[0]
+                    self._voice_id = voice['voice_id']
+
+
+class ElevenLabsTTSPlugin(agents.TTSPlugin):
+    def __init__(self):
+
+        super().__init__(process=self.process)
+
+    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterable[agents.Processor.Event[AsyncIterator[rtc.AudioFrame]]]:
+        ws = _WSWrapper()
+        result_queue = asyncio.Queue[agents.Processor.Event[rtc.AudioFrame]]()
         result_iterator = agents.utils.AsyncQueueIterator(result_queue)
-
+        asyncio.create_task(ws.connect())
         asyncio.create_task(self._push_data_loop(ws, text_iterator))
         asyncio.create_task(self._receive_audio_loop(ws, result_queue))
         return result_iterator
 
-    async def _push_data_loop(self, ws: wsclient.WebSocketClientProtocol, text_iterator: AsyncIterator[str]):
-        async for text in text_iterator:
-            if text is None:
-                await ws.send(json.dumps({"text": ""}))
-                break
+    async def _push_data_loop(self, ws_wrapper: _WSWrapper, text_iterators: AsyncIterable[AsyncIterable[str]]):
+        await ws_wrapper.wait_for_connected()
+        async for text_iterator in text_iterators:
+            async for text in text_iterator:
+                payload = {"text": f"{text} ", "try_trigger_generation": True}
+                await ws_wrapper.ws.send(json.dumps(payload))
+            await ws_wrapper.ws.send(json.dumps({"text": ""}))
 
-            payload = {"text": f"{text} ", "try_trigger_generation": True}
-            await ws.send(json.dumps(payload))
-
-    async def _receive_audio_loop(self, ws: wsclient.WebSocketClientProtocol, result_queue: asyncio.Queue):
+    async def _receive_audio_loop(self, ws_wrapper: _WSWrapper, result_queue: asyncio.Queue):
+        await ws_wrapper.wait_for_connected()
         # 10ms at 44.1k * 2 bytes per sample (int16) * 1 channels
         frame_size_bytes = 441 * 2
 
         try:
             remainder = b''
             while True:
-                response = await ws.recv()
+                response = await ws_wrapper.ws.recv()
                 data = json.loads(response)
 
                 if data['isFinal']:
@@ -62,7 +78,7 @@ class ElevenLabsTTS:
                             remainder = remainder + b'\x00' * \
                                 (frame_size_bytes - len(remainder))
                         await self._audio_source.capture_frame(self._create_frame_from_chunk(remainder))
-                    await ws.close()
+                    await ws_wrapper.ws.close()
                     return
 
                 if data["audio"]:
@@ -78,7 +94,7 @@ class ElevenLabsTTS:
                     for i in range(0, len(chunk), frame_size_bytes):
                         frame = self._create_frame_from_chunk(
                             chunk[i: i + frame_size_bytes])
-                        await result_queue.put(frame)
+                        await result_queue.put(agents.Processor.Event(type=agents.ProcessorEventType.SUCCESS, data=frame))
 
         except websockets.exceptions.ConnectionClosed:
             print("Connection closed")
@@ -90,19 +106,3 @@ class ElevenLabsTTS:
         audio_data = np.ctypeslib.as_array(frame.data)
         np.copyto(audio_data, np.frombuffer(chunk, dtype=np.int16))
         return frame
-
-    async def _get_voice_id_if_needed(self):
-        if self._voice_id == "":
-            voices_url = "https://api.elevenlabs.io/v1/voices"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(voices_url) as resp:
-                    json_resp = await resp.json()
-                    voice = json_resp.get('voices', [])[0]
-                    self._voice_id = voice['voice_id']
-
-
-class ElevenLabsTTSPlugin(agents.TTSPlugin):
-    def __init__(self):
-        self._tts = ElevenLabsTTS()
-
-        super().__init__(process=self._tts.push_text_iterator)

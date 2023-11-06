@@ -18,6 +18,9 @@ async def tts_agent(ctx: agents.JobContext):
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
     await ctx.room.local_participant.publish_track(track, options)
 
+    text_queue = asyncio.Queue()
+    text_queue_iterator = agents.utils.AsyncQueueIterator(text_queue)
+
     @ctx.room.on("data_received")
     def on_data_received(data: bytes, participant: rtc.RemoteParticipant, kind):
         payload = json.loads(data.decode('utf-8'))
@@ -25,14 +28,9 @@ async def tts_agent(ctx: agents.JobContext):
             return
 
         text = payload["text"]
-        iterator = agents.utils.AsyncIteratorList([text])
-        tts.push(iterator)
-        print(f"Data Received: {text}")
+        text_queue.put_nowait(text)
 
-    # async for response_frames in tts.stream():
-    #     print("RFrame")
-    #     for frame in response_frames:
-    #         print("Frame")
-    #         resampled = frame.remix_and_resample(
-    #             SAMPLE_RATE, NUM_CHANNELS)
-    #         await source.capture_frame(resampled)
+    async for frame_iter in tts.start(text_queue_iterator).unwrap():
+        async for frame in frame_iter:
+            resampled = frame.remix_and_resample(SAMPLE_RATE, NUM_CHANNELS)
+            await source.capture_frame(resampled)
