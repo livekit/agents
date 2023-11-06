@@ -1,8 +1,8 @@
 import asyncio
 from typing import AsyncIterable
 from livekit import rtc
-from livekit.agents import (VoiceActivityDetectionProcessor, VoiceActivityDetectionProcessorEvent,
-                            VoiceActivityDetectionProcessorEventType, Processor, ProcessorEventType)
+from livekit.agents import (VADProcessor, VADProcessorEvent,
+                            VADProcessorEventType, Processor, ProcessorEventType)
 import torch
 import numpy as np
 
@@ -28,7 +28,7 @@ class VAD:
         self._frame_queue = []
         self._talking_state = False
 
-    def process(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[VoiceActivityDetectionProcessorEvent]:
+    def process(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[VADProcessorEvent]:
         async def iterator():
             async for frame in frame_iterator:
                 event = await self.push_frame(frame)
@@ -60,16 +60,16 @@ class VAD:
                     result.extend(self._left_padding_frames)
                     result.extend(self._voice_frames)
                     self._reset_frames()
-                    event = VoiceActivityDetectionProcessorEvent(type=VoiceActivityDetectionProcessorEventType.FINISHED,
-                                                                 frames=result)
+                    event = VADProcessorEvent(type=VADProcessorEventType.FINISHED,
+                                              frames=result)
                     return Processor.Event(type=ProcessorEventType.SUCCESS,
                                            data=event)
         else:
             if talking_detected:
                 self._talking_state = True
                 self._voice_frames.extend(frame_queue_copy)
-                event = VoiceActivityDetectionProcessorEvent(type=VoiceActivityDetectionProcessorEventType.STARTED,
-                                                             frames=self._voice_frames)
+                event = VADProcessorEvent(type=VADProcessorEventType.STARTED,
+                                          frames=self._voice_frames)
                 return Processor.Event(type=ProcessorEventType.SUCCESS,
                                        data=event)
             else:
@@ -121,7 +121,7 @@ class VAD:
         return speech_prob > 0.5
 
 
-class VADProcessor(VoiceActivityDetectionProcessor):
+class VADProcessor(VADProcessor):
     def __init__(self, left_padding_ms=250, silence_threshold_ms=250):
         self.vad = VAD(left_padding_ms=left_padding_ms,
                        silence_threshold_ms=silence_threshold_ms)

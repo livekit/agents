@@ -16,7 +16,7 @@ async def stt_agent(ctx: agents.JobContext):
 
         vad_results = vad_processor\
             .start(audio_stream)\
-            .filter(lambda data: data.type == agents.VoiceActivityDetectionProcessorEventType.FINISHED)\
+            .filter(lambda data: data.type == agents.VADProcessorEventType.FINISHED)\
             .map(lambda data: data.frames)\
             .unwrap()
         stt_results = stt_processor.start(vad_results)
