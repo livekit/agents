@@ -14,16 +14,27 @@
 
 import logging
 import uuid
-from dataclasses import dataclass
+import os
 import asyncio
-from typing import AsyncGenerator, Coroutine, Dict, Optional, Callable, Awaitable
-from livekit import api, rtc
+import signal
+from typing import (
+    Any,
+    AsyncGenerator,
+    Coroutine,
+    Dict,
+    Optional,
+    Callable,
+    Awaitable,
+    Set,
+)
 from .processor.processor import Processor
 from ._proto import livekit_agent_pb2 as proto_agent
 from ._proto import livekit_models_pb2 as proto_models
+from dataclasses import dataclass
 from urllib.parse import urlparse
+
 import websockets
-import os
+from livekit import api, rtc
 
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_INTERVAL = 10
@@ -45,9 +56,11 @@ class Worker:
         self,
         available_cb: Callable[["JobRequest"], Coroutine],
         worker_type: proto_agent.JobType.ValueType,
-        ws_url: str = os.environ.get("LIVEKIT_WS_URL", "http://localhost:7880"),
+        *,
+        event_loop: Optional[asyncio.AbstractEventLoop] = None,
+        ws_url: str = os.environ.get("LIVEKIT_URL", "http://localhost:7880"),
         api_key: str = os.environ.get("LIVEKIT_API_KEY", ""),
-        api_secret: str = os.environ.get("LIVEKIT_API_SECRET", "")
+        api_secret: str = os.environ.get("LIVEKIT_API_SECRET", ""),
     ) -> None:
         parse_res = urlparse(ws_url)
         scheme = parse_res.scheme
@@ -57,6 +70,7 @@ class Worker:
         url = f"{scheme}://{parse_res.netloc}/{parse_res.path}"
         url = url.rstrip("/")
 
+        self._loop = event_loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
         self._available_cb = available_cb
         self._agent_url = url + "/agent"
@@ -81,9 +95,10 @@ class Worker:
         req.register.type = self._worker_type
 
         headers = {"Authorization": f"Bearer {join_jwt}"}
-        self._ws = await websockets.connect(self._agent_url, extra_headers=headers)
+        self._ws = await websockets.connect(
+            self._agent_url, extra_headers=headers
+        )
         await self._send(req)
-
         res = await self._recv()
         return res.register
 
@@ -123,7 +138,7 @@ class Worker:
     async def _recv(self) -> proto_agent.ServerMessage:
         message = await self._ws.recv()
         msg = proto_agent.ServerMessage()
-        msg.ParseFromString(bytes(message))
+        msg.ParseFromString(bytes(message))  # type: ignore
         return msg
 
     async def _send(self, msg: proto_agent.WorkerMessage) -> None:
@@ -157,7 +172,7 @@ class Worker:
             # server is asking the worker if we are available for a job
             availability = msg.availability
             job = JobRequest(self, availability.job)
-            asyncio.ensure_future(self._handle_new_job(job))
+            asyncio.ensure_future(self._handle_new_job(job), loop=self._loop)
         elif which == "assignment":
             # server is assigning a job to the worker
             assignment = msg.assignment
@@ -174,7 +189,7 @@ class Worker:
         for i in range(MAX_RECONNECT_ATTEMPTS):
             try:
                 reg = await self._connect()
-                logging.info(f"worker successfully re-registered: {reg}")
+                logging.info(f"worker successfully re-registered: {reg.worker_id}")
                 return True
             except Exception as e:
                 logging.error(f"failed to reconnect, attempt {i}: {e}")
@@ -191,51 +206,49 @@ class Worker:
         return self._running
 
     async def _run(self) -> None:
-        reg = await self._connect()  # initial connection
-        logging.info(f"worker successfully registered: {reg}")
-
-        while True:
-            try:
-                while True:
-                    await self._message_received(await self._recv())
-            except websockets.exceptions.ConnectionClosed as e:
-                if self._running:
-                    logging.error(f"connection closed, trying to reconnect: {e}")
-                    if not await self._reconnect():
-                        break
-            except Exception as e:
-                logging.error(f"error while running worker: {e}")
-                break
-
-    async def run(self):
-        if self._running:
-            raise Exception("worker is already running")
-
-        self._running = True
-
         try:
-            await self._run()
+            while True:
+                try:
+                    while True:
+                        print("waiting for message")
+                        await self._message_received(await self._recv())
+                except websockets.exceptions.ConnectionClosed as e:
+                    if self._running:
+                        logging.error(f"connection closed, trying to reconnect: {e}")
+                        if not await self._reconnect():
+                            break
+                except Exception as e:
+                    logging.error(f"error while running worker: {e}")
+                    break
+
         except asyncio.CancelledError:
-            logging.info(f"cancel received for worker {self._wid}, closing...")
-            await asyncio.shield(self.close())
+            await self._ws.close_transport()
 
-        await self.close()
+    async def start(self):
+        async with self._lock:
+            if self._running:
+                raise Exception("worker is already running")
 
-    async def close(self) -> None:
+            await self._connect()  # initial connection
+            self._running = True
+            self._task = self._loop.create_task(self._run())
+
+    async def shutdown(self) -> None:
         async with self._lock:
             if not self._running:
                 return
 
-            logging.info(f"closing worker {self._wid}")
-
-            # close the websocket and all running jobs
-            await self._ws.close()
-            await asyncio.gather(*[job.close() for job in self._running_jobs])
-
             self._running = False
+            self._task.cancel()
+            await self._task
+            await asyncio.gather(*[job.shutdown() for job in self._running_jobs])
 
 
 class JobContext:
+    """
+    Context for job, it contains the worker, the room, and the participant.
+    """
+
     def __init__(
         self,
         id: str,
@@ -247,7 +260,6 @@ class JobContext:
         self._worker = worker
         self._room = room
         self._participant = participant
-        self._close_event = asyncio.Event()
         self._processors: list[Processor] = []
         self._closed = False
         self._lock = asyncio.Lock()
@@ -268,28 +280,25 @@ class JobContext:
     def add_processor(self, processor: Processor) -> None:
         self._processors.append(processor)
 
-    async def wait_close(self) -> None:
+    async def shutdown(self) -> None:
         """
-        Wait until close is requested
-        """
-        await self._close_event.wait()
-
-    async def close(self) -> None:
-        """
-        Close the job and cleanup resources (linked processors & tasks)
+        Shutdown the job and cleanup resources (linked processors & tasks)
         """
         async with self._lock:
+            logging.info(f"shutting down job {self.id}")
             if self._closed:
                 return
 
             self._closed = True
-            self._close_event.set()
+
+            await self.room.disconnect()
 
             # close all processors
             for p in self._processors:
                 await p.close()
 
             self._worker._running_jobs.remove(self)
+            logging.info(f"job {self.id} shutdown")
 
     async def update_status(
         self,
@@ -406,4 +415,71 @@ class JobRequest:
 
             # start the agent
             job_ctx = JobContext(self.id, self._worker, self._room, participant)
-            asyncio.ensure_future(agent(job_ctx))
+            self._worker._loop.create_task(agent(job_ctx))
+
+
+class GracefulShutdown(SystemExit):
+    code = 1
+
+
+async def _run_worker(worker: Worker):
+    try:
+        await worker.start()
+        logging.info(f"worker started, press Ctrl+C to stop (worker id: {worker.id})")
+
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        logging.info(f"shutting down worker {worker._wid}")
+        await worker.shutdown()
+        logging.info(f"worker {worker._wid} shutdown")
+
+
+def run_worker(worker: Worker, loop: Optional[asyncio.AbstractEventLoop] = None):
+    """
+    Run the specified worker and handle graceful shutdown
+    """
+
+    loop = loop or asyncio.get_event_loop()
+
+    def _signal_handler():
+        raise GracefulShutdown()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _signal_handler)
+        except NotImplementedError:
+            pass
+
+    main_task = loop.create_task(_run_worker(worker))
+    try:
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(main_task)
+    except (GracefulShutdown, KeyboardInterrupt):
+        pass
+    finally:
+        main_task.cancel()
+
+        # the main task will perform a graceful shutdown of jobs.
+        # so wait for it to finish before closing the other tasks
+        loop.run_until_complete(main_task)
+
+        tasks = asyncio.all_tasks(loop)
+        for task in tasks:
+            task.cancel()
+
+        loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
+def run_app(worker: Worker):
+    """
+    Run the specified worker and enable the CLI
+    """
+
+    run_worker(worker)
