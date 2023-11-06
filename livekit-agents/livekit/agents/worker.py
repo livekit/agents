@@ -38,7 +38,7 @@ import websockets
 from livekit import api, rtc
 
 MAX_RECONNECT_ATTEMPTS = 5
-RECONNECT_INTERVAL = 10
+RECONNECT_INTERVAL = 5
 ASSIGNMENT_TIMEOUT = 15
 
 
@@ -307,6 +307,9 @@ class JobContext:
 
 
 class JobRequest:
+    """
+    Represents a new job from the server, this worker can either accept or reject it.
+    """
     def __init__(
         self,
         worker: Worker,
@@ -406,7 +409,6 @@ class JobRequest:
                 await self._room.disconnect()
                 raise JobCancelledError(f"participant '{sid}' not found")
 
-            # start the agent
             job_ctx = JobContext(self.id, self._worker, self._room, participant)
             self._worker._loop.create_task(agent(job_ctx))
 
@@ -420,14 +422,13 @@ def run_worker(
     Run the specified worker and handle graceful shutdown
     """
 
+    loop = loop or asyncio.get_event_loop()
+
     class GracefulShutdown(SystemExit):
         code = 1
 
-    loop = loop or asyncio.get_event_loop()
-
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-
             def _signal_handler():
                 raise GracefulShutdown()
 
