@@ -23,7 +23,7 @@ from typing import (
     Optional,
     Callable,
 )
-from .processor.processor import Processor
+from .processor import Processor
 from ._proto import livekit_agent_pb2 as proto_agent
 from ._proto import livekit_models_pb2 as proto_models
 from dataclasses import dataclass
@@ -69,7 +69,8 @@ class Worker:
         self._api_secret = api_secret
         self._running = False
         self._running_jobs: list["JobContext"] = []
-        self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
+        self._pending_jobs: Dict[str,
+                                 asyncio.Future[proto_agent.JobAssignment]] = {}
 
     def _set_url(self, ws_url: str) -> None:
         parse_res = urlparse(ws_url)
@@ -117,7 +118,8 @@ class Worker:
         try:
             return await asyncio.wait_for(f, ASSIGNMENT_TIMEOUT)
         except asyncio.TimeoutError:
-            raise AssignmentTimeoutError(f"assignment timeout for job {job_id}")
+            raise AssignmentTimeoutError(
+                f"assignment timeout for job {job_id}")
 
     async def _send_job_status(
         self,
@@ -187,7 +189,8 @@ class Worker:
         for i in range(MAX_RECONNECT_ATTEMPTS):
             try:
                 reg = await self._connect()
-                logging.info(f"worker successfully re-registered: {reg.worker_id}")
+                logging.info(
+                    f"worker successfully re-registered: {reg.worker_id}")
                 return True
             except Exception as e:
                 logging.error(f"failed to reconnect, attempt {i}: {e}")
@@ -203,7 +206,8 @@ class Worker:
                         await self._message_received(await self._recv())
                 except websockets.exceptions.ConnectionClosed as e:
                     if self._running:
-                        logging.error(f"connection closed, trying to reconnect: {e}")
+                        logging.error(
+                            f"connection closed, trying to reconnect: {e}")
                         if not await self._reconnect():
                             break
                 except Exception as e:
@@ -372,7 +376,8 @@ class JobRequest:
             )
 
             jwt = (
-                api.AccessToken(self._worker._api_key, self._worker._api_secret)
+                api.AccessToken(self._worker._api_key,
+                                self._worker._api_secret)
                 .with_identity(identity)
                 .with_grants(grants)
                 .with_metadata(metadata)
@@ -400,7 +405,8 @@ class JobRequest:
             if self.participant is None and sid:
                 # cancel the job if the participant cannot be found
                 # this can happen if the participant has left the room before the agent gets the job
-                logging.warn(f"participant '{sid}' not found, cancelling job {self.id}")
+                logging.warn(
+                    f"participant '{sid}' not found, cancelling job {self.id}")
                 await self._worker._send_job_status(
                     self.id,
                     proto_agent.JobStatus.JS_FAILED,
@@ -409,7 +415,8 @@ class JobRequest:
                 await self._room.disconnect()
                 raise JobCancelledError(f"participant '{sid}' not found")
 
-            job_ctx = JobContext(self.id, self._worker, self._room, participant)
+            job_ctx = JobContext(self.id, self._worker,
+                                 self._room, participant)
             self._worker._loop.create_task(agent(job_ctx))
 
         logging.info(f"accepted job {self.id}")
