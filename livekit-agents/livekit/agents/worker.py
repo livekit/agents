@@ -289,15 +289,14 @@ class JobContext:
             if self._closed:
                 return
 
-            self._closed = True
-
-            await self.room.disconnect()
-
             # close all processors
             for p in self._processors:
                 await p.close()
 
+            await self.room.disconnect()
+
             self._worker._running_jobs.remove(self)
+            self._closed = True
             logging.info(f"job {self.id} shutdown")
 
     async def update_status(
