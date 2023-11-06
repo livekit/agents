@@ -16,7 +16,6 @@ from .version import __version__
 from . import utils
 from ._proto.livekit_agent_pb2 import JobType
 from .processor.processor import Processor
-from .processor.stt import STTProcessor
 from .worker import (
     Worker,
     JobRequest,
@@ -25,3 +24,13 @@ from .worker import (
     AssignmentTimeoutError,
     run_app,
 )
+from .processor.processor import Processor, ProcessorEventType, ProcessorResultIterator
+from .processor.common_processors import (VoiceActivityDetectionProcessor,
+                                          VoiceActivityDetectionProcessorEvent,
+                                          VoiceActivityDetectionProcessorEventType,
+                                          SpeechToTextProcessor,
+                                          SpeechToTextProcessorEvent,
+                                          SpeechToTextProcessorEventType,
+                                          TextToSpeechProcessor,
+                                          TextToTextProcessor
+                                          )

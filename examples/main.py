@@ -7,6 +7,8 @@ import livekit.api as lkapi
 from dataclasses import dataclass
 from agents.vad.vad import vad_agent
 from agents.stt.stt import stt_agent
+from agents.kitt.kitt import kitt_agent
+from agents.tts.tts import tts_agent
 import dotenv
 import uuid
 import aiohttp
@@ -28,6 +30,16 @@ async def stt_job_available_cb(worker, job):
     print("Accepting stt job")
     await job.accept(agent=stt_agent)
 
+
+async def kitt_job_available_cb(worker, job):
+    print("Accepting kitt job")
+    await job.accept(agent=kitt_agent)
+
+
+async def tts_job_available_cb(worker, job):
+    print("Accepting tts job")
+    await job.accept(agent=tts_agent)
+
 workers = {
     "vad": lkagents.ManualWorker(ws_url=ws_url,
                                  api_key=api_key,
@@ -37,6 +49,14 @@ workers = {
                                  api_key=api_key,
                                  api_secret=api_secret,
                                  job_available_cb=stt_job_available_cb),
+    "kitt": lkagents.ManualWorker(ws_url=ws_url,
+                                  api_key=api_key,
+                                  api_secret=api_secret,
+                                  job_available_cb=kitt_job_available_cb),
+    "tts": lkagents.ManualWorker(ws_url=ws_url,
+                                 api_key=api_key,
+                                 api_secret=api_secret,
+                                 job_available_cb=tts_job_available_cb),
 }
 
 

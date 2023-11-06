@@ -13,40 +13,73 @@
 # limitations under the License.
 
 import asyncio
-from typing import AsyncIterator, Awaitable, Callable, TypeVar, Generic
-from abc import abstractclassmethod, abstractmethod
-from ..utils.async_queue_iterator import AsyncQueueIterator
+from enum import Enum
+from dataclasses import dataclass
+from typing import Callable, TypeVar, Generic, AsyncIterable, Optional
+from abc import abstractmethod
 
 T = TypeVar('T')
 U = TypeVar('U')
+E = TypeVar('E')
+
+ProcessorEventType = Enum('ProcessorEventType', ['ERROR', 'SUCCESS'])
 
 
 class Processor(Generic[T, U]):
 
-    def __init__(self, process: Callable[[T], Awaitable[U]]) -> None:
+    @dataclass
+    class Event(Generic[E]):
+        type: ProcessorEventType
+        data: Optional[E] = None
+        error: Optional[Exception] = None
+
+    def __init__(self, process: Callable[[AsyncIterable[T]], AsyncIterable[Event[U]]]) -> None:
         self._process = process
-        self.input_queue = asyncio.Queue()
-        self.output_queue = asyncio.Queue()
-        self.output_iterator = AsyncQueueIterator(self.output_queue)
-        asyncio.create_task(self._process_loop())
 
-    @abstractmethod
-    async def close(self) -> None:
-        pass
+    def start(self, data: AsyncIterable[T]) -> "ProcessorResultIterator[U]":
+        return ProcessorResultIterator(iterator=self._process(data))
 
-    def stream(self) -> AsyncIterator[U]:
-        return self.output_iterator
 
-    def push(self, data: T) -> None:
-        self.input_queue.put_nowait(data)
+class ProcessorResultIterator(Generic[T]):
 
-    async def _close(self) -> None:
-        await self.output_iterator.aclose()
-        await self.close()
+    def __init__(self, iterator: AsyncIterable[Processor.Event[T]]) -> None:
+        self._iterator = iterator
 
-    async def _process_loop(self):
-        while True:
-            data = await self.input_queue.get()
-            result = await self._process(data)
-            if result is not None:
-                await self.output_queue.put(result)
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> Processor.Event[T]:
+        async for item in self._iterator:
+            return item
+
+    def filter(self, predicate: Callable[[T], bool]) -> "ProcessorResultIterator[T]":
+        async def iteratator() -> AsyncIterable[Processor.Event[T]]:
+            async for item in self._iterator:
+                if item.type == ProcessorEventType.ERROR:
+                    yield item
+                    continue
+
+                if predicate(item.data):
+                    yield item
+
+        return ProcessorResultIterator(iterator=iteratator())
+
+    def map(self, mapper: Callable[[T], U]) -> "ProcessorResultIterator[U]":
+        async def iteratator() -> AsyncIterable[Processor.Event[U]]:
+            async for item in self._iterator:
+                if item.type == ProcessorEventType.ERROR:
+                    yield item
+                    continue
+
+                yield Processor.Event(type=item.type, data=mapper(item.data))
+
+        return ProcessorResultIterator(iterator=iteratator())
+
+    def unwrap(self):
+        async def iteratator() -> AsyncIterable[T]:
+            async for item in self._iterator:
+                if item.type == ProcessorEventType.ERROR:
+                    continue
+                yield item.data
+
+        return iteratator()
