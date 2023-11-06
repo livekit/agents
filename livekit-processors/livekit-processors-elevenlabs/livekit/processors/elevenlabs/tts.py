@@ -26,7 +26,7 @@ class ElevenLabsTTS:
         await ws.send(json.dumps(bos_message))
         return ws
 
-    async def push_text_iterator(self, text_iterator: AsyncIterator[str]) -> AsyncIterator[agents.TextToSpeechProcessor.Event]:
+    async def push_text_iterator(self, text_iterator: AsyncIterator[str]) -> AsyncIterator[agents.TTSProcessor.Event]:
         print("push")
         ws = await self._connect_ws()
         print("ELE Connected")
@@ -101,7 +101,7 @@ class ElevenLabsTTS:
                     self._voice_id = voice['voice_id']
 
 
-class ElevenLabsTTSProcessor(agents.TextToSpeechProcessor):
+class ElevenLabsTTSProcessor(agents.TTSProcessor):
     def __init__(self):
         self._tts = ElevenLabsTTS()
 

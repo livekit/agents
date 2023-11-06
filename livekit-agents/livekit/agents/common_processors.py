@@ -7,33 +7,33 @@ from dataclasses import dataclass
 from enum import Enum
 
 
-TextToTextProcessor = Processor[str, str]
+TTTProcessor = Processor[str, str]
 
 
-VoiceActivityDetectionProcessorEventType = Enum(
-    'VoiceActivityDetectionProcessorEventType', ['STARTED', 'FINISHED'])
+VADProcessorEventType = Enum(
+    'VADProcessorEventType', ['STARTED', 'FINISHED'])
 
 
 @dataclass
-class VoiceActivityDetectionProcessorEvent:
-    type: VoiceActivityDetectionProcessorEventType
+class VADProcessorEvent:
+    type: VADProcessorEventType
     frames: [rtc.AudioFrame]
 
 
-VoiceActivityDetectionProcessor = Processor[rtc.AudioFrame,
-                                            VoiceActivityDetectionProcessorEvent]
+VADProcessor = Processor[rtc.AudioFrame,
+                         VADProcessorEvent]
 
-SpeechToTextProcessorEventType = Enum(
-    'VoiceActivityDetectionProcessorEventType', ['DELTA_RESULT'])
+STTProcessorEventType = Enum(
+    'STTProcessorEventType', ['DELTA_RESULT'])
 
 
 @dataclass
-class SpeechToTextProcessorEvent:
-    type: SpeechToTextProcessorEventType
+class STTProcessorEvent:
+    type: STTProcessorEventType
     text: str
 
 
-SpeechToTextProcessor = Processor[rtc.AudioFrame, SpeechToTextProcessorEvent]
+STTProcessor = Processor[rtc.AudioFrame, STTProcessorEvent]
 
 
-TextToSpeechProcessor = Processor[str, rtc.AudioFrame]
+TTSProcessor = Processor[str, rtc.AudioFrame]

@@ -25,12 +25,12 @@ from .worker import (
     run_app,
 )
 from .processor import Processor, ProcessorEventType, ProcessorResultIterator
-from .common_processors import (VoiceActivityDetectionProcessor,
-                                VoiceActivityDetectionProcessorEvent,
-                                VoiceActivityDetectionProcessorEventType,
-                                SpeechToTextProcessor,
-                                SpeechToTextProcessorEvent,
-                                SpeechToTextProcessorEventType,
-                                TextToSpeechProcessor,
-                                TextToTextProcessor
+from .common_processors import (VADProcessor,
+                                VADProcessorEvent,
+                                VADProcessorEventType,
+                                STTProcessor,
+                                STTProcessorEvent,
+                                STTProcessorEventType,
+                                TTSProcessor,
+                                TTTProcessor
                                 )
