@@ -4,7 +4,6 @@ from livekit import rtc
 from livekit.plugins.vad import VAD, VADPlugin
 from livekit.plugins.elevenlabs import ElevenLabsTTSPlugin
 from livekit import agents
-from typing import AsyncIterator
 
 SAMPLE_RATE = 48000
 NUM_CHANNELS = 1
@@ -25,14 +24,13 @@ async def tts_agent(ctx: agents.JobContext):
             return
 
         text = payload["text"]
-        iterator = agents.utils.AsyncIteratorList([text])
-        tts.push(iterator)
-        print(f"Data Received: {text}")
+        iterator = tts.process(agents.utils.AsyncIteratorList([text]))
 
-    # async for response_frames in tts.stream():
-    #     print("RFrame")
-    #     for frame in response_frames:
-    #         print("Frame")
-    #         resampled = frame.remix_and_resample(
-    #             SAMPLE_RATE, NUM_CHANNELS)
-    #         await source.capture_frame(resampled)
+        async def speak():
+            async for frame_iter in iterator:
+                async for frame in frame_iter:
+                    resampled = frame.remix_and_resample(
+                        SAMPLE_RATE, NUM_CHANNELS)
+                    await source.capture_frame(resampled)
+
+        asyncio.create_task(speak())
