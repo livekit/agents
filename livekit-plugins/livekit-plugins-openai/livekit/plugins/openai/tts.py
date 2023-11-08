@@ -13,10 +13,6 @@ from livekit import agents
 import numpy as np
 
 
-WHISPER_SAMPLE_RATE = 16000
-WHISPER_CHANNELS = 1
-
-
 class TTSPlugin(agents.TTSPlugin):
 
     def __init__(self):
@@ -51,7 +47,7 @@ class TTSPlugin(agents.TTSPlugin):
 
         for b in array:
             audio_frame = rtc.AudioFrame(
-                sample_rate=WHISPER_SAMPLE_RATE,
+                sample_rate=sample_rate,
                 num_channels=1,
                 samples_per_channel=len(b) // 2,
                 data=b,
