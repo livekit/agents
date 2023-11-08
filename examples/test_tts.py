@@ -19,7 +19,7 @@ async def main():
 
     async for r in resp:
         async for frame in r:
-            print("NEIL", frame)
+            print("Got frame", frame)
 
     print("Done")
 
