@@ -4,7 +4,7 @@ from typing import AsyncIterator
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
 from livekit import rtc
-from livekit import agents
+from livekit.plugins import core
 
 
 class SpeechRecognition:
@@ -32,15 +32,15 @@ class SpeechRecognition:
                                                                       streaming_config=self._streaming_config)
         self._result_queue = asyncio.Queue[cloud_speech.StreamingRecognizeResponse](
         )
-        self._result_iterator = agents.utils.AsyncQueueIterator(
+        self._result_iterator = core.AsyncQueueIterator(
             self._result_queue)
 
-    def push_frames(self, frames: AsyncIterator[rtc.AudioFrame]) -> AsyncIterator[agents.STTPluginEvent]:
+    def push_frames(self, frames: AsyncIterator[rtc.AudioFrame]) -> AsyncIterator[core.STTPluginEvent]:
         client = SpeechAsyncClient.from_service_account_info(self._google_json)
 
-        resp_queue = asyncio.Queue[agents.common_processors.STTPluginEvent](
+        resp_queue = asyncio.Queue[core.STTPluginEvent](
         )
-        resp_iterator = agents.utils.AsyncQueueIterator(resp_queue)
+        resp_iterator = core.AsyncQueueIterator(resp_queue)
 
         async def req_iterator():
             yield self._config_request
@@ -59,12 +59,12 @@ class SpeechRecognition:
 
     async def iterate_results(self, generator):
         async for res in generator:
-            event = agents.STTPlugin.Event(
+            event = core.STTPlugin.Event(
                 text=res.results[0].alternatives[0].transcript)
             await self._result_queue.put(event)
 
 
-class SpeechRecognitionPlugin(agents.STTPlugin):
+class SpeechRecognitionPlugin(core.STTPlugin):
     def __init__(self, *, google_credentials_filepath: str):
         self._speech_recognition = SpeechRecognition(
             google_credentials_filepath=google_credentials_filepath)
