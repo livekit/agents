@@ -42,4 +42,3 @@ if __name__ == "__main__":
 
     worker = agents.Worker(available_cb=available_cb,
                            worker_type=agents.JobType.JT_ROOM)
-    asyncio.run(worker.start())
