@@ -36,4 +36,4 @@ class STTPluginEvent:
 STTPlugin = Plugin[rtc.AudioFrame, STTPluginEvent]
 
 
-TTSPlugin = Plugin[AsyncIterable[str], rtc.AudioFrame]
+TTSPlugin = Plugin[AsyncIterable[str], AsyncIterable[rtc.AudioFrame]]

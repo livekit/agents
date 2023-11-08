@@ -35,7 +35,7 @@ class AsyncQueueIterator(Generic[T]):
 
     async def __anext__(self):
         item = await self.queue.get()
-        if item is AsyncQueueIterator.EOS:
+        if type(item) is AsyncQueueIterator.EOS:
             raise StopAsyncIteration
         return item
 

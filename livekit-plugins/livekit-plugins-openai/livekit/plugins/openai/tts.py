@@ -23,9 +23,8 @@ class TTSPlugin(agents.TTSPlugin):
         self._model = None
         super().__init__(process=self.process)
 
-    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterator[agents.Plugin.Event[agents.STTPluginEvent]]:
+    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterator[agents.Plugin.Event[AsyncIterator[rtc.AudioFrame]]]:
         async def iterator():
-            print("NEIL ti", text_iterator)
             async for texts in text_iterator:
                 complete_sentence = ""
                 async for text in texts:
@@ -35,7 +34,8 @@ class TTSPlugin(agents.TTSPlugin):
                 result_iterator = agents.utils.AsyncQueueIterator(result_queue)
                 event_loop = asyncio.get_event_loop()
                 event_loop.run_in_executor(None, self._sync_process, complete_sentence, result_iterator, event_loop)
-                yield result_iterator
+                event = agents.Plugin.Event(type=agents.PluginEventType.SUCCESS, data=result_iterator)
+                yield event 
 
         return iterator()
 
@@ -46,17 +46,17 @@ class TTSPlugin(agents.TTSPlugin):
         tensor, sample_rate = torchaudio.load(byte_stream)
         array = tensor.numpy()
 
-        async def add_to_iterator(item, iterator: agents.utils.AsyncQueueIterator[bytes]):
-            audio_frame = rtc.AudioFrame(
-                sample_rate=WHISPER_SAMPLE_RATE,
-                channel_count=WHISPER_CHANNELS,
-                data=item,
-            )
-            await iterator.push(audio_frame)
+        async def add_to_iterator(frame: rtc.AudioFrame, iterator: agents.utils.AsyncQueueIterator[bytes]):
+            await iterator.push(frame)
 
         for b in array:
-            print("NEIL ti 2", b)
-            asyncio.run_coroutine_threadsafe(add_to_iterator(b, result_iterator), loop=loop)
+            audio_frame = rtc.AudioFrame(
+                sample_rate=WHISPER_SAMPLE_RATE,
+                num_channels=1,
+                samples_per_channel=len(b) // 2,
+                data=b,
+            )
+            asyncio.run_coroutine_threadsafe(add_to_iterator(audio_frame, result_iterator), loop=loop)
 
         asyncio.run_coroutine_threadsafe(result_iterator.aclose(), loop=loop)
 

@@ -13,12 +13,13 @@ async def main():
 
     tts = TTSPlugin()
 
-    resp = tts.start(texts_iterator)
+    resp = tts.start(texts_iterator).unwrap()
 
     print("Starting...", resp)
 
     async for r in resp:
-        pass
+        async for frame in r:
+            print("NEIL", frame)
 
     print("Done")
 
