@@ -14,7 +14,6 @@
 
 from .version import __version__
 from . import utils
-from ._proto.livekit_agent_pb2 import JobType
 from .worker import (
     Worker,
     JobRequest,
@@ -33,3 +32,6 @@ from .common_plugins import (VADPlugin,
                              TTSPlugin,
                              TTTPlugin
                              )
+
+
+from livekit.protocol.agent import JobType
