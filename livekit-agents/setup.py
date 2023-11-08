@@ -50,7 +50,7 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.agents"]),
     python_requires=">=3.7.0",
-    install_requires=[],
+    install_requires=["livekit-protocol>=0.1.0"],
     package_data={},
     project_urls={
         "Documentation": "https://docs.livekit.io",
