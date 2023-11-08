@@ -13,22 +13,29 @@
 # limitations under the License.
 
 import asyncio
+from typing import AsyncIterable, TypeVar, Generic
 
 
-class AsyncQueueIterator:
+T = TypeVar('T')
+
+
+class AsyncQueueIterator(Generic[T]):
 
     class EOS:
         pass
 
-    def __init__(self, queue: asyncio.Queue):
+    def __init__(self, queue: asyncio.Queue[T]):
         self.queue = queue
 
     def __aiter__(self):
         return self
 
+    async def push(self, item):
+        await self.queue.put(item)
+
     async def __anext__(self):
         item = await self.queue.get()
-        if item is AsyncQueueIterator.EOS:
+        if type(item) is AsyncQueueIterator.EOS:
             raise StopAsyncIteration
         return item
 
