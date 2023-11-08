@@ -32,12 +32,13 @@ isort==5.12.0
 jedi==0.19.1
 Jinja2==3.1.2
 livekit==0.5.0
--e git+ssh://git@github.com/livekit/python-agents.git@96a44aad1d30fa2b48c88e2be9b379f9bba145ef#egg=livekit_agents&subdirectory=livekit-agents
+-e git+ssh://git@github.com/livekit/python-agents.git@cc48e0950a66fba52218c0c307da2d055037a4cf#egg=livekit_agents&subdirectory=livekit-agents
 livekit-api==0.1.1
--e git+ssh://git@github.com/livekit/python-agents.git@96a44aad1d30fa2b48c88e2be9b379f9bba145ef#egg=livekit_processors_elevenlabs&subdirectory=livekit-processors/livekit-processors-elevenlabs
--e git+ssh://git@github.com/livekit/python-agents.git@96a44aad1d30fa2b48c88e2be9b379f9bba145ef#egg=livekit_processors_google&subdirectory=livekit-processors/livekit-processors-google
--e git+ssh://git@github.com/livekit/python-agents.git@96a44aad1d30fa2b48c88e2be9b379f9bba145ef#egg=livekit_processors_openai&subdirectory=livekit-processors/livekit-processors-openai
--e git+ssh://git@github.com/livekit/python-agents.git@96a44aad1d30fa2b48c88e2be9b379f9bba145ef#egg=livekit_processors_vad&subdirectory=livekit-processors/livekit-processors-vad
+-e git+ssh://git@github.com/livekit/python-agents.git@cc48e0950a66fba52218c0c307da2d055037a4cf#egg=livekit_plugins_elevenlabs&subdirectory=livekit-plugins/livekit-plugins-elevenlabs
+-e git+ssh://git@github.com/livekit/python-agents.git@cc48e0950a66fba52218c0c307da2d055037a4cf#egg=livekit_plugins_openai&subdirectory=livekit-plugins/livekit-plugins-openai
+-e git+ssh://git@github.com/livekit/python-agents.git@cc48e0950a66fba52218c0c307da2d055037a4cf#egg=livekit_plugins_vad&subdirectory=livekit-plugins/livekit-plugins-vad
+-e git+ssh://git@github.com/livekit/python-agents.git@cc48e0950a66fba52218c0c307da2d055037a4cf#egg=livekit_processors_google&subdirectory=livekit-plugins/livekit-plugins-google
+-e git+ssh://git@github.com/livekit/python-agents.git@cc48e0950a66fba52218c0c307da2d055037a4cf#egg=livekit_processors_vad&subdirectory=livekit-plugins/livekit-plugins-vad
 llvmlite==0.41.1
 MarkupSafe==2.1.3
 matplotlib-inline==0.1.6
@@ -49,7 +50,7 @@ networkx==3.2.1
 numba==0.58.1
 numpy==1.26.1
 openai==0.28.1
-openai-whisper==20230918
+openai-whisper==20231106
 parso==0.8.3
 pexpect==4.8.0
 platformdirs==3.11.0
