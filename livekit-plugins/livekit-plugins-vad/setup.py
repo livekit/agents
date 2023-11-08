@@ -52,7 +52,7 @@ setuptools.setup(
         include=["livekit.plugins"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit", "livekit-agents", "torch >= 2.0.0", "torchaudio", "numpy >= 1.24.0"
+        "livekit", "livekit-plugins-core", "torch >= 2.0.0", "torchaudio", "numpy >= 1.24.0"
     ],
     package_data={},
     project_urls={

@@ -52,8 +52,8 @@ setuptools.setup(
         include=["livekit.processors"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit >= 0.5.0",
-        "livekit-agents",
+        "livekit",
+        "livekit-plugins-core",
         "numpy >= 1.24.0",
         "google-api-core >= 2.11.1",
         "google-auth >= 2.23.0",
