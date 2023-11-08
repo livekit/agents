@@ -31,7 +31,7 @@ class TTSPlugin(agents.TTSPlugin):
                 async for text in texts:
                     complete_sentence += text
                 # run in executor
-                result_queue = asyncio.Queue[bytes]()
+                result_queue = asyncio.Queue[rtc.AudioFrame]()
                 result_iterator = agents.utils.AsyncQueueIterator(result_queue)
                 event_loop = asyncio.get_event_loop()
                 event_loop.run_in_executor(None, self._sync_process, complete_sentence, result_iterator, event_loop)
@@ -47,7 +47,12 @@ class TTSPlugin(agents.TTSPlugin):
         array = tensor.numpy()
 
         async def add_to_iterator(item, iterator: agents.utils.AsyncQueueIterator[bytes]):
-            await iterator.push(item)
+            audio_frame = rtc.AudioFrame(
+                sample_rate=WHISPER_SAMPLE_RATE,
+                channel_count=WHISPER_CHANNELS,
+                data=item,
+            )
+            await iterator.push(audio_frame)
 
         for b in array:
             print("NEIL ti 2", b)
