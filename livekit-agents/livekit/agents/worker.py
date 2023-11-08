@@ -23,7 +23,7 @@ from typing import (
     Optional,
     Callable,
 )
-from .plugin import Plugin
+from livekit.plugins.core import Plugin
 from ._proto import livekit_agent_pb2 as proto_agent
 from ._proto import livekit_models_pb2 as proto_models
 from dataclasses import dataclass

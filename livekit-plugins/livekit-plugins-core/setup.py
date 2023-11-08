@@ -48,7 +48,7 @@ setuptools.setup(
     ],
     keywords=["webrtc", "realtime", "audio", "video", "livekit"],
     license="Apache-2.0",
-    packages=setuptools.find_namespace_packages(include=["livekit.plugins"]),
+    packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.7.0",
     install_requires=[],
     package_data={},

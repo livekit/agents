@@ -1,7 +1,7 @@
 import asyncio
 from typing import AsyncIterable, TypeVar, Callable
-from livekit.agents.utils.async_queue_iterator import AsyncQueueIterator
 from livekit import rtc
+from .async_queue_iterator import AsyncQueueIterator
 from .plugin import Plugin, PluginEventType
 from dataclasses import dataclass
 from enum import Enum
