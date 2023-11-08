@@ -1,8 +1,7 @@
-import time
 import asyncio
 import os
 from livekit import rtc
-from livekit import agents
+from livekit.plugins import core
 import numpy as np
 from typing import AsyncIterator, Optional, AsyncIterable
 import websockets.client as wsclient
@@ -39,15 +38,15 @@ class _WSWrapper:
                     self._voice_id = voice['voice_id']
 
 
-class ElevenLabsTTSPlugin(agents.TTSPlugin):
+class ElevenLabsTTSPlugin(core.TTSPlugin):
     def __init__(self):
 
         super().__init__(process=self.process)
 
-    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterable[agents.Processor.Event[AsyncIterator[rtc.AudioFrame]]]:
+    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterable[core.Plugin.Event[AsyncIterator[rtc.AudioFrame]]]:
         ws = _WSWrapper()
-        result_queue = asyncio.Queue[agents.Processor.Event[rtc.AudioFrame]]()
-        result_iterator = agents.utils.AsyncQueueIterator(result_queue)
+        result_queue = asyncio.Queue[core.Plugin.Event[rtc.AudioFrame]]()
+        result_iterator = core.utils.AsyncQueueIterator(result_queue)
         asyncio.create_task(ws.connect())
         asyncio.create_task(self._push_data_loop(ws, text_iterator))
         asyncio.create_task(self._receive_audio_loop(ws, result_queue))
@@ -94,7 +93,7 @@ class ElevenLabsTTSPlugin(agents.TTSPlugin):
                     for i in range(0, len(chunk), frame_size_bytes):
                         frame = self._create_frame_from_chunk(
                             chunk[i: i + frame_size_bytes])
-                        await result_queue.put(agents.Processor.Event(type=agents.ProcessorEventType.SUCCESS, data=frame))
+                        await result_queue.put(core.Plugin.Event(type=core.PluginEventType.SUCCESS, data=frame))
 
         except websockets.exceptions.ConnectionClosed:
             print("Connection closed")

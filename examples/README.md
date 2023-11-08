@@ -14,11 +14,8 @@ Fill the `.env` file with the keys and secrets you need for the examples you wis
 
 ## Install Dependencies
 
-> **_OPTIONAL:_**  It's common practice to setup a virtual environment when running python projects so its dependencies don't conflict with other projects or global dependencies you've installed. To do this run `python -m venv venv` then `source venv/bin/activate`
+> **_OPTIONAL:_** It's common practice to setup a virtual environment when running python projects so its dependencies don't conflict with other projects or global dependencies you've installed. To do this run `python -m venv venv` then `source venv/bin/activate`
 
-<<<<<<< Updated upstream
-`pip install -r requirements.txt`
-=======
 `pip install -r requirements.txt`
 
 ## Run Agents Service
@@ -26,4 +23,3 @@ Fill the `.env` file with the keys and secrets you need for the examples you wis
 LiveKit orchestrates adding agents in response to events that happen (room creation for example).
 
 When a Worker is created, it registers itself with LiveKit and LiveKit will begin to schedule rooms
->>>>>>> Stashed changes

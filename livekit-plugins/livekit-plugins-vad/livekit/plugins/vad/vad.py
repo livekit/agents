@@ -1,8 +1,8 @@
 import asyncio
 from typing import AsyncIterable
 from livekit import rtc
-from livekit.agents import (VADPlugin, VADPluginEvent,
-                            VADPluginEventType, Plugin, PluginEventType)
+from livekit.plugins.core import (VADPlugin, VADPluginEvent,
+                                  VADPluginEventType, Plugin, PluginEventType)
 import torch
 import numpy as np
 
