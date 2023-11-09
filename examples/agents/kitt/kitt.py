@@ -1,7 +1,8 @@
 import os
 import asyncio
 import logging
-from livekit import agents, plugins, protocol, rtc
+from livekit import agents, protocol, rtc
+from livekit.plugins import core
 from livekit.plugins.vad import VADPlugin, VAD
 from livekit.plugins.google import SpeechRecognitionPlugin
 from livekit.plugins.openai import WhisperOpenSourceTranscriberPlugin, ChatGPTPlugin, ChatGPTMessage, ChatGPTMessageRole
@@ -22,7 +23,7 @@ async def kitt_agent(ctx: agents.JobContext):
 
         vad_results = vad_plugin\
             .start(audio_stream)\
-            .filter(lambda data: data.type == plugins.VADPluginEventType.FINISHED)\
+            .filter(lambda data: data.type == core.VADPluginResultType.FINISHED)\
             .map(lambda data: data.frames)\
             .unwrap()
         stt_results = stt_plugin.start(vad_results)
