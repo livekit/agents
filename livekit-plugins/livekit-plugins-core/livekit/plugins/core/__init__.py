@@ -1,10 +1,10 @@
-from .plugin import Plugin, PluginEventType, PluginResultIterator
+from .plugin import Plugin, PluginResultIterator
 from .common_plugins import (VADPlugin,
-                             VADPluginEvent,
-                             VADPluginEventType,
+                             VADPluginResult,
+                             VADPluginResultType,
                              STTPlugin,
-                             STTPluginEvent,
-                             STTPluginEventType,
+                             STTPluginResult,
+                             STTPluginResultType,
                              TTSPlugin,
                              TTTPlugin
                              )

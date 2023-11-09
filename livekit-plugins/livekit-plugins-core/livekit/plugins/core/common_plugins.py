@@ -11,29 +11,29 @@ TTTPlugin = Plugin[str, str]
 
 
 VADPluginResultType = Enum(
-    'VADPluginEventType', ['STARTED', 'FINISHED'])
+    'VADPluginResultType', ['STARTED', 'FINISHED'])
 
 
 @dataclass
-class VADPluginEvent:
+class VADPluginResult:
     type: VADPluginResultType
     frames: [rtc.AudioFrame]
 
 
 VADPlugin = Plugin[rtc.AudioFrame,
-                   VADPluginEvent]
+                   VADPluginResult]
 
-STTPluginEventType = Enum(
-    'STTPluginEventType', ['DELTA_RESULT'])
+STTPluginResultType = Enum(
+    'STTPluginResultType', ['DELTA_RESULT'])
 
 
 @dataclass
-class STTPluginEvent:
-    type: STTPluginEventType
+class STTPluginResult:
+    type: STTPluginResultType
     text: str
 
 
-STTPlugin = Plugin[rtc.AudioFrame, STTPluginEvent]
+STTPlugin = Plugin[rtc.AudioFrame, STTPluginResult]
 
 
 TTSPlugin = Plugin[AsyncIterable[str], AsyncIterable[rtc.AudioFrame]]

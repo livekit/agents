@@ -35,10 +35,10 @@ class SpeechRecognition:
         self._result_iterator = core.AsyncQueueIterator(
             self._result_queue)
 
-    def push_frames(self, frames: AsyncIterator[rtc.AudioFrame]) -> AsyncIterator[core.STTPluginEvent]:
+    def push_frames(self, frames: AsyncIterator[rtc.AudioFrame]) -> AsyncIterator[core.STTPluginResult]:
         client = SpeechAsyncClient.from_service_account_info(self._google_json)
 
-        resp_queue = asyncio.Queue[core.STTPluginEvent](
+        resp_queue = asyncio.Queue[core.STTPluginResult](
         )
         resp_iterator = core.AsyncQueueIterator(resp_queue)
 

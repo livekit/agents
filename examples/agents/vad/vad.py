@@ -22,7 +22,7 @@ async def vad_agent(ctx: agents.JobContext):
             left_padding_ms=200, silence_threshold_ms=250)
 
         vad_results = vad_plugin.start(audio_stream)\
-            .filter(lambda data: data.type == agents.VADPluginEventType.FINISHED)\
+            .filter(lambda data: data.type == agents.STTPluginResultType.FINISHED)\
             .map(lambda data: data.frames)\
             .unwrap()
 
