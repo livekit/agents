@@ -19,7 +19,7 @@ class WhisperOpenSourceTranscriberPlugin(core.STTPlugin):
         self._model = None
         super().__init__(process=self.process)
 
-    def process(self, frames_iterator: AsyncIterator[[rtc.AudioFrame]]) -> AsyncIterator[core.Plugin.Event[core.STTPluginEvent]]:
+    def process(self, frames_iterator: AsyncIterator[[rtc.AudioFrame]]) -> AsyncIterator[core.STTPluginResult]:
         async def iterator():
             async for frames in frames_iterator:
                 event = await self._push_frames(frames)
@@ -28,7 +28,7 @@ class WhisperOpenSourceTranscriberPlugin(core.STTPlugin):
 
         return iterator()
 
-    async def _push_frames(self, frames: [rtc.AudioFrame]) -> core.Plugin.Event[core.STTPluginEvent]:
+    async def _push_frames(self, frames: [rtc.AudioFrame]) -> core.STTPluginResult:
         resampled = [
             frame.remix_and_resample(WHISPER_SAMPLE_RATE, WHISPER_CHANNELS) for frame in frames]
 
@@ -44,9 +44,7 @@ class WhisperOpenSourceTranscriberPlugin(core.STTPlugin):
             write_index += len(resampled[i].data)
 
         result = await asyncio.get_event_loop().run_in_executor(None, self._transcribe, np_frames.astype(dtype=np.float32) / 32768.0)
-        result_event = core.Plugin.Event(type=core.PluginEventType.SUCCESS, data=core.STTPluginEvent(
-            type=core.STTPluginEventType.DELTA_RESULT, text=result))
-        return result_event
+        yield result
 
     def _transcribe(self, buffer: np.array) -> str:
         # TODO: include this with the package

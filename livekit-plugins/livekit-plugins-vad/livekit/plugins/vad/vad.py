@@ -1,8 +1,8 @@
 import asyncio
 from typing import AsyncIterable
 from livekit import rtc
-from livekit.plugins.core import (VADPlugin, VADPluginEvent,
-                                  VADPluginEventType, Plugin, PluginEventType)
+from livekit.plugins.core import (VADPlugin as VADPluginType, VADPluginResult,
+                                  VADPluginResultType)
 import torch
 import numpy as np
 
@@ -28,7 +28,7 @@ class VAD:
         self._frame_queue = []
         self._talking_state = False
 
-    def process(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[VADPluginEvent]:
+    def process(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[VADPluginResult]:
         async def iterator():
             async for frame in frame_iterator:
                 event = await self.push_frame(frame)
@@ -42,7 +42,7 @@ class VAD:
 
         # run inference every 30ms
         if len(self._frame_queue) * 10 < 30:
-            return None
+            return
 
         frame_queue_copy = self._frame_queue.copy()
         self._frame_queue = []
@@ -60,22 +60,18 @@ class VAD:
                     result.extend(self._left_padding_frames)
                     result.extend(self._voice_frames)
                     self._reset_frames()
-                    event = VADPluginEvent(type=VADPluginEventType.FINISHED,
-                                              frames=result)
-                    return Plugin.Event(type=PluginEventType.SUCCESS,
-                                           data=event)
+                    event = VADPluginResult(type=VADPluginResultType.FINISHED,
+                                            frames=result)
+                    yield event
         else:
             if talking_detected:
                 self._talking_state = True
                 self._voice_frames.extend(frame_queue_copy)
-                event = VADPluginEvent(type=VADPluginEventType.STARTED,
-                                          frames=self._voice_frames)
-                return Plugin.Event(type=PluginEventType.SUCCESS,
-                                       data=event)
+                event = VADPluginResult(type=VADPluginResultType.STARTED,
+                                        frames=self._voice_frames)
+                yield event
             else:
                 self._add_left_padding(frame_queue_copy)
-
-        return None
 
     def _add_left_padding(self, frames: [rtc.AudioFrame]):
         current_padding_ms = 0
@@ -121,7 +117,7 @@ class VAD:
         return speech_prob > 0.5
 
 
-class VADPlugin(VADPlugin):
+class VADPlugin(VADPluginType):
     def __init__(self, left_padding_ms=250, silence_threshold_ms=250):
         self.vad = VAD(left_padding_ms=left_padding_ms,
                        silence_threshold_ms=silence_threshold_ms)
