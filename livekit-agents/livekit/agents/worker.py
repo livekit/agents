@@ -35,7 +35,7 @@ from urllib.parse import urlparse
 from contextlib import aclosing
 
 import websockets
-from livekit import api, rtc
+from livekit import api, rtc, protocol
 
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_INTERVAL = 5
@@ -56,7 +56,7 @@ class Worker:
     def __init__(
         self,
         available_cb: Callable[["JobRequest"], Coroutine],
-        worker_type: proto_agent.JobType.ValueType,
+        worker_type: protocol.agent.JobType.ValueType,
         *,
         event_loop: Optional[asyncio.AbstractEventLoop] = None,
         ws_url: str = os.environ.get("LIVEKIT_URL", "http://localhost:7880"),
@@ -76,6 +76,7 @@ class Worker:
         self._running_jobs: list["JobContext"] = []
         self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
 
+
     def _set_url(self, ws_url: str) -> None:
         parse_res = urlparse(ws_url)
         scheme = parse_res.scheme
@@ -88,14 +89,14 @@ class Worker:
         self._agent_url = url + "/agent"
         self._rtc_url = url
 
-    async def _connect(self) -> proto_agent.RegisterWorkerResponse:
+    async def _connect(self) -> protocol.agent.RegisterWorkerResponse:
         join_jwt = (
             api.AccessToken(self._api_key, self._api_secret)
             .with_grants(api.VideoGrants(agent=True))
             .to_jwt()
         )
 
-        req = proto_agent.WorkerMessage()
+        req = protocol.agent.WorkerMessage()
         req.register.worker_id = self._wid
         req.register.type = self._worker_type
 
@@ -107,11 +108,11 @@ class Worker:
 
     async def _send_availability(
         self, job_id: str, available: bool
-    ) -> proto_agent.JobAssignment:
+    ) -> protocol.agent.JobAssignment:
         """
         Send availability to the server, and wait for assignment
         """
-        req = proto_agent.WorkerMessage()
+        req = protocol.agent.WorkerMessage()
         req.availability.available = available
         req.availability.job_id = job_id
 
@@ -127,11 +128,11 @@ class Worker:
     async def _send_job_status(
         self,
         job_id: str,
-        status: proto_agent.JobStatus.ValueType,
+        status: protocol.agent.JobStatus.ValueType,
         error: str,
         user_data: str = "",
     ) -> None:
-        req = proto_agent.WorkerMessage()
+        req = protocol.agent.WorkerMessage()
         req.job_update.job_id = job_id
         req.job_update.status = status
         req.job_update.error = error
@@ -148,11 +149,11 @@ class Worker:
 
     async def _recv(self) -> proto_agent.ServerMessage:
         message = await self._ws.recv()
-        msg = proto_agent.ServerMessage()
+        msg = protocol.agent.ServerMessage()
         msg.ParseFromString(bytes(message))  # type: ignore
         return msg
 
-    async def _send(self, msg: proto_agent.WorkerMessage) -> None:
+    async def _send(self, msg: protocol.agent.WorkerMessage) -> None:
         try:
             await self._ws.send(msg.SerializeToString())
         except websockets.exceptions.ConnectionClosed:
@@ -177,7 +178,8 @@ class Worker:
             )
             await job.reject()
 
-    async def _message_received(self, msg: proto_agent.ServerMessage) -> None:
+    async def _message_received(self, msg: protocol.agent.ServerMessage) -> None:
+        logging.debug(f"received message: {msg}")
         which = msg.WhichOneof("message")
         if which == "availability":
             # server is asking the worker if we are available for a job
@@ -311,7 +313,7 @@ class JobContext:
 
     async def update_status(
         self,
-        status: proto_agent.JobStatus.ValueType,
+        status: protocol.agent.JobStatus.ValueType,
         error: str = "",
         user_data: str = "",
     ) -> None:
@@ -341,11 +343,11 @@ class JobRequest:
         return self._info.id
 
     @property
-    def room(self) -> proto_models.Room:
+    def room(self) -> protocol.models.Room:
         return self._info.room
 
     @property
-    def participant(self) -> Optional[proto_models.ParticipantInfo]:
+    def participant(self) -> Optional[protocol.models.ParticipantInfo]:
         if self._info.participant.sid:
             return self._info.participant
         return None

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from .version import __version__
-from . import utils
+
 from .worker import (
     Worker,
     JobRequest,
