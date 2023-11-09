@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import AsyncIterator, Optional
+from typing import AsyncIterable, Optional
 
 import whisper
 from livekit import rtc
@@ -19,12 +19,11 @@ class WhisperOpenSourceTranscriberPlugin(core.STTPlugin):
         self._model = None
         super().__init__(process=self.process)
 
-    def process(self, frames_iterator: AsyncIterator[[rtc.AudioFrame]]) -> AsyncIterator[core.STTPluginResult]:
+    def process(self, frame_groups: AsyncIterable[[rtc.AudioFrame]]) -> AsyncIterable[core.STTPluginResult]:
         async def iterator():
-            async for frames in frames_iterator:
-                event = await self._push_frames(frames)
-                if event is not None:
-                    yield event
+            async for frames in frame_groups:
+                res = await self._push_frames(frames)
+                yield core.AsyncIteratorList([res])
 
         return iterator()
 
@@ -44,7 +43,7 @@ class WhisperOpenSourceTranscriberPlugin(core.STTPlugin):
             write_index += len(resampled[i].data)
 
         result = await asyncio.get_event_loop().run_in_executor(None, self._transcribe, np_frames.astype(dtype=np.float32) / 32768.0)
-        yield result
+        return core.STTPluginResult(type=core.STTPluginResultType.DELTA_RESULT, text=result)
 
     def _transcribe(self, buffer: np.array) -> str:
         # TODO: include this with the package

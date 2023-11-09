@@ -30,10 +30,10 @@ class AsyncQueueIterator(Generic[T]):
     def __aiter__(self):
         return self
 
-    async def push(self, item):
+    async def put(self, item):
         await self.queue.put(item)
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         item = await self.queue.get()
         if type(item) is AsyncQueueIterator.EOS:
             raise StopAsyncIteration

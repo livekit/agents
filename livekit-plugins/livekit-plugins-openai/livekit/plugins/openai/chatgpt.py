@@ -14,9 +14,9 @@
 
 import os
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import AsyncIterable
 from livekit.plugins import core
-import openai
+from openai import AsyncOpenAI
 from enum import Enum
 
 ChatGPTMessageRole = Enum(
@@ -28,42 +28,39 @@ class ChatGPTMessage:
     role: ChatGPTMessageRole
     content: str
 
-    def toAPI(self):
+    def to_api(self):
         return {
             "role": self.role.name,
             "content": self.content
         }
 
 
-class ChatGPT:
+class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
     def __init__(self, prompt: str, message_capacity: int):
-        openai.api_key = os.environ["OPENAI_API_KEY"]
+        self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._prompt = prompt
         self._message_capacity = message_capacity
         self._messages: [ChatGPTMessage] = []
+        super().__init__(process=self.process)
 
-    async def push_message(self, message: ChatGPTMessage) -> AsyncIterator[str]:
-        self._messages.append(message)
-        if len(self._messages) > self._message_capacity:
-            self._messages.pop(0)
+    def process(self, message_iterator: AsyncIterable[ChatGPTMessage]) -> AsyncIterable[AsyncIterable[str]]:
+        async def iterator():
+            async for msg in message_iterator:
+                self._messages.append(msg)
+                if len(self._messages) > self._message_capacity:
+                    self._messages.pop(0)
 
-        return self._generate_text_streamed("gpt-3.5-turbo")
+                yield self._generate_text_streamed('gpt-3.5-turbo')
 
-    async def _generate_text_streamed(self, model: str) -> AsyncIterator[str]:
+        return iterator()
+
+    async def _generate_text_streamed(self, model: str) -> AsyncIterable[str]:
         prompt_message = ChatGPTMessage(
             role=ChatGPTMessageRole.system, content=self._prompt)
-        async for chunk in await openai.ChatCompletion.acreate(model=model,
-                                                               n=1,
-                                                               stream=True,
-                                                               messages=[prompt_message.toAPI()] + [m.toAPI() for m in self._messages]):
-            content = chunk["choices"][0].get("delta", {}).get("content")
+        async for chunk in await self._client.chat.completions.create(model=model,
+                                                                      n=1,
+                                                                      stream=True,
+                                                                      messages=[prompt_message.to_api()] + [m.to_api() for m in self._messages]):
+            content = chunk.choices[0].delta.content
             if content is not None:
                 yield content
-
-
-class ChatGPTPlugin(core.Plugin):
-    def __init__(self, *, prompt: str, message_capacity: int):
-        self._chatgpt = ChatGPT(
-            prompt=prompt, message_capacity=message_capacity)
-
-        super().__init__(process=self._chatgpt.push_message)

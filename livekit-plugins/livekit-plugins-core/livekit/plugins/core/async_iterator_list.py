@@ -5,8 +5,8 @@ T = TypeVar('T')
 
 
 class AsyncIteratorList:
-    def __init__(self, list: [T]):
-        self._list = list
+    def __init__(self, items: [T]):
+        self._list = items 
 
     def __aiter__(self):
         return self
