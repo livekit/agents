@@ -13,7 +13,7 @@ from livekit.plugins import core
 import numpy as np
 
 
-class TTSPlugin(agents.TTSPlugin):
+class TTSPlugin(core.TTSPlugin):
 
     def __init__(self):
         self._model = None
