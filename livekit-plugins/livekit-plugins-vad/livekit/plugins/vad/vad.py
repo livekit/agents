@@ -2,7 +2,7 @@ import asyncio
 from typing import AsyncIterable
 from livekit import rtc
 from livekit.plugins.core import (VADPlugin as VADPluginType, VADPluginResult,
-                                  VADPluginResultType, Plugin, PluginEventType)
+                                  VADPluginResultType)
 import torch
 import numpy as np
 
@@ -61,14 +61,14 @@ class VAD:
                     result.extend(self._voice_frames)
                     self._reset_frames()
                     event = VADPluginResult(type=VADPluginResultType.FINISHED,
-                                           frames=result)
+                                            frames=result)
                     yield event
         else:
             if talking_detected:
                 self._talking_state = True
                 self._voice_frames.extend(frame_queue_copy)
                 event = VADPluginResult(type=VADPluginResultType.STARTED,
-                                       frames=self._voice_frames)
+                                        frames=self._voice_frames)
                 yield event
             else:
                 self._add_left_padding(frame_queue_copy)
