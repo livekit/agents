@@ -1,8 +1,7 @@
 import os
 import asyncio
-import livekit.rtc as rtc
-from livekit import agents
-from livekit import plugins
+import logging
+from livekit import agents, plugins, protocol, rtc
 from livekit.plugins.vad import VADPlugin, VAD
 from livekit.plugins.google import SpeechRecognitionPlugin
 from livekit.plugins.openai import WhisperOpenSourceTranscriberPlugin, ChatGPTPlugin, ChatGPTMessage, ChatGPTMessageRole
@@ -36,10 +35,12 @@ async def kitt_agent(ctx: agents.JobContext):
         asyncio.create_task(process_track(track))
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
+
     async def available_cb(job_request: agents.JobRequest):
         print("Accepting job for KITT")
         job_request.accept(kitt_agent)
 
     worker = agents.Worker(available_cb=available_cb,
-                           worker_type=agents.JobType.JT_ROOM)
-    asyncio.run(worker.start())
+                           worker_type=protocol.agent.JobType.JT_ROOM)
+    agents.run_app(worker)
