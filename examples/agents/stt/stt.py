@@ -1,6 +1,7 @@
 import asyncio
 import livekit.rtc as rtc
 from livekit import agents
+from livekit.plugins import core
 from livekit.plugins.vad import VADPlugin, VAD
 from livekit.plugins.openai import WhisperOpenSourceTranscriberPlugin
 from typing import AsyncIterator
@@ -16,7 +17,7 @@ async def stt_agent(ctx: agents.JobContext):
 
         vad_results = vad_plugin\
             .start(audio_stream)\
-            .filter(lambda data: data.type == agents.VADPluginEventType.FINISHED)\
+            .filter(lambda data: data.type == core.VADPluginResultType.FINISHED)\
             .map(lambda data: data.frames)\
             .unwrap()
         stt_results = stt_plugin.start(vad_results)
@@ -25,7 +26,7 @@ async def stt_agent(ctx: agents.JobContext):
 
         async for event in stt_results:
             print("NEIL event", event)
-            if event.type == agents.PluginEventType.ERROR:
+            if event.type == core.STTPluginEventType.ERROR:
                 continue
 
             text = event.data.text

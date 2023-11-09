@@ -15,7 +15,7 @@
 import os
 from dataclasses import dataclass
 from typing import AsyncIterator
-from livekit import agents
+from livekit.plugins import core
 import openai
 from enum import Enum
 
@@ -61,7 +61,7 @@ class ChatGPT:
                 yield content
 
 
-class ChatGPTPlugin(agents.Plugin):
+class ChatGPTPlugin(core.Plugin):
     def __init__(self, *, prompt: str, message_capacity: int):
         self._chatgpt = ChatGPT(
             prompt=prompt, message_capacity=message_capacity)

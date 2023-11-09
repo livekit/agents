@@ -26,7 +26,7 @@ with open(os.path.join(here, 'livekit', 'plugins', 'google', 'version.py'), 'r')
 
 
 setuptools.setup(
-    name="livekit-processors-google",
+    name="livekit-plugins-google",
     version=about['__version__'],
     description="LiveKit Python Plugins for Google Services",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
@@ -49,11 +49,11 @@ setuptools.setup(
     keywords=["webrtc", "realtime", "audio", "video", "livekit"],
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(
-        include=["livekit.processors"]),
+        include=["livekit.plugins"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit >= 0.5.0",
-        "livekit-agents",
+        "livekit",
+        "livekit-plugins-core",
         "numpy >= 1.24.0",
         "google-api-core >= 2.11.1",
         "google-auth >= 2.23.0",
