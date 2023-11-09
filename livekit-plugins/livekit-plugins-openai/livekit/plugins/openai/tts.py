@@ -19,7 +19,7 @@ class TTSPlugin(agents.TTSPlugin):
         self._model = None
         super().__init__(process=self.process)
 
-    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterator[core.Plugin.Event[AsyncIterator[rtc.AudioFrame]]]:
+    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterator[AsyncIterator[rtc.AudioFrame]]:
         async def iterator():
             async for texts in text_iterator:
                 complete_sentence = ""
@@ -30,8 +30,7 @@ class TTSPlugin(agents.TTSPlugin):
                 result_iterator = core.AsyncQueueIterator(result_queue)
                 event_loop = asyncio.get_event_loop()
                 event_loop.run_in_executor(None, self._sync_process, complete_sentence, result_iterator, event_loop)
-                event = core.Plugin.Event(type=core.PluginEventType.SUCCESS, data=result_iterator)
-                yield event
+                yield result_iterator
 
         return iterator()
 

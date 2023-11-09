@@ -59,9 +59,7 @@ class SpeechRecognition:
 
     async def iterate_results(self, generator):
         async for res in generator:
-            event = core.STTPlugin.Event(
-                text=res.results[0].alternatives[0].transcript)
-            await self._result_queue.put(event)
+            await self._result_queue.put(res.results[0].alternatives[0].transcript)
 
 
 class SpeechRecognitionPlugin(core.STTPlugin):

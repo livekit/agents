@@ -43,9 +43,9 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
 
         super().__init__(process=self.process)
 
-    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterable[core.Plugin.Event[AsyncIterator[rtc.AudioFrame]]]:
+    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterable[AsyncIterator[rtc.AudioFrame]]:
         ws = _WSWrapper()
-        result_queue = asyncio.Queue[core.Plugin.Event[rtc.AudioFrame]]()
+        result_queue = asyncio.Queue[rtc.AudioFrame]()
         result_iterator = core.utils.AsyncQueueIterator(result_queue)
         asyncio.create_task(ws.connect())
         asyncio.create_task(self._push_data_loop(ws, text_iterator))
@@ -93,7 +93,7 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
                     for i in range(0, len(chunk), frame_size_bytes):
                         frame = self._create_frame_from_chunk(
                             chunk[i: i + frame_size_bytes])
-                        await result_queue.put(core.Plugin.Event(type=core.PluginEventType.SUCCESS, data=frame))
+                        await result_queue.put(frame)
 
         except websockets.exceptions.ConnectionClosed:
             print("Connection closed")

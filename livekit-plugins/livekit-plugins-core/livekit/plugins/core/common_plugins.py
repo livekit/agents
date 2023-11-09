@@ -2,7 +2,7 @@ import asyncio
 from typing import AsyncIterable, TypeVar, Callable
 from livekit import rtc
 from .async_queue_iterator import AsyncQueueIterator
-from .plugin import Plugin, PluginEventType
+from .plugin import Plugin 
 from dataclasses import dataclass
 from enum import Enum
 
@@ -10,13 +10,13 @@ from enum import Enum
 TTTPlugin = Plugin[str, str]
 
 
-VADPluginEventType = Enum(
+VADPluginResultType = Enum(
     'VADPluginEventType', ['STARTED', 'FINISHED'])
 
 
 @dataclass
 class VADPluginEvent:
-    type: VADPluginEventType
+    type: VADPluginResultType
     frames: [rtc.AudioFrame]
 
 
