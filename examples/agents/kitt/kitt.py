@@ -14,6 +14,11 @@ PROMPT = "You are KITT, a voice assistant in a meeting created by LiveKit. \
 
 
 async def kitt_agent(ctx: agents.JobContext):
+    source = rtc.AudioSource(48000, 1)
+    track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
+    options = rtc.TrackPublishOptions()
+    options.source = rtc.TrackSource.SOURCE_MICROPHONE
+    await ctx.room.local_participant.publish_track(track, options)
 
     async def process_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
@@ -29,18 +34,31 @@ async def kitt_agent(ctx: agents.JobContext):
             .filter(lambda data: data.type == core.VADPluginResultType.FINISHED)\
             .map(lambda data: data.frames)
 
+        chat_gpt_input_iterator = core.AsyncQueueIterator(
+            asyncio.Queue[ChatGPTMessage]())
         stt_results = stt_plugin.start(vad_results)
+        chatgpt_result = chatgpt_plugin.start(chat_gpt_input_iterator)
+        tts_result = tts_plugin.start(chatgpt_result)
 
-        async for stt_iterator in stt_results:
-            print("STT: ", stt_iterator)
-            complete_stt_result = ""
-            async for stt_r in stt_iterator:
-                complete_stt_result += stt_r.text
-                chatgpt_results = chatgpt_plugin.start(ChatGPTMessage(
-                    role=ChatGPTMessageRole.user, content=complete_stt_result))
+        async def process_stt():
+            async for stt_iterator in stt_results:
+                complete_stt_result = ""
+                async for stt_r in stt_iterator:
+                    complete_stt_result += stt_r.text
+                    print("STT: ", complete_stt_result)
+                    msg = ChatGPTMessage(
+                        role=ChatGPTMessageRole.user, content=stt_r.text)
+                    await chat_gpt_input_iterator.put(msg)
 
-                async for chatgpt_r in chatgpt_results:
-                    logging.info(f"ChatGPT: {chatgpt_r}")
+        async def send_audio():
+            async for frame_iter in tts_result:
+                async for frame in frame_iter:
+                    logging.info("Sending audio frame")
+                    resampled = frame.remix_and_resample(48000, 1)
+                    await source.capture_frame(resampled)
+
+        asyncio.create_task(process_stt())
+        asyncio.create_task(send_audio())
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
@@ -64,7 +82,7 @@ async def kitt_agent(ctx: agents.JobContext):
             publication.set_subscribed(True)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
 
     async def available_cb(job_request: agents.JobRequest):
         print("Accepting job for KITT")

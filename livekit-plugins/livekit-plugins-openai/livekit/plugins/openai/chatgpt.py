@@ -41,14 +41,18 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
         self._prompt = prompt
         self._message_capacity = message_capacity
         self._messages: [ChatGPTMessage] = []
-        super().__init__(process=self.push_message)
+        super().__init__(process=self.process)
 
-    def push_message(self, message: ChatGPTMessage) -> AsyncIterable[str]:
-        self._messages.append(message)
-        if len(self._messages) > self._message_capacity:
-            self._messages.pop(0)
+    def process(self, message_iterator: AsyncIterable[ChatGPTMessage]) -> AsyncIterable[AsyncIterable[str]]:
+        async def iterator():
+            async for msg in message_iterator:
+                self._messages.append(msg)
+                if len(self._messages) > self._message_capacity:
+                    self._messages.pop(0)
 
-        return self._generate_text_streamed("gpt-3.5-turbo")
+                yield self._generate_text_streamed('gpt-3.5-turbo')
+
+        return iterator()
 
     async def _generate_text_streamed(self, model: str) -> AsyncIterable[str]:
         prompt_message = ChatGPTMessage(
@@ -57,6 +61,6 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
                                                                       n=1,
                                                                       stream=True,
                                                                       messages=[prompt_message.to_api()] + [m.to_api() for m in self._messages]):
-            content = chunk["choices"][0].get("delta", {}).get("content")
+            content = chunk.choices[0].delta.content
             if content is not None:
                 yield content

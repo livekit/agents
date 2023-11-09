@@ -42,7 +42,7 @@ class TTSPlugin(core.TTSPlugin):
         array = tensor.numpy()
 
         async def add_to_iterator(frame: rtc.AudioFrame, iterator: core.AsyncQueueIterator[bytes]):
-            await iterator.push(frame)
+            await iterator.put(frame)
 
         for b in array:
             audio_frame = rtc.AudioFrame(
