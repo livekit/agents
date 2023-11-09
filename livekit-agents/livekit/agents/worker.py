@@ -102,7 +102,7 @@ class Worker:
         req.register.type = self._worker_type
 
         headers = {"Authorization": f"Bearer {join_jwt}"}
-        self._ws = await websockets.connect(self._agent_url, extra_headers=headers, close_timeout=0)
+        self._ws = await websockets.connect(self._agent_url, extra_headers=headers, close_timeout=0.150)
         await self._send(req)
         res = await self._recv()
         return res.register
