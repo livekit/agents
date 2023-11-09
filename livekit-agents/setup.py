@@ -46,7 +46,8 @@ setuptools.setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3 :: Only",
     ],
-    keywords=["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"],
+    keywords=["webrtc", "realtime", "audio",
+              "video", "livekit", "agents", "AI"],
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
@@ -55,6 +56,7 @@ setuptools.setup(
         "livekit>=0.5.0",
         "livekit-api>=0.1.3",
         "livekit-plugins-core",
+        "livekit-protocol",
         "websockets>=12.0",
     ],
     package_data={

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from .version import __version__
-from ._proto.livekit_agent_pb2 import JobType
 from .worker import (
     Worker,
     JobRequest,
