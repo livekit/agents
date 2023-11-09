@@ -54,12 +54,11 @@ setuptools.setup(
         "click>=8.1.7",
         "livekit>=0.5.0",
         "livekit-api>=0.1.3",
+        "livekit-protocol>=0.1.0",
         "livekit-plugins-core",
         "websockets>=12.0",
     ],
-    package_data={
-        "livekit.agents": ["py.typed", "*.pyi", "**/*.pyi"],
-    },
+    package_data={},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",
