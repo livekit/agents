@@ -27,9 +27,10 @@ from typing import (
 )
 
 from click import Option
+from websockets import frames
+from .plugin import Plugin
 from livekit.protocol import agent as proto_agent
 from livekit.protocol import models  as proto_models
-from livekit.plugins.core import Plugin
 from dataclasses import dataclass
 from urllib.parse import urlparse
 from contextlib import aclosing
@@ -224,6 +225,7 @@ class Worker:
                     break
 
         except asyncio.CancelledError:
+            await self._ws.write_close_frame(frames.Close(frames.CloseCode.NORMAL_CLOSURE, ""))
             await self._ws.close_transport()
 
     @property
