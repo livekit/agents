@@ -27,6 +27,7 @@ from typing import (
 )
 
 from click import Option
+from websockets import frames
 from livekit.protocol import agent as proto_agent
 from livekit.protocol import models  as proto_models
 from livekit.plugins.core import Plugin
@@ -101,7 +102,7 @@ class Worker:
         req.register.type = self._worker_type
 
         headers = {"Authorization": f"Bearer {join_jwt}"}
-        self._ws = await websockets.connect(self._agent_url, extra_headers=headers)
+        self._ws = await websockets.connect(self._agent_url, extra_headers=headers, close_timeout=0.150)
         await self._send(req)
         res = await self._recv()
         return res.register
@@ -226,7 +227,7 @@ class Worker:
                     break
 
         except asyncio.CancelledError:
-            await self._ws.close_transport()
+            await self._ws.close()
 
     @property
     def id(self) -> str:
