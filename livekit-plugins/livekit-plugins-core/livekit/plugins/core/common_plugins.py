@@ -33,7 +33,7 @@ class STTPluginResult:
     text: str
 
 
-STTPlugin = Plugin[rtc.AudioFrame, STTPluginResult]
+STTPlugin = Plugin[[rtc.AudioFrame], AsyncIterable[STTPluginResult]]
 
 
 TTSPlugin = Plugin[AsyncIterable[str], AsyncIterable[rtc.AudioFrame]]

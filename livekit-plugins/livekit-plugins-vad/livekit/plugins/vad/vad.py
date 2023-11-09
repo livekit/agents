@@ -62,16 +62,18 @@ class VAD:
                     self._reset_frames()
                     event = VADPluginResult(type=VADPluginResultType.FINISHED,
                                             frames=result)
-                    yield event
+                    return event
         else:
             if talking_detected:
                 self._talking_state = True
                 self._voice_frames.extend(frame_queue_copy)
                 event = VADPluginResult(type=VADPluginResultType.STARTED,
                                         frames=self._voice_frames)
-                yield event
+                return event
             else:
                 self._add_left_padding(frame_queue_copy)
+
+        return None
 
     def _add_left_padding(self, frames: [rtc.AudioFrame]):
         current_padding_ms = 0
