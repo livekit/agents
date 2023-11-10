@@ -4,17 +4,24 @@ import logging
 from livekit import agents, protocol, rtc
 from livekit.plugins import core
 from livekit.plugins.vad import VADPlugin, VAD
-from livekit.plugins.openai import WhisperOpenSourceTranscriberPlugin, ChatGPTPlugin, ChatGPTMessage, ChatGPTMessageRole
-from livekit.plugins.elevenlabs import ElevenLabsTTSPlugin
+from livekit.plugins.openai import (WhisperOpenSourceTranscriberPlugin,
+                                    ChatGPTPlugin,
+                                    ChatGPTMessage,
+                                    ChatGPTMessageRole,
+                                    TTSPlugin)
 from typing import AsyncIterator
+import audioread
 
 PROMPT = "You are KITT, a voice assistant in a meeting created by LiveKit. \
           Keep your responses concise while still being friendly and personable. \
           If your response is a question, please append a question mark symbol to the end of it."
 
+OAI_TTS_SAMPLE_RATE = 24000
+OAI_TTS_CHANNELS = 1
+
 
 async def kitt_agent(ctx: agents.JobContext):
-    source = rtc.AudioSource(48000, 1)
+    source = rtc.AudioSource(OAI_TTS_SAMPLE_RATE, OAI_TTS_CHANNELS)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
@@ -27,7 +34,7 @@ async def kitt_agent(ctx: agents.JobContext):
             left_padding_ms=1000, silence_threshold_ms=500)
         stt_plugin = WhisperOpenSourceTranscriberPlugin()
         chatgpt_plugin = ChatGPTPlugin(prompt=PROMPT, message_capacity=20)
-        tts_plugin = ElevenLabsTTSPlugin()
+        tts_plugin = TTSPlugin()
 
         vad_results = vad_plugin\
             .start(audio_stream)\
@@ -46,6 +53,8 @@ async def kitt_agent(ctx: agents.JobContext):
                 async for stt_r in stt_iterator:
                     complete_stt_result += stt_r.text
                     print("STT: ", complete_stt_result)
+                    if complete_stt_result.strip() == "":
+                        continue
                     msg = ChatGPTMessage(
                         role=ChatGPTMessageRole.user, content=stt_r.text)
                     await chat_gpt_input_iterator.put(msg)
@@ -53,9 +62,7 @@ async def kitt_agent(ctx: agents.JobContext):
         async def send_audio():
             async for frame_iter in tts_result:
                 async for frame in frame_iter:
-                    logging.info("Sending audio frame")
-                    resampled = frame.remix_and_resample(48000, 1)
-                    await source.capture_frame(resampled)
+                    await source.capture_frame(frame)
 
         asyncio.create_task(process_stt())
         asyncio.create_task(send_audio())
