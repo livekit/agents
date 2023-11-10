@@ -13,7 +13,7 @@ WHISPER_SAMPLE_RATE = 16000
 WHISPER_CHANNELS = 1
 
 
-class WhisperOpenSourceTranscriberPlugin(core.STTPlugin):
+class WhisperLocalTranscriber(core.STTPlugin):
 
     def __init__(self):
         self._model = None
