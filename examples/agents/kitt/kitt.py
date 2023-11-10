@@ -5,7 +5,6 @@ from openai import AsyncOpenAI
 from livekit import agents, protocol, rtc
 from livekit.plugins import core
 from livekit.plugins.vad import VADPlugin, VAD
-
 from livekit.plugins.openai import (WhisperAPITranscriber,
                                     ChatGPTPlugin,
                                     ChatGPTMessage,
