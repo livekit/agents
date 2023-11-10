@@ -22,10 +22,7 @@ async def stt_agent(ctx: agents.JobContext):
             .unwrap()
         stt_results = stt_plugin.start(vad_results)
 
-        print("NEIL stt_results:", stt_results)
-
         async for event in stt_results:
-            print("NEIL event", event)
             if event.type == core.STTPluginEventType.ERROR:
                 continue
 
