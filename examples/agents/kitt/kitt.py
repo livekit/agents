@@ -1,10 +1,12 @@
 import os
 import asyncio
 import logging
+from openai import AsyncOpenAI
 from livekit import agents, protocol, rtc
 from livekit.plugins import core
 from livekit.plugins.vad import VADPlugin, VAD
-from livekit.plugins.openai import (WhisperOpenSourceTranscriberPlugin,
+
+from livekit.plugins.openai import (WhisperAPITranscriber,
                                     ChatGPTPlugin,
                                     ChatGPTMessage,
                                     ChatGPTMessageRole,
@@ -32,7 +34,7 @@ async def kitt_agent(ctx: agents.JobContext):
 
         vad_plugin = VADPlugin(
             left_padding_ms=1000, silence_threshold_ms=500)
-        stt_plugin = WhisperOpenSourceTranscriberPlugin()
+        stt_plugin = WhisperAPITranscriber()
         chatgpt_plugin = ChatGPTPlugin(prompt=PROMPT, message_capacity=20)
         tts_plugin = TTSPlugin()
 
