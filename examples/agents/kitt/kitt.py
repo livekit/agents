@@ -42,14 +42,15 @@ async def kitt_agent(ctx: agents.JobContext):
         chatgpt_plugin = ChatGPTPlugin(prompt=PROMPT, message_capacity=20)
         tts_plugin = TTSPlugin()
 
-        def vad_state_changer(vad_result: core.VADPluginResult):
+        def vad_state_changer(vad_result: core.VADPluginResult, metadata: core.PluginIterator.ResultMetadata):
+            print("NEIL")
             if vad_result.type == core.VADPluginResultType.STARTED:
                 pass
                 # stt_plugin.reset()
                 # chatgpt_plugin.reset()
                 # tts_plugin.reset()
 
-        async def process_stt(text_streams: AsyncIterator[AsyncIterator[str]]):
+        async def process_stt(text_streams: AsyncIterator[AsyncIterator[str]], metadata: core.PluginIterator.ResultMetadata):
             async for text_stream in text_streams:
                 complete_stt_result = ""
                 async for stt_r in text_stream:
@@ -61,21 +62,24 @@ async def kitt_agent(ctx: agents.JobContext):
                         role=ChatGPTMessageRole.user, content=stt_r.text)
                     yield msg
 
-        async def send_audio(frame_streams: AsyncIterator[AsyncIterator[rtc.AudioFrame]]):
+        async def send_audio(frame_streams: AsyncIterator[AsyncIterator[rtc.AudioFrame]], metadata: core.PluginIterator.ResultMetadata):
             async for frame_stream in frame_streams:
                 async for frame in frame_stream:
                     await source.capture_frame(frame)
 
-        vad_plugin\
+        vr = vad_plugin\
             .start(input_iterator)\
             .do(vad_state_changer)\
-            .filter(lambda data: data.type == core.VADPluginResultType.FINISHED)\
-            .map(lambda data: data.frames)\
+            .filter(lambda data, _: data.type == core.VADPluginResultType.FINISHED)\
+            .map(lambda data, _: data.frames)\
             .pipe(stt_plugin)\
             .map_async(process_stt)\
             .pipe(chatgpt_plugin)\
             .pipe(tts_plugin)\
             .do_async(send_audio)
+
+        async for d, m in vr:
+            print(d, m)
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):

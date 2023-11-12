@@ -46,20 +46,18 @@ class Plugin(Generic[T, U]):
         self._current_thread = threading.current_thread().ident
 
     def start(self, data: "PluginIterator[T]") -> "PluginIterator[U]":
-
-        class Closure:
-            current_metadata = None
+        
+        current_metadata: "[PluginIterator.ResultMetadata]" = []
 
         async def item_iterator():
             async for (item, metadata) in data:
-                print("yielding item", item, Closure.current_metadata)
-                Closure.current_metadata = metadata
+                current_metadata.append(metadata)
                 yield item
 
         async def iterator():
             async for item in self._process(item_iterator()):
-                print("yielding item", item, Closure.current_metadata)
-                yield item, Closure.current_metadata
+                print("NEIL")
+                yield item, current_metadata.pop(0)
 
         return PluginIterator(iterator=iterator())
 
@@ -128,21 +126,21 @@ class PluginIterator(Generic[T]):
         async def iterator() -> AsyncIterable[T]:
             async for (item, metadata) in self._iterator:
                 if predicate(item, metadata):
-                    yield item
+                    yield item, metadata
 
         return PluginIterator(iterator=iterator())
 
     def map(self, mapper: Callable[[T, ResultMetadata], U]) -> "PluginIterator[U]":
         async def iterator() -> AsyncIterable[U]:
             async for (item, metadata) in self._iterator:
-                yield mapper(item, metadata)
+                yield mapper(item, metadata), metadata
 
         return PluginIterator(iterator=iterator())
 
     def map_async(self, mapper: Callable[[T, ResultMetadata], Awaitable[U]]) -> "PluginIterator[U]":
         async def iterator() -> AsyncIterable[U]:
             async for (item, metadata) in self._iterator:
-                yield await mapper(item, metadata)
+                yield await mapper(item, metadata), metadata
 
         return PluginIterator(iterator=iterator())
 
@@ -150,7 +148,7 @@ class PluginIterator(Generic[T]):
         async def iterator() -> AsyncIterable[T]:
             async for (item, metadata) in self._iterator:
                 callback(item, metadata)
-                yield item
+                yield item, metadata
 
         return PluginIterator(iterator=iterator())
 
@@ -158,7 +156,7 @@ class PluginIterator(Generic[T]):
         async def iterator() -> AsyncIterable[T]:
             async for (item, metadata) in self._iterator:
                 await callback(item, metadata)
-                yield item
+                yield item, metadata
 
         return PluginIterator(iterator=iterator())
 
