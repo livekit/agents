@@ -41,15 +41,14 @@ async def kitt_agent(ctx: agents.JobContext):
             left_padding_ms=1000, silence_threshold_ms=500)
         stt_plugin = WhisperAPITranscriber()
         chatgpt_plugin = ChatGPTPlugin(prompt=PROMPT, message_capacity=20)
+        complete_sentence_plugin = core.CompleteSentencesPlugin()
         tts_plugin = TTSPlugin()
 
         def vad_state_changer(vad_result: core.VADPluginResult, metadata: core.PluginIterator.ResultMetadata):
             if vad_result.type == core.VADPluginResultType.STARTED:
                 state[0] = AgentState.LISTENING
                 state[1] = metadata.sequence_number
-                stt_plugin.reset()
-                chatgpt_plugin.reset()
-                tts_plugin.reset()
+                # chatgpt_plugin.interrupt()
             else:
                 state[0] = AgentState.SPEAKING
                 state[1] = metadata.sequence_number
@@ -79,6 +78,8 @@ async def kitt_agent(ctx: agents.JobContext):
             .pipe(stt_plugin)\
             .map_async(process_stt)\
             .pipe(chatgpt_plugin)\
+            .pipe(complete_sentence_plugin)\
+            .skip_while(should_skip)\
             .pipe(tts_plugin)\
             .do_async(send_audio)\
             .run()

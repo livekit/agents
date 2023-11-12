@@ -14,7 +14,7 @@ class VADPlugin(VADPluginType):
     """
 
     def __init__(self, *, left_padding_ms: int, silence_threshold_ms: int):
-        super().__init__(process=self._process, reset=self._reset, close=self._close)
+        super().__init__(process=self._process, close=self._close)
         self._silence_threshold_ms = silence_threshold_ms
         self._left_padding_ms = left_padding_ms
         self._window_buffer = np.zeros(512, dtype=np.float32)
@@ -28,9 +28,6 @@ class VADPlugin(VADPluginType):
         self._left_padding_frames = []
         self._frame_queue = []
         self._talking_state = False
-
-    async def _reset(self):
-        pass
 
     async def _close(self):
         pass

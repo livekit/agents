@@ -6,7 +6,8 @@ from .common_plugins import (VADPlugin,
                              STTPluginResult,
                              STTPluginResultType,
                              TTSPlugin,
-                             TTTPlugin
+                             TTTPlugin,
+                             CompleteSentencesPlugin
                              )
 from .async_iterator_list import AsyncIteratorList
 from .async_queue_iterator import AsyncQueueIterator

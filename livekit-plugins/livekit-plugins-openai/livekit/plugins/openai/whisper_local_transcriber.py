@@ -16,8 +16,8 @@ WHISPER_CHANNELS = 1
 class WhisperLocalTranscriber(core.STTPlugin):
 
     def __init__(self):
-        self._model = None
         super().__init__(process=self.process)
+        self._model = None
 
     def process(self, frame_groups: AsyncIterable[[rtc.AudioFrame]]) -> AsyncIterable[core.STTPluginResult]:
         async def iterator():

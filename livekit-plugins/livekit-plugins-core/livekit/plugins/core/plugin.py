@@ -36,13 +36,12 @@ EventTypes = Literal["error"]
 
 class Plugin(Generic[T, U]):
 
-    def __init__(self, process: Callable[[AsyncIterable[T]], AsyncIterable[U]], close: Callable, reset: Callable) -> None:
-        self._process = process
-        self._close = close
-        self._reset = reset
-        self._events: Dict[T, Set[Callable]] = dict()
-        self._current_loop = asyncio.get_running_loop()
-        self._current_thread = threading.current_thread().ident
+    def __init__(self, process: Callable[[AsyncIterable[T]], AsyncIterable[U]], close: Callable) -> None:
+        self.__process = process
+        self.__close = close
+        self.__events: Dict[T, Set[Callable]] = dict()
+        self.__current_loop = asyncio.get_running_loop()
+        self.__current_thread = threading.current_thread().ident
 
     def set_input(self, data: "PluginIterator[T]") -> "PluginIterator[U]":
         
@@ -54,27 +53,27 @@ class Plugin(Generic[T, U]):
                 yield item
 
         async def iterator():
-            async for item in self._process(item_iterator()):
+            async for item in self.__process(item_iterator()):
                 yield item, current_metadata[0]
 
         return PluginIterator(iterator=iterator())
 
     def emit(self, event: EventTypes, *args, **kwargs) -> None:
         def emit_event():
-            if event in self._events:
-                for callback in self._events[event]:
+            if event in self.__events:
+                for callback in self.__events[event]:
                     callback(*args, **kwargs)
 
-        if threading.current_thread().ident == self._current_thread:
+        if threading.current_thread().ident == self.__current_thread:
             emit_event()
         else:
-            self._current_loop.call_soon_threadsafe(emit_event)
+            self.__current_loop.call_soon_threadsafe(emit_event)
             
     def on(self, event: EventTypes, callback: Optional[Callable] = None) -> Callable:
         if callback is not None:
-            if event not in self._events:
-                self._events[event] = set()
-            self._events[event].add(callback)
+            if event not in self.__events:
+                self.__events[event] = set()
+            self.__events[event].add(callback)
             return callback
         else:
             def decorator(callback: Callable) -> Callable:
@@ -83,23 +82,16 @@ class Plugin(Generic[T, U]):
             return decorator
 
     def off(self, event: T, callback: Callable) -> None:
-        if event in self._events:
-            self._events[event].remove(callback)
+        if event in self.__events:
+            self.__events[event].remove(callback)
 
     def close(self) -> None:
-        if threading.current_thread().ident != self._current_thread:
-            asyncio.run_coroutine_threadsafe(self._close(), self._current_loop)
+        if threading.current_thread().ident != self.__current_thread:
+            asyncio.run_coroutine_threadsafe(self.__close(), self.__current_loop)
         else:
-            self._current_loop.create_task(self._close())
+            self.__current_loop.create_task(self.__close())
     
-    def reset(self) -> None:
-        if threading.current_thread().ident != self._current_thread:
-            asyncio.run_coroutine_threadsafe(self._close(), self._current_loop)
-        else:
-            self._current_loop.create_task(self._close())
-
     
-ResultType = Enum("ResultType", "DATA FINISHED ERROR")
 class PluginIterator(Generic[T]):
 
     @dataclass

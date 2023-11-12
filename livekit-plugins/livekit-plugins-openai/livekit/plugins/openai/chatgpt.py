@@ -37,14 +37,17 @@ class ChatGPTMessage:
 
 class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
     def __init__(self, prompt: str, message_capacity: int):
+        super().__init__(process=self._process, close=self._close)
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._prompt = prompt
         self._message_capacity = message_capacity
         self._messages: [ChatGPTMessage] = []
-        super().__init__(process=self._process, reset=self._reset, close=self._close)
+        self._producing_resopnse = False
+        self._needs_interrupt = False
 
-    async def _reset(self):
-        pass
+    def interrupt(self):
+        print("interrupting")
+        self._needs_interrupt = True
 
     async def _close(self):
         pass
@@ -52,6 +55,7 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
     def _process(self, message_iterator: AsyncIterable[ChatGPTMessage]) -> AsyncIterable[AsyncIterable[str]]:
         async def iterator():
             async for msg in message_iterator:
+                print("new message")
                 self._messages.append(msg)
                 if len(self._messages) > self._message_capacity:
                     self._messages.pop(0)
@@ -68,5 +72,11 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
                                                                       stream=True,
                                                                       messages=[prompt_message.to_api()] + [m.to_api() for m in self._messages]):
             content = chunk.choices[0].delta.content
+
+            if self._needs_interrupt:
+                self._needs_interrupt = False
+                print("interrupted")
+                break
+
             if content is not None:
                 yield content
