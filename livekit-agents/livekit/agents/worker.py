@@ -375,7 +375,9 @@ class JobRequest:
         self,
         agent: Callable[[JobContext], Coroutine],
         should_handle_track: Callable[[
-            rtc.TrackPublication], bool],
+            rtc.TrackPublication, rtc.RemoteParticipant], bool],
+        room_options: rtc.RoomOptions = None,
+        grants: api.VideoGrants = None,
         name: str = "",
         identity: str = "",
         metadata: str = "",
@@ -391,7 +393,7 @@ class JobRequest:
             self._answered = True
 
             identity = identity or "agent-" + self.id
-            grants = api.VideoGrants(
+            grants = grants or api.VideoGrants(
                 room=self.room.name,
                 room_join=True,
                 agent=True,
@@ -412,7 +414,7 @@ class JobRequest:
                 _ = await self._worker._send_availability(self.id, True)
 
             try:
-                options = rtc.RoomOptions(auto_subscribe=False)
+                options = room_options or rtc.RoomOptions(auto_subscribe=False)
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
                 logging.error(
