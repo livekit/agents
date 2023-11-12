@@ -86,11 +86,17 @@ class Plugin(Generic[T, U]):
         if event in self._events:
             self._events[event].remove(callback)
 
-    async def close(self) -> None:
-        self._close()
+    def close(self) -> None:
+        if threading.current_thread().ident != self._current_thread:
+            asyncio.run_coroutine_threadsafe(self._close(), self._current_loop)
+        else:
+            self._current_loop.create_task(self._close())
     
-    async def reset(self) -> None:
-        self._reset()
+    def reset(self) -> None:
+        if threading.current_thread().ident != self._current_thread:
+            asyncio.run_coroutine_threadsafe(self._close(), self._current_loop)
+        else:
+            self._current_loop.create_task(self._close())
 
     
 ResultType = Enum("ResultType", "DATA FINISHED ERROR")
@@ -155,6 +161,14 @@ class PluginIterator(Generic[T]):
             async for (item, metadata) in self._iterator:
                 await callback(item, metadata)
                 yield item, metadata
+
+        return PluginIterator(iterator=iterator())
+
+    def skip_while(self, predicate: Callable[[T, ResultMetadata], bool]) -> "PluginIterator[T]":
+        async def iterator() -> AsyncIterable[T]:
+            async for (item, metadata) in self._iterator:
+                if not predicate(item, metadata):
+                    yield item, metadata
 
         return PluginIterator(iterator=iterator())
 

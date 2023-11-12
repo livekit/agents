@@ -12,7 +12,6 @@ from livekit.plugins.openai import (WhisperAPITranscriber,
                                     TTSPlugin)
 from typing import AsyncIterator
 from enum import Enum
-import audioread
 
 PROMPT = "You are KITT, a voice assistant in a meeting created by LiveKit. \
           Keep your responses concise while still being friendly and personable. \
@@ -32,6 +31,8 @@ async def kitt_agent(ctx: agents.JobContext):
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
     await ctx.room.local_participant.publish_track(track, options)
 
+    state = [AgentState.LISTENING, 0]  # state, sequence number of interest
+
     async def process_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
         input_iterator = core.PluginIterator.create(audio_stream)
@@ -44,10 +45,14 @@ async def kitt_agent(ctx: agents.JobContext):
 
         def vad_state_changer(vad_result: core.VADPluginResult, metadata: core.PluginIterator.ResultMetadata):
             if vad_result.type == core.VADPluginResultType.STARTED:
-                pass
-                # stt_plugin.reset()
-                # chatgpt_plugin.reset()
-                # tts_plugin.reset()
+                state[0] = AgentState.LISTENING
+                state[1] = metadata.sequence_number
+                stt_plugin.reset()
+                chatgpt_plugin.reset()
+                tts_plugin.reset()
+            else:
+                state[0] = AgentState.SPEAKING
+                state[1] = metadata.sequence_number
 
         async def process_stt(text_stream: AsyncIterator[str], metadata: core.PluginIterator.ResultMetadata):
             complete_stt_result = ""
@@ -59,23 +64,22 @@ async def kitt_agent(ctx: agents.JobContext):
 
         async def send_audio(frame_stream: AsyncIterator[rtc.AudioFrame], metadata: core.PluginIterator.ResultMetadata):
             async for frame in frame_stream:
+                if (should_skip(frame, metadata)):
+                    continue
                 await source.capture_frame(frame)
+
+        def should_skip(_: any, metadata: core.PluginIterator.ResultMetadata):
+            return state[0] == AgentState.LISTENING or metadata.sequence_number < state[1]
 
         await vad_plugin\
             .set_input(input_iterator)\
-            .do(lambda _, md: print(f"NEIL INPUT SN: {md.sequence_number}"))\
             .do(vad_state_changer)\
-            .do(lambda _, md: print(f"NEIL VAD SN: {md.sequence_number}"))\
             .filter(lambda data, _: data.type == core.VADPluginResultType.FINISHED)\
             .map(lambda data, _: data.frames)\
             .pipe(stt_plugin)\
-            .do(lambda _, md: print(f"NEIL STT SN: {md.sequence_number}"))\
             .map_async(process_stt)\
-            .do(lambda _, md: print(f"NEIL STT 2 SN: {md.sequence_number}"))\
             .pipe(chatgpt_plugin)\
-            .do(lambda _, md: print(f"GPT SN: {md.sequence_number}"))\
             .pipe(tts_plugin)\
-            .do(lambda _, md: print(f"TTS SN: {md.sequence_number}"))\
             .do_async(send_audio)\
             .run()
 
