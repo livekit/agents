@@ -63,13 +63,19 @@ async def kitt_agent(ctx: agents.JobContext):
 
         await vad_plugin\
             .set_input(input_iterator)\
+            .do(lambda _, md: print(f"NEIL INPUT SN: {md.sequence_number}"))\
             .do(vad_state_changer)\
+            .do(lambda _, md: print(f"NEIL VAD SN: {md.sequence_number}"))\
             .filter(lambda data, _: data.type == core.VADPluginResultType.FINISHED)\
             .map(lambda data, _: data.frames)\
             .pipe(stt_plugin)\
+            .do(lambda _, md: print(f"NEIL STT SN: {md.sequence_number}"))\
             .map_async(process_stt)\
+            .do(lambda _, md: print(f"NEIL STT 2 SN: {md.sequence_number}"))\
             .pipe(chatgpt_plugin)\
+            .do(lambda _, md: print(f"GPT SN: {md.sequence_number}"))\
             .pipe(tts_plugin)\
+            .do(lambda _, md: print(f"TTS SN: {md.sequence_number}"))\
             .do_async(send_audio)\
             .run()
 

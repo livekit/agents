@@ -24,10 +24,9 @@ from typing import (Callable,
                     Dict,
                     Set,
                     Literal,
-                    Any,
                     Awaitable,
                     Tuple)
-from abc import abstractmethod
+
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -47,17 +46,16 @@ class Plugin(Generic[T, U]):
 
     def set_input(self, data: "PluginIterator[T]") -> "PluginIterator[U]":
         
-        current_metadata: "[PluginIterator.ResultMetadata]" = []
+        current_metadata: "[PluginIterator.ResultMetadata]" = [None]
 
         async def item_iterator():
             async for (item, metadata) in data:
-                current_metadata.append(metadata)
+                current_metadata[0] = metadata
                 yield item
 
         async def iterator():
             async for item in self._process(item_iterator()):
-                print("NEIL")
-                yield item, current_metadata.pop(0)
+                yield item, current_metadata[0]
 
         return PluginIterator(iterator=iterator())
 
