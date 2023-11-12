@@ -48,7 +48,7 @@ async def kitt_agent(ctx: agents.JobContext):
             if vad_result.type == core.VADPluginResultType.STARTED:
                 state[0] = AgentState.LISTENING
                 state[1] = metadata.sequence_number
-                # chatgpt_plugin.interrupt()
+                chatgpt_plugin.interrupt()
             else:
                 state[0] = AgentState.SPEAKING
                 state[1] = metadata.sequence_number

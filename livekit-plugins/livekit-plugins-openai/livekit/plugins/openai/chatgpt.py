@@ -42,12 +42,12 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
         self._prompt = prompt
         self._message_capacity = message_capacity
         self._messages: [ChatGPTMessage] = []
-        self._producing_resopnse = False
+        self._producing_response = False
         self._needs_interrupt = False
 
     def interrupt(self):
-        print("interrupting")
-        self._needs_interrupt = True
+        if self._producing_response:
+            self._needs_interrupt = True
 
     async def _close(self):
         pass
@@ -55,7 +55,6 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
     def _process(self, message_iterator: AsyncIterable[ChatGPTMessage]) -> AsyncIterable[AsyncIterable[str]]:
         async def iterator():
             async for msg in message_iterator:
-                print("new message")
                 self._messages.append(msg)
                 if len(self._messages) > self._message_capacity:
                     self._messages.pop(0)
@@ -67,6 +66,7 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
     async def _generate_text_streamed(self, model: str) -> AsyncIterable[str]:
         prompt_message = ChatGPTMessage(
             role=ChatGPTMessageRole.system, content=self._prompt)
+        self._producing_response = True
         async for chunk in await self._client.chat.completions.create(model=model,
                                                                       n=1,
                                                                       stream=True,
@@ -80,3 +80,5 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
 
             if content is not None:
                 yield content
+
+        self._producing_response = False 
