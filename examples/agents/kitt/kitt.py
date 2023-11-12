@@ -4,15 +4,14 @@ import logging
 from openai import AsyncOpenAI
 from livekit import agents, protocol, rtc
 from livekit.plugins import core
-from livekit.plugins.vad import VADPlugin, VAD
-
+from livekit.plugins.vad import VADPlugin
 from livekit.plugins.openai import (WhisperAPITranscriber,
                                     ChatGPTPlugin,
                                     ChatGPTMessage,
                                     ChatGPTMessageRole,
                                     TTSPlugin)
 from typing import AsyncIterator
-import audioread
+from enum import Enum
 
 PROMPT = "You are KITT, a voice assistant in a meeting created by LiveKit. \
           Keep your responses concise while still being friendly and personable. \
@@ -22,6 +21,9 @@ OAI_TTS_SAMPLE_RATE = 24000
 OAI_TTS_CHANNELS = 1
 
 
+AgentState = Enum("AgentState", "LISTENING, SPEAKING")
+
+
 async def kitt_agent(ctx: agents.JobContext):
     source = rtc.AudioSource(OAI_TTS_SAMPLE_RATE, OAI_TTS_CHANNELS)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
@@ -29,45 +31,58 @@ async def kitt_agent(ctx: agents.JobContext):
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
     await ctx.room.local_participant.publish_track(track, options)
 
+    state = [AgentState.LISTENING, 0]  # state, sequence number of interest
+
     async def process_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
+        input_iterator = core.PluginIterator.create(audio_stream)
 
         vad_plugin = VADPlugin(
             left_padding_ms=1000, silence_threshold_ms=500)
         stt_plugin = WhisperAPITranscriber()
         chatgpt_plugin = ChatGPTPlugin(prompt=PROMPT, message_capacity=20)
+        complete_sentence_plugin = core.CompleteSentencesPlugin()
         tts_plugin = TTSPlugin()
 
-        vad_results = vad_plugin\
-            .start(audio_stream)\
-            .filter(lambda data: data.type == core.VADPluginResultType.FINISHED)\
-            .map(lambda data: data.frames)
+        def vad_state_changer(vad_result: core.VADPluginResult, metadata: core.PluginIterator.ResultMetadata):
+            if vad_result.type == core.VADPluginResultType.STARTED:
+                state[0] = AgentState.LISTENING
+                state[1] = metadata.sequence_number
+                chatgpt_plugin.interrupt()
+            else:
+                state[0] = AgentState.SPEAKING
+                state[1] = metadata.sequence_number
 
-        chat_gpt_input_iterator = core.AsyncQueueIterator(
-            asyncio.Queue[ChatGPTMessage]())
-        stt_results = stt_plugin.start(vad_results)
-        chatgpt_result = chatgpt_plugin.start(chat_gpt_input_iterator)
-        tts_result = tts_plugin.start(chatgpt_result)
+        async def process_stt(text_stream: AsyncIterator[str], metadata: core.PluginIterator.ResultMetadata):
+            complete_stt_result = ""
+            async for stt_r in text_stream:
+                complete_stt_result += stt_r.text
+            msg = ChatGPTMessage(
+                role=ChatGPTMessageRole.user, content=complete_stt_result)
+            return msg
 
-        async def process_stt():
-            async for stt_iterator in stt_results:
-                complete_stt_result = ""
-                async for stt_r in stt_iterator:
-                    complete_stt_result += stt_r.text
-                    print("STT: ", complete_stt_result)
-                    if complete_stt_result.strip() == "":
-                        continue
-                    msg = ChatGPTMessage(
-                        role=ChatGPTMessageRole.user, content=stt_r.text)
-                    await chat_gpt_input_iterator.put(msg)
+        async def send_audio(frame_stream: AsyncIterator[rtc.AudioFrame], metadata: core.PluginIterator.ResultMetadata):
+            async for frame in frame_stream:
+                if (should_skip(frame, metadata)):
+                    continue
+                await source.capture_frame(frame)
 
-        async def send_audio():
-            async for frame_iter in tts_result:
-                async for frame in frame_iter:
-                    await source.capture_frame(frame)
+        def should_skip(_: any, metadata: core.PluginIterator.ResultMetadata):
+            return state[0] == AgentState.LISTENING or metadata.sequence_number < state[1]
 
-        asyncio.create_task(process_stt())
-        asyncio.create_task(send_audio())
+        await vad_plugin\
+            .set_input(input_iterator)\
+            .do(vad_state_changer)\
+            .filter(lambda data, _: data.type == core.VADPluginResultType.FINISHED)\
+            .map(lambda data, _: data.frames)\
+            .pipe(stt_plugin)\
+            .map_async(process_stt)\
+            .pipe(chatgpt_plugin)\
+            .pipe(complete_sentence_plugin)\
+            .skip_while(should_skip)\
+            .pipe(tts_plugin)\
+            .do_async(send_audio)\
+            .run()
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):

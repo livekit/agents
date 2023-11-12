@@ -17,12 +17,15 @@ import audioread
 class TTSPlugin(core.TTSPlugin):
 
     def __init__(self):
+        super().__init__(process=self._process, close=self._close)
         self._model = None
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._response_iterator = core.AsyncQueueIterator(asyncio.Queue[rtc.AudioFrame]())
-        super().__init__(process=self.process)
 
-    def process(self, text_streams: AsyncIterator[AsyncIterator[str]]) -> AsyncIterator[AsyncIterator[rtc.AudioFrame]]:
+    async def _close(self):
+        pass
+
+    def _process(self, text_streams: AsyncIterator[AsyncIterator[str]]) -> AsyncIterator[AsyncIterator[rtc.AudioFrame]]:
         asyncio.create_task(self._async_process(text_streams))
         return self._response_iterator
 

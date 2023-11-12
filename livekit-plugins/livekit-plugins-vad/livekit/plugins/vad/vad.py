@@ -9,11 +9,12 @@ import numpy as np
 VAD_SAMPLE_RATE = 16000
 
 
-class VAD:
+class VADPlugin(VADPluginType):
     """Class for Voice Activity Detection (VAD)
     """
 
     def __init__(self, *, left_padding_ms: int, silence_threshold_ms: int):
+        super().__init__(process=self._process, close=self._close)
         self._silence_threshold_ms = silence_threshold_ms
         self._left_padding_ms = left_padding_ms
         self._window_buffer = np.zeros(512, dtype=np.float32)
@@ -28,7 +29,10 @@ class VAD:
         self._frame_queue = []
         self._talking_state = False
 
-    def process(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[VADPluginResult]:
+    async def _close(self):
+        pass
+
+    def _process(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[VADPluginResult]:
         async def iterator():
             async for frame in frame_iterator:
                 event = await self.push_frame(frame)
@@ -117,10 +121,3 @@ class VAD:
         tensor = torch.from_numpy(self._window_buffer)
         speech_prob = self._model(tensor, VAD_SAMPLE_RATE).item()
         return speech_prob > 0.5
-
-
-class VADPlugin(VADPluginType):
-    def __init__(self, left_padding_ms=250, silence_threshold_ms=250):
-        self.vad = VAD(left_padding_ms=left_padding_ms,
-                       silence_threshold_ms=silence_threshold_ms)
-        super().__init__(process=self.vad.process)

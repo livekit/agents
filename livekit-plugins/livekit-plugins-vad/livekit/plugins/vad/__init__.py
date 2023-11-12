@@ -1,1 +1,1 @@
-from .vad import VAD, VADPlugin
+from .vad import VADPlugin
