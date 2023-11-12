@@ -41,9 +41,15 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
         self._prompt = prompt
         self._message_capacity = message_capacity
         self._messages: [ChatGPTMessage] = []
-        super().__init__(process=self.process)
+        super().__init__(process=self._process, reset=self._reset, close=self._close)
 
-    def process(self, message_iterator: AsyncIterable[ChatGPTMessage]) -> AsyncIterable[AsyncIterable[str]]:
+    async def _reset(self):
+        pass
+
+    async def _close(self):
+        pass
+
+    def _process(self, message_iterator: AsyncIterable[ChatGPTMessage]) -> AsyncIterable[AsyncIterable[str]]:
         async def iterator():
             async for msg in message_iterator:
                 self._messages.append(msg)

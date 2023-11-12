@@ -1,3 +1,4 @@
+import logging
 import asyncio
 import os
 import io
@@ -22,11 +23,19 @@ class WhisperAPITranscriber(core.STTPlugin):
         self._model = None
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._result_iterator = core.AsyncQueueIterator(asyncio.Queue[core.STTPluginResult]())
-        super().__init__(process=self.process)
+        self._task = None
+        super().__init__(process=self._process, reset=self._reset, close=self._close)
 
-    def process(self, frame_streams: AsyncIterable[[rtc.AudioFrame]]) -> AsyncIterable[AsyncIterable[core.STTPluginResult]]:
-        asyncio.create_task(self._async_process(frame_streams))
+    def _process(self, frame_streams: AsyncIterable[[rtc.AudioFrame]]) -> AsyncIterable[AsyncIterable[core.STTPluginResult]]:
+        self._task = asyncio.create_task(self._async_process(frame_streams))
         return self._result_iterator
+
+    async def _close(self):
+        pass
+
+    async def _reset(self):
+        if self._task is not None:
+            self._task.cancel()
 
     async def _async_process(self, frame_streams: AsyncIterable[[rtc.AudioFrame]]) -> AsyncIterable[core.STTPluginResult]:
         async for frame_stream in frame_streams:
@@ -39,12 +48,15 @@ class WhisperAPITranscriber(core.STTPlugin):
                 full_buffer += frame.data
 
             bytes_io = io.BytesIO(full_buffer)
-            with wave.open(bytes_io, mode="wb") as wave_file:
+            with wave.open(file=bytes_io, mode="wb") as wave_file:
                 wave_file.setnchannels(channels)
                 wave_file.setsampwidth(2)  # int16
                 wave_file.setframerate(sample_rate)
                 wave_file.writeframes(full_buffer)
 
-            response = await self._client.audio.transcriptions.create(file=("input.wav", bytes_io), model="whisper-1", response_format="text")
-            result = core.STTPluginResult(type=core.STTPluginResultType.DELTA_RESULT, text=response)
-            await self._result_iterator.put(core.AsyncIteratorList([result]))
+            try:
+                response = await self._client.audio.transcriptions.create(file=("input.wav", bytes_io), model="whisper-1", response_format="text")
+                result = core.STTPluginResult(type=core.STTPluginResultType.DELTA_RESULT, text=response)
+                await self._result_iterator.put(core.AsyncIteratorList([result]))
+            except Exception as e:
+                logging.error("Error transcribing audio: %s", e)
