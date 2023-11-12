@@ -47,14 +47,14 @@ class WhisperAPITranscriber(core.STTPlugin):
             for frame in frame_stream:
                 full_buffer += frame.data
 
-            bytes_io = io.BytesIO(full_buffer)
-            with wave.open(file=bytes_io, mode="wb") as wave_file:
-                wave_file.setnchannels(channels)
-                wave_file.setsampwidth(2)  # int16
-                wave_file.setframerate(sample_rate)
-                wave_file.writeframes(full_buffer)
-
             try:
+                bytes_io = io.BytesIO(full_buffer)
+                with wave.open(bytes_io, mode="wb") as wave_file:
+                    wave_file.setnchannels(channels)
+                    wave_file.setsampwidth(2)  # int16
+                    wave_file.setframerate(sample_rate)
+                    wave_file.writeframes(full_buffer)
+
                 response = await self._client.audio.transcriptions.create(file=("input.wav", bytes_io), model="whisper-1", response_format="text")
                 result = core.STTPluginResult(type=core.STTPluginResultType.DELTA_RESULT, text=response)
                 await self._result_iterator.put(core.AsyncIteratorList([result]))

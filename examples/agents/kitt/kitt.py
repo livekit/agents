@@ -43,32 +43,26 @@ async def kitt_agent(ctx: agents.JobContext):
         tts_plugin = TTSPlugin()
 
         def vad_state_changer(vad_result: core.VADPluginResult, metadata: core.PluginIterator.ResultMetadata):
-            print("NEIL")
             if vad_result.type == core.VADPluginResultType.STARTED:
                 pass
                 # stt_plugin.reset()
                 # chatgpt_plugin.reset()
                 # tts_plugin.reset()
 
-        async def process_stt(text_streams: AsyncIterator[AsyncIterator[str]], metadata: core.PluginIterator.ResultMetadata):
-            async for text_stream in text_streams:
-                complete_stt_result = ""
-                async for stt_r in text_stream:
-                    complete_stt_result += stt_r.text
-                    print("STT: ", complete_stt_result)
-                    if complete_stt_result.strip() == "":
-                        continue
-                    msg = ChatGPTMessage(
-                        role=ChatGPTMessageRole.user, content=stt_r.text)
-                    yield msg
+        async def process_stt(text_stream: AsyncIterator[str], metadata: core.PluginIterator.ResultMetadata):
+            complete_stt_result = ""
+            async for stt_r in text_stream:
+                complete_stt_result += stt_r.text
+            msg = ChatGPTMessage(
+                role=ChatGPTMessageRole.user, content=complete_stt_result)
+            return msg
 
-        async def send_audio(frame_streams: AsyncIterator[AsyncIterator[rtc.AudioFrame]], metadata: core.PluginIterator.ResultMetadata):
-            async for frame_stream in frame_streams:
-                async for frame in frame_stream:
-                    await source.capture_frame(frame)
+        async def send_audio(frame_stream: AsyncIterator[rtc.AudioFrame], metadata: core.PluginIterator.ResultMetadata):
+            async for frame in frame_stream:
+                await source.capture_frame(frame)
 
-        vr = vad_plugin\
-            .start(input_iterator)\
+        await vad_plugin\
+            .set_input(input_iterator)\
             .do(vad_state_changer)\
             .filter(lambda data, _: data.type == core.VADPluginResultType.FINISHED)\
             .map(lambda data, _: data.frames)\
@@ -76,10 +70,8 @@ async def kitt_agent(ctx: agents.JobContext):
             .map_async(process_stt)\
             .pipe(chatgpt_plugin)\
             .pipe(tts_plugin)\
-            .do_async(send_audio)
-
-        async for d, m in vr:
-            print(d, m)
+            .do_async(send_audio)\
+            .run()
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):

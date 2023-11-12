@@ -45,7 +45,7 @@ class Plugin(Generic[T, U]):
         self._current_loop = asyncio.get_running_loop()
         self._current_thread = threading.current_thread().ident
 
-    def start(self, data: "PluginIterator[T]") -> "PluginIterator[U]":
+    def set_input(self, data: "PluginIterator[T]") -> "PluginIterator[U]":
         
         current_metadata: "[PluginIterator.ResultMetadata]" = []
 
@@ -161,4 +161,8 @@ class PluginIterator(Generic[T]):
         return PluginIterator(iterator=iterator())
 
     def pipe(self, plugin: Plugin[T, U]) -> "PluginIterator[U]":
-        return plugin.start(self)
+        return plugin.set_input(self)
+
+    async def run(self):
+        async for _ in self:
+            pass
