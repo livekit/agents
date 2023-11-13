@@ -449,7 +449,7 @@ class JobRequest:
 
             @self._room.on("track_published")
             def on_track_published(publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-                if not should_subscribe(publication):
+                if not should_subscribe(publication, participant):
                     return
 
                 publication.set_subscribed(True)
