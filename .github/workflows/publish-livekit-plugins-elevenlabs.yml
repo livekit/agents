@@ -1,0 +1,12 @@
+name: Publish livekit-plugins-elevenlabs
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  call-publish-workflow:
+    uses: ./.github/workflows/publish-package.yml
+    with:
+      package_name: 'livekit-plugins/livekit-plugins-elevenlabs'
