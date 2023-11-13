@@ -396,11 +396,10 @@ class JobRequest:
             self._answered = True
 
             identity = identity or "agent-" + self.id
-            grants = grants or api.VideoGrants(
-                room=self.room.name,
-                room_join=True,
-                agent=True,
-            )
+            grants = grants or api.VideoGrants()
+            grants.room_join = True
+            grants.agent = True
+            grants.room = self.room.name
 
             jwt = (
                 api.AccessToken(self._worker._api_key,
