@@ -41,7 +41,7 @@ async def kitt_agent(ctx: agents.JobContext):
             left_padding_ms=1000, silence_threshold_ms=500)
         stt_plugin = WhisperAPITranscriber()
         chatgpt_plugin = ChatGPTPlugin(prompt=PROMPT, message_capacity=20)
-        complete_sentence_plugin = core.utilities.CompleteSentencesPlugin()
+        complete_sentence_plugin = core.utils.CompleteSentencesPlugin()
         tts_plugin = TTSPlugin()
 
         def vad_state_changer(vad_result: core.VADPluginResult, metadata: core.PluginIterator.ResultMetadata):
