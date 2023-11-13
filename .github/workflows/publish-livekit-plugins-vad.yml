@@ -1,9 +1,7 @@
 name: Publish livekit-plugins-vad
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch
 
 jobs:
   call-publish-workflow:
