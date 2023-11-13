@@ -1,0 +1,10 @@
+name: Publish livekit-plugins-openai
+
+on:
+  workflow_dispatch
+
+jobs:
+  call-publish-workflow:
+    uses: ./.github/workflows/publish-package.yml
+    with:
+      package_name: 'livekit-plugins/livekit-plugins-openai'
