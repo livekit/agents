@@ -2,7 +2,7 @@ import os
 import asyncio
 import logging
 from openai import AsyncOpenAI
-from livekit import agents, protocol, rtc
+from livekit import agents, rtc
 from livekit.plugins import core
 from livekit.plugins.vad import VADPlugin
 from livekit.plugins.openai import (WhisperAPITranscriber,
@@ -86,32 +86,17 @@ async def kitt_agent(ctx: agents.JobContext):
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-        if publication.kind != rtc.TrackKind.KIND_AUDIO:
-            return
-
         asyncio.create_task(process_track(track))
-
-    @ctx.room.on('track_published')
-    def on_track_published(publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-        if publication.kind != rtc.TrackKind.KIND_AUDIO:
-            return
-
-        publication.set_subscribed(True)
-
-    for participant in ctx.room.participants.values():
-        for publication in participant.tracks.values():
-            if publication.kind != rtc.TrackKind.KIND_AUDIO:
-                continue
-
-            publication.set_subscribed(True)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     async def available_cb(job_request: agents.JobRequest):
         print("Accepting job for KITT")
-        await job_request.accept(kitt_agent)
+        await job_request.accept(kitt_agent, should_subscribe=lambda track_pub, _: track_pub.kind == rtc.TrackKind.KIND_AUDIO)
 
     worker = agents.Worker(available_cb=available_cb,
-                           worker_type=protocol.agent.JobType.JT_ROOM)
+                           worker_type=agents.JobType.JT_ROOM,
+
+                           )
     agents.run_app(worker)

@@ -29,7 +29,7 @@ from typing import (
 from click import Option
 from websockets import frames
 from livekit.protocol import agent as proto_agent
-from livekit.protocol import models  as proto_models
+from livekit.protocol import models as proto_models
 from livekit.plugins.core import Plugin
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -41,6 +41,10 @@ from livekit import api, rtc, protocol
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_INTERVAL = 5
 ASSIGNMENT_TIMEOUT = 15
+
+
+def subscribe_all(*args) -> bool:
+    return True
 
 
 class AssignmentTimeoutError(Exception):
@@ -75,8 +79,8 @@ class Worker:
         self._api_secret = api_secret
         self._running = False
         self._running_jobs: list["JobContext"] = []
-        self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
-
+        self._pending_jobs: Dict[str,
+                                 asyncio.Future[proto_agent.JobAssignment]] = {}
 
     def _set_url(self, ws_url: str) -> None:
         parse_res = urlparse(ws_url)
@@ -124,7 +128,8 @@ class Worker:
         try:
             return await asyncio.wait_for(f, ASSIGNMENT_TIMEOUT)
         except asyncio.TimeoutError:
-            raise AssignmentTimeoutError(f"assignment timeout for job {job_id}")
+            raise AssignmentTimeoutError(
+                f"assignment timeout for job {job_id}")
 
     async def _send_job_status(
         self,
@@ -144,7 +149,8 @@ class Worker:
         # TODO(theomonnom): the server could handle the JobSimulation like we're doing with the SFU today
         job_id = "JR_" + str(uuid.uuid4())[:12]
         job_type = proto_agent.JobType.JT_ROOM if participant is None else proto_agent.JobType.JT_PUBLISHER
-        job = proto_agent.Job(id=job_id, type=job_type, room=room, participant=participant)
+        job = proto_agent.Job(id=job_id, type=job_type,
+                              room=room, participant=participant)
         job = JobRequest(self, job, simulated=True)
         asyncio.ensure_future(self._handle_new_job(job), loop=self._loop)
 
@@ -203,7 +209,8 @@ class Worker:
         for i in range(MAX_RECONNECT_ATTEMPTS):
             try:
                 reg = await self._connect()
-                logging.info(f"worker successfully re-registered: {reg.worker_id}")
+                logging.info(
+                    f"worker successfully re-registered: {reg.worker_id}")
                 return True
             except Exception as e:
                 logging.error(f"failed to reconnect, attempt {i}: {e}")
@@ -219,7 +226,8 @@ class Worker:
                         await self._message_received(await self._recv())
                 except websockets.exceptions.ConnectionClosed as e:
                     if self._running:
-                        logging.error(f"connection closed, trying to reconnect: {e}")
+                        logging.error(
+                            f"connection closed, trying to reconnect: {e}")
                         if not await self._reconnect():
                             break
                 except Exception as e:
@@ -360,17 +368,19 @@ class JobRequest:
         async with self._lock:
             if self._answered:
                 raise Exception("job already answered")
-            
+
             self._answered = True
             if not self._simulated:
                 await self._worker._send_availability(self.id, False)
-
 
         logging.info(f"rejected job {self.id}")
 
     async def accept(
         self,
         agent: Callable[[JobContext], Coroutine],
+        should_subscribe: Callable[[
+            rtc.TrackPublication, rtc.RemoteParticipant], bool],
+        grants: api.VideoGrants = None,
         name: str = "",
         identity: str = "",
         metadata: str = "",
@@ -386,14 +396,14 @@ class JobRequest:
             self._answered = True
 
             identity = identity or "agent-" + self.id
-            grants = api.VideoGrants(
-                room=self.room.name,
-                room_join=True,
-                agent=True,
-            )
+            grants = grants or api.VideoGrants()
+            grants.room_join = True
+            grants.agent = True
+            grants.room = self.room.name
 
             jwt = (
-                api.AccessToken(self._worker._api_key, self._worker._api_secret)
+                api.AccessToken(self._worker._api_key,
+                                self._worker._api_secret)
                 .with_identity(identity)
                 .with_grants(grants)
                 .with_metadata(metadata)
@@ -406,7 +416,8 @@ class JobRequest:
                 _ = await self._worker._send_availability(self.id, True)
 
             try:
-                options = rtc.RoomOptions(auto_subscribe=True)
+                should_auto_subscribe = should_subscribe == subscribe_all
+                options = rtc.RoomOptions(auto_subscribe=should_auto_subscribe)
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
                 logging.error(
@@ -422,7 +433,8 @@ class JobRequest:
             if self.participant is None and sid:
                 # cancel the job if the participant cannot be found
                 # this can happen if the participant has left the room before the agent gets the job
-                logging.warn(f"participant '{sid}' not found, cancelling job {self.id}")
+                logging.warn(
+                    f"participant '{sid}' not found, cancelling job {self.id}")
                 await self._worker._send_job_status(
                     self.id,
                     proto_agent.JobStatus.JS_FAILED,
@@ -431,8 +443,23 @@ class JobRequest:
                 await self._room.disconnect()
                 raise JobCancelledError(f"participant '{sid}' not found")
 
-            job_ctx = JobContext(self.id, self._worker, self._room, participant)
+            job_ctx = JobContext(self.id, self._worker,
+                                 self._room, participant)
             self._worker._loop.create_task(agent(job_ctx))
+
+            @self._room.on("track_published")
+            def on_track_published(publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+                if not should_subscribe(publication, participant):
+                    return
+
+                publication.set_subscribed(True)
+
+            for participant in self._room.participants.values():
+                for publication in participant.tracks.values():
+                    if not should_subscribe(publication):
+                        continue
+
+                    publication.set_subscribed(True)
 
         logging.info(f"accepted job {self.id}")
 
@@ -543,15 +570,17 @@ def run_app(worker: Worker) -> None:
 
             async with aclosing(room_service) as service:
                 room = await room_service.create_room(api.CreateRoomRequest(name=room_name))
-                
+
                 participant = None
                 if identity:
                     participant = await room_service.get_participant(api.RoomParticipantIdentity(room=room_name, identity=identity))
 
                 return room, participant
- 
+
         room_info, participant = worker._loop.run_until_complete(_pre_run())
-        logging.info(f"Simulating job for room {room_info.name} ({room_info.sid}) - Participant: {participant or 'None'}")
-        _run_worker(worker, started_cb=lambda _: worker._simulate_job(room_info, participant))
+        logging.info(
+            f"Simulating job for room {room_info.name} ({room_info.sid}) - Participant: {participant or 'None'}")
+        _run_worker(worker, started_cb=lambda _: worker._simulate_job(
+            room_info, participant))
 
     cli()
