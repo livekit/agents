@@ -378,7 +378,7 @@ class JobRequest:
     async def accept(
         self,
         agent: Callable[[JobContext], Coroutine],
-        should_handle_track: Callable[[
+        should_subscribe: Callable[[
             rtc.TrackPublication, rtc.RemoteParticipant], bool],
         grants: api.VideoGrants = None,
         name: str = "",
@@ -449,14 +449,14 @@ class JobRequest:
 
             @self._room.on("track_published")
             def on_track_published(publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-                if not should_handle_track(publication):
+                if not should_subscribe(publication):
                     return
 
                 publication.set_subscribed(True)
 
             for participant in self._room.participants.values():
                 for publication in participant.tracks.values():
-                    if not should_handle_track(publication):
+                    if not should_subscribe(publication):
                         continue
 
                     publication.set_subscribed(True)

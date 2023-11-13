@@ -93,7 +93,7 @@ if __name__ == "__main__":
 
     async def available_cb(job_request: agents.JobRequest):
         print("Accepting job for KITT")
-        await job_request.accept(kitt_agent, should_handle_track=lambda track_pub, _: track_pub.kind == rtc.TrackKind.KIND_AUDIO)
+        await job_request.accept(kitt_agent, should_subscribe=lambda track_pub, _: track_pub.kind == rtc.TrackKind.KIND_AUDIO)
 
     worker = agents.Worker(available_cb=available_cb,
                            worker_type=protocol.agent.JobType.JT_ROOM,
