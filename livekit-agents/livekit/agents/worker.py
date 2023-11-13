@@ -416,7 +416,8 @@ class JobRequest:
                 _ = await self._worker._send_availability(self.id, True)
 
             try:
-                options = rtc.RoomOptions(auto_subscribe=False)
+                should_auto_subscribe = should_subscribe == subscribe_all
+                options = rtc.RoomOptions(auto_subscribe=should_auto_subscribe)
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
                 logging.error(
