@@ -43,6 +43,10 @@ RECONNECT_INTERVAL = 5
 ASSIGNMENT_TIMEOUT = 15
 
 
+def subscribe_all(*args) -> bool:
+    return True
+
+
 class AssignmentTimeoutError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
@@ -376,7 +380,6 @@ class JobRequest:
         agent: Callable[[JobContext], Coroutine],
         should_handle_track: Callable[[
             rtc.TrackPublication, rtc.RemoteParticipant], bool],
-        room_options: rtc.RoomOptions = None,
         grants: api.VideoGrants = None,
         name: str = "",
         identity: str = "",
@@ -414,7 +417,7 @@ class JobRequest:
                 _ = await self._worker._send_availability(self.id, True)
 
             try:
-                options = room_options or rtc.RoomOptions(auto_subscribe=False)
+                options = rtc.RoomOptions(auto_subscribe=False)
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
                 logging.error(
