@@ -8,3 +8,4 @@ jobs:
     uses: ./.github/workflows/publish-package.yml
     with:
       package_name: 'livekit-plugins/livekit-plugins-google'
+    secrets: inherit
