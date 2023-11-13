@@ -8,6 +8,6 @@ from .common_plugins import (VADPlugin,
                              TTSPlugin,
                              TTTPlugin,
                              )
-from . import utilities
+from . import utils
 from .async_iterator_list import AsyncIteratorList
 from .async_queue_iterator import AsyncQueueIterator
