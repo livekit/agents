@@ -20,12 +20,14 @@ class TTSPlugin(core.TTSPlugin):
         super().__init__(process=self._process, close=self._close)
         self._model = None
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        self._response_iterator = core.AsyncQueueIterator(asyncio.Queue[rtc.AudioFrame]())
+        self._response_iterator = core.AsyncQueueIterator(
+            asyncio.Queue[rtc.AudioFrame]())
 
     async def _close(self):
         pass
 
-    def _process(self, text_streams: AsyncIterator[AsyncIterator[str]]) -> AsyncIterator[AsyncIterator[rtc.AudioFrame]]:
+    def _process(self, text_streams: AsyncIterator[AsyncIterator[str]]
+                 ) -> AsyncIterator[AsyncIterator[rtc.AudioFrame]]:
         asyncio.create_task(self._async_process(text_streams))
         return self._response_iterator
 
@@ -44,10 +46,12 @@ class TTSPlugin(core.TTSPlugin):
             response = await self._client.audio.speech.create(model="tts-1", voice="alloy", response_format="mp3", input=complete_text, )
             filepath = "/tmp/openai_tts/output.mp3"
             response.stream_to_file(filepath)
-            audio_stream = core.AsyncQueueIterator(asyncio.Queue[rtc.AudioFrame]())
+            audio_stream = core.AsyncQueueIterator(
+                asyncio.Queue[rtc.AudioFrame]())
             with audioread.audio_open(filepath) as f:
                 for buf in f:
-                    frame = rtc.AudioFrame(buf, f.samplerate, f.channels, len(buf) // 2)
+                    frame = rtc.AudioFrame(
+                        buf, f.samplerate, f.channels, len(buf) // 2)
                     await audio_stream.put(frame)
 
                 await audio_stream.aclose()

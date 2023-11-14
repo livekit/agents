@@ -144,8 +144,10 @@ class Worker:
         req.job_update.user_data = user_data
         await self._ws.send(req.SerializeToString())
 
-    def _simulate_job(self, room: proto_models.Room, participant: Optional[proto_models.ParticipantInfo]):
-        # TODO(theomonnom): the server could handle the JobSimulation like we're doing with the SFU today
+    def _simulate_job(self, room: proto_models.Room,
+                      participant: Optional[proto_models.ParticipantInfo]):
+        # TODO(theomonnom): the server could handle the JobSimulation like
+        # we're doing with the SFU today
         job_id = "JR_" + str(uuid.uuid4())[:12]
         job_type = proto_agent.JobType.JT_ROOM if participant is None else proto_agent.JobType.JT_PUBLISHER
         job = proto_agent.Job(id=job_id, type=job_type,
@@ -431,7 +433,8 @@ class JobRequest:
             participant = self._room.participants.get(sid)
             if self.participant is None and sid:
                 # cancel the job if the participant cannot be found
-                # this can happen if the participant has left the room before the agent gets the job
+                # this can happen if the participant has left the room before
+                # the agent gets the job
                 logging.warn(
                     f"participant '{sid}' not found, cancelling job {self.id}")
                 await self._worker._send_job_status(
@@ -447,7 +450,9 @@ class JobRequest:
             self._worker._loop.create_task(agent(job_ctx))
 
             @self._room.on("track_published")
-            def on_track_published(publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+            def on_track_published(
+                    publication: rtc.TrackPublication,
+                    participant: rtc.RemoteParticipant):
                 if not should_subscribe(publication, participant):
                     return
 
@@ -533,21 +538,25 @@ def run_app(worker: Worker) -> None:
     import click
 
     @click.group()
-    @click.option(
-        "--log-level",
-        default="INFO",
-        type=click.Choice(
-            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
-        ),
-        help="Set the logging level",
-    )
+    @click.option("--log-level",
+                  default="INFO",
+                  type=click.Choice(["DEBUG",
+                                     "INFO",
+                                     "WARNING",
+                                     "ERROR",
+                                     "CRITICAL"],
+                                    case_sensitive=False),
+                  help="Set the logging level",
+                  )
     @click.option(
         "--url",
         help="The websocket URL",
         default=worker._rtc_url,
     )
     @click.option("--api-key", help="The API key", default=worker._api_key)
-    @click.option("--api-secret", help="The API secret", default=worker._api_secret)
+    @click.option("--api-secret",
+                  help="The API secret",
+                  default=worker._api_secret)
     def cli(log_level: str, url: str, api_key: str, api_secret: str) -> None:
         logging.basicConfig(level=log_level)
         worker._set_url(url)

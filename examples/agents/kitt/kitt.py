@@ -44,7 +44,9 @@ async def kitt_agent(ctx: agents.JobContext):
         complete_sentence_plugin = core.utils.CompleteSentencesPlugin()
         tts_plugin = TTSPlugin()
 
-        def vad_state_changer(vad_result: core.VADPluginResult, metadata: core.PluginIterator.ResultMetadata):
+        def vad_state_changer(
+                vad_result: core.VADPluginResult,
+                metadata: core.PluginIterator.ResultMetadata):
             if vad_result.type == core.VADPluginResultType.STARTED:
                 state[0] = AgentState.LISTENING
                 state[1] = metadata.sequence_number
@@ -85,7 +87,10 @@ async def kitt_agent(ctx: agents.JobContext):
             .run()
 
     @ctx.room.on("track_subscribed")
-    def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+    def on_track_subscribed(
+            track: rtc.Track,
+            publication: rtc.TrackPublication,
+            participant: rtc.RemoteParticipant):
         asyncio.create_task(process_track(track))
 
 if __name__ == "__main__":

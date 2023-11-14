@@ -29,7 +29,10 @@ setuptools.setup(
     name="livekit-plugins-vad",
     version=about['__version__'],
     description="LiveKit Python Plugins for Voice Activity Detection",
-    long_description=(here / "README.md").read_text(encoding="utf-8"),
+    long_description=(
+        here /
+        "README.md").read_text(
+            encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/python-agents",
     cmdclass={},
@@ -46,14 +49,22 @@ setuptools.setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3 :: Only",
     ],
-    keywords=["webrtc", "realtime", "audio", "video", "livekit"],
+    keywords=[
+        "webrtc",
+        "realtime",
+        "audio",
+        "video",
+        "livekit"],
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(
         include=["livekit.*"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit", "livekit-plugins-core", "torch >= 2.0.0", "torchaudio", "numpy >= 1.24.0"
-    ],
+        "livekit",
+        "livekit-plugins-core",
+        "torch >= 2.0.0",
+        "torchaudio",
+        "numpy >= 1.24.0"],
     package_data={},
     project_urls={
         "Documentation": "https://docs.livekit.io",

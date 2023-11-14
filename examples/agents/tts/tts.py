@@ -18,7 +18,10 @@ async def tts_agent(ctx: agents.JobContext):
     await ctx.room.local_participant.publish_track(track, options)
 
     @ctx.room.on("data_received")
-    def on_data_received(data: bytes, participant: rtc.RemoteParticipant, kind):
+    def on_data_received(
+            data: bytes,
+            participant: rtc.RemoteParticipant,
+            kind):
         payload = json.loads(data.decode('utf-8'))
         if payload["type"] != "tts":
             return

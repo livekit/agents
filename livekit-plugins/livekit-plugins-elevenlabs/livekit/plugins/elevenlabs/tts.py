@@ -40,10 +40,12 @@ class _WSWrapper:
 
 class ElevenLabsTTSPlugin(core.TTSPlugin):
     def __init__(self):
-        self._result_iterator = core.AsyncQueueIterator(asyncio.Queue[AsyncIterable[rtc.AudioFrame]]())
+        self._result_iterator = core.AsyncQueueIterator(
+            asyncio.Queue[AsyncIterable[rtc.AudioFrame]]())
         super().__init__(process=self.process)
 
-    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterable[AsyncIterable[rtc.AudioFrame]]:
+    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]
+                ) -> AsyncIterable[AsyncIterable[rtc.AudioFrame]]:
         asyncio.create_task(self._async_process(text_iterator))
         return self._result_iterator
 
@@ -51,7 +53,8 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
         async for text_stream in text_iterator:
             ws = _WSWrapper()
             await ws.connect()
-            result_stream = core.AsyncQueueIterator[rtc.AudioFrame](asyncio.Queue[rtc.AudioFrame]())
+            result_stream = core.AsyncQueueIterator[rtc.AudioFrame](
+                asyncio.Queue[rtc.AudioFrame]())
             asyncio.create_task(self._push_data_loop(ws, text_stream))
             asyncio.create_task(self._receive_audio_loop(ws, result_stream))
             await self._result_iterator.put(result_stream)
@@ -105,7 +108,9 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
 
     def _create_frame_from_chunk(self, chunk: bytes):
         frame = rtc.AudioFrame.create(
-            sample_rate=44100, num_channels=1, samples_per_channel=441)  # Eleven labs format
+            sample_rate=44100,
+            num_channels=1,
+            samples_per_channel=441)  # Eleven labs format
         audio_data = np.ctypeslib.as_array(frame.data)
         np.copyto(audio_data, np.frombuffer(chunk, dtype=np.int16))
         return frame

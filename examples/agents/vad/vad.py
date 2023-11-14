@@ -22,10 +22,9 @@ async def vad_agent(ctx: agents.JobContext):
         vad_plugin = VADPlugin(
             left_padding_ms=200, silence_threshold_ms=250)
 
-        vad_results = vad_plugin.start(audio_stream)\
-            .filter(lambda data: data.type == core.VADPluginResultType.FINISHED)\
-            .map(lambda data: data.frames)\
-            .unwrap()
+        vad_results = vad_plugin.start(audio_stream) .filter(
+            lambda data: data.type == core.VADPluginResultType.FINISHED) .map(
+            lambda data: data.frames) .unwrap()
 
         async for frames in vad_results:
             asyncio.create_task(ctx.room.local_participant.publish_data(
@@ -38,7 +37,10 @@ async def vad_agent(ctx: agents.JobContext):
                 f"VAD - Voice Finished. Frame Count: {len(frames)}")
 
     @ctx.room.on("track_subscribed")
-    def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+    def on_track_subscribed(
+            track: rtc.Track,
+            publication: rtc.TrackPublication,
+            participant: rtc.RemoteParticipant):
         if publication.kind != rtc.TrackKind.KIND_AUDIO or track.name == "echo":
             return
         asyncio.create_task(process_track(track))
