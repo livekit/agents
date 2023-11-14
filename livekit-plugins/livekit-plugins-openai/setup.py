@@ -58,7 +58,7 @@ setuptools.setup(
         "numpy >= 1.24.0",
         "openai >= 0.28.0",
         "openai-whisper",
-        "audioread",
+        "audioread >= 3.0.0",
     ],
     package_data={},
     project_urls={

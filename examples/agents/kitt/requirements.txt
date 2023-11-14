@@ -1,4 +1,3 @@
-audioread>=3.0.0
 livekit-agents>=0.0.1
 livekit-plugins-core>=0.0.1
 livekit-plugins-openai>=0.0.1
