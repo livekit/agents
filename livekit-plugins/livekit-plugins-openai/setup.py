@@ -49,10 +49,10 @@ setuptools.setup(
     keywords=["webrtc", "realtime", "audio", "video", "livekit"],
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(
-        include=["livekit.plugins"]),
+        include=["livekit.*"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit >= 0.4.6", "livekit-plugins-core", "torch >= 2.0.0", "numpy >= 1.24.0", "openai >= 0.28.0", "openai-whisper"
+        "livekit", "livekit-plugins-core", "torch >= 2.0.0", "numpy >= 1.24.0", "openai >= 0.28.0", "openai-whisper"
     ],
     package_data={},
     project_urls={
