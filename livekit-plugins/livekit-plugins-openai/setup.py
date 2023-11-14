@@ -54,7 +54,7 @@ setuptools.setup(
     install_requires=[
         "livekit >= 0.5.0",
         "livekit-plugins-core",
-        "torch >= 2.0.0",
+        "torch >= 2.1.0",
         "numpy >= 1.24.0",
         "openai >= 0.28.0",
         "openai-whisper",
