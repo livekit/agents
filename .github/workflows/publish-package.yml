@@ -22,7 +22,8 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
+  build:
+
     defaults:
       run:
         working-directory: ${{ inputs.package_name }}
@@ -45,9 +46,24 @@ jobs:
     - name: Build package
       run: python -m build
 
+    - name: Store the distribution packages
+      uses: actions/upload-artifact@v3
+      with:
+        name: python-package-distributions
+        path: dist/
+
+  publish:
+
+    steps:
+
+    - name: Download all the dists
+      uses: actions/download-artifact@v3
+      with:
+        name: python-package-distributions
+        path: dist/
+
     - name: Publish package
       uses: pypa/gh-action-pypi-publish@27b31702a0e7fc50959f5ad993c78deac1bdfc29
       with:
         user: __token__
         password: ${{ secrets.PYPI_API_TOKEN }}
-        packages_dir: ${{ inputs.package_name }}
