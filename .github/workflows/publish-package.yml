@@ -54,6 +54,11 @@ jobs:
 
   publish:
 
+    needs:
+    - build
+
+    runs-on: ubuntu-latest
+
     steps:
 
     - name: Download all the dists
