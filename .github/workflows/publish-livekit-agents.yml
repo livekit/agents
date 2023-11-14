@@ -7,5 +7,5 @@ jobs:
   call-publish-workflow:
     uses: ./.github/workflows/publish-package.yml
     with:
-      package_name: 'livekit-plugins/livekit-plugins-agents'
+      package_name: 'livekit-agents'
     secrets: inherit
