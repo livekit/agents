@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import AsyncIterable, Optional
+from typing import AsyncIterable, List, Optional
 
 import whisper
 from livekit import rtc
@@ -19,7 +19,7 @@ class WhisperLocalTranscriber(core.STTPlugin):
         super().__init__(process=self.process)
         self._model = None
 
-    def process(self, frame_groups: AsyncIterable[[rtc.AudioFrame]]) -> AsyncIterable[core.STTPluginResult]:
+    def process(self, frame_groups: AsyncIterable[List[rtc.AudioFrame]]) -> AsyncIterable[core.STTPluginResult]:
         async def iterator():
             async for frames in frame_groups:
                 res = await self._push_frames(frames)
@@ -27,7 +27,7 @@ class WhisperLocalTranscriber(core.STTPlugin):
 
         return iterator()
 
-    async def _push_frames(self, frames: [rtc.AudioFrame]) -> core.STTPluginResult:
+    async def _push_frames(self, frames: List[rtc.AudioFrame]) -> core.STTPluginResult:
         resampled = [
             frame.remix_and_resample(WHISPER_SAMPLE_RATE, WHISPER_CHANNELS) for frame in frames]
 

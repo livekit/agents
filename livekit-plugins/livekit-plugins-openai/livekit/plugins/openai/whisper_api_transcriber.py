@@ -5,7 +5,7 @@ import io
 import wave
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import AsyncIterable, Optional
+from typing import AsyncIterable, List, Optional
 
 from openai import AsyncOpenAI
 from livekit import rtc
@@ -27,7 +27,7 @@ class WhisperAPITranscriber(core.STTPlugin):
         self._task = None
         self._frame_streams = None
 
-    def _process(self, frame_streams: AsyncIterable[[rtc.AudioFrame]]) -> AsyncIterable[AsyncIterable[core.STTPluginResult]]:
+    def _process(self, frame_streams: AsyncIterable[List[rtc.AudioFrame]]) -> AsyncIterable[AsyncIterable[core.STTPluginResult]]:
         self._frame_streams = frame_streams
         self._task = asyncio.create_task(self._async_process(frame_streams))
         return self._result_iterator
@@ -35,7 +35,7 @@ class WhisperAPITranscriber(core.STTPlugin):
     async def _close(self):
         pass
 
-    async def _async_process(self, frame_streams: AsyncIterable[[rtc.AudioFrame]]) -> AsyncIterable[core.STTPluginResult]:
+    async def _async_process(self, frame_streams: AsyncIterable[List[rtc.AudioFrame]]) -> AsyncIterable[core.STTPluginResult]:
         async for frame_stream in frame_streams:
             if len(frame_stream) == 0:
                 continue

@@ -33,7 +33,6 @@ from livekit.protocol import models as proto_models
 from livekit.plugins.core import Plugin
 from dataclasses import dataclass
 from urllib.parse import urlparse
-from contextlib import aclosing
 
 import websockets
 from livekit import api, rtc, protocol
@@ -568,7 +567,7 @@ def run_app(worker: Worker) -> None:
                 worker._rtc_url, worker._api_key, worker._api_secret
             )
 
-            async with aclosing(room_service) as service:
+            try:
                 room = await room_service.create_room(api.CreateRoomRequest(name=room_name))
 
                 participant = None
@@ -576,6 +575,8 @@ def run_app(worker: Worker) -> None:
                     participant = await room_service.get_participant(api.RoomParticipantIdentity(room=room_name, identity=identity))
 
                 return room, participant
+            finally:
+                await room_service.close()
 
         room_info, participant = worker._loop.run_until_complete(_pre_run())
         logging.info(

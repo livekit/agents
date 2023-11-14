@@ -1,10 +1,12 @@
-# python-agents
+# LiveKit Agent Framework
 
-As we've introduced more client SDKs meant to be run in a server-side environment, we've noticed common patterns and use cases emerge. To tackle these common patterns and to reduce boilerplate, we've introduced Agents. 
+The Agent Framework is designed for building real-time, programmable participants
+that run on servers. Easily tap into LiveKit WebRTC sessions and process or generate
+audio, video, and data streams.
 
-Agents are LiveKit participants that can be used without having to manually wire up things like selective track subscription, track subscribed callbacks, etc.
+The framework includes plugins for common workflows, such as voice activity detection and speech-to-text.
 
-This repo also contains common processors that are useful for agent developers. For example, many agents will need VAD (Voice Activity Detection) so we've made a processor for that.
+Furthermore, it integrates seamlessly with LiveKit server, offloading job queuing and scheduling responsibilities to it. This approach eliminates the need for additional queuing infrastructure. The code developed on your local machine is fully scalable when deployed to a server, supporting thousands of concurrent sessions.
 
 ## Getting Started
 
@@ -14,15 +16,26 @@ To install the core agent library:
 pip install livekit-agents
 ```
 
-Processors can be installed one-by-one depending on what your agent needs:
+Plugins can be installed individually depending on what your agent needs. Available plugins:
 
-```bash
-pip install livekit-processors-vad livekit-processors-openai
+- livekit-plugins-elevenlabs
+- livekit-plugins-google
+- livekit-plugins-openai
+- livekit-plugins-vad
+
+## Terminology
+
+- **Agent**: A function that defines the workflow of the server-side participant. This is what you will be developing.
+- **Worker**: A container process responsible for managing job queuing with LiveKit server. Each worker is capable of running multiple agents simultaneously.
+- **Plugin**: A library class that perform a specific task like speech-to-text with a specific provider. Agents can combine multiple plugins together to perform more complex tasks.
+
+## Creating an Agent
+
+Let's begin with a simple agent that performs speech-to-text on incoming audio tracks.
+
+```python
+
 ```
-
-## Creating An Agent
-
-An agent is a class that sub-classes `Agent`.
 
 The following agent listens to audio tracks and
 sends a DataChannel into the room whenever speaking has been detected.
@@ -68,6 +81,7 @@ class MyAgent(Agent):
 Examples can be found in the `examples/` repo.
 
 Examples coming soon:
+
 - Siri-like
 - Audio-to-Audio Language Translation
 - Transcribtion
