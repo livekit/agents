@@ -52,7 +52,8 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
     async def _close(self):
         pass
 
-    def _process(self, message_iterator: AsyncIterable[ChatGPTMessage]) -> AsyncIterable[AsyncIterable[str]]:
+    def _process(
+            self, message_iterator: AsyncIterable[ChatGPTMessage]) -> AsyncIterable[AsyncIterable[str]]:
         async def iterator():
             async for msg in message_iterator:
                 self._messages.append(msg)
@@ -81,4 +82,4 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
             if content is not None:
                 yield content
 
-        self._producing_response = False 
+        self._producing_response = False

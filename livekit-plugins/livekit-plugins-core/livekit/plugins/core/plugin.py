@@ -34,9 +34,13 @@ U = TypeVar('U')
 
 EventTypes = Literal["error"]
 
+
 class Plugin(Generic[T, U]):
 
-    def __init__(self, process: Callable[[AsyncIterable[T]], AsyncIterable[U]], close: Callable) -> None:
+    def __init__(self,
+                 process: Callable[[AsyncIterable[T]],
+                                   AsyncIterable[U]],
+                 close: Callable) -> None:
         self.__process = process
         self.__close = close
         self.__events: Dict[T, Set[Callable]] = dict()
@@ -44,7 +48,7 @@ class Plugin(Generic[T, U]):
         self.__current_thread = threading.current_thread().ident
 
     def set_input(self, data: "PluginIterator[T]") -> "PluginIterator[U]":
-        
+
         current_metadata: "[PluginIterator.ResultMetadata]" = [None]
 
         async def item_iterator():
@@ -68,8 +72,11 @@ class Plugin(Generic[T, U]):
             emit_event()
         else:
             self.__current_loop.call_soon_threadsafe(emit_event)
-            
-    def on(self, event: EventTypes, callback: Optional[Callable] = None) -> Callable:
+
+    def on(
+            self,
+            event: EventTypes,
+            callback: Optional[Callable] = None) -> Callable:
         if callback is not None:
             if event not in self.__events:
                 self.__events[event] = set()
@@ -87,18 +94,20 @@ class Plugin(Generic[T, U]):
 
     def close(self) -> None:
         if threading.current_thread().ident != self.__current_thread:
-            asyncio.run_coroutine_threadsafe(self.__close(), self.__current_loop)
+            asyncio.run_coroutine_threadsafe(
+                self.__close(), self.__current_loop)
         else:
             self.__current_loop.create_task(self.__close())
-    
-    
+
+
 class PluginIterator(Generic[T]):
 
     @dataclass
     class ResultMetadata:
         sequence_number: int
 
-    def __init__(self, iterator: AsyncIterable[Tuple[T, ResultMetadata]]) -> None:
+    def __init__(
+            self, iterator: AsyncIterable[Tuple[T, ResultMetadata]]) -> None:
         self._iterator = iterator
 
     def __aiter__(self):
@@ -118,7 +127,8 @@ class PluginIterator(Generic[T]):
         async for item in self._iterator:
             return item
 
-    def filter(self, predicate: Callable[[T, ResultMetadata], bool]) -> "PluginIterator[T]":
+    def filter(self, predicate: Callable[[
+               T, ResultMetadata], bool]) -> "PluginIterator[T]":
         async def iterator() -> AsyncIterable[T]:
             async for (item, metadata) in self._iterator:
                 if predicate(item, metadata):
@@ -126,21 +136,26 @@ class PluginIterator(Generic[T]):
 
         return PluginIterator(iterator=iterator())
 
-    def map(self, mapper: Callable[[T, ResultMetadata], U]) -> "PluginIterator[U]":
+    def map(self, mapper: Callable[[
+            T, ResultMetadata], U]) -> "PluginIterator[U]":
         async def iterator() -> AsyncIterable[U]:
             async for (item, metadata) in self._iterator:
                 yield mapper(item, metadata), metadata
 
         return PluginIterator(iterator=iterator())
 
-    def map_async(self, mapper: Callable[[T, ResultMetadata], Awaitable[U]]) -> "PluginIterator[U]":
+    def map_async(self,
+                  mapper: Callable[[T,
+                                    ResultMetadata],
+                                   Awaitable[U]]) -> "PluginIterator[U]":
         async def iterator() -> AsyncIterable[U]:
             async for (item, metadata) in self._iterator:
                 yield await mapper(item, metadata), metadata
 
         return PluginIterator(iterator=iterator())
 
-    def do(self, callback: Callable[[T, ResultMetadata], None]) -> "PluginIterator[T]":
+    def do(self, callback: Callable[[
+           T, ResultMetadata], None]) -> "PluginIterator[T]":
         async def iterator() -> AsyncIterable[T]:
             async for (item, metadata) in self._iterator:
                 callback(item, metadata)
@@ -148,7 +163,10 @@ class PluginIterator(Generic[T]):
 
         return PluginIterator(iterator=iterator())
 
-    def do_async(self, callback: Callable[[T, ResultMetadata], Awaitable[None]]) -> "PluginIterator[T]":
+    def do_async(self,
+                 callback: Callable[[T,
+                                     ResultMetadata],
+                                    Awaitable[None]]) -> "PluginIterator[T]":
         async def iterator() -> AsyncIterable[T]:
             async for (item, metadata) in self._iterator:
                 await callback(item, metadata)
@@ -156,7 +174,10 @@ class PluginIterator(Generic[T]):
 
         return PluginIterator(iterator=iterator())
 
-    def skip_while(self, predicate: Callable[[T, ResultMetadata], bool]) -> "PluginIterator[T]":
+    def skip_while(self,
+                   predicate: Callable[[T,
+                                        ResultMetadata],
+                                       bool]) -> "PluginIterator[T]":
         async def iterator() -> AsyncIterable[T]:
             async for (item, metadata) in self._iterator:
                 if not predicate(item, metadata):

@@ -19,7 +19,8 @@ class WhisperLocalTranscriber(core.STTPlugin):
         super().__init__(process=self.process)
         self._model = None
 
-    def process(self, frame_groups: AsyncIterable[List[rtc.AudioFrame]]) -> AsyncIterable[core.STTPluginResult]:
+    def process(
+            self, frame_groups: AsyncIterable[List[rtc.AudioFrame]]) -> AsyncIterable[core.STTPluginResult]:
         async def iterator():
             async for frames in frame_groups:
                 res = await self._push_frames(frames)
@@ -29,7 +30,9 @@ class WhisperLocalTranscriber(core.STTPlugin):
 
     async def _push_frames(self, frames: List[rtc.AudioFrame]) -> core.STTPluginResult:
         resampled = [
-            frame.remix_and_resample(WHISPER_SAMPLE_RATE, WHISPER_CHANNELS) for frame in frames]
+            frame.remix_and_resample(
+                WHISPER_SAMPLE_RATE,
+                WHISPER_CHANNELS) for frame in frames]
 
         total_len = 0
         for frame in resampled:
@@ -43,7 +46,8 @@ class WhisperLocalTranscriber(core.STTPlugin):
             write_index += len(resampled[i].data)
 
         result = await asyncio.get_event_loop().run_in_executor(None, self._transcribe, np_frames.astype(dtype=np.float32) / 32768.0)
-        return core.STTPluginResult(type=core.STTPluginResultType.DELTA_RESULT, text=result)
+        return core.STTPluginResult(
+            type=core.STTPluginResultType.DELTA_RESULT, text=result)
 
     def _transcribe(self, buffer: np.array) -> str:
         # TODO: include this with the package

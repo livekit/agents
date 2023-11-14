@@ -32,7 +32,8 @@ class VADPlugin(VADPluginType):
     async def _close(self):
         pass
 
-    def _process(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[VADPluginResult]:
+    def _process(
+            self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[VADPluginResult]:
         async def iterator():
             async for frame in frame_iterator:
                 event = await self.push_frame(frame)
@@ -117,7 +118,8 @@ class VADPlugin(VADPluginType):
                                     buffer_count] = self._window_buffer[buffer_count:]
         self._window_buffer[-buffer_count:] = self._copy_float32
         self._window_buffer[:-
-                            buffer_count] = self._window_buffer_scratch[:-buffer_count]
+                            buffer_count] = self._window_buffer_scratch[:-
+                                                                        buffer_count]
         tensor = torch.from_numpy(self._window_buffer)
         speech_prob = self._model(tensor, VAD_SAMPLE_RATE).item()
         return speech_prob > 0.5
