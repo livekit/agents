@@ -1,4 +1,4 @@
-from typing import AsyncIterable
+from typing import AsyncIterable, List
 from livekit import rtc
 from .async_iterator_list import AsyncIteratorList
 from .plugin import Plugin
@@ -32,7 +32,7 @@ class STTPluginResult:
     text: str
 
 
-STTPlugin = Plugin[[rtc.AudioFrame], AsyncIterable[STTPluginResult]]
+STTPlugin = Plugin[List[rtc.AudioFrame], AsyncIterable[STTPluginResult]]
 
 
 TTSPlugin = Plugin[AsyncIterable[str], AsyncIterable[rtc.AudioFrame]]

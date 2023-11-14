@@ -96,7 +96,5 @@ if __name__ == "__main__":
         await job_request.accept(kitt_agent, should_subscribe=lambda track_pub, _: track_pub.kind == rtc.TrackKind.KIND_AUDIO)
 
     worker = agents.Worker(available_cb=available_cb,
-                           worker_type=agents.JobType.JT_ROOM,
-
-                           )
+                           worker_type=agents.JobType.JT_ROOM)
     agents.run_app(worker)
