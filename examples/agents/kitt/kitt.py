@@ -40,16 +40,20 @@ async def process_track(ctx: agents.JobContext, track: rtc.Track, source: rtc.Au
     complete_sentence_plugin = core.utils.CompleteSentencesPlugin()
     tts_plugin = TTSPlugin()
 
-    def vad_state_changer(
+    async def vad_state_changer(
             vad_result: core.VADPluginResult,
             metadata: core.PluginIterator.ResultMetadata):
         if vad_result.type == core.VADPluginResultType.STARTED:
             state[0] = AgentState.LISTENING
             state[1] = metadata.sequence_number
             chatgpt_plugin.interrupt()
+            await ctx.room.local_participant.update_metadata(
+                create_message(state="listening"))
         else:
             state[0] = AgentState.SPEAKING
             state[1] = metadata.sequence_number
+            await ctx.room.local_participant.update_metadata(
+                create_message(state="speaking"))
 
     async def process_stt(text_stream: AsyncIterator[str], metadata: core.PluginIterator.ResultMetadata):
         complete_stt_result = ""
@@ -72,7 +76,7 @@ async def process_track(ctx: agents.JobContext, track: rtc.Track, source: rtc.Au
 
     await vad_plugin\
         .set_input(input_iterator)\
-        .do(vad_state_changer)\
+        .do_async(vad_state_changer)\
         .filter(lambda data, _: data.type == core.VADPluginResultType.FINISHED)\
         .map(lambda data, _: data.frames)\
         .pipe(stt_plugin)\
