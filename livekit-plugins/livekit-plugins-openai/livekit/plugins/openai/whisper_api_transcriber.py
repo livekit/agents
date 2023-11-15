@@ -55,7 +55,7 @@ class WhisperAPITranscriber(core.STTPlugin):
                     wave_file.setframerate(sample_rate)
                     wave_file.writeframes(full_buffer)
 
-                response = await self._client.audio.transcriptions.create(file=("input.wav", bytes_io), model="whisper-1", response_format="text")
+                response = asyncio.wait_for(await self._client.audio.transcriptions.create(file=("input.wav", bytes_io), model="whisper-1", response_format="text"), 10)
                 result = core.STTPluginResult(
                     type=core.STTPluginResultType.DELTA_RESULT, text=response)
                 await self._result_iterator.put(core.AsyncIteratorList([result]))
