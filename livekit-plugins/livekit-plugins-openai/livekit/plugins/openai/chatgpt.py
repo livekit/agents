@@ -68,15 +68,24 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
     async def _generate_text_streamed(self, model: str) -> AsyncIterable[str]:
         prompt_message = ChatGPTMessage(
             role=ChatGPTMessageRole.system, content=self._prompt)
-        self._producing_response = True
-        chat_stream = asyncio.wait_for(await self._client.chat.completions.create(model=model,
-                                                                                  n=1,
-                                                                                  stream=True,
-                                                                                  messages=[prompt_message.to_api()] + [m.to_api() for m in self._messages]), 5)
+        try:
+            chat_stream = await asyncio.wait_for(self._client.chat.completions.create(model=model,
+                                                                                      n=1,
+                                                                                      stream=True,
+                                                                                      messages=[prompt_message.to_api()] + [m.to_api() for m in self._messages]), 10)
+        except TimeoutError:
+            yield "Sorry, I'm taking too long to respond. Please try again later."
+            return
+
         self._producing_response = True
         while True:
-            await asyncio.sleep(1)
-            chunk = asyncio.wait_for(anext(chat_stream, None), 5)
+            await asyncio.sleep(0.5)
+
+            try:
+                chunk = await asyncio.wait_for(anext(chat_stream, None), 5)
+            except TimeoutError:
+                break
+
             if chunk is None:
                 break
             content = chunk.choices[0].delta.content
