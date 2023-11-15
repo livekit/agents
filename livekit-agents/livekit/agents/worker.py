@@ -460,7 +460,7 @@ class JobRequest:
 
             for participant in self._room.participants.values():
                 for publication in participant.tracks.values():
-                    if not should_subscribe(publication):
+                    if not should_subscribe(publication, participant):
                         continue
 
                     publication.set_subscribed(True)
