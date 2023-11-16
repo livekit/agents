@@ -401,6 +401,7 @@ class JobRequest:
             grants.room_join = True
             grants.agent = True
             grants.room = self.room.name
+            grants.can_update_own_metadata = True
 
             jwt = (
                 api.AccessToken(self._worker._api_key,

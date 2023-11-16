@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import logging
+from dataclasses import dataclass
 from livekit import agents, rtc
 from livekit.plugins import core
 from livekit.plugins.vad import VADPlugin
@@ -22,14 +23,37 @@ OAI_TTS_SAMPLE_RATE = 24000
 OAI_TTS_CHANNELS = 1
 
 
-AgentState = Enum("AgentState", "LISTENING, SPEAKING")
+AgentState = Enum("AgentState", "LISTENING, THINKING, SPEAKING")
+UserState = Enum("UserState", "SPEAKING, SILENT")
+
+
+@dataclass
+class State:
+    agent_sending_audio: bool = False
+    chat_gpt_working: bool = False
+    user_state: UserState = UserState.SILENT
+    current_sequence_number: int = 0
+
+    def get_agent_state(self):
+        if self.agent_sending_audio:
+            return AgentState.SPEAKING
+
+        if self.chat_gpt_working:
+            return AgentState.THINKING
+
+        return AgentState.LISTENING
+
+    def to_metadata(self):
+        return create_message(
+            user_state=self.user_state.name.lower(),
+            agent_state=self.get_agent_state().name.lower())
 
 
 def create_message(**kwargs):
     return json.dumps(kwargs)
 
 
-async def process_track(ctx: agents.JobContext, track: rtc.Track, source: rtc.AudioSource, state: [AgentState, int]):
+async def process_track(ctx: agents.JobContext, track: rtc.Track, source: rtc.AudioSource, state: State):
     audio_stream = rtc.AudioStream(track)
     input_iterator = core.PluginIterator.create(audio_stream)
 
@@ -40,16 +64,21 @@ async def process_track(ctx: agents.JobContext, track: rtc.Track, source: rtc.Au
     complete_sentence_plugin = core.utils.CompleteSentencesPlugin()
     tts_plugin = TTSPlugin()
 
-    def vad_state_changer(
+    async def set_metadata():
+        await ctx.room.local_participant.publish_data(state.to_metadata())
+
+    async def vad_state_changer(
             vad_result: core.VADPluginResult,
             metadata: core.PluginIterator.ResultMetadata):
         if vad_result.type == core.VADPluginResultType.STARTED:
-            state[0] = AgentState.LISTENING
-            state[1] = metadata.sequence_number
+            state.user_state = UserState.SPEAKING
+            state.current_sequence_number = metadata.sequence_number
             chatgpt_plugin.interrupt()
+            await set_metadata()
         else:
-            state[0] = AgentState.SPEAKING
-            state[1] = metadata.sequence_number
+            state.user_state = UserState.SILENT
+            state.current_sequence_number = metadata.sequence_number
+            await set_metadata()
 
     async def process_stt(text_stream: AsyncIterator[str], metadata: core.PluginIterator.ResultMetadata):
         complete_stt_result = ""
@@ -61,23 +90,41 @@ async def process_track(ctx: agents.JobContext, track: rtc.Track, source: rtc.Au
             role=ChatGPTMessageRole.user, content=complete_stt_result)
         return msg
 
+    async def process_chatgpt(chatgpt_stream: AsyncIterator[str], metadata: core.PluginIterator.ResultMetadata):
+        async def iterator():
+            state.chat_gpt_working = True
+            await set_metadata()
+            async for chatgpt_r in chatgpt_stream:
+                yield chatgpt_r
+
+            state.chat_gpt_working = False
+            await set_metadata()
+
+        return iterator()
+
     async def send_audio(frame_stream: AsyncIterator[rtc.AudioFrame], metadata: core.PluginIterator.ResultMetadata):
+        state.agent_sending_audio = True
+        await set_metadata()
         async for frame in frame_stream:
             if (should_skip(frame, metadata)):
                 continue
             await source.capture_frame(frame)
+        state.agent_sending_audio = False
+        await set_metadata()
 
     def should_skip(_: any, metadata: core.PluginIterator.ResultMetadata):
-        return state[0] == AgentState.LISTENING or metadata.sequence_number < state[1]
+        return state.user_state == UserState.SPEAKING or metadata.sequence_number < state.current_sequence_number
 
     await vad_plugin\
         .set_input(input_iterator)\
-        .do(vad_state_changer)\
+        .do_async(vad_state_changer)\
         .filter(lambda data, _: data.type == core.VADPluginResultType.FINISHED)\
         .map(lambda data, _: data.frames)\
         .pipe(stt_plugin)\
         .map_async(process_stt)\
+        .do(lambda *a: logging.info("After STT"))\
         .pipe(chatgpt_plugin)\
+        .map_async(process_chatgpt)\
         .pipe(complete_sentence_plugin)\
         .skip_while(should_skip)\
         .pipe(tts_plugin)\
@@ -91,7 +138,7 @@ async def kitt_agent(ctx: agents.JobContext):
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
-    state = [AgentState.LISTENING, 0]  # state, sequence number of interest
+    state = State()
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(
