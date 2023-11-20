@@ -174,6 +174,8 @@ class Worker:
         does not send an answer or raises an exception
         """
 
+        logging.info(f"NEIL --------- handling new job {job.id}")
+
         try:
             await self._available_cb(job)
         except Exception as e:

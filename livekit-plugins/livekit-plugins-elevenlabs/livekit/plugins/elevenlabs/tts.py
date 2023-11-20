@@ -40,14 +40,16 @@ class _WSWrapper:
 
 class ElevenLabsTTSPlugin(core.TTSPlugin):
     def __init__(self):
+        super().__init__(process=self._process, close=self._close)
         self._result_iterator = core.AsyncQueueIterator(
             asyncio.Queue[AsyncIterable[rtc.AudioFrame]]())
-        super().__init__(process=self.process)
 
-    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]
-                ) -> AsyncIterable[AsyncIterable[rtc.AudioFrame]]:
+    def _process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterable[AsyncIterable[rtc.AudioFrame]]:
         asyncio.create_task(self._async_process(text_iterator))
         return self._result_iterator
+
+    async def _close(self):
+        pass
 
     async def _async_process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterable[AsyncIterable[rtc.AudioFrame]]:
         async for text_stream in text_iterator:

@@ -11,6 +11,7 @@ from livekit.plugins.openai import (WhisperAPITranscriber,
                                     ChatGPTMessage,
                                     ChatGPTMessageRole,
                                     TTSPlugin)
+from livekit.plugins.elevenlabs.tts import ElevenLabsTTSPlugin
 from typing import AsyncIterator
 from enum import Enum
 
@@ -21,6 +22,9 @@ PROMPT = "You are KITT, a voice assistant in a meeting created by LiveKit. \
 
 OAI_TTS_SAMPLE_RATE = 24000
 OAI_TTS_CHANNELS = 1
+
+ELEVENLABS_TTS_SAMPLE_RATE = 44100
+ELEVENLABS_TTS_CHANNELS = 1
 
 
 AgentState = Enum("AgentState", "LISTENING, THINKING, SPEAKING")
@@ -45,6 +49,7 @@ class State:
 
     def to_metadata(self):
         return create_message(
+            type="state",
             user_state=self.user_state.name.lower(),
             agent_state=self.get_agent_state().name.lower())
 
@@ -62,7 +67,8 @@ async def process_track(ctx: agents.JobContext, track: rtc.Track, source: rtc.Au
     stt_plugin = WhisperAPITranscriber()
     chatgpt_plugin = ChatGPTPlugin(prompt=PROMPT, message_capacity=20)
     complete_sentence_plugin = core.utils.CompleteSentencesPlugin()
-    tts_plugin = TTSPlugin()
+    # tts_plugin = TTSPlugin()
+    tts_plugin = ElevenLabsTTSPlugin()
 
     async def set_metadata():
         await ctx.room.local_participant.publish_data(state.to_metadata())
@@ -134,7 +140,8 @@ async def process_track(ctx: agents.JobContext, track: rtc.Track, source: rtc.Au
 
 async def kitt_agent(ctx: agents.JobContext):
 
-    source = rtc.AudioSource(OAI_TTS_SAMPLE_RATE, OAI_TTS_CHANNELS)
+    # source = rtc.AudioSource(OAI_TTS_SAMPLE_RATE, OAI_TTS_CHANNELS)
+    source = rtc.AudioSource(ELEVENLABS_TTS_SAMPLE_RATE, ELEVENLABS_TTS_CHANNELS)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
