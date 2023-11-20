@@ -1,3 +1,5 @@
+import os
+import pkg_resources
 import asyncio
 from typing import AsyncIterable
 from livekit import rtc
@@ -19,8 +21,7 @@ class VADPlugin(VADPluginType):
         self._left_padding_ms = left_padding_ms
         self._window_buffer = np.zeros(512, dtype=np.float32)
         self._window_buffer_scratch = np.zeros(512, dtype=np.float32)
-        (self._model, _) = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad', model='silero_vad')
+        self._model = None
         self._copy_int16 = np.zeros(1, dtype=np.int16)
         self._copy_float32 = np.zeros(1, dtype=np.float32)
         self._silent_frame_count_since_voice = 0
@@ -43,6 +44,10 @@ class VADPlugin(VADPluginType):
         return iterator()
 
     async def push_frame(self, frame: rtc.AudioFrame):
+
+        if self._model is None:
+            await asyncio.get_event_loop().run_in_executor(None, self._load_model)
+
         self._frame_queue.append(frame)
 
         # run inference every 30ms
@@ -123,3 +128,7 @@ class VADPlugin(VADPluginType):
         tensor = torch.from_numpy(self._window_buffer)
         speech_prob = self._model(tensor, VAD_SAMPLE_RATE).item()
         return speech_prob > 0.5
+
+    def _load_model(self):
+        model_path = pkg_resources.resource_filename('livekit.plugins.vad', 'files/silero_vad.jit')
+        self._model = torch.jit.load(model_path)
