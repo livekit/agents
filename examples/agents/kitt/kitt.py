@@ -45,6 +45,7 @@ class State:
 
     def to_metadata(self):
         return create_message(
+            type="state",
             user_state=self.user_state.name.lower(),
             agent_state=self.get_agent_state().name.lower())
 
