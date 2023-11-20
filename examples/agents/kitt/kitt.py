@@ -54,6 +54,7 @@ def create_message(**kwargs):
 
 
 async def process_track(ctx: agents.JobContext, track: rtc.Track, source: rtc.AudioSource, state: State):
+    logging.info("Processing Track: %s", track.sid)
     audio_stream = rtc.AudioStream(track)
     input_iterator = core.PluginIterator.create(audio_stream)
 
@@ -149,6 +150,7 @@ async def kitt_agent(ctx: agents.JobContext):
         asyncio.create_task(process_track(ctx, track, source, state))
 
     await ctx.room.local_participant.publish_track(track, options)
+    logging.info("Published track")
 
 
 if __name__ == "__main__":
