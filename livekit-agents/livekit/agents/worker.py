@@ -448,7 +448,20 @@ class JobRequest:
 
             job_ctx = JobContext(self.id, self._worker,
                                  self._room, participant)
-            self._worker._loop.create_task(agent(job_ctx))
+
+            def done_callback(t: asyncio.Task):
+                try:
+                    if t.cancelled():
+                        logging.info("Task was cancelled. Worker: %s Job: %s", self._worker.id, self.id)
+                    else:
+                        logging.info("Task completed successfully. Worker: %s Job: %s", self._worker.id, self.id)
+                except asyncio.CancelledError:
+                    logging.info("Task was cancelled. Worker: %s Job: %s", self._worker.id, self.id)
+                except Exception as e:
+                    logging.error("Task raised an uncaught exception. Worker: %s Job: %s Exception: %s", self._worker.id, self.id, e)
+
+            task = self._worker._loop.create_task(agent(job_ctx))
+            task.add_done_callback(done_callback)
 
             @self._room.on("track_published")
             def on_track_published(
@@ -516,7 +529,7 @@ def _run_worker(
         asyncio.set_event_loop(loop)
         loop.run_until_complete(main_task)
     except (GracefulShutdown, KeyboardInterrupt):
-        pass
+        logging.info("Graceful shutdown worker")
     finally:
         main_task.cancel()
         loop.run_until_complete(main_task)
