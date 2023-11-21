@@ -4,7 +4,7 @@ import asyncio
 from typing import AsyncIterable
 from livekit import rtc
 from livekit.plugins.core import (VADPlugin as VADPluginType, VADPluginResult,
-                                  VADPluginResultType)
+                                  VADPluginResultType, PluginIterator)
 import torch
 import numpy as np
 
@@ -16,7 +16,6 @@ class VADPlugin(VADPluginType):
     """
 
     def __init__(self, *, left_padding_ms: int, silence_threshold_ms: int):
-        super().__init__(process=self._process, close=self._close)
         self._silence_threshold_ms = silence_threshold_ms
         self._left_padding_ms = left_padding_ms
         self._window_buffer = np.zeros(512, dtype=np.float32)
@@ -30,18 +29,21 @@ class VADPlugin(VADPluginType):
         self._frame_queue = []
         self._talking_state = False
 
-    async def _close(self):
+    async def close(self):
         pass
 
-    def _process(
-            self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[VADPluginResult]:
+    async def process(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[VADPluginResult]:
+        res = PluginIterator[VADPluginResult]()
+
         async def iterator():
             async for frame in frame_iterator:
                 event = await self.push_frame(frame)
                 if event is not None:
-                    yield event
+                    await res.put(event)
+            await res.aclose()
 
-        return iterator()
+        asyncio.create_task(iterator())
+        return res
 
     async def push_frame(self, frame: rtc.AudioFrame):
 

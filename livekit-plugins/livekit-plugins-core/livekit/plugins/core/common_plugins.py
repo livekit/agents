@@ -1,7 +1,6 @@
 from typing import AsyncIterable, List
 from livekit import rtc
-from .async_iterator_list import AsyncIteratorList
-from .plugin import Plugin
+from .plugin import Plugin, PluginIterator
 from dataclasses import dataclass
 from enum import Enum
 
@@ -19,11 +18,9 @@ class VADPluginResult:
     frames: [rtc.AudioFrame]
 
 
-VADPlugin = Plugin[rtc.AudioFrame,
-                   VADPluginResult]
+VADPlugin = Plugin[AsyncIterable[rtc.AudioFrame], PluginIterator[VADPluginResult]]
 
-STTPluginResultType = Enum(
-    'STTPluginResultType', ['DELTA_RESULT'])
+STTPluginResultType = Enum('STTPluginResultType', ['DELTA_RESULT'])
 
 
 @dataclass
@@ -32,7 +29,7 @@ class STTPluginResult:
     text: str
 
 
-STTPlugin = Plugin[List[rtc.AudioFrame], AsyncIterable[STTPluginResult]]
+STTPlugin = Plugin[List[rtc.AudioFrame], PluginIterator[STTPluginResult]]
 
 
-TTSPlugin = Plugin[AsyncIterable[str], AsyncIterable[rtc.AudioFrame]]
+TTSPlugin = Plugin[AsyncIterable[str], PluginIterator[rtc.AudioFrame]]

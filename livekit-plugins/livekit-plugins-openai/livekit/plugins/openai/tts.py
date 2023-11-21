@@ -17,21 +17,13 @@ import audioread
 class TTSPlugin(core.TTSPlugin):
 
     def __init__(self):
-        super().__init__(process=self._process, close=self._close)
-        self._model = None
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        self._response_iterator = core.AsyncQueueIterator(
-            asyncio.Queue[rtc.AudioFrame]())
 
-    async def _close(self):
+    async def close(self):
         pass
 
-    def _process(self, text_streams: AsyncIterator[AsyncIterator[str]]
-                 ) -> AsyncIterator[AsyncIterator[rtc.AudioFrame]]:
-        asyncio.create_task(self._async_process(text_streams))
-        return self._response_iterator
-
-    async def _async_process(self, text_streams: AsyncIterator[AsyncIterator[str]]) -> AsyncIterator[AsyncIterator[rtc.AudioFrame]]:
+    async def process(self, text_stream: AsyncIterator[str]) -> AsyncIterator[rtc.AudioFrame]:
+        res = core.PluginIterator[rtc.AudioFrame]()
         loop = asyncio.get_event_loop()
 
         def create_directory():
@@ -39,21 +31,21 @@ class TTSPlugin(core.TTSPlugin):
 
         await loop.run_in_executor(None, create_directory)
 
-        async for text_stream in text_streams:
+        async def generate_result():
             complete_text = ""
             async for text in text_stream:
                 complete_text += text
+
             response = await self._client.audio.speech.create(model="tts-1", voice="alloy", response_format="mp3", input=complete_text, )
             filepath = "/tmp/openai_tts/output.mp3"
             response.stream_to_file(filepath)
-            audio_stream = core.AsyncQueueIterator(
-                asyncio.Queue[rtc.AudioFrame]())
             with audioread.audio_open(filepath) as f:
                 for buf in f:
                     frame = rtc.AudioFrame(
                         buf, f.samplerate, f.channels, len(buf) // 2)
-                    await audio_stream.put(frame)
+                    await res.put(frame)
 
-                await audio_stream.aclose()
+                await res.aclose()
 
-            await self._response_iterator.put(audio_stream)
+        asyncio.create_task(generate_result())
+        return res

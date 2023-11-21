@@ -20,31 +20,24 @@ WHISPER_CHANNELS = 1
 class WhisperAPITranscriber(core.STTPlugin):
 
     def __init__(self):
-        super().__init__(process=self._process, close=self._close)
         self._model = None
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        self._result_iterator = core.AsyncQueueIterator(
-            asyncio.Queue[core.STTPluginResult]())
         self._task = None
-        self._frame_streams = None
 
-    def _process(self, frame_streams: AsyncIterable[List[rtc.AudioFrame]]
-                 ) -> AsyncIterable[AsyncIterable[core.STTPluginResult]]:
-        self._frame_streams = frame_streams
-        self._task = asyncio.create_task(self._async_process(frame_streams))
-        return self._result_iterator
-
-    async def _close(self):
+    async def close(self):
         pass
 
-    async def _async_process(self, frame_streams: AsyncIterable[List[rtc.AudioFrame]]) -> AsyncIterable[core.STTPluginResult]:
-        async for frame_stream in frame_streams:
-            if len(frame_stream) == 0:
-                continue
-            sample_rate = frame_stream[0].sample_rate
-            channels = frame_stream[0].num_channels
+    async def process(self, frames: List[rtc.AudioFrame]) -> AsyncIterable[core.STTPluginResult]:
+        res = core.PluginIterator[core.STTPluginResult]()
+
+        async def generate_result():
+            if len(frames) == 0:
+                await res.aclose()
+                return
+            sample_rate = frames[0].sample_rate
+            channels = frames[0].num_channels
             full_buffer = bytearray()
-            for frame in frame_stream:
+            for frame in frames:
                 full_buffer += frame.data
 
             try:
@@ -58,6 +51,11 @@ class WhisperAPITranscriber(core.STTPlugin):
                 response = await asyncio.wait_for(self._client.audio.transcriptions.create(file=("input.wav", bytes_io), model="whisper-1", response_format="text"), 10)
                 result = core.STTPluginResult(
                     type=core.STTPluginResultType.DELTA_RESULT, text=response)
-                await self._result_iterator.put(core.AsyncIteratorList([result]))
+                await res.put(result)
             except Exception as e:
                 logging.error("Error transcribing audio: %s", e)
+
+            await res.aclose()
+
+        asyncio.create_task(generate_result())
+        return res
