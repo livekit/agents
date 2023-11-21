@@ -1,3 +1,6 @@
+<!--BEGIN_BANNER_IMAGE-->
+<!--END_BANNER_IMAGE-->
+
 # LiveKit Agent Framework
 
 The Agent Framework is designed for building real-time, programmable participants
@@ -87,3 +90,6 @@ Examples coming soon:
 - Transcribtion
 - Face-Detection
 - Voice-to-Image
+
+<!--BEGIN_REPO_NAV-->
+<!--END_REPO_NAV-->
