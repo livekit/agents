@@ -44,23 +44,18 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
         self._result_iterator = core.AsyncQueueIterator(
             asyncio.Queue[AsyncIterable[rtc.AudioFrame]]())
 
-    def _process(self, text_iterator: AsyncIterator[AsyncIterator[str]]
-                 ) -> AsyncIterable[AsyncIterable[rtc.AudioFrame]]:
+    async def generate_speech(self, text_stream: AsyncIterator[str]) -> AsyncIterable[rtc.AudioFrame]:
+        ws = _WSWrapper()
+        await ws.connect()
+        result_queue = asyncio.Queue[rtc.AudioFrame]()
+        asyncio.create_task(self._push_data_loop(ws, text_stream))
+        asyncio.create_task(self._receive_audio_loop(ws, result_stream))
+        await self._result_iterator.put(result_stream)
         asyncio.create_task(self._async_process(text_iterator))
         return self._result_iterator
 
     async def _close(self):
         pass
-
-    async def _async_process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterable[AsyncIterable[rtc.AudioFrame]]:
-        async for text_stream in text_iterator:
-            ws = _WSWrapper()
-            await ws.connect()
-            result_stream = core.AsyncQueueIterator[rtc.AudioFrame](
-                asyncio.Queue[rtc.AudioFrame]())
-            asyncio.create_task(self._push_data_loop(ws, text_stream))
-            asyncio.create_task(self._receive_audio_loop(ws, result_stream))
-            await self._result_iterator.put(result_stream)
 
     async def _push_data_loop(self, ws_wrapper: _WSWrapper, text_stream: AsyncIterable[str]):
         await ws_wrapper.wait_for_connected()
@@ -69,7 +64,7 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
             await ws_wrapper.ws.send(json.dumps(payload))
         await ws_wrapper.ws.send(json.dumps({"text": ""}))
 
-    async def _receive_audio_loop(self, ws_wrapper: _WSWrapper, response_queue: core.AsyncQueueIterator[rtc.AudioFrame]):
+    async def _receive_audio_loop(self, ws_wrapper: _WSWrapper, result_queue: asyncio.Queue[rtc.AudioFrame]):
         await ws_wrapper.wait_for_connected()
         # 10ms at 44.1k * 2 bytes per sample (int16) * 1 channels
         frame_size_bytes = 441 * 2
@@ -86,7 +81,7 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
                             remainder = remainder + b'\x00' * \
                                 (frame_size_bytes - len(remainder))
                         frame = self._create_frame_from_chunk(remainder)
-                        await response_queue.put(frame)
+                        await result_queue.put(frame)
                     await ws_wrapper.ws.close()
                     return
 
@@ -103,7 +98,7 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
                     for i in range(0, len(chunk), frame_size_bytes):
                         frame = self._create_frame_from_chunk(
                             chunk[i: i + frame_size_bytes])
-                        await response_queue.put(frame)
+                        await result_queue.put(frame)
 
         except websockets.exceptions.ConnectionClosed:
             print("Connection closed")
