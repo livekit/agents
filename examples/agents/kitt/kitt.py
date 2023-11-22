@@ -35,6 +35,8 @@ class KITT():
         self.tts_plugin = TTSPlugin()
         self.ctx = None
         self.source = None
+        self.track_tasks = set()
+        self.stt_tasks = set()
 
     async def start(self, ctx: agents.JobContext):
         self.ctx = ctx
@@ -50,7 +52,9 @@ class KITT():
         await self.ctx.room.local_participant.publish_track(track, options)
 
     def on_track_subscribed(self, track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-        asyncio.create_task(self.process_track(track))
+        t = asyncio.create_task(self.process_track(track))
+        self.track_tasks.add(t)
+        t.add_done_callback(self.track_tasks.remove)
 
     def cleanup(self):
         pass
@@ -66,7 +70,9 @@ class KITT():
                 self.user_state = UserState.SILENT
                 await self.send_datachannel_state()
                 stt_output_stream = self.stt_plugin.transcribe_frames(vad_result.frames)
-                asyncio.create_task(self.process_stt_result(stt_output_stream))
+                t = asyncio.create_task(self.process_stt_result(stt_output_stream))
+                self.stt_tasks.add(t)
+                t.add_done_callback(self.stt_tasks.remove)
 
     async def process_stt_result(self, text_stream):
         complete_stt_result = ""
