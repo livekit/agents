@@ -54,7 +54,7 @@ class KITT():
     def on_track_subscribed(self, track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
         t = asyncio.create_task(self.process_track(track))
         self.track_tasks.add(t)
-        t.add_done_callback(self.track_tasks.remove)
+        t.add_done_callback(lambda t: t in self.track_tasks and self.track_tasks.remove(t))
 
     def cleanup(self):
         pass
@@ -65,6 +65,9 @@ class KITT():
             if vad_result.type == VADEventType.STARTED:
                 self.user_state = UserState.SPEAKING
                 self.chatgpt_plugin.interrupt()
+                for task in self.stt_tasks:
+                    task.cancel()
+                self.stt_tasks.clear()
                 await self.send_datachannel_state()
             elif vad_result.type == VADEventType.FINISHED:
                 self.user_state = UserState.SILENT
@@ -72,7 +75,7 @@ class KITT():
                 stt_output_stream = self.stt_plugin.transcribe_frames(vad_result.frames)
                 t = asyncio.create_task(self.process_stt_result(stt_output_stream))
                 self.stt_tasks.add(t)
-                t.add_done_callback(self.stt_tasks.remove)
+                t.add_done_callback(lambda t: t in self.stt_tasks and self.stt_tasks.remove(t))
 
     async def process_stt_result(self, text_stream):
         complete_stt_result = ""
