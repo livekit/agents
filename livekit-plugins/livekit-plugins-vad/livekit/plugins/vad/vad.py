@@ -1,19 +1,25 @@
 import os
 import pkg_resources
 import asyncio
+from dataclasses import dataclass
 from typing import AsyncIterable
+from enum import Enum
 from livekit import rtc
-from livekit.plugins.core import (VADPlugin as VADPluginType, VADPluginResult,
-                                  VADPluginResultType)
 import torch
 import numpy as np
 
 VAD_SAMPLE_RATE = 16000
 
+VADEventType = Enum("VADEventType", "STARTED, FINISHED")
 
-class VADPlugin(VADPluginType):
+class VADPlugin:
     """Class for Voice Activity Detection (VAD)
     """
+
+    @dataclass
+    class Event:
+        type: VADEventType
+        frames: [rtc.AudioFrame]
 
     def __init__(self, *, left_padding_ms: int, silence_threshold_ms: int):
         self._silence_threshold_ms = silence_threshold_ms
@@ -32,7 +38,7 @@ class VADPlugin(VADPluginType):
     async def close(self):
         pass
 
-    async def start(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[VADPluginResult]:
+    async def start(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[Event]:
         async for frame in frame_iterator:
             event = await self.push_frame(frame)
             if event is not None:
@@ -65,14 +71,14 @@ class VADPlugin(VADPluginType):
                     result.extend(self._left_padding_frames)
                     result.extend(self._voice_frames)
                     self._reset_frames()
-                    event = VADPluginResult(type=VADPluginResultType.FINISHED,
+                    event = VADPlugin.Event(type=VADEventType.FINISHED,
                                             frames=result)
                     return event
         else:
             if talking_detected:
                 self._talking_state = True
                 self._voice_frames.extend(frame_queue_copy)
-                event = VADPluginResult(type=VADPluginResultType.STARTED,
+                event = VADPlugin.Event(type=VADEventType.STARTED,
                                         frames=self._voice_frames)
                 return event
             else:

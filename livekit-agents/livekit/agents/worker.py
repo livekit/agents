@@ -30,7 +30,6 @@ from click import Option
 from websockets import frames
 from livekit.protocol import agent as proto_agent
 from livekit.protocol import models as proto_models
-from livekit.plugins.core import Plugin
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -282,7 +281,6 @@ class JobContext:
         self._worker = worker
         self._room = room
         self._participant = participant
-        self._plugins: list[Plugin] = []
         self._closed = False
         self._lock = asyncio.Lock()
         self._worker._running_jobs.append(self)
@@ -299,9 +297,6 @@ class JobContext:
     def participant(self) -> Optional[rtc.RemoteParticipant]:
         return self._participant
 
-    def add_plugin(self, plugin: Plugin) -> None:
-        self._plugins.append(plugin)
-
     async def shutdown(self) -> None:
         """
         Shutdown the job and cleanup resources (linked plugins & tasks)
@@ -310,10 +305,6 @@ class JobContext:
             logging.info(f"shutting down job {self.id}")
             if self._closed:
                 return
-
-            # close all plugins
-            for p in self._plugins:
-                await p.close()
 
             await self.room.disconnect()
 

@@ -61,7 +61,6 @@ setuptools.setup(
     python_requires=">=3.7.0",
     install_requires=[
         "livekit",
-        "livekit-plugins-core",
         "torch >= 2.0.0",
         "numpy >= 1.24.0"],
     package_data={'livekit.plugins.vad': ['files/silero_vad.jit']},

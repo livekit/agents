@@ -3,21 +3,16 @@ import asyncio
 import os
 import io
 import wave
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import AsyncIterable, List, Optional
-
+from typing import List
 from openai import AsyncOpenAI
 from livekit import rtc
-from livekit.plugins import core
-import numpy as np
 
 
 WHISPER_SAMPLE_RATE = 16000
 WHISPER_CHANNELS = 1
 
 
-class WhisperAPITranscriber(core.STTPlugin):
+class WhisperAPITranscriber:
 
     def __init__(self):
         self._model = None
@@ -27,7 +22,7 @@ class WhisperAPITranscriber(core.STTPlugin):
     async def close(self):
         pass
 
-    async def transcribe_frames(self, frames: List[rtc.AudioFrame]) -> AsyncIterable[core.STTPluginResult]:
+    async def transcribe_frames(self, frames: List[rtc.AudioFrame]) -> str:
         if len(frames) == 0:
             return
 
@@ -46,9 +41,7 @@ class WhisperAPITranscriber(core.STTPlugin):
                 wave_file.writeframes(full_buffer)
 
             response = await asyncio.wait_for(self._client.audio.transcriptions.create(file=("input.wav", bytes_io), model="whisper-1", response_format="text"), 10)
-            result = core.STTPluginResult(
-                type=core.STTPluginResultType.DELTA_RESULT, text=response)
-            yield result
+            yield response
         except Exception as e:
             logging.error("Error transcribing audio: %s", e)
 

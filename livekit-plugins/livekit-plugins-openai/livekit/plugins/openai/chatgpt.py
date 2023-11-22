@@ -17,7 +17,6 @@ import logging
 import asyncio
 from dataclasses import dataclass
 from typing import AsyncIterable
-from livekit.plugins import core
 from openai import AsyncOpenAI
 from enum import Enum
 
@@ -37,7 +36,7 @@ class ChatGPTMessage:
         }
 
 
-class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
+class ChatGPTPlugin:
     def __init__(self, prompt: str, message_capacity: int):
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._prompt = prompt

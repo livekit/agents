@@ -2,8 +2,7 @@ import json
 import asyncio
 import logging
 from livekit import agents, rtc
-from livekit.plugins import core
-from livekit.plugins.vad import VADPlugin
+from livekit.plugins.vad import VADPlugin, VADEventType
 from livekit.plugins.openai import (WhisperAPITranscriber,
                                     ChatGPTPlugin,
                                     ChatGPTMessage,
@@ -40,6 +39,7 @@ class KITT():
     async def start(self, ctx: agents.JobContext):
         self.ctx = ctx
         ctx.room.on("track_subscribed", self.on_track_subscribed)
+        ctx.room.on("disconnected", self.cleanup)
         await self.publish_audio()
 
     async def publish_audio(self):
@@ -52,14 +52,17 @@ class KITT():
     def on_track_subscribed(self, track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
         asyncio.create_task(self.process_track(track))
 
+    def cleanup(self):
+        pass
+
     async def process_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
         async for vad_result in self.vad_plugin.start(audio_stream):
-            if vad_result.type == core.VADPluginResultType.STARTED:
+            if vad_result.type == VADEventType.STARTED:
                 self.user_state = UserState.SPEAKING
                 self.chatgpt_plugin.interrupt()
                 await self.send_datachannel_state()
-            elif vad_result.type == core.VADPluginResultType.FINISHED:
+            elif vad_result.type == VADEventType.FINISHED:
                 self.user_state = UserState.SILENT
                 await self.send_datachannel_state()
                 stt_output_stream = self.stt_plugin.transcribe_frames(vad_result.frames)
@@ -67,8 +70,8 @@ class KITT():
 
     async def process_stt_result(self, text_stream):
         complete_stt_result = ""
-        async for stt_r in text_stream:
-            complete_stt_result += stt_r.text
+        async for text in text_stream:
+            complete_stt_result += text
         await self.ctx.room.local_participant.publish_data(json.dumps({"type": "transcription", "text": complete_stt_result}))
         msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=complete_stt_result)
         chatgpt_result = self.chatgpt_plugin.add_message(msg)

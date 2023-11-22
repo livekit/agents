@@ -1,1 +1,1 @@
-from .vad import VADPlugin
+from .vad import VADPlugin, VADEventType

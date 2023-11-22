@@ -2,13 +2,11 @@ import os
 import asyncio
 from typing import AsyncIterator
 from openai import AsyncOpenAI
-
 from livekit import rtc
-from livekit.plugins import core
 import audioread
 
 
-class TTSPlugin(core.TTSPlugin):
+class TTSPlugin:
 
     def __init__(self):
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
