@@ -78,6 +78,10 @@ class ChatGPTPlugin:
                 chunk = await asyncio.wait_for(anext(chat_stream, None), 5)
             except TimeoutError:
                 break
+            except asyncio.CancelledError:
+                self._producing_response = False
+                self._needs_interrupt = False
+                break
 
             if chunk is None:
                 break
