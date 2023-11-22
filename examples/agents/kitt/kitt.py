@@ -72,7 +72,9 @@ class KITT():
             elif vad_result.type == VADEventType.FINISHED:
                 self.user_state = UserState.SILENT
                 await self.send_datachannel_state()
-                stt_output = self.stt_plugin.transcribe_frames(vad_result.frames)
+                stt_output = await self.stt_plugin.transcribe_frames(vad_result.frames)
+                if len(stt_output) == 0:
+                    continue
                 t = asyncio.create_task(self.process_stt_result(stt_output))
                 self.stt_tasks.add(t)
                 t.add_done_callback(lambda t: t in self.stt_tasks and self.stt_tasks.remove(t))

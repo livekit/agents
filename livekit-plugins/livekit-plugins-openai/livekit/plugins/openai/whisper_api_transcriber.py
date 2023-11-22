@@ -41,7 +41,7 @@ class WhisperAPITranscriber:
                 wave_file.writeframes(full_buffer)
 
             response = await asyncio.wait_for(self._client.audio.transcriptions.create(file=("input.wav", bytes_io), model="whisper-1", response_format="text"), 10)
-            yield response
+            return response
         except Exception as e:
             logging.error("Error transcribing audio: %s", e)
 
