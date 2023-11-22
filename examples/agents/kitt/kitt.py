@@ -72,17 +72,14 @@ class KITT():
             elif vad_result.type == VADEventType.FINISHED:
                 self.user_state = UserState.SILENT
                 await self.send_datachannel_state()
-                stt_output_stream = self.stt_plugin.transcribe_frames(vad_result.frames)
-                t = asyncio.create_task(self.process_stt_result(stt_output_stream))
+                stt_output = self.stt_plugin.transcribe_frames(vad_result.frames)
+                t = asyncio.create_task(self.process_stt_result(stt_output))
                 self.stt_tasks.add(t)
                 t.add_done_callback(lambda t: t in self.stt_tasks and self.stt_tasks.remove(t))
 
-    async def process_stt_result(self, text_stream):
-        complete_stt_result = ""
-        async for text in text_stream:
-            complete_stt_result += text
-        await self.ctx.room.local_participant.publish_data(json.dumps({"type": "transcription", "text": complete_stt_result}))
-        msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=complete_stt_result)
+    async def process_stt_result(self, text):
+        await self.ctx.room.local_participant.publish_data(json.dumps({"type": "transcription", "text": text}))
+        msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=text)
         chatgpt_result = self.chatgpt_plugin.add_message(msg)
         await self.process_chatgpt_result(chatgpt_result)
 
