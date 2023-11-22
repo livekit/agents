@@ -25,15 +25,25 @@ UserState = Enum("UserState", "SPEAKING, SILENT")
 
 class KITT():
     def __init__(self):
-        self.agent_sending_audio = False
-        self.chat_gpt_working = False
-        self.user_state = UserState.SILENT
+        #state
+        self.agent_sending_audio: bool = False
+        self.chat_gpt_working: bool = False
+        self.user_state: UserState = UserState.SILENT
+        
+        #plugins
         self.vad_plugin = VADPlugin(left_padding_ms=1000, silence_threshold_ms=500)
         self.chatgpt_plugin = ChatGPTPlugin(prompt=PROMPT, message_capacity=20)
         self.stt_plugin = WhisperAPITranscriber()
         self.tts_plugin = TTSPlugin()
+
+  
+        self.ctx: Optional[agents.JobContext] = None
+        self.source: Optional[rtc.AudioSource] = None
+        self.track_tasks: Set[asyncio.Task] = set()
+        self.stt_tasks: Set[asyncio.Task] = set()
+
         self.ctx = None
-        self.source = None
+        self.line_out = None
         self.track_tasks = set()
         self.stt_tasks = set()
 
@@ -67,10 +77,10 @@ class KITT():
                 for task in self.stt_tasks:
                     task.cancel()
                 self.stt_tasks.clear()
-                await self.send_datachannel_state()
+                await self.send_state_update()
             elif vad_result.type == VADEventType.FINISHED:
                 self.user_state = UserState.SILENT
-                await self.send_datachannel_state()
+                await self.send_state_update()
                 stt_output = await self.stt_plugin.transcribe_frames(vad_result.frames)
                 if len(stt_output) == 0:
                     continue
@@ -86,33 +96,31 @@ class KITT():
 
     async def process_chatgpt_result(self, text_stream):
         self.chat_gpt_working = True
-        await self.send_datachannel_state()
+        await self.send_state_update()
 
-        running_sentence = ""
+        sentence = ""
         async for text in text_stream:
+            sentence += text
+          
             if text.endswith("\n") or text.endswith("?") or text.endswith("!") or text.endswith("."):
-                running_sentence += text
-                audio_stream = await self.tts_plugin.generate_speech_from_text(running_sentence)
+                audio_stream = await self.tts_plugin.generate_speech_from_text(sentence)
                 await self.send_audio_stream(audio_stream)
-                running_sentence = ""
-                continue
+                sentence = ""
 
-            running_sentence += text
-
-        if len(running_sentence) > 0:
-            audio_stream = await self.tts_plugin.generate_speech_from_text(running_sentence)
+        if len(sentence) > 0:
+            audio_stream = await self.tts_plugin.generate_speech_from_text(sentence)
             await self.send_audio_stream(audio_stream)
 
         self.chat_gpt_working = False
-        await self.send_datachannel_state()
+        await self.send_state_update()
 
     async def send_audio_stream(self, audio_stream):
         self.agent_sending_audio = True
-        await self.send_datachannel_state()
+        await self.send_state_update()
         async for frame in audio_stream:
-            await self.source.capture_frame(frame)
+            await self.line_out.capture_frame(frame)
         self.agent_sending_audio = False
-        await self.send_datachannel_state()
+        await self.send_state_update()
 
     def get_agent_state(self):
         if self.agent_sending_audio:
@@ -123,8 +131,12 @@ class KITT():
 
         return AgentState.LISTENING
 
-    async def send_datachannel_state(self):
-        msg = json.dumps({"type": "state", "user_state": self.user_state.name.lower(), "agent_state": self.get_agent_state().name.lower()})
+    async def send_state_update(self):
+        msg = json.dumps({
+          "type": "state", 
+          "user_state": self.user_state.name.lower(), 
+          "agent_state": self.get_agent_state().name.lower()
+        })
         await self.ctx.room.local_participant.publish_data(msg)
 
 if __name__ == "__main__":
