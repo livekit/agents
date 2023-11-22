@@ -1,9 +1,8 @@
 import asyncio
 import livekit.rtc as rtc
 from livekit.plugins import core
-from livekit.plugins.vad import VAD, VADPlugin
+from livekit.plugins.vad import VADPlugin
 from livekit import agents
-from typing import AsyncIterator
 
 SAMPLE_RATE = 48000
 NUM_CHANNELS = 1

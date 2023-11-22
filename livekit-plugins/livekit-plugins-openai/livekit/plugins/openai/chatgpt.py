@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import logging
 import asyncio
 from dataclasses import dataclass
 from typing import AsyncIterable
@@ -52,21 +53,13 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
     async def close(self):
         pass
 
-    async def process(self, message: ChatGPTMessage) -> AsyncIterable[str]:
-        res = core.PluginIterator[str]()
-
-        async def get_result():
-            self._messages.append(message)
-            if len(self._messages) > self._message_capacity:
-                self._messages.pop(0)
-            
-            async for text in self._generate_text_streamed('gpt-3.5-turbo'):
-                await res.put(text)
-
-            await res.aclose()
-
-        asyncio.create_task(get_result())
-        return res
+    async def add_message(self, message: ChatGPTMessage) -> AsyncIterable[str]:
+        self._messages.append(message)
+        if len(self._messages) > self._message_capacity:
+            self._messages.pop(0)
+        
+        async for text in self._generate_text_streamed('gpt-3.5-turbo'):
+            yield text
 
     async def _generate_text_streamed(self, model: str) -> AsyncIterable[str]:
         prompt_message = ChatGPTMessage(
@@ -82,8 +75,6 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
 
         self._producing_response = True
         while True:
-            await asyncio.sleep(0.5)
-
             try:
                 chunk = await asyncio.wait_for(anext(chat_stream, None), 5)
             except TimeoutError:
@@ -95,7 +86,7 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
 
             if self._needs_interrupt:
                 self._needs_interrupt = False
-                print("interrupted")
+                logging.info("ChatGPT Interrupted")
                 break
 
             if content is not None:

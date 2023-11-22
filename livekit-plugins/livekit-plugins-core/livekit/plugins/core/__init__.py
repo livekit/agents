@@ -1,4 +1,4 @@
-from .plugin import Plugin, PluginIterator
+from .plugin import Plugin 
 from .common_plugins import (VADPlugin,
                              VADPluginResult,
                              VADPluginResultType,
@@ -8,4 +8,3 @@ from .common_plugins import (VADPlugin,
                              TTSPlugin,
                              TTTPlugin,
                              )
-from . import utils
