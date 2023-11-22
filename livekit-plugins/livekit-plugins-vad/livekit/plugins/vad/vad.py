@@ -12,6 +12,7 @@ VAD_SAMPLE_RATE = 16000
 
 VADEventType = Enum("VADEventType", "STARTED, FINISHED")
 
+
 class VADPlugin:
     """Class for Voice Activity Detection (VAD)
     """
@@ -131,5 +132,6 @@ class VADPlugin:
         return speech_prob > 0.5
 
     def _load_model(self):
-        model_path = pkg_resources.resource_filename('livekit.plugins.vad', 'files/silero_vad.jit')
+        model_path = pkg_resources.resource_filename(
+            'livekit.plugins.vad', 'files/silero_vad.jit')
         self._model = torch.jit.load(model_path)

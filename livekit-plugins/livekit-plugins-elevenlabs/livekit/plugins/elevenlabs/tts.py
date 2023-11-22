@@ -44,7 +44,8 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
         self._result_iterator = core.AsyncQueueIterator(
             asyncio.Queue[AsyncIterable[rtc.AudioFrame]]())
 
-    def _process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterable[AsyncIterable[rtc.AudioFrame]]:
+    def _process(self, text_iterator: AsyncIterator[AsyncIterator[str]]
+                 ) -> AsyncIterable[AsyncIterable[rtc.AudioFrame]]:
         asyncio.create_task(self._async_process(text_iterator))
         return self._result_iterator
 

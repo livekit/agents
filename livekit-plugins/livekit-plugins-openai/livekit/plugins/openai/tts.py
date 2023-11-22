@@ -35,5 +35,6 @@ class TTSPlugin:
         response.stream_to_file(filepath)
         with audioread.audio_open(filepath) as f:
             for buf in f:
-                frame = rtc.AudioFrame(buf, f.samplerate, f.channels, len(buf) // 2)
+                frame = rtc.AudioFrame(
+                    buf, f.samplerate, f.channels, len(buf) // 2)
                 yield frame

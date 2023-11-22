@@ -1,6 +1,7 @@
 import json
 import asyncio
 import logging
+from typing import Optional, Set
 from livekit import agents, rtc
 from livekit.plugins.vad import VADPlugin, VADEventType
 from livekit.plugins.openai import (WhisperAPITranscriber,
@@ -25,18 +26,19 @@ UserState = Enum("UserState", "SPEAKING, SILENT")
 
 class KITT():
     def __init__(self):
-        #state
+        # state
         self.agent_sending_audio: bool = False
         self.chat_gpt_working: bool = False
         self.user_state: UserState = UserState.SILENT
-        
-        #plugins
-        self.vad_plugin = VADPlugin(left_padding_ms=1000, silence_threshold_ms=500)
+
+        # plugins
+        self.vad_plugin = VADPlugin(
+            left_padding_ms=1000,
+            silence_threshold_ms=500)
         self.chatgpt_plugin = ChatGPTPlugin(prompt=PROMPT, message_capacity=20)
         self.stt_plugin = WhisperAPITranscriber()
         self.tts_plugin = TTSPlugin()
 
-  
         self.ctx: Optional[agents.JobContext] = None
         self.source: Optional[rtc.AudioSource] = None
         self.track_tasks: Set[asyncio.Task] = set()
@@ -55,15 +57,21 @@ class KITT():
 
     async def publish_audio(self):
         self.source = rtc.AudioSource(OAI_TTS_SAMPLE_RATE, OAI_TTS_CHANNELS)
-        track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.source)
+        track = rtc.LocalAudioTrack.create_audio_track(
+            "agent-mic", self.source)
         options = rtc.TrackPublishOptions()
         options.source = rtc.TrackSource.SOURCE_MICROPHONE
         await self.ctx.room.local_participant.publish_track(track, options)
 
-    def on_track_subscribed(self, track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+    def on_track_subscribed(
+            self,
+            track: rtc.Track,
+            publication: rtc.TrackPublication,
+            participant: rtc.RemoteParticipant):
         t = asyncio.create_task(self.process_track(track))
         self.track_tasks.add(t)
-        t.add_done_callback(lambda t: t in self.track_tasks and self.track_tasks.remove(t))
+        t.add_done_callback(
+            lambda t: t in self.track_tasks and self.track_tasks.remove(t))
 
     def cleanup(self):
         pass
@@ -86,7 +94,8 @@ class KITT():
                     continue
                 t = asyncio.create_task(self.process_stt_result(stt_output))
                 self.stt_tasks.add(t)
-                t.add_done_callback(lambda t: t in self.stt_tasks and self.stt_tasks.remove(t))
+                t.add_done_callback(
+                    lambda t: t in self.stt_tasks and self.stt_tasks.remove(t))
 
     async def process_stt_result(self, text):
         await self.ctx.room.local_participant.publish_data(json.dumps({"type": "transcription", "text": text}))
@@ -101,8 +110,9 @@ class KITT():
         sentence = ""
         async for text in text_stream:
             sentence += text
-          
-            if text.endswith("\n") or text.endswith("?") or text.endswith("!") or text.endswith("."):
+
+            if text.endswith("\n") or text.endswith(
+                    "?") or text.endswith("!") or text.endswith("."):
                 audio_stream = await self.tts_plugin.generate_speech_from_text(sentence)
                 await self.send_audio_stream(audio_stream)
                 sentence = ""
@@ -132,12 +142,11 @@ class KITT():
         return AgentState.LISTENING
 
     async def send_state_update(self):
-        msg = json.dumps({
-          "type": "state", 
-          "user_state": self.user_state.name.lower(), 
-          "agent_state": self.get_agent_state().name.lower()
-        })
+        msg = json.dumps({"type": "state",
+                          "user_state": self.user_state.name.lower(),
+                          "agent_state": self.get_agent_state().name.lower()})
         await self.ctx.room.local_participant.publish_data(msg)
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
