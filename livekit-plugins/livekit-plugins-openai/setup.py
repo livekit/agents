@@ -53,7 +53,6 @@ setuptools.setup(
     python_requires=">=3.7.0",
     install_requires=[
         "livekit >= 0.5.0",
-        "livekit-plugins-core",
         "torch >= 2.1.0",
         "numpy >= 1.24.0",
         "openai >= 0.28.0",

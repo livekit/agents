@@ -53,7 +53,6 @@ setuptools.setup(
     python_requires=">=3.7.0",
     install_requires=[
         "livekit",
-        "livekit-plugins-core",
         "numpy >= 1.24.0",
         "elevenlabs >= 0.2.26",
         "websockets >= 11.0.0",
