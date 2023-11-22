@@ -28,7 +28,6 @@ class KITT():
         self.agent_sending_audio = False
         self.chat_gpt_working = False
         self.user_state = UserState.SILENT
-        self.current_sequence_number = 0
         self.vad_plugin = VADPlugin(left_padding_ms=1000, silence_threshold_ms=500)
         self.chatgpt_plugin = ChatGPTPlugin(prompt=PROMPT, message_capacity=20)
         self.stt_plugin = WhisperAPITranscriber()
