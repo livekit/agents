@@ -56,7 +56,6 @@ setuptools.setup(
         "livekit>=0.6.0",
         "livekit-api>=0.1.3",
         "livekit-protocol>=0.1.0",
-        "livekit-plugins-core",
         "livekit-protocol",
         "websockets>=12.0",
     ],
