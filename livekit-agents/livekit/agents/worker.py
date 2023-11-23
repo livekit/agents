@@ -443,13 +443,26 @@ class JobRequest:
             def done_callback(t: asyncio.Task):
                 try:
                     if t.cancelled():
-                        logging.info("Task was cancelled. Worker: %s Job: %s", self._worker.id, self.id)
+                        logging.info(
+                            "Task was cancelled. Worker: %s Job: %s",
+                            self._worker.id,
+                            self.id)
                     else:
-                        logging.info("Task completed successfully. Worker: %s Job: %s", self._worker.id, self.id)
+                        logging.info(
+                            "Task completed successfully. Worker: %s Job: %s",
+                            self._worker.id,
+                            self.id)
                 except asyncio.CancelledError:
-                    logging.info("Task was cancelled. Worker: %s Job: %s", self._worker.id, self.id)
+                    logging.info(
+                        "Task was cancelled. Worker: %s Job: %s",
+                        self._worker.id,
+                        self.id)
                 except Exception as e:
-                    logging.error("Task raised an uncaught exception. Worker: %s Job: %s Exception: %s", self._worker.id, self.id, e)
+                    logging.error(
+                        "Task raised an uncaught exception. Worker: %s Job: %s Exception: %s",
+                        self._worker.id,
+                        self.id,
+                        e)
 
             task = self._worker._loop.create_task(agent(job_ctx))
             task.add_done_callback(done_callback)

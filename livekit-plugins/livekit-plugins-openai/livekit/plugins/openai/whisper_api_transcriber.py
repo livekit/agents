@@ -44,4 +44,3 @@ class WhisperAPITranscriber:
             return response
         except Exception as e:
             logging.error("Error transcribing audio: %s", e)
-

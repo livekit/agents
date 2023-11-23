@@ -56,7 +56,7 @@ class ChatGPTPlugin:
         self._messages.append(message)
         if len(self._messages) > self._message_capacity:
             self._messages.pop(0)
-        
+
         async for text in self._generate_text_streamed('gpt-3.5-turbo'):
             yield text
 
