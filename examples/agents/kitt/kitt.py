@@ -54,12 +54,11 @@ class KITT():
         self.tts_plugin = TTSPlugin()
 
         self.ctx: Optional[agents.JobContext] = None
-        self.source: Optional[rtc.AudioSource] = None
         self.track_tasks: Set[asyncio.Task] = set()
         self.stt_tasks: Set[asyncio.Task] = set()
 
         self.ctx = None
-        self.line_out = None
+        self.line_out: Optional[rtc.AudioSource] = None
         self.track_tasks = set()
         self.stt_tasks = set()
 
@@ -72,7 +71,7 @@ class KITT():
     async def publish_audio(self):
         self.line_out = rtc.AudioSource(OAI_TTS_SAMPLE_RATE, OAI_TTS_CHANNELS)
         track = rtc.LocalAudioTrack.create_audio_track(
-            "agent-mic", self.source)
+            "agent-mic", self.line_out)
         options = rtc.TrackPublishOptions()
         options.source = rtc.TrackSource.SOURCE_MICROPHONE
         await self.ctx.room.local_participant.publish_track(track, options)
