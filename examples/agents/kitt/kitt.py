@@ -70,7 +70,7 @@ class KITT():
         await self.publish_audio()
 
     async def publish_audio(self):
-        self.source = rtc.AudioSource(OAI_TTS_SAMPLE_RATE, OAI_TTS_CHANNELS)
+        self.line_out = rtc.AudioSource(OAI_TTS_SAMPLE_RATE, OAI_TTS_CHANNELS)
         track = rtc.LocalAudioTrack.create_audio_track(
             "agent-mic", self.source)
         options = rtc.TrackPublishOptions()
