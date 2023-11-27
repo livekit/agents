@@ -38,7 +38,7 @@ class WhisperAPITranscriber:
 
     async def transcribe_frames(self, frames: List[rtc.AudioFrame]) -> str:
         if len(frames) == 0:
-            return
+            return ""
 
         sample_rate = frames[0].sample_rate
         channels = frames[0].num_channels
