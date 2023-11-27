@@ -58,6 +58,9 @@ setuptools.setup(
         "openai >= 0.28.0",
         "openai-whisper",
         "audioread >= 3.0.0",
+        "opencv-python >= 4.8",
+        "numpy >= 1.26",
+        "requests >= 2.31"
     ],
     package_data={},
     project_urls={
