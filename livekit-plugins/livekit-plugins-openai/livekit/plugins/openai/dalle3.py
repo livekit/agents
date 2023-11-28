@@ -40,7 +40,8 @@ class DALLE3Plugin:
         image = await asyncio.get_event_loop().run_in_executor(None, self.fetch_image, image_url)
         argb_array = bytearray(image.tobytes())
 
-        argb_frame = rtc.ArgbFrame.create(rtc.VideoFormatType.FORMAT_ARGB, image.shape[0], image.shape[1])
+        argb_frame = rtc.ArgbFrame.create(
+            rtc.VideoFormatType.FORMAT_ARGB, image.shape[0], image.shape[1])
         argb_frame.data[:] = argb_array
         return rtc.VideoFrame(0, rtc.VideoRotation.VIDEO_ROTATION_0, argb_frame.to_i420())
 
@@ -48,7 +49,6 @@ class DALLE3Plugin:
         response = requests.get(url, timeout=10)
         arr = np.asarray(bytearray(response.content), dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        print("Got image", img, img.shape)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGBA)
         from_to = [0, 3, 1, 1, 2, 2, 3, 0]
         cv2.mixChannels([img], [img], from_to)
