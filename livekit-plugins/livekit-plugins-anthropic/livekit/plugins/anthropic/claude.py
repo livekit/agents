@@ -55,9 +55,10 @@ class ClaudeMessage:
 
 
 class ClaudePlugin:
-    def __init__(self, system_message: str = ''):
+    def __init__(self, model: str = 'claude-2', system_message: str = ''):
         self._client = AsyncAnthropic(
             api_key=os.environ["ANTHROPIC_API_KEY"])
+        self._model = model
         self._system_message = system_message
         self._messages: [ClaudeMessage] = []
         self._producing_response = False
@@ -72,10 +73,10 @@ class ClaudePlugin:
 
     async def add_message(self, message: ClaudeMessage) -> AsyncIterable[str]:
         self._messages.append(message)
-        async for text in self._generate_text_streamed('claude-2'):
+        async for text in self._generate_text_streamed():
             yield text
 
-    async def _generate_text_streamed(self, model: str) -> AsyncIterable[str]:
+    async def _generate_text_streamed(self) -> AsyncIterable[str]:
         system_message = ClaudeMessage(
             role=ClaudeMessageRole.system, content=self._system_message)
 
@@ -97,7 +98,7 @@ class ClaudePlugin:
                                                           for m in self._messages] + [ClaudeMessage(role=ClaudeMessageRole.assistant, content="").to_api()])
             chat_stream = await asyncio.wait_for(
                 self._client.completions.create(
-                    model=model,
+                    model=self._model,
                     max_tokens_to_sample=300,
                     stream=True,
                     prompt=prompt
