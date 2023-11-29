@@ -37,7 +37,8 @@ class ChatGPTMessage:
 
 
 class ChatGPTPlugin:
-    def __init__(self, prompt: str, message_capacity: int):
+    def __init__(self, prompt: str, message_capacity: int, model: str):
+        self._model = model
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._prompt = prompt
         self._message_capacity = message_capacity
@@ -57,7 +58,7 @@ class ChatGPTPlugin:
         if len(self._messages) > self._message_capacity:
             self._messages.pop(0)
 
-        async for text in self._generate_text_streamed('gpt-3.5-turbo'):
+        async for text in self._generate_text_streamed(self._model):
             yield text
 
     async def _generate_text_streamed(self, model: str) -> AsyncIterable[str]:
@@ -73,6 +74,7 @@ class ChatGPTPlugin:
             return
 
         self._producing_response = True
+        complete_response = ""
         while True:
             try:
                 chunk = await asyncio.wait_for(anext(chat_stream, None), 5)
@@ -93,6 +95,9 @@ class ChatGPTPlugin:
                 break
 
             if content is not None:
+                complete_response += content
                 yield content
 
+        self._messages.append(ChatGPTMessage(
+            role=ChatGPTMessageRole.assistant, content=complete_response))
         self._producing_response = False
