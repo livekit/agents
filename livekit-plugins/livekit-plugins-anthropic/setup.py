@@ -52,7 +52,6 @@ setuptools.setup(
         include=["livekit.*"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit >= 0.5.0",
         "anthropic >= 0.7.5",
     ],
     package_data={},
