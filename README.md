@@ -87,7 +87,7 @@ Examples coming soon:
 
 - Siri-like
 - Audio-to-Audio Language Translation
-- Transcribtion
+- Transcription
 - Face-Detection
 - Voice-to-Image
 
