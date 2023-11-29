@@ -89,7 +89,7 @@ class ChatGPTPlugin:
 
             if self._needs_interrupt:
                 self._needs_interrupt = False
-                logging.info("ChatGPT Interrupted")
+                logging.info("ChatGPT interrupted")
                 break
 
             if content is not None:
