@@ -49,7 +49,8 @@ class KITT():
         self.vad_plugin = VADPlugin(
             left_padding_ms=1000,
             silence_threshold_ms=500)
-        self.chatgpt_plugin = ChatGPTPlugin(prompt=PROMPT, message_capacity=20)
+        self.chatgpt_plugin = ChatGPTPlugin(
+            prompt=PROMPT, message_capacity=20, model="gpt-3.5-turbo")
         self.stt_plugin = WhisperAPITranscriber()
         self.tts_plugin = TTSPlugin()
 
