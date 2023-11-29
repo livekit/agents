@@ -21,7 +21,6 @@ import cv2
 import numpy as np
 from typing import AsyncIterator
 from openai import AsyncOpenAI
-from PIL import Image
 from livekit import rtc
 
 
@@ -37,7 +36,7 @@ class DALLE3Plugin:
                                                       quality="standard",
                                                       n=1)
         image_url = response.data[0].url
-        image = await asyncio.get_event_loop().run_in_executor(None, self.fetch_image, image_url)
+        image = await asyncio.get_event_loop().run_in_executor(None, self._fetch_image, image_url)
         argb_array = bytearray(image.tobytes())
 
         argb_frame = rtc.ArgbFrame.create(
@@ -45,7 +44,7 @@ class DALLE3Plugin:
         argb_frame.data[:] = argb_array
         return rtc.VideoFrame(0, rtc.VideoRotation.VIDEO_ROTATION_0, argb_frame.to_i420())
 
-    def fetch_image(self, url):
+    def _fetch_image(self, url):
         response = requests.get(url, timeout=10)
         arr = np.asarray(bytearray(response.content), dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
