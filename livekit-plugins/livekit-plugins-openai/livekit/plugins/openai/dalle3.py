@@ -48,7 +48,7 @@ class DALLE3Plugin:
         response = requests.get(url, timeout=10)
         arr = np.asarray(bytearray(response.content), dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGBA)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2RGBA)
         from_to = [0, 3, 1, 1, 2, 2, 3, 0]
         cv2.mixChannels([img], [img], from_to)
         return img
