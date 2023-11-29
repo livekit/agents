@@ -47,7 +47,7 @@ sends a DataChannel into the room whenever speaking has been detected.
 import asyncio
 from typing import AsyncIterator
 
-from livekit.rtc as rtc
+import livekit.rtc as rtc
 from livekit.agents import Agent, Processor
 from livekit.processors.vad import VAD
 
