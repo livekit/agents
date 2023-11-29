@@ -35,6 +35,9 @@ from urllib.parse import urlparse
 
 import websockets
 from livekit import api, rtc, protocol
+import dotenv
+
+dotenv.load_dotenv()
 
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_INTERVAL = 5
