@@ -21,6 +21,8 @@ import audioread
 
 
 class TTSPlugin:
+    """Text-to-speech plugin using OpenAI's API
+    """
 
     def __init__(self):
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -29,12 +31,29 @@ class TTSPlugin:
         pass
 
     async def generate_speech_from_text(self, text: str) -> AsyncIterator[rtc.AudioFrame]:
+        """Generate a stream of speech from text
+
+        Args:
+            text (str): Text to generate speech from
+
+        Returns:
+            AsyncIterator[rtc.AudioFrame]: Stream of 24000hz, 1 channel audio frames
+        """
         async def iterator():
             yield text
 
         return self.generate_speech_from_stream(iterator())
 
     async def generate_speech_from_stream(self, text_stream: AsyncIterator[str]) -> AsyncIterator[rtc.AudioFrame]:
+        """Generate a stream of speech from a stream of text
+
+        Args:
+            text_stream (AsyncIterator[str]): Stream of text to generate speech from
+
+        Returns:
+            AsyncIterator[rtc.AudioFrame]: Stream of 24000hz, 1 channel audio frames
+        """
+
         def create_directory():
             os.makedirs("/tmp/openai_tts", exist_ok=True)
 

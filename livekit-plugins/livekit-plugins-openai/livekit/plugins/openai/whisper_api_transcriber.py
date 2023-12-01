@@ -27,6 +27,8 @@ WHISPER_CHANNELS = 1
 
 
 class WhisperAPITranscriber:
+    """Plugin that uses OpenAI's Whisper API to generate text from audio
+    """
 
     def __init__(self):
         self._model = None
@@ -37,6 +39,14 @@ class WhisperAPITranscriber:
         pass
 
     async def transcribe_frames(self, frames: List[rtc.AudioFrame]) -> str:
+        """Generate text from a list of audio frames
+
+        Args:
+            frames (List[rtc.AudioFrame]): List of audio frames to generate text from
+
+        Returns:
+            str: Text transcribed from audio frames
+        """
         if len(frames) == 0:
             return ""
 

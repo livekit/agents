@@ -13,8 +13,6 @@
 # limitations under the License.
 
 import os
-import time
-import io
 import requests
 import asyncio
 import cv2
@@ -25,13 +23,23 @@ from livekit import rtc
 
 
 class DALLE3Plugin:
+    """DALL-E 3 Plugin
+    """
 
     def __init__(self):
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-    async def generate_image_from_prompt(self, text: str) -> AsyncIterator[rtc.VideoFrame]:
+    async def generate_image_from_prompt(self, prompt: str) -> rtc.VideoFrame:
+        """Generate an image from a prompt
+
+        Args:
+            prompt (str): Prompt to generate an image from
+
+        Returns:
+            rtc.VideoFrame: Image generated from prompt
+        """
         response = await self._client.images.generate(model="dall-e-3",
-                                                      prompt=text,
+                                                      prompt=prompt,
                                                       size="1024x1024",
                                                       quality="standard",
                                                       n=1)
@@ -42,7 +50,10 @@ class DALLE3Plugin:
         argb_frame = rtc.ArgbFrame.create(
             rtc.VideoFormatType.FORMAT_ARGB, image.shape[0], image.shape[1])
         argb_frame.data[:] = argb_array
-        return rtc.VideoFrame(0, rtc.VideoRotation.VIDEO_ROTATION_0, argb_frame.to_i420())
+        return rtc.VideoFrame(
+            0,
+            rtc.VideoRotation.VIDEO_ROTATION_0,
+            argb_frame.to_i420())
 
     def _fetch_image(self, url):
         response = requests.get(url, timeout=10)

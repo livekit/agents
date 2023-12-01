@@ -80,8 +80,9 @@ class ClaudePlugin:
 
             Assistant:
             '''
-            prompt = ''.join([system_message.to_api()] + [m.to_api()
-                                                          for m in self._messages] + [ClaudeMessage(role=ClaudeMessageRole.assistant, content="").to_api()])
+            prompt = ''.join([system_message.to_api()] +
+                             [m.to_api() for m in self._messages] +
+                             [ClaudeMessage(role=ClaudeMessageRole.assistant, content="").to_api()])
             chat_stream = await asyncio.wait_for(
                 self._client.completions.create(
                     model=self._model,
