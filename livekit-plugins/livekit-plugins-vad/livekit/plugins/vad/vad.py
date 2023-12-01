@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import pkg_resources
 import asyncio
 from dataclasses import dataclass
@@ -54,12 +53,20 @@ class VADPlugin:
         pass
 
     async def start(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[Event]:
+        """Start detecting voice activity
+
+        Args:
+            frame_iterator (AsyncIterable[rtc.AudioFrame]): Stream of audio frames to check for voice
+
+        Returns:
+            AsyncIterable[Event]: Stream of voice events
+        """
         async for frame in frame_iterator:
-            event = await self.push_frame(frame)
+            event = await self._push_frame(frame)
             if event is not None:
                 yield event
 
-    async def push_frame(self, frame: rtc.AudioFrame):
+    async def _push_frame(self, frame: rtc.AudioFrame):
 
         if self._model is None:
             await asyncio.get_event_loop().run_in_executor(None, self._load_model)

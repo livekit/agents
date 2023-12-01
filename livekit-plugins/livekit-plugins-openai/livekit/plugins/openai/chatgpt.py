@@ -37,7 +37,16 @@ class ChatGPTMessage:
 
 
 class ChatGPTPlugin:
+    """OpenAI ChatGPT Plugin
+    """
+
     def __init__(self, prompt: str, message_capacity: int, model: str):
+        """
+        Args:
+            prompt (str): First 'system' message sent to the chat that prompts the assistant
+            message_capacity (int): Maximum number of messages to send to the chat
+            model (str): Which model to use (i.e. 'gpt-3.5-turbo')
+        """
         self._model = model
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._prompt = prompt
@@ -47,6 +56,8 @@ class ChatGPTPlugin:
         self._needs_interrupt = False
 
     def interrupt(self):
+        """Interrupt a currently streaming response (if there is one)
+        """
         if self._producing_response:
             self._needs_interrupt = True
 
@@ -54,6 +65,14 @@ class ChatGPTPlugin:
         pass
 
     async def add_message(self, message: ChatGPTMessage) -> AsyncIterable[str]:
+        """Add a message to the chat and generate a streamed response
+
+        Args:
+            message (ChatGPTMessage): The message to add
+
+        Returns:
+            AsyncIterable[str]: Streamed ChatGPT response
+        """
         self._messages.append(message)
         if len(self._messages) > self._message_capacity:
             self._messages.pop(0)

@@ -165,11 +165,11 @@ class KITT():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    async def available_cb(job_request: agents.JobRequest):
+    async def job_request_cb(job_request: agents.JobRequest):
         print("Accepting job for KITT")
         kitt = KITT()
         await job_request.accept(kitt.start, should_subscribe=lambda track_pub, _: track_pub.kind == rtc.TrackKind.KIND_AUDIO)
 
-    worker = agents.Worker(available_cb=available_cb,
+    worker = agents.Worker(job_request_cb=job_request_cb,
                            worker_type=agents.JobType.JT_ROOM)
     agents.run_app(worker)

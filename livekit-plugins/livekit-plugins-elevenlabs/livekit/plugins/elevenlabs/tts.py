@@ -15,7 +15,6 @@
 import asyncio
 import os
 from livekit import rtc
-from livekit.plugins import core
 import numpy as np
 from typing import AsyncIterator, Optional, AsyncIterable
 import websockets.client as wsclient
@@ -52,13 +51,18 @@ class _WSWrapper:
                     self._voice_id = voice['voice_id']
 
 
-class ElevenLabsTTSPlugin(core.TTSPlugin):
-    def __init__(self):
-        super().__init__(process=self._process, close=self._close)
-        self._result_iterator = core.AsyncQueueIterator(
-            asyncio.Queue[AsyncIterable[rtc.AudioFrame]]())
-
+class TTSPlugin:
+    """Eleven Labs TTS plugin
+    """
     async def generate_speech(self, text_stream: AsyncIterator[str]) -> AsyncIterable[rtc.AudioFrame]:
+        """Generate streamed speech from a stream of text
+
+        Args:
+            text_stream (AsyncIterator[str]): Iterator of text to be converted to speech
+
+        Returns:
+            AsyncIterable[rtc.AudioFrame]: Iterator of audio frames
+        """
         ws = _WSWrapper()
         await ws.connect()
         result_queue = asyncio.Queue[rtc.AudioFrame]()
