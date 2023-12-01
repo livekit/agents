@@ -27,6 +27,7 @@ from typing import (
 )
 
 from livekit.protocol import agent as proto_agent
+from livekit.agents import JobType
 from livekit.protocol import models as proto_models
 from livekit import api, rtc, protocol
 from urllib.parse import urlparse
@@ -71,7 +72,7 @@ class Worker:
     def __init__(
         self,
         job_request_cb: Callable[["JobRequest"], Coroutine],
-        worker_type: protocol.agent.JobType.ValueType,
+        worker_type: JobType.ValueType,
         *,
         event_loop: Optional[asyncio.AbstractEventLoop] = None,
         ws_url: str = os.environ.get("LIVEKIT_URL", "http://localhost:7880"),
@@ -82,7 +83,7 @@ class Worker:
 
         Args:
             job_request_cb (Callable[[JobRequest], Coroutine]): Callback that is triggered when a new Job is available.
-            worker_type (protocol.agent.JobType.ValueType): What kind of jobs this worker can handle.
+            worker_type (JobType.ValueType): What kind of jobs this worker can handle.
             event_loop (Optional[asyncio.AbstractEventLoop], optional): Optional asyncio event loop to use for this worker. Defaults to None.
             ws_url (_type_, optional): LiveKit websocket URL. Defaults to os.environ.get("LIVEKIT_URL", "http://localhost:7880").
             api_key (str, optional): LiveKit API Key. Defaults to os.environ.get("LIVEKIT_API_KEY", "").
@@ -170,7 +171,7 @@ class Worker:
         # TODO(theomonnom): the server could handle the JobSimulation like
         # we're doing with the SFU today
         job_id = "JR_" + str(uuid.uuid4())[:12]
-        job_type = proto_agent.JobType.JT_ROOM if participant is None else proto_agent.JobType.JT_PUBLISHER
+        job_type = JobType.JT_ROOM if participant is None else JobType.JT_PUBLISHER
         job = proto_agent.Job(id=job_id, type=job_type,
                               room=room, participant=participant)
         job = JobRequest(self, job, simulated=True)
