@@ -22,9 +22,9 @@ pip install livekit-agents
 Plugins can be installed individually depending on what your agent needs. Available plugins:
 
 - livekit-plugins-elevenlabs
-- livekit-plugins-google
 - livekit-plugins-openai
 - livekit-plugins-vad
+- livekit-plugins-anthropic
 
 ## Terminology
 
@@ -34,50 +34,107 @@ Plugins can be installed individually depending on what your agent needs. Availa
 
 ## Creating an Agent
 
-Let's begin with a simple agent that performs speech-to-text on incoming audio tracks.
+Let's begin with a simple agent that performs speech-to-text on incoming audio tracks and sends a data channel message for each result.
 
-```python
-
-```
-
-The following agent listens to audio tracks and
-sends a DataChannel into the room whenever speaking has been detected.
-
-```python
+```python title="my_agent.py"
+import json
 import asyncio
-from typing import AsyncIterator
+from typing import Optional, Set
+from livekit import agents, rtc
+from livekit.plugins.vad import VADPlugin, VADEventType
+from livekit.plugins.openai import WhisperAPITranscriber
 
-import livekit.rtc as rtc
-from livekit.agents import Agent, Processor
-from livekit.processors.vad import VAD
+
+class MyAgent():
+    def __init__(self):
+        # Initialize plugins 
+        self.vad_plugin = VADPlugin(
+            left_padding_ms=1000,
+            silence_threshold_ms=500)
+        self.stt_plugin = WhisperAPITranscriber()
+
+        self.ctx: Optional[agents.JobContext] = None
+        self.track_tasks: Set[asyncio.Task] = set()
+        self.ctx = None
+
+    async def start(self, ctx: agents.JobContext):
+        self.ctx = ctx
+        ctx.room.on("track_subscribed", self.on_track_subscribed)
+        ctx.room.on("disconnected", self.cleanup)
+
+    # Callback for when a track is subscribed to. Only tracks matching the should_subscribe filter that is configured when accepting a job will be subscribed to.
+    def on_track_subscribed(
+            self,
+            track: rtc.Track,
+            publication: rtc.TrackPublication,
+            participant: rtc.RemoteParticipant):
+        t = asyncio.create_task(self.process_track(track))
+        self.track_tasks.add(t)
+        t.add_done_callback(
+            lambda t: t in self.track_tasks and self.track_tasks.remove(t))
+
+    def cleanup(self):
+        # Whatever cleanup you need to do.
+        pass
+
+    async def process_track(self, track: rtc.Track):
+        audio_stream = rtc.AudioStream(track)
+        async for vad_result in self.vad_plugin.start(audio_stream):
+            # When the human has finished talking, send the audio frames containing voice to the transcription plugin (in this case the Whisper API).
+            if vad_result.type == VADEventType.FINISHED:
+                stt_output = await self.stt_plugin.transcribe_frames(vad_result.frames)
+                if len(stt_output) == 0:
+                    continue
+                # Send the speech transcription to all participants in the LiveKit room via a DataChannel message.
+                await self.ctx.room.local_participant.publish_data(json.dumps({"type": "transcription", "text": text}))
 
 
-class MyAgent(Agent):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.vad = VAD(silence_threshold_ms=250)
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
 
-    def on_audio_track(self, track: rtc.Track, participant: rtc.Participant):
-        loop = asyncio.get_event_loop()
-        loop.create_task(self.process(track))
+    # Callback that gets called on every new Agent JobRequest. In this callback you can create your agent and accept (or decline) a job. Declining a job will tell the LiveKit server to give the job to another Worker.
+    async def job_request_cb(job_request: agents.JobRequest):
+        # Accept the job request with my_agent and configure a filter function that decides which tracks the agent processes. In this case, the agent only cares about audio tracks.
+        my_agent = MyAgent()
+        await job_request.accept(my_agent.start, should_subscribe=lambda track_pub, _: track_pub.kind == rtc.TrackKind.KIND_AUDIO)
 
-    async def process(self, participant: rtc.Participant, audio_track: rtc.Track):
-        audio_stream = rtc.AudioStream(audio_track)
-        vad_processor = Processor(process=self.vad.push_frame)
-        asyncio.create_task(self.vad_result_loop(vad_processor.stream()))
-        async for frame in audio_stream:
-            vad_processor.push(frame)
+    # When a new LiveKit room is created, the job_request_cb is called.
+    worker = agents.Worker(job_request_cb=job_request_cb,
+                           worker_type=agents.JobType.JT_ROOM)
 
-    async def vad_result_loop(self, participant: rtc.Participant, queue: AsyncIterator[VAD.Event]):
-        async for event in queue:
-            if event.type == "voice_started":
-                await self.participant.publish_data(f"{participant.identity} started talking")
-            elif event.type == "voice_finished":
-                await self.participant.publish_data(f"{participant.identity} stopped talking")
-
-    def should_process(self, track: rtc.TrackPublication, participant: rtc.Participant) -> bool:
-        return track.kind == rtc.TrackKind.Audio
+    # Start the cli
+    agents.run_app(worker)
 ```
+
+## Running an Agent
+
+The Agent Framework expose a cli interface to run your agent. To start the above agent, run:
+
+```bash
+python my_agent.py start --api-key=<your livekit api key> --api-secret<your livekit api secret> --url=<your livekit url>
+```
+
+The environment variables `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and `LIVEKIT_URL` can be used instead of the cli-args. (`.env` files also supported)
+
+### What is happening when I run my Agent?
+
+When you run your agent with the above commands, a worker is started that opens an authenticated websocket connection to a LiveKit server (defined by your LIVEKIT_URL and authenticated with the key and secret).
+
+This doesn't actually run any agents. Instead, the worker sits waiting for the LiveKit server to give it a job. In the above case, this happens whenever a new LiveKit room is created because the worker type is `JT_ROOM`.
+
+Once the LiveKit server is given a job, the worker can decide whether or not to accept it. Accepting the job will create a LiveKit participant that joins the room and begin subscribing to tracks.
+
+### What happens when I SIGTERM one of my Workers? 
+
+The Agent Framework was designed for production use cases. Since agents are more stateful entities than typical web-servers, it's important that workers can't be terminated while they are running active agents.
+
+When calling SIGTERM on a worker, the worker will signal to the LiveKit server that it does not want to be given any more jobs. It will also auto-decline any new job requests that might sneak in before the server signaling has occurred. The worker will remain alive while it manages an agent that is still connected to a room.
+
+## Deploying a Worker?
+
+Workers can be deployed like any other python application. Deployments will typically need `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and `LIVEKIT_URL` set as environment variables.
+
+This reference [Dockerfile](examples/agents/Dockerfile) serves as a good start point for your agent deployment.
 
 ## More Examples
 
@@ -85,7 +142,7 @@ Examples can be found in the `examples/` repo.
 
 Examples coming soon:
 
-- Siri-like
+- KITT (Clone of ChatGPT Voice Mode) 
 - Audio-to-Audio Language Translation
 - Transcription
 - Face-Detection
