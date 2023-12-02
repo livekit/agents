@@ -79,8 +79,7 @@ class Worker:
         api_key: str = os.environ.get("LIVEKIT_API_KEY", ""),
         api_secret: str = os.environ.get("LIVEKIT_API_SECRET", ""),
     ) -> None:
-        """_summary_
-
+        """
         Args:
             job_request_cb (Callable[[JobRequest], Coroutine]): Callback that is triggered when a new Job is available.
             worker_type (JobType.ValueType): What kind of jobs this worker can handle.
