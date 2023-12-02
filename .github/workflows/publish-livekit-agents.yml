@@ -8,4 +8,5 @@ jobs:
     uses: ./.github/workflows/publish-package.yml
     with:
       package_name: 'livekit-agents'
+      docs_entrypoint: 'livekit-plugins/livekit-agents/livekit/agents'
     secrets: inherit

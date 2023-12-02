@@ -14,8 +14,15 @@ on:
       package_name:
         required: true
         type: string
+      docs_entrypoint:
+        required: true
+        type: string
     secrets:
       PYPI_API_TOKEN:
+        required: true
+      DOCS_DEPLOY_AWS_ACCESS_KEY:
+        required: true
+      DOCS_DEPLOY_AWS_API_SECRET:
         required: true
 
 permissions:
@@ -72,3 +79,20 @@ jobs:
       with:
         user: __token__
         password: ${{ secrets.PYPI_API_TOKEN }}
+
+  docs:
+    needs:
+    - publish
+
+    - name: Install dependencies
+      run: python -m pip install --upgrade pdoc  
+
+    - name: Build Docs
+        if: steps.changesets.outputs.published == 'true'
+        run: python -m pdoc ${{ inputs.docs_entrypoint }} --docformat=google --html --output-dir docs
+    - name: S3 Upload
+        run: aws s3 cp docs/ s3://livekit-docs/${{ inputs.package_name }} --recursive
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
+          AWS_DEFAULT_REGION: "us-east-1"
