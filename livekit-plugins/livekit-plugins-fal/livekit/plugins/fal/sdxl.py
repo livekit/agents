@@ -28,10 +28,12 @@ class SDXLPlugin:
     Requires FAL_KEY_ID and FAL_KEY_SECRET environment variables to be set.
     """
 
-    def __init__(self):
+    def __init__(self, model='110602490-fast-sdxl'):
         if not os.getenv("FAL_KEY_ID") and os.getenv("FAL_KEY_SECRET"):
             raise ValueError(
                 "The Fal plugin requires FAL_KEY_ID and FAL_KEY_SECRET environment variables to be set.")
+
+        self.model = model
 
     async def generate_image_from_prompt(self, prompt: str) -> rtc.VideoFrame:
         """Generate an image from a prompt
@@ -44,7 +46,7 @@ class SDXLPlugin:
         """
 
         handler = fal.apps.submit(
-            '110602490-fast-sdxl',
+            self.model,
             arguments={
                 'prompt': prompt,
                 'sync_mode': False
