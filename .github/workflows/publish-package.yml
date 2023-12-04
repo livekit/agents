@@ -90,8 +90,11 @@ jobs:
     - name: Install dependencies
       run: python -m pip install --upgrade pdoc  
 
+    - name: Debug
+      run: ls -la
+
     - name: Build Docs
-      run: echo $pwd && python -m pdoc ${{ inputs.docs_entrypoint }} --docformat=google --output-dir docs
+      run: python -m pdoc ${{ inputs.docs_entrypoint }} --docformat=google --output-dir docs
 
     - name: S3 Upload
       run: aws s3 cp docs/ s3://livekit-docs/${{ inputs.package_name }} --recursive
