@@ -84,6 +84,7 @@ jobs:
     needs:
     - publish
 
+    steps:
     - name: Install dependencies
       run: python -m pip install --upgrade pdoc  
 
