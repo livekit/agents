@@ -84,6 +84,8 @@ jobs:
     needs:
     - publish
 
+    runs-on: ubuntu-latest
+
     steps:
     - name: Install dependencies
       run: python -m pip install --upgrade pdoc  
