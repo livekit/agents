@@ -27,8 +27,8 @@ from typing import (
 )
 
 from livekit.protocol import agent as proto_agent
-from livekit.agents import JobType
 from livekit.protocol import models as proto_models
+from livekit.protocol.agent import JobType as ProtoJobType
 from livekit import api, rtc, protocol
 from urllib.parse import urlparse
 import websockets
@@ -40,6 +40,8 @@ dotenv.load_dotenv()
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_INTERVAL = 5
 ASSIGNMENT_TIMEOUT = 15
+
+JobType = ProtoJobType
 
 
 def subscribe_all(*_) -> bool:
