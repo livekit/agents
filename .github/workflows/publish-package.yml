@@ -96,7 +96,7 @@ jobs:
       run: python ${{ inputs.package_name }}/setup.py egg_info
 
     - name: Debug
-      run: ls -la $ {{ inputs.package_name }}
+      run: ls -la ${{ inputs.package_name }}
 
     - name: Install Requirements From Egg Info
       run: python -m pip install -r ${{ inputs.package_name }}/$(echo ${{ inputs.package_name }} | tr '-' '_').egg-info/requires.txt
