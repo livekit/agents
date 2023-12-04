@@ -90,7 +90,7 @@ jobs:
     - uses: actions/checkout@v3
 
     - name: Install dependencies
-      run: python -m pip install --upgrade pdoc  
+      run: python -m pip install --upgrade pdoc livekit
 
     - name: Debug
       run: ls -la
@@ -99,7 +99,7 @@ jobs:
       run: python -m pdoc ${{ inputs.docs_entrypoint }} --docformat=google --output-dir docs
 
     - name: S3 Upload
-      run: aws s3 cp docs/ s3://livekit-docs/${{ inputs.package_name }} --recursive
+      run: aws s3 cp docs/ s3://livekit-docs/${{ inputs.package_name }} --recursive -e livekit=livekit
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
