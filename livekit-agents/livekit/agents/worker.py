@@ -572,20 +572,18 @@ def run_app(worker: Worker) -> None:
     @click.option("--identity", help="particiant identity")
     def simulate_job(room_name: str, identity: str) -> None:
         async def _pre_run() -> Tuple[proto_models.Room, Optional[proto_models.ParticipantInfo]]:
-            room_service = api.RoomService(
-                worker._rtc_url, worker._api_key, worker._api_secret
-            )
+            lkapi = api.LiveKitAPI(worker._rtc_url, worker._api_key, worker._api_secret)
 
             try:
-                room = await room_service.create_room(api.CreateRoomRequest(name=room_name))
+                room = await lkapi.room.create_room(api.CreateRoomRequest(name=room_name))
 
                 participant = None
                 if identity:
-                    participant = await room_service.get_participant(api.RoomParticipantIdentity(room=room_name, identity=identity))
+                    participant = await lkapi.room.get_participant(api.RoomParticipantIdentity(room=room_name, identity=identity))
 
                 return room, participant
             finally:
-                await room_service.close()
+                await lkapi.aclose()
 
         room_info, participant = worker._loop.run_until_complete(_pre_run())
         logging.info(
