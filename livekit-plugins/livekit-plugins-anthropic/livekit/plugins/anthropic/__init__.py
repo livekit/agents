@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .vad import VADPlugin, VADEventType
+from .claude import ClaudePlugin, ClaudeMessage, ClaudeMessageRole
