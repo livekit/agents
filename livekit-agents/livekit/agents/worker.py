@@ -602,7 +602,8 @@ def run_app(worker: Worker) -> None:
 
     @cli.command(help="Start a worker and simulate a job, useful for testing")
     @click.option("--room-name", help="The room name", required=True)
-    def simulate_job(room_name: str) -> None:
+    @click.option("--identity", help="The participant identity")
+    def simulate_job(room_name: str, identity: str) -> None:
         async def _pre_run() -> Tuple[proto_models.Room, Optional[proto_models.ParticipantInfo]]:
             lkapi = api.LiveKitAPI(worker._rtc_url, worker._api_key, worker._api_secret)
 
