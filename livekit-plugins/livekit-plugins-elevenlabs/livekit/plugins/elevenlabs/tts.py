@@ -1,7 +1,20 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import asyncio
 import os
 from livekit import rtc
-from livekit.plugins import core
 import numpy as np
 from typing import AsyncIterator, Optional, AsyncIterable
 import websockets.client as wsclient
@@ -38,26 +51,35 @@ class _WSWrapper:
                     self._voice_id = voice['voice_id']
 
 
-class ElevenLabsTTSPlugin(core.TTSPlugin):
-    def __init__(self):
-        self._result_iterator = core.AsyncQueueIterator(
-            asyncio.Queue[AsyncIterable[rtc.AudioFrame]]())
-        super().__init__(process=self.process)
+class TTSPlugin:
+    """Eleven Labs TTS plugin
+    """
+    async def generate_speech(self, text_stream: AsyncIterator[str]) -> AsyncIterable[rtc.AudioFrame]:
+        """Generate streamed speech from a stream of text
 
-    def process(self, text_iterator: AsyncIterator[AsyncIterator[str]]
-                ) -> AsyncIterable[AsyncIterable[rtc.AudioFrame]]:
-        asyncio.create_task(self._async_process(text_iterator))
-        return self._result_iterator
+        Args:
+            text_stream (AsyncIterator[str]): Iterator of text to be converted to speech
 
-    async def _async_process(self, text_iterator: AsyncIterator[AsyncIterator[str]]) -> AsyncIterable[AsyncIterable[rtc.AudioFrame]]:
-        async for text_stream in text_iterator:
-            ws = _WSWrapper()
-            await ws.connect()
-            result_stream = core.AsyncQueueIterator[rtc.AudioFrame](
-                asyncio.Queue[rtc.AudioFrame]())
-            asyncio.create_task(self._push_data_loop(ws, text_stream))
-            asyncio.create_task(self._receive_audio_loop(ws, result_stream))
-            await self._result_iterator.put(result_stream)
+        Returns:
+            AsyncIterable[rtc.AudioFrame]: Iterator of audio frames
+        """
+        ws = _WSWrapper()
+        await ws.connect()
+        result_queue = asyncio.Queue[rtc.AudioFrame]()
+        asyncio.create_task(self._push_data_loop(ws, text_stream))
+        asyncio.create_task(self._receive_audio_loop(ws, result_queue))
+
+        async def iterator():
+            while True:
+                frame = await result_queue.get()
+                if frame is None:
+                    return
+                yield frame
+
+        return iterator()
+
+    async def _close(self):
+        pass
 
     async def _push_data_loop(self, ws_wrapper: _WSWrapper, text_stream: AsyncIterable[str]):
         await ws_wrapper.wait_for_connected()
@@ -66,7 +88,7 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
             await ws_wrapper.ws.send(json.dumps(payload))
         await ws_wrapper.ws.send(json.dumps({"text": ""}))
 
-    async def _receive_audio_loop(self, ws_wrapper: _WSWrapper, response_queue: core.AsyncQueueIterator[rtc.AudioFrame]):
+    async def _receive_audio_loop(self, ws_wrapper: _WSWrapper, result_queue: asyncio.Queue[rtc.AudioFrame]):
         await ws_wrapper.wait_for_connected()
         # 10ms at 44.1k * 2 bytes per sample (int16) * 1 channels
         frame_size_bytes = 441 * 2
@@ -83,8 +105,9 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
                             remainder = remainder + b'\x00' * \
                                 (frame_size_bytes - len(remainder))
                         frame = self._create_frame_from_chunk(remainder)
-                        await response_queue.put(frame)
+                        await result_queue.put(frame)
                     await ws_wrapper.ws.close()
+                    await result_queue.put(None)
                     return
 
                 if data["audio"]:
@@ -100,10 +123,11 @@ class ElevenLabsTTSPlugin(core.TTSPlugin):
                     for i in range(0, len(chunk), frame_size_bytes):
                         frame = self._create_frame_from_chunk(
                             chunk[i: i + frame_size_bytes])
-                        await response_queue.put(frame)
+                        await result_queue.put(frame)
 
         except websockets.exceptions.ConnectionClosed:
             print("Connection closed")
+            await result_queue.put(None)
             return
 
     def _create_frame_from_chunk(self, chunk: bytes):

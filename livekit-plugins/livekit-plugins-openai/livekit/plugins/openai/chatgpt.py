@@ -13,10 +13,10 @@
 # limitations under the License.
 
 import os
+import logging
 import asyncio
 from dataclasses import dataclass
 from typing import AsyncIterable
-from livekit.plugins import core
 from openai import AsyncOpenAI
 from enum import Enum
 
@@ -36,9 +36,18 @@ class ChatGPTMessage:
         }
 
 
-class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
-    def __init__(self, prompt: str, message_capacity: int):
-        super().__init__(process=self._process, close=self._close)
+class ChatGPTPlugin:
+    """OpenAI ChatGPT Plugin
+    """
+
+    def __init__(self, prompt: str, message_capacity: int, model: str):
+        """
+        Args:
+            prompt (str): First 'system' message sent to the chat that prompts the assistant
+            message_capacity (int): Maximum number of messages to send to the chat
+            model (str): Which model to use (i.e. 'gpt-3.5-turbo')
+        """
+        self._model = model
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._prompt = prompt
         self._message_capacity = message_capacity
@@ -47,23 +56,29 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
         self._needs_interrupt = False
 
     def interrupt(self):
+        """Interrupt a currently streaming response (if there is one)
+        """
         if self._producing_response:
             self._needs_interrupt = True
 
-    async def _close(self):
+    async def close(self):
         pass
 
-    def _process(
-            self, message_iterator: AsyncIterable[ChatGPTMessage]) -> AsyncIterable[AsyncIterable[str]]:
-        async def iterator():
-            async for msg in message_iterator:
-                self._messages.append(msg)
-                if len(self._messages) > self._message_capacity:
-                    self._messages.pop(0)
+    async def add_message(self, message: ChatGPTMessage) -> AsyncIterable[str]:
+        """Add a message to the chat and generate a streamed response
 
-                yield self._generate_text_streamed('gpt-3.5-turbo')
+        Args:
+            message (ChatGPTMessage): The message to add
 
-        return iterator()
+        Returns:
+            AsyncIterable[str]: Streamed ChatGPT response
+        """
+        self._messages.append(message)
+        if len(self._messages) > self._message_capacity:
+            self._messages.pop(0)
+
+        async for text in self._generate_text_streamed(self._model):
+            yield text
 
     async def _generate_text_streamed(self, model: str) -> AsyncIterable[str]:
         prompt_message = ChatGPTMessage(
@@ -78,12 +93,15 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
             return
 
         self._producing_response = True
+        complete_response = ""
         while True:
-            await asyncio.sleep(0.5)
-
             try:
                 chunk = await asyncio.wait_for(anext(chat_stream, None), 5)
             except TimeoutError:
+                break
+            except asyncio.CancelledError:
+                self._producing_response = False
+                self._needs_interrupt = False
                 break
 
             if chunk is None:
@@ -92,10 +110,13 @@ class ChatGPTPlugin(core.Plugin[ChatGPTMessage, AsyncIterable[str]]):
 
             if self._needs_interrupt:
                 self._needs_interrupt = False
-                print("interrupted")
+                logging.info("ChatGPT interrupted")
                 break
 
             if content is not None:
+                complete_response += content
                 yield content
 
+        self._messages.append(ChatGPTMessage(
+            role=ChatGPTMessageRole.assistant, content=complete_response))
         self._producing_response = False

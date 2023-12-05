@@ -52,13 +52,15 @@ setuptools.setup(
         include=["livekit.*"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "livekit >= 0.5.0",
-        "livekit-plugins-core",
+        "livekit",
         "torch >= 2.1.0",
         "numpy >= 1.24.0",
         "openai >= 0.28.0",
         "openai-whisper",
         "audioread >= 3.0.0",
+        "opencv-python >= 4.8",
+        "numpy >= 1.26",
+        "requests >= 2.31"
     ],
     package_data={},
     project_urls={

@@ -1,3 +1,6 @@
+<!--BEGIN_BANNER_IMAGE-->
+<!--END_BANNER_IMAGE-->
+
 # LiveKit Agent Framework
 
 The Agent Framework is designed for building real-time, programmable participants
@@ -44,7 +47,7 @@ sends a DataChannel into the room whenever speaking has been detected.
 import asyncio
 from typing import AsyncIterator
 
-from livekit.rtc as rtc
+import livekit.rtc as rtc
 from livekit.agents import Agent, Processor
 from livekit.processors.vad import VAD
 
@@ -84,6 +87,9 @@ Examples coming soon:
 
 - Siri-like
 - Audio-to-Audio Language Translation
-- Transcribtion
+- Transcription
 - Face-Detection
 - Voice-to-Image
+
+<!--BEGIN_REPO_NAV-->
+<!--END_REPO_NAV-->

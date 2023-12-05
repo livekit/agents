@@ -1,59 +1,73 @@
-import io
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 import asyncio
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator
 from openai import AsyncOpenAI
-import torch
-
-import whisper
 from livekit import rtc
-from livekit.plugins import core
-import numpy as np
 import audioread
 
 
-class TTSPlugin(core.TTSPlugin):
+class TTSPlugin:
+    """Text-to-speech plugin using OpenAI's API
+    """
 
     def __init__(self):
-        super().__init__(process=self._process, close=self._close)
-        self._model = None
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        self._response_iterator = core.AsyncQueueIterator(
-            asyncio.Queue[rtc.AudioFrame]())
 
-    async def _close(self):
+    async def close(self):
         pass
 
-    def _process(self, text_streams: AsyncIterator[AsyncIterator[str]]
-                 ) -> AsyncIterator[AsyncIterator[rtc.AudioFrame]]:
-        asyncio.create_task(self._async_process(text_streams))
-        return self._response_iterator
+    async def generate_speech_from_text(self, text: str) -> AsyncIterator[rtc.AudioFrame]:
+        """Generate a stream of speech from text
 
-    async def _async_process(self, text_streams: AsyncIterator[AsyncIterator[str]]) -> AsyncIterator[AsyncIterator[rtc.AudioFrame]]:
-        loop = asyncio.get_event_loop()
+        Args:
+            text (str): Text to generate speech from
+
+        Returns:
+            AsyncIterator[rtc.AudioFrame]: Stream of 24000hz, 1 channel audio frames
+        """
+        async def iterator():
+            yield text
+
+        return self.generate_speech_from_stream(iterator())
+
+    async def generate_speech_from_stream(self, text_stream: AsyncIterator[str]) -> AsyncIterator[rtc.AudioFrame]:
+        """Generate a stream of speech from a stream of text
+
+        Args:
+            text_stream (AsyncIterator[str]): Stream of text to generate speech from
+
+        Returns:
+            AsyncIterator[rtc.AudioFrame]: Stream of 24000hz, 1 channel audio frames
+        """
 
         def create_directory():
             os.makedirs("/tmp/openai_tts", exist_ok=True)
 
-        await loop.run_in_executor(None, create_directory)
+        await asyncio.get_event_loop().run_in_executor(None, create_directory)
 
-        async for text_stream in text_streams:
-            complete_text = ""
-            async for text in text_stream:
-                complete_text += text
-            response = await self._client.audio.speech.create(model="tts-1", voice="alloy", response_format="mp3", input=complete_text, )
-            filepath = "/tmp/openai_tts/output.mp3"
-            response.stream_to_file(filepath)
-            audio_stream = core.AsyncQueueIterator(
-                asyncio.Queue[rtc.AudioFrame]())
-            with audioread.audio_open(filepath) as f:
-                for buf in f:
-                    frame = rtc.AudioFrame(
-                        buf, f.samplerate, f.channels, len(buf) // 2)
-                    await audio_stream.put(frame)
+        complete_text = ""
+        async for text in text_stream:
+            complete_text += text
 
-                await audio_stream.aclose()
-
-            await self._response_iterator.put(audio_stream)
+        response = await self._client.audio.speech.create(model="tts-1", voice="alloy", response_format="mp3", input=complete_text, )
+        filepath = "/tmp/openai_tts/output.mp3"
+        response.stream_to_file(filepath)
+        with audioread.audio_open(filepath) as f:
+            for buf in f:
+                frame = rtc.AudioFrame(
+                    buf, f.samplerate, f.channels, len(buf) // 2)
+                yield frame

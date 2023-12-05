@@ -1,0 +1,12 @@
+name: Publish livekit-plugins-anthropic
+
+on:
+  workflow_dispatch
+
+jobs:
+  call-publish-workflow:
+    uses: ./.github/workflows/publish-package.yml
+    with:
+      package_name: 'livekit-plugins/livekit-plugins-anthropic'
+      docs_entrypoint: 'livekit-plugins/livekit-plugins-anthropic/livekit/plugins/anthropic'
+    secrets: inherit

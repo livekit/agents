@@ -22,6 +22,5 @@ from .worker import (
     AssignmentTimeoutError,
     run_app,
     subscribe_all,
+    JobType
 )
-
-from livekit.protocol.agent import JobType
