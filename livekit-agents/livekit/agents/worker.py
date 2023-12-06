@@ -12,28 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
-import uuid
-import os
 import asyncio
+import logging
+import os
 import signal
+import uuid
 from typing import (
     Any,
+    Callable,
     Coroutine,
     Dict,
     Optional,
-    Callable,
     Tuple,
 )
+from urllib.parse import urlparse
 
+import dotenv
+import websockets
+
+from livekit import api, protocol, rtc
 from livekit.protocol import agent as proto_agent
 from livekit.protocol import models as proto_models
 from livekit.protocol.agent import JobType as ProtoJobType
-from livekit import api, rtc, protocol
-from urllib.parse import urlparse
-import websockets
-
-import dotenv
 
 dotenv.load_dotenv()
 
