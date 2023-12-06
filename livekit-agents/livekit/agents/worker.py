@@ -37,7 +37,7 @@ import dotenv
 
 dotenv.load_dotenv()
 
-MAX_RECONNECT_ATTEMPTS = 5
+MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_INTERVAL = 5
 ASSIGNMENT_TIMEOUT = 15
 
@@ -45,22 +45,19 @@ JobType = ProtoJobType
 
 
 def subscribe_all(*_) -> bool:
-    """Utility function for subscribing to all tracks
-    """
+    """Utility function for subscribing to all tracks"""
     return True
 
 
 class AssignmentTimeoutError(Exception):
-    """Worker timed out when joining the worker-pool
-    """
+    """Worker timed out when joining the worker-pool"""
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
 
 
 class JobCancelledError(Exception):
-    """Job was cancelled by the server
-    """
+    """Job was cancelled by the server"""
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
@@ -101,8 +98,7 @@ class Worker:
         self._api_secret = api_secret
         self._running = False
         self._running_jobs: list["JobContext"] = []
-        self._pending_jobs: Dict[str,
-                                 asyncio.Future[proto_agent.JobAssignment]] = {}
+        self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
 
     def _set_url(self, ws_url: str) -> None:
         parse_res = urlparse(ws_url)
@@ -128,7 +124,9 @@ class Worker:
         req.register.type = self._worker_type
 
         headers = {"Authorization": f"Bearer {join_jwt}"}
-        self._ws = await websockets.connect(self._agent_url, extra_headers=headers, close_timeout=0.150)
+        self._ws = await websockets.connect(
+            self._agent_url, extra_headers=headers, close_timeout=0.150
+        )
         await self._send(req)
         res = await self._recv()
         return res.register
@@ -151,7 +149,8 @@ class Worker:
             return await asyncio.wait_for(f, ASSIGNMENT_TIMEOUT)
         except asyncio.TimeoutError as exc:
             raise AssignmentTimeoutError(
-                f"assignment timeout for job {job_id}") from exc
+                f"assignment timeout for job {job_id}"
+            ) from exc
 
     async def _send_job_status(
         self,
@@ -167,14 +166,18 @@ class Worker:
         req.job_update.user_data = user_data
         await self._ws.send(req.SerializeToString())
 
-    def _simulate_job(self, room: proto_models.Room,
-                      participant: Optional[proto_models.ParticipantInfo]):
+    def _simulate_job(
+        self,
+        room: proto_models.Room,
+        participant: Optional[proto_models.ParticipantInfo],
+    ):
         # TODO(theomonnom): the server could handle the JobSimulation like
         # we're doing with the SFU today
         job_id = "JR_" + str(uuid.uuid4())[:12]
         job_type = JobType.JT_ROOM if participant is None else JobType.JT_PUBLISHER
-        job = proto_agent.Job(id=job_id, type=job_type,
-                              room=room, participant=participant)
+        job = proto_agent.Job(
+            id=job_id, type=job_type, room=room, participant=participant
+        )
         job = JobRequest(self, job, simulated=True)
         asyncio.ensure_future(self._handle_new_job(job), loop=self._loop)
 
@@ -205,8 +208,8 @@ class Worker:
 
         if not job._answered:
             logging.warning(
-                "user did not answer availability for job %s, rejecting",
-                job.id)
+                "user did not answer availability for job %s, rejecting", job.id
+            )
             await job.reject()
 
     async def _message_received(self, msg: protocol.agent.ServerMessage) -> None:
@@ -233,8 +236,7 @@ class Worker:
         for i in range(MAX_RECONNECT_ATTEMPTS):
             try:
                 reg = await self._connect()
-                logging.info(
-                    "worker successfully re-registered: %s", reg.worker_id)
+                logging.info("worker successfully re-registered: %s", reg.worker_id)
                 return True
             except Exception as e:
                 logging.error("failed to reconnect, attempt %i: %s", i, e)
@@ -250,34 +252,27 @@ class Worker:
                         await self._message_received(await self._recv())
                 except websockets.exceptions.ConnectionClosed as e:
                     if self._running:
-                        logging.error(
-                            "connection closed, trying to reconnect: %s", e)
+                        logging.error("connection closed, trying to reconnect: %s", e)
                         if not await self._reconnect():
                             break
                 except Exception as e:
                     logging.error("error while running worker: %s", e)
                     break
+        finally:
+            await asyncio.shield(self._shutdown())
 
-        except asyncio.CancelledError:
+    async def _shutdown(self) -> None:
+        async with self._lock:
+            if not self._running:
+                return
+
             await self._ws.close()
-
-    @property
-    def id(self) -> str:
-        """Worker ID
-        """
-        return self._wid
-
-    @property
-    def running(self) -> bool:
-        """Whether the worker is running.
-         Running is first set to True when the websocket connection is established and
-         the Worker has been acknowledged by a LiveKit Server.
-        """
-        return self._running
+            # Close all running jobs
+            await asyncio.gather(*[job.shutdown() for job in self._running_jobs])
+            self._running = False
 
     async def start(self) -> None:
-        """Start the Worker
-        """
+        """Start the Worker"""
         async with self._lock:
             if self._running:
                 raise Exception("worker is already running")
@@ -287,16 +282,26 @@ class Worker:
             self._task = self._loop.create_task(self._run())
 
     async def shutdown(self) -> None:
-        """Shut the Worker down.
-        """
+        """Shut the Worker down."""
         async with self._lock:
             if not self._running:
                 return
 
-            self._running = False
             self._task.cancel()
             await self._task
-            await asyncio.gather(*[job.shutdown() for job in self._running_jobs])
+
+    @property
+    def id(self) -> str:
+        """Worker ID"""
+        return self._wid
+
+    @property
+    def running(self) -> bool:
+        """Whether the worker is running.
+        Running is first set to True when the websocket connection is established and
+        the Worker has been acknowledged by a LiveKit Server.
+        """
+        return self._running
 
 
 class JobContext:
@@ -320,14 +325,12 @@ class JobContext:
 
     @property
     def id(self) -> str:
-        """Job ID
-        """
+        """Job ID"""
         return self._id
 
     @property
     def room(self) -> rtc.Room:
-        """LiveKit Room object
-        """
+        """LiveKit Room object"""
         return self._room
 
     async def shutdown(self) -> None:
@@ -397,8 +400,7 @@ class JobRequest:
     async def accept(
         self,
         agent: Callable[[JobContext], Coroutine],
-        should_subscribe: Callable[[
-            rtc.TrackPublication, rtc.RemoteParticipant], bool],
+        should_subscribe: Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool],
         grants: api.VideoGrants = None,
         name: str = "",
         identity: str = "",
@@ -428,8 +430,7 @@ class JobRequest:
             grants.can_update_own_metadata = True
 
             jwt = (
-                api.AccessToken(self._worker._api_key,
-                                self._worker._api_secret)
+                api.AccessToken(self._worker._api_key, self._worker._api_secret)
                 .with_identity(identity)
                 .with_grants(grants)
                 .with_metadata(metadata)
@@ -447,7 +448,8 @@ class JobRequest:
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
                 logging.error(
-                    "failed to connect to the room, cancelling job %s: %s", self.id, e)
+                    "failed to connect to the room, cancelling job %s: %s", self.id, e
+                )
                 await self._worker._send_job_status(
                     self.id, proto_agent.JobStatus.JS_FAILED, str(e)
                 )
@@ -461,31 +463,36 @@ class JobRequest:
                         logging.info(
                             "Task was cancelled. Worker: %s Job: %s",
                             self._worker.id,
-                            self.id)
+                            self.id,
+                        )
                     else:
                         logging.info(
                             "Task completed successfully. Worker: %s Job: %s",
                             self._worker.id,
-                            self.id)
+                            self.id,
+                        )
                 except asyncio.CancelledError:
                     logging.info(
                         "Task was cancelled. Worker: %s Job: %s",
                         self._worker.id,
-                        self.id)
+                        self.id,
+                    )
                 except Exception as e:
                     logging.error(
                         "Task raised an uncaught exception. Worker: %s Job: %s Exception: %s",
                         self._worker.id,
                         self.id,
-                        e)
+                        e,
+                    )
 
             task = self._worker._loop.create_task(agent(job_ctx))
             task.add_done_callback(done_callback)
 
             @self._room.on("track_published")
             def on_track_published(
-                    publication: rtc.TrackPublication,
-                    participant: rtc.RemoteParticipant):
+                publication: rtc.RemoteTrackPublication,
+                participant: rtc.RemoteParticipant,
+            ):
                 if not should_subscribe(publication, participant):
                     return
 
@@ -502,7 +509,8 @@ class JobRequest:
 
 
 def _run_worker(
-    worker: Worker, loop: Optional[asyncio.AbstractEventLoop] = None,
+    worker: Worker,
+    loop: Optional[asyncio.AbstractEventLoop] = None,
     started_cb: Optional[Callable[[Worker], Any]] = None,
 ) -> None:
     """
@@ -531,11 +539,10 @@ def _run_worker(
                 started_cb(worker)
 
             logging.info(
-                "worker started, press Ctrl+C to stop (worker id: %s)",
-                worker.id)
+                "worker started, press Ctrl+C to stop (worker id: %s)", worker.id
+            )
 
-            while True:
-                await asyncio.sleep(3600)
+            await worker._task
         except asyncio.CancelledError:
             pass
         finally:
@@ -571,25 +578,21 @@ def run_app(worker: Worker) -> None:
     import click
 
     @click.group()
-    @click.option("--log-level",
-                  default="INFO",
-                  type=click.Choice(["DEBUG",
-                                     "INFO",
-                                     "WARNING",
-                                     "ERROR",
-                                     "CRITICAL"],
-                                    case_sensitive=False),
-                  help="Set the logging level",
-                  )
+    @click.option(
+        "--log-level",
+        default="INFO",
+        type=click.Choice(
+            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
+        ),
+        help="Set the logging level",
+    )
     @click.option(
         "--url",
         help="The websocket URL",
         default=worker._rtc_url,
     )
     @click.option("--api-key", help="The API key", default=worker._api_key)
-    @click.option("--api-secret",
-                  help="The API secret",
-                  default=worker._api_secret)
+    @click.option("--api-secret", help="The API secret", default=worker._api_secret)
     def cli(log_level: str, url: str, api_key: str, api_secret: str) -> None:
         logging.basicConfig(level=log_level)
         worker._set_url(url)
@@ -602,22 +605,32 @@ def run_app(worker: Worker) -> None:
 
     @cli.command(help="Start a worker and simulate a job, useful for testing")
     @click.option("--room-name", help="The room name", required=True)
-    def simulate_job(room_name: str) -> None:
-        async def _pre_run() -> Tuple[proto_models.Room, Optional[proto_models.ParticipantInfo]]:
-            room_service = api.RoomService(
-                worker._rtc_url, worker._api_key, worker._api_secret
-            )
+    @click.option("--identity", help="The participant identity")
+    def simulate_job(room_name: str, identity: str) -> None:
+        async def _pre_run() -> (
+            Tuple[proto_models.Room, Optional[proto_models.ParticipantInfo]]
+        ):
+            lkapi = api.LiveKitAPI(worker._rtc_url, worker._api_key, worker._api_secret)
 
             try:
-                room = await room_service.create_room(api.CreateRoomRequest(name=room_name))
-                return room
-            finally:
-                await room_service.close()
+                room = await lkapi.room.create_room(
+                    api.CreateRoomRequest(name=room_name)
+                )
 
-        room_info = worker._loop.run_until_complete(_pre_run())
-        logging.info(
-            f"Simulating job for room {room_info.name} ({room_info.sid})")
-        _run_worker(worker, started_cb=lambda _: worker._simulate_job(
-            room_info))
+                participant = None
+                if identity:
+                    participant = await lkapi.room.get_participant(
+                        api.RoomParticipantIdentity(room=room_name, identity=identity)
+                    )
+
+                return room, participant
+            finally:
+                await lkapi.aclose()
+
+        room_info, participant = worker._loop.run_until_complete(_pre_run())
+        logging.info(f"Simulating job for room {room_info.name} ({room_info.sid})")
+        _run_worker(
+            worker, started_cb=lambda _: worker._simulate_job(room_info, participant)
+        )
 
     cli()
