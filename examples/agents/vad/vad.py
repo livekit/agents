@@ -13,47 +13,67 @@
 # limitations under the License.
 
 import asyncio
-import livekit.rtc as rtc
-from livekit.plugins import core
-from livekit.plugins.vad import VADPlugin
-from livekit import agents
-
-SAMPLE_RATE = 48000
-NUM_CHANNELS = 1
+import logging
+from typing import Optional, Set
+from livekit import agents, rtc
+from livekit.plugins.vad import VADPlugin, VADEventType
 
 
-async def vad_agent(ctx: agents.JobContext):
+class VAD():
+    def __init__(self):
+        # plugins
+        self.vad_plugin = VADPlugin(
+            left_padding_ms=1000,
+            silence_threshold_ms=500)
 
-    source = rtc.AudioSource(SAMPLE_RATE, NUM_CHANNELS)
-    track = rtc.LocalAudioTrack.create_audio_track("echo", source)
-    options = rtc.TrackPublishOptions()
-    options.source = rtc.TrackSource.SOURCE_MICROPHONE
-    await ctx.room.local_participant.publish_track(track, options)
+        self.ctx: Optional[agents.JobContext] = None
+        self.track_tasks: Set[asyncio.Task] = set()
+        self.line_out: Optional[rtc.AudioSource] = None
 
-    async def process_track(track: rtc.Track):
-        audio_stream = rtc.AudioStream(track)
-        vad_plugin = VADPlugin(
-            left_padding_ms=200, silence_threshold_ms=250)
+    async def start(self, ctx: agents.JobContext):
+        self.ctx = ctx
+        ctx.room.on("track_subscribed", self.on_track_subscribed)
+        ctx.room.on("disconnected", self.cleanup)
+        await self.publish_audio()
 
-        vad_results = vad_plugin.start(audio_stream) .filter(
-            lambda data: data.type == core.VADPluginResultType.FINISHED) .map(
-            lambda data: data.frames) .unwrap()
+    async def publish_audio(self):
+        self.line_out = rtc.AudioSource(48000, 1)
+        track = rtc.LocalAudioTrack.create_audio_track(
+            "agent-mic", self.line_out)
+        options = rtc.TrackPublishOptions()
+        options.source = rtc.TrackSource.SOURCE_MICROPHONE
+        await self.ctx.room.local_participant.publish_track(track, options)
 
-        async for frames in vad_results:
-            asyncio.create_task(ctx.room.local_participant.publish_data(
-                f"Voice Detected For: {len(frames) * 10.0 / 1000.0} seconds"))
-            for frame in frames:
-                resampled = frame.remix_and_resample(
-                    SAMPLE_RATE, NUM_CHANNELS)
-                await source.capture_frame(resampled)
-            print(
-                f"VAD - Voice Finished. Frame Count: {len(frames)}")
-
-    @ctx.room.on("track_subscribed")
     def on_track_subscribed(
+            self,
             track: rtc.Track,
             publication: rtc.TrackPublication,
             participant: rtc.RemoteParticipant):
-        if publication.kind != rtc.TrackKind.KIND_AUDIO or track.name == "echo":
-            return
-        asyncio.create_task(process_track(track))
+        t = asyncio.create_task(self.process_track(track))
+        self.track_tasks.add(t)
+        t.add_done_callback(
+            lambda t: t in self.track_tasks and self.track_tasks.remove(t))
+
+    def cleanup(self):
+        pass
+
+    async def process_track(self, track: rtc.Track):
+        audio_stream = rtc.AudioStream(track)
+        async for vad_result in self.vad_plugin.start(audio_stream):
+            if vad_result.type == VADEventType.STARTED:
+                pass
+            elif vad_result.type == VADEventType.FINISHED:
+                for frame in vad_result.frames:
+                    await self.line_out.capture_frame(frame)
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
+    async def job_request_cb(job_request: agents.JobRequest):
+        print("Accepting job for VAD")
+        vad = VAD()
+        await job_request.accept(vad.start, should_subscribe=lambda track_pub, _: track_pub.kind == rtc.TrackKind.KIND_AUDIO)
+
+    worker = agents.Worker(job_request_cb=job_request_cb,
+                           worker_type=agents.JobType.JT_ROOM)
+    agents.run_app(worker)
