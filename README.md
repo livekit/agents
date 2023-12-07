@@ -37,8 +37,9 @@ Plugins can be installed individually depending on what your agent needs. Availa
 Let's begin with a simple agent that performs speech-to-text on incoming audio tracks and sends a data channel message for each result.
 
 ```python title="my_agent.py"
-import json
 import asyncio
+import json
+import logging
 from typing import Optional, Set
 from livekit import agents, rtc
 from livekit.plugins.vad import VADPlugin, VADEventType
@@ -70,8 +71,7 @@ class MyAgent():
             participant: rtc.RemoteParticipant):
         t = asyncio.create_task(self.process_track(track))
         self.track_tasks.add(t)
-        t.add_done_callback(
-            lambda t: t in self.track_tasks and self.track_tasks.remove(t))
+        t.add_done_callback(self.track_tasks.discard)
 
     def cleanup(self):
         # Whatever cleanup you need to do.
