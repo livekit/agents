@@ -111,6 +111,8 @@ class KITT():
             elif vad_result.type == VADEventType.FINISHED:
                 self.user_state = UserState.SILENT
                 await self.send_state_update()
+                if self.get_agent_state() == AgentState.SPEAKING or self.get_agent_state() == AgentState.THINKING:
+                    continue
                 stt_output = await self.stt_plugin.transcribe_frames(vad_result.frames)
                 if len(stt_output) == 0:
                     continue
