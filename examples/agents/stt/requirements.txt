@@ -1,4 +1,0 @@
-asyncio
-openai>=1.2.4
-livekit-agents>=0.0.1
-livekit-plugins-openai>=0.0.1
