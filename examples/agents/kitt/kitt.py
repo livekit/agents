@@ -79,7 +79,6 @@ class KITT():
         payload = json.loads(data.decode('utf-8'))
         
         if payload["type"] == "user_chat_message":
-            logging.warning("payload")
             text = payload["text"]
             msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=text)
             chatgpt_result = self.chatgpt_plugin.add_message(msg)
