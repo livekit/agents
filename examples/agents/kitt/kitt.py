@@ -66,8 +66,23 @@ class KITT():
     async def start(self, ctx: agents.JobContext):
         self.ctx = ctx
         ctx.room.on("track_subscribed", self.on_track_subscribed)
+        ctx.room.on("data_received", self.on_data_received)
         ctx.room.on("disconnected", self.cleanup)
         await self.publish_audio()
+
+    def on_data_received(
+            self,
+            data: bytes,
+            participant: rtc.RemoteParticipant,
+            kind):
+            
+        payload = json.loads(data.decode('utf-8'))
+        
+        if payload["type"] == "user_chat_message":
+            text = payload["text"]
+            msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=text)
+            chatgpt_result = self.chatgpt_plugin.add_message(msg)
+            asyncio.create_task(self.process_chatgpt_result(chatgpt_result))
 
     async def publish_audio(self):
         self.line_out = rtc.AudioSource(OAI_TTS_SAMPLE_RATE, OAI_TTS_CHANNELS)
@@ -128,13 +143,15 @@ class KITT():
             if text.endswith("\n") or text.endswith(
                     "?") or text.endswith("!") or text.endswith("."):
                 audio_stream = await self.tts_plugin.generate_speech_from_text(sentence)
+                await self.ctx.room.local_participant.publish_data(json.dumps({"type": "agent_chat_message", "text": sentence}))
                 await self.send_audio_stream(audio_stream)
                 sentence = ""
 
         if len(sentence) > 0:
             audio_stream = await self.tts_plugin.generate_speech_from_text(sentence)
             await self.send_audio_stream(audio_stream)
-
+            await self.ctx.room.local_participant.publish_data(json.dumps({"type": "agent_chat_message", "text": sentence}))
+        
         self.chat_gpt_working = False
         await self.send_state_update()
 
