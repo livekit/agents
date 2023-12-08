@@ -12,22 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import asyncio
+import json
 import logging
-from typing import Optional, Set
-from livekit import agents, rtc
-from livekit.plugins.vad import VADPlugin, VADEventType
-from livekit.plugins.openai import (WhisperAPITranscriber,
-                                    ChatGPTPlugin,
-                                    ChatGPTMessage,
-                                    ChatGPTMessageRole,
-                                    TTSPlugin)                                    
-from PIL import Image, ImageSequence
 from enum import Enum
+from typing import Optional
+                    
+from PIL import Image, ImageSequence
+from livekit import agents, rtc
+from livekit.plugins.openai import (
+    ChatGPTMessage,
+    ChatGPTMessageRole,
+    ChatGPTPlugin,
+    TTSPlugin,
+    WhisperAPITranscriber,
+)
+from livekit.plugins.vad import VADEventType, VADPlugin
 
 WIDTH, HEIGHT = 1280, 720
-
 
 PROMPT = "You are KITT, a voice assistant in a meeting created by LiveKit. \
           Keep your responses concise while still being friendly and personable. \
@@ -58,13 +60,8 @@ class KITT():
         self.tts_plugin = TTSPlugin()
 
         self.ctx: Optional[agents.JobContext] = None
-        self.track_tasks: Set[asyncio.Task] = set()
-        self.stt_tasks: Set[asyncio.Task] = set()
-
-        self.ctx = None
         self.line_out: Optional[rtc.AudioSource] = None
-        self.track_tasks = set()
-        self.stt_tasks = set()
+        self.tasks = set()
 
     async def start(self, ctx: agents.JobContext):
         self.ctx = ctx
@@ -95,12 +92,13 @@ class KITT():
             text = payload["text"]
             msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=text)
             chatgpt_result = self.chatgpt_plugin.add_message(msg)
-            asyncio.create_task(self.process_chatgpt_result(chatgpt_result))
+            t = asyncio.create_task(self.process_chatgpt_result(chatgpt_result))
+            self.tasks.add(t)
+            t.add_done_callback(self.tasks.discard)
 
     async def publish_audio(self):
         self.line_out = rtc.AudioSource(OAI_TTS_SAMPLE_RATE, OAI_TTS_CHANNELS)
-        track = rtc.LocalAudioTrack.create_audio_track(
-            "agent-mic", self.line_out)
+        track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.line_out)
         options = rtc.TrackPublishOptions()
         options.source = rtc.TrackSource.SOURCE_MICROPHONE
         await self.ctx.room.local_participant.publish_track(track, options)
@@ -111,9 +109,8 @@ class KITT():
             publication: rtc.TrackPublication,
             participant: rtc.RemoteParticipant):
         t = asyncio.create_task(self.process_track(track))
-        self.track_tasks.add(t)
-        t.add_done_callback(
-            lambda t: t in self.track_tasks and self.track_tasks.remove(t))
+        self.tasks.add(t)
+        t.add_done_callback(self.tasks.discard)
 
     def cleanup(self):
         pass
@@ -123,21 +120,18 @@ class KITT():
         async for vad_result in self.vad_plugin.start(audio_stream):
             if vad_result.type == VADEventType.STARTED:
                 self.user_state = UserState.SPEAKING
-                self.chatgpt_plugin.interrupt()
-                for task in self.stt_tasks:
-                    task.cancel()
-                self.stt_tasks.clear()
                 await self.send_state_update()
             elif vad_result.type == VADEventType.FINISHED:
                 self.user_state = UserState.SILENT
                 await self.send_state_update()
+                if self.get_agent_state() == AgentState.SPEAKING or self.get_agent_state() == AgentState.THINKING:
+                    continue
                 stt_output = await self.stt_plugin.transcribe_frames(vad_result.frames)
                 if len(stt_output) == 0:
                     continue
                 t = asyncio.create_task(self.process_stt_result(stt_output))
-                self.stt_tasks.add(t)
-                t.add_done_callback(
-                    lambda t: t in self.stt_tasks and self.stt_tasks.remove(t))
+                self.tasks.add(t)
+                t.add_done_callback(self.tasks.discard)
 
     async def process_stt_result(self, text):
         await self.ctx.room.local_participant.publish_data(json.dumps({"type": "transcription", "text": text}))
@@ -219,6 +213,5 @@ if __name__ == "__main__":
         kitt = KITT()
         await job_request.accept(kitt.start, should_subscribe=lambda track_pub, _: track_pub.kind == rtc.TrackKind.KIND_AUDIO)
 
-    worker = agents.Worker(job_request_cb=job_request_cb,
-                           worker_type=agents.JobType.JT_ROOM)
+    worker = agents.Worker(job_request_cb=job_request_cb, worker_type=agents.JobType.JT_ROOM)
     agents.run_app(worker)
