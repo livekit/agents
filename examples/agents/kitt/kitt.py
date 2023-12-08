@@ -22,8 +22,11 @@ from livekit.plugins.openai import (WhisperAPITranscriber,
                                     ChatGPTPlugin,
                                     ChatGPTMessage,
                                     ChatGPTMessageRole,
-                                    TTSPlugin)
+                                    TTSPlugin)                                    
+from PIL import Image, ImageSequence
 from enum import Enum
+
+WIDTH, HEIGHT = 1280, 720
 
 
 PROMPT = "You are KITT, a voice assistant in a meeting created by LiveKit. \
@@ -69,6 +72,16 @@ class KITT():
         ctx.room.on("data_received", self.on_data_received)
         ctx.room.on("disconnected", self.cleanup)
         await self.publish_audio()
+
+         # publish a track
+        source = rtc.VideoSource(WIDTH, HEIGHT)
+        track = rtc.LocalVideoTrack.create_video_track("hue", source)
+        options = rtc.TrackPublishOptions()
+        options.source = rtc.TrackSource.SOURCE_CAMERA
+        publication = await ctx.room.local_participant.publish_track(track, options)
+        logging.info("published track %s", publication.sid)
+        asyncio.ensure_future(self.draw_gif_frames(source, "screensaver.gif"))
+
 
     def on_data_received(
             self,
@@ -177,6 +190,25 @@ class KITT():
                           "user_state": self.user_state.name.lower(),
                           "agent_state": self.get_agent_state().name.lower()})
         await self.ctx.room.local_participant.publish_data(msg)
+
+    async def draw_gif_frames(self, source: rtc.VideoSource, gif_path: str):
+        gif = Image.open(gif_path)
+
+        while True:
+            for frame in ImageSequence.Iterator(gif):
+                frame = frame.convert("RGBA")
+                width, height = frame.size
+                frame_data = frame.tobytes()
+
+                argb_frame = rtc.ArgbFrame.create(rtc.VideoFormatType.FORMAT_ARGB, width, height)
+                argb_frame.data[:] = frame_data
+
+                video_frame = rtc.VideoFrame(
+                    0, rtc.VideoRotation.VIDEO_ROTATION_0, argb_frame.to_i420()
+                )
+
+                source.capture_frame(video_frame)
+                await asyncio.sleep(1/30)
 
 
 if __name__ == "__main__":
