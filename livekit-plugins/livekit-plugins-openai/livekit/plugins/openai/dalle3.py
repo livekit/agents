@@ -17,7 +17,6 @@ import requests
 import asyncio
 import cv2
 import numpy as np
-from typing import AsyncIterator
 from openai import AsyncOpenAI
 from livekit import rtc
 
@@ -29,19 +28,25 @@ class DALLE3Plugin:
     def __init__(self):
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-    async def generate_image_from_prompt(self, prompt: str) -> rtc.VideoFrame:
+    async def generate_image_from_prompt(self,
+                                         prompt: str,
+                                         size='1024x1024',
+                                         model='dall-e-3',
+                                         quality="standard",
+                                        ) -> rtc.VideoFrame:
         """Generate an image from a prompt
 
         Args:
             prompt (str): Prompt to generate an image from
+            size (str, optional): Size of image to generate (1024x1024, 1024x1792 or 1792x1024). Defaults to '1024x1024'.
 
         Returns:
             rtc.VideoFrame: Image generated from prompt
         """
-        response = await self._client.images.generate(model="dall-e-3",
+        response = await self._client.images.generate(model=model,
                                                       prompt=prompt,
-                                                      size="1024x1024",
-                                                      quality="standard",
+                                                      size=size,
+                                                      quality=quality,
                                                       n=1)
         image_url = response.data[0].url
         image = await asyncio.get_event_loop().run_in_executor(None, self._fetch_image, image_url)

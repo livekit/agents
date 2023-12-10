@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-import asyncio
+import tempfile
 from typing import AsyncIterator
 from openai import AsyncOpenAI
 from livekit import rtc
@@ -24,8 +24,10 @@ class TTSPlugin:
     """Text-to-speech plugin using OpenAI's API
     """
 
-    def __init__(self):
+    def __init__(self, model = "tts-1", voice = "alloy"):
         self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self._model = model
+        self._voice = voice
 
     async def close(self):
         pass
@@ -54,20 +56,21 @@ class TTSPlugin:
             AsyncIterator[rtc.AudioFrame]: Stream of 24000hz, 1 channel audio frames
         """
 
-        def create_directory():
-            os.makedirs("/tmp/openai_tts", exist_ok=True)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            complete_text = ""
+            async for text in text_stream:
+                complete_text += text
 
-        await asyncio.get_event_loop().run_in_executor(None, create_directory)
-
-        complete_text = ""
-        async for text in text_stream:
-            complete_text += text
-
-        response = await self._client.audio.speech.create(model="tts-1", voice="alloy", response_format="mp3", input=complete_text, )
-        filepath = "/tmp/openai_tts/output.mp3"
-        response.stream_to_file(filepath)
-        with audioread.audio_open(filepath) as f:
-            for buf in f:
-                frame = rtc.AudioFrame(
-                    buf, f.samplerate, f.channels, len(buf) // 2)
-                yield frame
+            response = await self._client.audio.speech.create(
+                model=self._model,
+                voice=self._voice,
+                response_format="mp3",
+                input=complete_text,
+            )
+            filepath = os.path.join(tmpdir, "output.mp3")
+            response.stream_to_file(filepath)
+            with audioread.audio_open(filepath) as f:
+                for buf in f:
+                    frame = rtc.AudioFrame(
+                        buf, f.samplerate, f.channels, len(buf) // 2)
+                    yield frame
