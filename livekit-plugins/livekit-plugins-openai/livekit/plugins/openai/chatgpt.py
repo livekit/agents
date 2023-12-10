@@ -64,6 +64,15 @@ class ChatGPTPlugin:
     async def close(self):
         pass
 
+    async def send_system_prompt(self) -> AsyncIterable[str]:
+        """Send the system prompt to the chat and generate a streamed response
+
+        Returns:
+            AsyncIterable[str]: Streamed ChatGPT response
+        """
+        async for text in self.add_message(None):
+            yield text
+
     async def add_message(self, message: ChatGPTMessage) -> AsyncIterable[str]:
         """Add a message to the chat and generate a streamed response
 
@@ -73,7 +82,9 @@ class ChatGPTPlugin:
         Returns:
             AsyncIterable[str]: Streamed ChatGPT response
         """
-        self._messages.append(message)
+
+        if message is not None:
+            self._messages.append(message)
         if len(self._messages) > self._message_capacity:
             self._messages.pop(0)
 

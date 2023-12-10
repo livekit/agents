@@ -3,3 +3,4 @@ livekit-api
 livekit-agents
 livekit-plugins-openai
 livekit-plugins-vad
+Pillow

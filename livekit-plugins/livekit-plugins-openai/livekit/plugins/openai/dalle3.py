@@ -17,7 +17,6 @@ import requests
 import asyncio
 import cv2
 import numpy as np
-from typing import AsyncIterator
 from openai import AsyncOpenAI
 from livekit import rtc
 
