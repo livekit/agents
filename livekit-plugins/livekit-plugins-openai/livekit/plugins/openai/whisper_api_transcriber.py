@@ -18,8 +18,8 @@ import os
 import io
 import wave
 from typing import List
-from openai import AsyncOpenAI
 from livekit import rtc
+import openai
 
 
 WHISPER_SAMPLE_RATE = 16000
@@ -32,7 +32,7 @@ class WhisperAPITranscriber:
 
     def __init__(self):
         self._model = None
-        self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._task = None
 
     async def close(self):

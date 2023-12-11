@@ -16,8 +16,8 @@ import os
 import requests
 import asyncio
 import cv2
+import openai
 import numpy as np
-from openai import AsyncOpenAI
 from livekit import rtc
 
 
@@ -26,14 +26,14 @@ class DALLE3Plugin:
     """
 
     def __init__(self):
-        self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
     async def generate_image_from_prompt(self,
                                          prompt: str,
                                          size='1024x1024',
                                          model='dall-e-3',
                                          quality="standard",
-                                        ) -> rtc.VideoFrame:
+                                         ) -> rtc.VideoFrame:
         """Generate an image from a prompt
 
         Args:
