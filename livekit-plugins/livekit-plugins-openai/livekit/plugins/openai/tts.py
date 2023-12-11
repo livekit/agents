@@ -15,9 +15,9 @@
 import os
 import tempfile
 from typing import AsyncIterator
-from openai import AsyncOpenAI
 from livekit import rtc
 import audioread
+import openai
 
 
 class TTSPlugin:
@@ -25,7 +25,7 @@ class TTSPlugin:
     """
 
     def __init__(self, model = "tts-1", voice = "alloy"):
-        self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._model = model
         self._voice = voice
 

@@ -15,9 +15,9 @@
 import os
 import logging
 import asyncio
+import openai
 from dataclasses import dataclass
 from typing import AsyncIterable
-from openai import AsyncOpenAI
 from enum import Enum
 
 ChatGPTMessageRole = Enum(
@@ -48,7 +48,7 @@ class ChatGPTPlugin:
             model (str): Which model to use (i.e. 'gpt-3.5-turbo')
         """
         self._model = model
-        self._client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._prompt = prompt
         self._message_capacity = message_capacity
         self._messages: [ChatGPTMessage] = []
