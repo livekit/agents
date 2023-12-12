@@ -25,12 +25,16 @@ class DALLE3Plugin:
     """DALL-E 3 Plugin
     """
 
+    PORTRAIT = '1024x1792'
+    LANDSCAPE = '1792x1024'
+    SQUARE = '1024x1024'
+
     def __init__(self):
         self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
     async def generate_image_from_prompt(self,
                                          prompt: str,
-                                         size='1024x1024',
+                                         size=LANDSCAPE,
                                          model='dall-e-3',
                                          quality="standard",
                                          ) -> rtc.VideoFrame:
@@ -52,8 +56,9 @@ class DALLE3Plugin:
         image = await asyncio.get_event_loop().run_in_executor(None, self._fetch_image, image_url)
         argb_array = bytearray(image.tobytes())
 
+        # shape is (height, width, channels)
         argb_frame = rtc.ArgbFrame.create(
-            rtc.VideoFormatType.FORMAT_ARGB, image.shape[0], image.shape[1])
+            rtc.VideoFormatType.FORMAT_ARGB, image.shape[1], image.shape[0])
         argb_frame.data[:] = argb_array
         return rtc.VideoFrame(
             0,
