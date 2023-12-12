@@ -297,7 +297,8 @@ class Worker:
 
     @property
     def running(self) -> bool:
-        """Whether the worker is running.
+        """
+        Whether the worker is running.
         Running is first set to True when the websocket connection is established and
         the Worker has been acknowledged by a LiveKit Server.
         """
@@ -322,6 +323,7 @@ class JobContext:
         self._closed = False
         self._lock = asyncio.Lock()
         self._worker._running_jobs.append(self)
+        self._tasks = set()
 
     @property
     def id(self) -> str:
@@ -333,19 +335,55 @@ class JobContext:
         """LiveKit Room object"""
         return self._room
 
-    async def shutdown(self) -> None:
+    def create_task(self, coro: Coroutine) -> asyncio.Task:
         """
-        Shutdown the job and cleanup resources (linked plugins & tasks)
+        Creates and asyncio.Task and internally
+        keeps a reference until the task is complete to prevent
+        it from being garbage collected. Also adds a callback to
+        that logs the task's completion status along with any
+        exceptions that may have been raised.
+
+        Args:
+            coro (Coroutine): async function to run
+
+        Returns:
+            asyncio.Task
         """
+
+        t = asyncio.create_task(coro)
+
+        def done_cb(task: asyncio.Task):
+            self._tasks.discard(t)
+            if task.exception():
+                logging.error("A task raised an exception:", exc_info=task.exception())
+
+        t.add_done_callback(done_cb)
+        return t
+
+    async def shutdown(self, task_timeout: Optional[float] = 25) -> None:
+        """
+        Disconnect the agent from the room, shutdown the job, and cleanup resources.
+        This will also cancel all tasks created by this job if task_timeout is specified.
+
+        Args:
+            task_timeout (Optional[float], optional): How long to wait before tasks created via JobContext.create_task are cancelled.
+            If None, tasks will not be cancelled. Defaults to 25.
+        """
+
         async with self._lock:
             logging.info("shutting down job %s", self.id)
             if self._closed:
                 return
 
-            await self.room.disconnect()
-
             self._worker._running_jobs.remove(self)
             self._closed = True
+            await self.room.disconnect()
+
+            if task_timeout is not None:
+                await asyncio.sleep(task_timeout)
+                for task in self._tasks:
+                    task.cancel()
+
             logging.info("job %s shutdown", self.id)
 
     async def update_status(
@@ -355,7 +393,6 @@ class JobContext:
         user_data: str = "",
     ) -> None:
         await self._worker._send_job_status(self._id, status, error, user_data)
-
 
 class JobRequest:
     """
