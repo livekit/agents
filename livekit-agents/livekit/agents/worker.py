@@ -438,20 +438,40 @@ class JobRequest:
         self,
         agent: Callable[[JobContext], Coroutine],
         should_subscribe: Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool],
+        auto_disconnect: Callable[[rtc.Room], bool] = None,
         grants: api.VideoGrants = None,
         name: str = "",
         identity: str = "",
         metadata: str = "",
     ) -> None:
-        """Signal to the LiveKit Server that we can handle the job, and connect to the room.
+        """
+        Signal to the LiveKit Server that we can handle the job, and connect to the room.
 
         Args:
-            agent (Callable[[JobContext], Coroutine]): Your agent entrypoint.
-            should_subscribe (Callable[[ rtc.TrackPublication, rtc.RemoteParticipant], bool]): Given a TrackPublication and a RemoteParticipant, return whether or not the agent should subscribe to the track.
-            grants (api.VideoGrants, optional): _description_. Additional grants to give to the agent participant in its token. Defaults to None.
-            name (str, optional): Name of the agent participant. Defaults to "".
-            identity (str, optional): Identity of the agent participant. Defaults to "".
-            metadata (str, optional): Metadata of the agent participant. Defaults to "".
+            agent (Callable[[JobContext], Coroutine]):
+                Your agent entrypoint.
+
+            should_subscribe (Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool]):
+                Given a TrackPublication and a RemoteParticipant, determines whether the agent
+                should subscribe to the track.
+
+            auto_disconnect: (Callable[[rtc.Room], Coroutine]):
+                Given a Room, decides whether the agent should automatically disconnect
+                after the agent is done. This is called whenever the participants in the
+                room change or the track publications in the room change.
+
+            grants (api.VideoGrants, optional):
+                Additional grants to give to the agent participant in its token.
+                Defaults to None.
+
+            name (str, optional):
+                Name of the agent participant. Defaults to "".
+
+            identity (str, optional):
+                Identity of the agent participant. Defaults to "".
+
+            metadata (str, optional):
+                Metadata of the agent participant. Defaults to "".
         """
         async with self._lock:
             if self._answered:
@@ -525,15 +545,27 @@ class JobRequest:
             task = self._worker._loop.create_task(agent(job_ctx))
             task.add_done_callback(done_callback)
 
+            def shutdown_if_needed():
+                if auto_disconnect is not None and auto_disconnect(self._room):
+                    asyncio.ensure_future(job_ctx.shutdown(), loop=self._worker._loop)
+
             @self._room.on("track_published")
             def on_track_published(
                 publication: rtc.RemoteTrackPublication,
                 participant: rtc.RemoteParticipant,
             ):
+                shutdown_if_needed()
+
                 if not should_subscribe(publication, participant):
                     return
 
                 publication.set_subscribed(True)
+
+            def on_participant_changed(*_):
+                shutdown_if_needed()
+
+            self._room.on("participant_connected", on_participant_changed)
+            self._room.on("participant_disconnected", on_participant_changed)
 
             for participant in self._room.participants.values():
                 for publication in participant.tracks.values():
@@ -541,6 +573,10 @@ class JobRequest:
                         continue
 
                     publication.set_subscribed(True)
+
+            # Call shutdown_if_needed() once to check if the conditions
+            # for auto disconnect are already met
+            shutdown_if_needed()
 
         logging.info("accepted job %s", self.id)
 
