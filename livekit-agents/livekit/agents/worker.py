@@ -394,6 +394,7 @@ class JobContext:
     ) -> None:
         await self._worker._send_job_status(self._id, status, error, user_data)
 
+
 class JobRequest:
     """
     Represents a new job from the server, this worker can either accept or reject it.
@@ -461,7 +462,7 @@ class JobRequest:
                 after the agent is done. This is called whenever the participants in the
                 room change or the track publications in the room change. None indicates
                 not to auto disconnect. Defaults to None.
-            
+
             auto_disconnect_task_timeout (Optional[float], optional):
                 How long to wait before tasks created via JobContext.create_task are cancelled.
 
@@ -552,7 +553,10 @@ class JobRequest:
 
             def shutdown_if_needed():
                 if auto_disconnect is not None and auto_disconnect(self._room):
-                    asyncio.ensure_future(job_ctx.shutdown(task_timeout=auto_disconnect_task_timeout), loop=self._worker._loop)
+                    asyncio.ensure_future(
+                        job_ctx.shutdown(task_timeout=auto_disconnect_task_timeout),
+                        loop=self._worker._loop,
+                    )
 
             @self._room.on("track_published")
             def on_track_published(
