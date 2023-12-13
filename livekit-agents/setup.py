@@ -57,8 +57,7 @@ setuptools.setup(
         "livekit-api>=0.1.3",
         "livekit-protocol>=0.1.0",
         "livekit-protocol",
-        "websockets>=12.0",
-        "python-dotenv>=1.0.0",
+        "websockets>=12.0"
     ],
     package_data={},
     project_urls={

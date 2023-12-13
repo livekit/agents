@@ -27,15 +27,12 @@ from typing import (
 )
 from urllib.parse import urlparse
 
-import dotenv
 import websockets
 
 from livekit import api, protocol, rtc
 from livekit.protocol import agent as proto_agent
 from livekit.protocol import models as proto_models
 from livekit.protocol.agent import JobType as ProtoJobType
-
-dotenv.load_dotenv()
 
 MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_INTERVAL = 5
