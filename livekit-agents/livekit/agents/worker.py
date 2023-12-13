@@ -439,6 +439,7 @@ class JobRequest:
         agent: Callable[[JobContext], Coroutine],
         should_subscribe: Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool],
         auto_disconnect: Callable[[rtc.Room], bool] = None,
+        auto_disconnect_task_timeout: Optional[float] = 25,
         grants: api.VideoGrants = None,
         name: str = "",
         identity: str = "",
@@ -455,10 +456,14 @@ class JobRequest:
                 Given a TrackPublication and a RemoteParticipant, determines whether the agent
                 should subscribe to the track.
 
-            auto_disconnect: (Callable[[rtc.Room], Coroutine]):
+            auto_disconnect: (Callable[[rtc.Room], Coroutine], optional):
                 Given a Room, decides whether the agent should automatically disconnect
                 after the agent is done. This is called whenever the participants in the
-                room change or the track publications in the room change.
+                room change or the track publications in the room change. None indicates
+                not to auto disconnect. Defaults to None.
+            
+            auto_disconnect_task_timeout (Optional[float], optional):
+                How long to wait before tasks created via JobContext.create_task are cancelled.
 
             grants (api.VideoGrants, optional):
                 Additional grants to give to the agent participant in its token.
@@ -547,7 +552,7 @@ class JobRequest:
 
             def shutdown_if_needed():
                 if auto_disconnect is not None and auto_disconnect(self._room):
-                    asyncio.ensure_future(job_ctx.shutdown(), loop=self._worker._loop)
+                    asyncio.ensure_future(job_ctx.shutdown(task_timeout=auto_disconnect_task_timeout), loop=self._worker._loop)
 
             @self._room.on("track_published")
             def on_track_published(
