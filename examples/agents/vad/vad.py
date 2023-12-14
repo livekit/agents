@@ -19,12 +19,10 @@ from livekit import agents, rtc
 from livekit.plugins.vad import VADPlugin, VADEventType
 
 
-class VAD():
+class VAD:
     def __init__(self):
         # plugins
-        self.vad_plugin = VADPlugin(
-            left_padding_ms=1000,
-            silence_threshold_ms=500)
+        self.vad_plugin = VADPlugin(left_padding_ms=1000, silence_threshold_ms=500)
 
         self.ctx: Optional[agents.JobContext] = None
         self.track_tasks: Set[asyncio.Task] = set()
@@ -38,24 +36,21 @@ class VAD():
 
     async def publish_audio(self):
         self.line_out = rtc.AudioSource(48000, 1)
-        track = rtc.LocalAudioTrack.create_audio_track(
-            "agent-mic", self.line_out)
+        track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.line_out)
         options = rtc.TrackPublishOptions()
         options.source = rtc.TrackSource.SOURCE_MICROPHONE
         await self.ctx.room.local_participant.publish_track(track, options)
 
     def on_track_subscribed(
-            self,
-            track: rtc.Track,
-            publication: rtc.TrackPublication,
-            participant: rtc.RemoteParticipant):
-        t = asyncio.create_task(self.process_track(track))
-        self.track_tasks.add(t)
-        t.add_done_callback(
-            lambda t: t in self.track_tasks and self.track_tasks.remove(t))
+        self,
+        track: rtc.Track,
+        publication: rtc.TrackPublication,
+        participant: rtc.RemoteParticipant,
+    ):
+        self.ctx.create_task(self.process_track(track))
 
     def cleanup(self):
-        pass
+        logging.info("VAD agent clean up")
 
     async def process_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
@@ -66,14 +61,22 @@ class VAD():
                 for frame in vad_result.frames:
                     await self.line_out.capture_frame(frame)
 
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     async def job_request_cb(job_request: agents.JobRequest):
-        print("Accepting job for VAD")
+        logging.info("VAD agent received job request")
         vad = VAD()
-        await job_request.accept(vad.start, should_subscribe=lambda track_pub, _: track_pub.kind == rtc.TrackKind.KIND_AUDIO)
 
-    worker = agents.Worker(job_request_cb=job_request_cb,
-                           worker_type=agents.JobType.JT_ROOM)
+        await job_request.accept(
+            vad.start,
+            subscribe_cb=agents.SubscribeCallbacks.AUDIO_ONLY,
+            auto_disconnect_cb=agents.AutoDisconnectCallbacks.DEFAULT,
+            identity="vad_agent",
+        )
+
+    worker = agents.Worker(
+        job_request_cb=job_request_cb, worker_type=agents.JobType.JT_ROOM
+    )
     agents.run_app(worker)

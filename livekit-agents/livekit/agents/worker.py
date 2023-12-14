@@ -29,21 +29,18 @@ from urllib.parse import urlparse
 
 import websockets
 
-from livekit import api, protocol, rtc
+from livekit import api, protocol
 from livekit.protocol import agent as proto_agent
 from livekit.protocol import models as proto_models
 from livekit.protocol.agent import JobType as ProtoJobType
+from .job_request import JobRequest
+from .job_context import JobContext
 
 MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_INTERVAL = 5
 ASSIGNMENT_TIMEOUT = 15
 
 JobType = ProtoJobType
-
-
-def subscribe_all(*_) -> bool:
-    """Utility function for subscribing to all tracks"""
-    return True
 
 
 class AssignmentTimeoutError(Exception):
@@ -294,215 +291,12 @@ class Worker:
 
     @property
     def running(self) -> bool:
-        """Whether the worker is running.
+        """
+        Whether the worker is running.
         Running is first set to True when the websocket connection is established and
         the Worker has been acknowledged by a LiveKit Server.
         """
         return self._running
-
-
-class JobContext:
-    """
-    Context for job, it contains the worker, the room, and the participant.
-    You should not create these on your own. They are created by the Worker.
-    """
-
-    def __init__(
-        self,
-        id: str,
-        worker: Worker,
-        room: rtc.Room,
-    ) -> None:
-        self._id = id
-        self._worker = worker
-        self._room = room
-        self._closed = False
-        self._lock = asyncio.Lock()
-        self._worker._running_jobs.append(self)
-
-    @property
-    def id(self) -> str:
-        """Job ID"""
-        return self._id
-
-    @property
-    def room(self) -> rtc.Room:
-        """LiveKit Room object"""
-        return self._room
-
-    async def shutdown(self) -> None:
-        """
-        Shutdown the job and cleanup resources (linked plugins & tasks)
-        """
-        async with self._lock:
-            logging.info("shutting down job %s", self.id)
-            if self._closed:
-                return
-
-            await self.room.disconnect()
-
-            self._worker._running_jobs.remove(self)
-            self._closed = True
-            logging.info("job %s shutdown", self.id)
-
-    async def update_status(
-        self,
-        status: protocol.agent.JobStatus.ValueType,
-        error: str = "",
-        user_data: str = "",
-    ) -> None:
-        await self._worker._send_job_status(self._id, status, error, user_data)
-
-
-class JobRequest:
-    """
-    Represents a new job from the server, this worker can either accept or reject it.
-    """
-
-    def __init__(
-        self,
-        worker: Worker,
-        job_info: proto_agent.Job,
-        simulated: bool = False,
-    ) -> None:
-        self._worker = worker
-        self._info = job_info
-        self._room = rtc.Room()
-        self._answered = False
-        self._simulated = simulated
-        self._lock = asyncio.Lock()
-
-    @property
-    def id(self) -> str:
-        return self._info.id
-
-    @property
-    def room(self) -> protocol.models.Room:
-        return self._info.room
-
-    async def reject(self) -> None:
-        """
-        Tell the server that we cannot handle the job
-        """
-        async with self._lock:
-            if self._answered:
-                raise Exception("job already answered")
-
-            self._answered = True
-            if not self._simulated:
-                await self._worker._send_availability(self.id, False)
-
-        logging.info("rejected job %s", self.id)
-
-    async def accept(
-        self,
-        agent: Callable[[JobContext], Coroutine],
-        should_subscribe: Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool],
-        grants: api.VideoGrants = None,
-        name: str = "",
-        identity: str = "",
-        metadata: str = "",
-    ) -> None:
-        """Signal to the LiveKit Server that we can handle the job, and connect to the room.
-
-        Args:
-            agent (Callable[[JobContext], Coroutine]): Your agent entrypoint.
-            should_subscribe (Callable[[ rtc.TrackPublication, rtc.RemoteParticipant], bool]): Given a TrackPublication and a RemoteParticipant, return whether or not the agent should subscribe to the track.
-            grants (api.VideoGrants, optional): _description_. Additional grants to give to the agent participant in its token. Defaults to None.
-            name (str, optional): Name of the agent participant. Defaults to "".
-            identity (str, optional): Identity of the agent participant. Defaults to "".
-            metadata (str, optional): Metadata of the agent participant. Defaults to "".
-        """
-        async with self._lock:
-            if self._answered:
-                raise Exception("job already answered")
-
-            self._answered = True
-
-            identity = identity or "agent-" + self.id
-            grants = grants or api.VideoGrants()
-            grants.room_join = True
-            grants.agent = True
-            grants.room = self.room.name
-            grants.can_update_own_metadata = True
-
-            jwt = (
-                api.AccessToken(self._worker._api_key, self._worker._api_secret)
-                .with_identity(identity)
-                .with_grants(grants)
-                .with_metadata(metadata)
-                .with_name(name)
-                .to_jwt()
-            )
-
-            # raise AssignmentTimeoutError if assignment times out
-            if not self._simulated:
-                _ = await self._worker._send_availability(self.id, True)
-
-            try:
-                should_auto_subscribe = should_subscribe == subscribe_all
-                options = rtc.RoomOptions(auto_subscribe=should_auto_subscribe)
-                await self._room.connect(self._worker._rtc_url, jwt, options)
-            except rtc.ConnectError as e:
-                logging.error(
-                    "failed to connect to the room, cancelling job %s: %s", self.id, e
-                )
-                await self._worker._send_job_status(
-                    self.id, proto_agent.JobStatus.JS_FAILED, str(e)
-                )
-                raise e
-
-            job_ctx = JobContext(self.id, self._worker, self._room)
-
-            def done_callback(t: asyncio.Task):
-                try:
-                    if t.cancelled():
-                        logging.info(
-                            "Task was cancelled. Worker: %s Job: %s",
-                            self._worker.id,
-                            self.id,
-                        )
-                    else:
-                        logging.info(
-                            "Task completed successfully. Worker: %s Job: %s",
-                            self._worker.id,
-                            self.id,
-                        )
-                except asyncio.CancelledError:
-                    logging.info(
-                        "Task was cancelled. Worker: %s Job: %s",
-                        self._worker.id,
-                        self.id,
-                    )
-                except Exception as e:
-                    logging.error(
-                        "Task raised an uncaught exception. Worker: %s Job: %s Exception: %s",
-                        self._worker.id,
-                        self.id,
-                        e,
-                    )
-
-            task = self._worker._loop.create_task(agent(job_ctx))
-            task.add_done_callback(done_callback)
-
-            @self._room.on("track_published")
-            def on_track_published(
-                publication: rtc.RemoteTrackPublication,
-                participant: rtc.RemoteParticipant,
-            ):
-                if not should_subscribe(publication, participant):
-                    return
-
-                publication.set_subscribed(True)
-
-            for participant in self._room.participants.values():
-                for publication in participant.tracks.values():
-                    if not should_subscribe(publication, participant):
-                        continue
-
-                    publication.set_subscribed(True)
-
-        logging.info("accepted job %s", self.id)
 
 
 def _run_worker(
