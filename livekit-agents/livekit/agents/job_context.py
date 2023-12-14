@@ -77,7 +77,7 @@ class JobContext:
         t.add_done_callback(done_cb)
         return t
 
-    async def shutdown(self) -> None:
+    async def disconnect(self) -> None:
         """
         Disconnect the agent from the room, shutdown the job, and cleanup resources.
         This will also cancel all tasks created by this job if task_timeout is specified.

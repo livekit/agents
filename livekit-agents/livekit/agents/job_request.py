@@ -89,9 +89,9 @@ class AutoDisconnectCallbacks:
         If the agent is not tied to a participant, it will shut down when the agent is the only remaining participant.
         """
         if ctx.participant is not None:
-            return DisconnectHelper.PUBLISHER_LEFT(ctx)
+            return AutoDisconnectCallbacks.PUBLISHER_LEFT(ctx)
 
-        return DisconnectHelper.ROOM_EMPTY(ctx)
+        return AutoDisconnectCallbacks.ROOM_EMPTY(ctx)
 
 
 class JobRequest:
@@ -139,8 +139,10 @@ class JobRequest:
         agent: Callable[[JobContext], Coroutine],
         subscribe_cb: Callable[
             [rtc.TrackPublication, rtc.RemoteParticipant], bool
-        ] = SubscribeHelper.SUBSCRIBE_NONE,
-        auto_disconnect_cb: Callable[[JobContext], bool] = DisconnectHelper.DEFAULT,
+        ] = SubscribeCallbacks.SUBSCRIBE_NONE,
+        auto_disconnect_cb: Callable[
+            [JobContext], bool
+        ] = AutoDisconnectCallbacks.DEFAULT,
         grants: api.VideoGrants = None,
         name: str = "",
         identity: str = "",
@@ -203,7 +205,7 @@ class JobRequest:
 
             try:
                 options = rtc.RoomOptions(
-                    auto_subscribe=subscribe_cb == SubscribeHelper.SUBSCRIBE_ALL
+                    auto_subscribe=subscribe_cb == SubscribeCallbacks.SUBSCRIBE_ALL
                 )
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
@@ -258,10 +260,10 @@ class JobRequest:
             task = self._worker._loop.create_task(agent(job_ctx))
             task.add_done_callback(done_callback)
 
-            def shutdown_if_needed(*_):
-                if subscribe_cb(job_ctx):
+            def disconnect_if_needed(*_):
+                if auto_disconnect_cb(job_ctx):
                     asyncio.ensure_future(
-                        job_ctx.shutdown(),
+                        job_ctx.disconnect(),
                         loop=self._worker._loop,
                     )
 
@@ -275,7 +277,7 @@ class JobRequest:
 
                 publication.set_subscribed(True)
 
-            self._room.on("participant_disconnected", shutdown_if_needed)
+            self._room.on("participant_disconnected", disconnect_if_needed)
 
             for participant in self._room.participants.values():
                 for publication in participant.tracks.values():
@@ -284,8 +286,8 @@ class JobRequest:
 
                     publication.set_subscribed(True)
 
-            # Call shutdown_if_needed() once to check if the conditions
+            # Call disconnect_if_needed() once to check if the conditions
             # for auto disconnect are already met
-            shutdown_if_needed()
+            disconnect_if_needed()
 
         logging.info("accepted job %s", self.id)
