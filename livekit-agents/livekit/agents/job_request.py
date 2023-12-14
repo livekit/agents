@@ -93,7 +93,7 @@ class ShutdownOptions:
         return ShutdownOptions(predicate=predicate, task_timeout=10)
 
     @staticmethod
-    def when_job_request_participant_left(task_timeout: Optional[float] = 25):
+    def job_publisher_left(task_timeout: Optional[float] = 25):
         def predicate(ctx: "JobContext") -> Coroutine:
             if ctx.participant is None:
                 logging.error(
@@ -116,9 +116,7 @@ class ShutdownOptions:
         """
 
         def predicate(ctx: "JobContext") -> Coroutine:
-            part_so = ShutdownOptions.when_job_request_participant_left(
-                task_timeout=task_timeout
-            )
+            part_so = ShutdownOptions.job_publisher_left(task_timeout=task_timeout)
             room_so = ShutdownOptions.when_only_agents_remain(task_timeout=task_timeout)
             if ctx.participant is not None:
                 return part_so.predicate(ctx)
