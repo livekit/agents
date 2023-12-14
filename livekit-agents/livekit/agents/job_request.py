@@ -76,19 +76,24 @@ class ShutdownOptions:
     """
 
     @staticmethod
-    def when_only_agents_remain(
+    def room_empty(
         task_timeout: Optional[float] = 25,
     ) -> "ShutdownOptions":
         def predicate(ctx: JobContext) -> Coroutine:
-            return False
-            # TODO: uncomment when participant.is_agent is implemented
-            # only_agents_left = True
-            # for p in ctx.room.participants.values():
-            # if not p.is_agent:
-            # only_agents_left = False
+            # Hot path, if there are no participants, we don't need to check
+            if len(ctx.room.participants) == 0:
+                return True
 
-        #
-        # return only_agents_left
+            # Hot path, if there are more than 1 participants, we don't need to check
+            if len(ctx.room.participants) > 1:
+                return False
+
+            # If only participant is the agent
+            for p in ctx.room.participants.values():
+                if p.identity == ctx.agent_identity:
+                    return True
+
+            return False
 
         return ShutdownOptions(predicate=predicate, task_timeout=10)
 
@@ -109,7 +114,7 @@ class ShutdownOptions:
     def default(task_timeout: Optional[float] = 25):
         """
         Default shutdown options. If the agent is tied to a participant, it will shut down when that participant leaves.
-        If the agent is not tied to a participant, it will shut down when all non-agent participants leave.
+        If the agent is not tied to a participant, it will shut down when the agent is the only remaining participant.
 
         Args:
             task_timeout (Optional[float], optional): _description_. Defaults to 25.
@@ -117,7 +122,7 @@ class ShutdownOptions:
 
         def predicate(ctx: "JobContext") -> Coroutine:
             part_so = ShutdownOptions.job_publisher_left(task_timeout=task_timeout)
-            room_so = ShutdownOptions.when_only_agents_remain(task_timeout=task_timeout)
+            room_so = ShutdownOptions.room_empty(task_timeout=task_timeout)
             if ctx.participant is not None:
                 return part_so.predicate(ctx)
 
@@ -249,7 +254,11 @@ class JobRequest:
                 participant = self._room.participants.get(self._info.participant.sid)
 
             job_ctx = JobContext(
-                self.id, self._worker, self._room, participant=participant
+                self.id,
+                self._worker,
+                self._room,
+                participant=participant,
+                agent_identity=identity,
             )
 
             def done_callback(t: asyncio.Task):

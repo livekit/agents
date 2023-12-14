@@ -19,11 +19,13 @@ class JobContext:
         id: str,
         worker: "Worker",
         room: rtc.Room,
+        agent_identity: str,
         participant: Optional[rtc.Participant] = None,
     ) -> None:
         self._id = id
         self._worker = worker
         self._room = room
+        self._agent_identity = agent_identity
         self._participant = participant
         self._closed = False
         self._lock = asyncio.Lock()
@@ -44,6 +46,11 @@ class JobContext:
     def participant(self) -> Optional[rtc.Participant]:
         """LiveKit Participant corresponding to the Job"""
         return self._participant
+
+    @property
+    def agent_identity(self) -> Optional[rtc.Participant]:
+        """Participant sid for the agent"""
+        return self._agent_identity
 
     def create_task(self, coro: Coroutine) -> asyncio.Task:
         """
@@ -70,7 +77,7 @@ class JobContext:
         t.add_done_callback(done_cb)
         return t
 
-    async def shutdown(self, timeout: Optional[float] = 25) -> None:
+    async def shutdown(self, task_timeout: Optional[float] = 25) -> None:
         """
         Disconnect the agent from the room, shutdown the job, and cleanup resources.
         This will also cancel all tasks created by this job if task_timeout is specified.
@@ -89,8 +96,8 @@ class JobContext:
             self._closed = True
             await self.room.disconnect()
 
-            if timeout is not None:
-                await asyncio.sleep(timeout)
+            if task_timeout is not None:
+                await asyncio.sleep(task_timeout)
                 for task in self._tasks:
                     task.cancel()
 
