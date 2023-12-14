@@ -12,127 +12,86 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class SubscribeOptions:
-    """
-    SubscribeOptions is used to configure how the agent subscribes to tracks in the room.
-    """
-
-    predicate: Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool]
-    _livekit_auto_subscribe = False
+class SubscribeCallbacks:
+    """Helper callbacks for common subscribe scenarios"""
 
     @staticmethod
-    def subscribe_all() -> "SubscribeOptions":
+    def SUBSCRIBE_ALL(
+        publication: rtc.TrackPublication, participant: rtc.RemoteParticipant
+    ) -> bool:
         """
-        Subscribe to all tracks automatically. This will also set the LiveKit room option auto_subscribe to true as an optimization.
+        Subscribe to all tracks automatically. This will also set the LiveKit room option
+        auto_subscribe to true as an optimization.
         """
-        so = SubscribeOptions(predicate=lambda *_: True)
-        so._livekit_auto_subscribe = True
-        return so
+        return True
 
     @staticmethod
-    def subscribe_none() -> "SubscribeOptions":
-        """Don't subscribe to any tracks automatically
-
-        Returns:
-            _type_: _description_
-        """
-        return SubscribeOptions(predicate=lambda *_: False)
+    def SUBSCRIBE_NONE(
+        publication: rtc.TrackPublication, participant: rtc.RemoteParticipant
+    ) -> bool:
+        """Don't subscribe to any tracks automatically"""
+        return False
 
     @staticmethod
-    def video_only() -> "SubscribeOptions":
+    def VIDEO_ONLY(
+        publication: rtc.TrackPublication, participant: rtc.RemoteParticipant
+    ) -> bool:
         """
         Subscribe to video tracks automatically
         """
-        return SubscribeOptions(
-            predicate=lambda p, _: p.kind == rtc.TrackKind.KIND_VIDEO
-        )
+        return publication.kind == rtc.TrackKind.KIND_VIDEO
 
     @staticmethod
-    def audio_only() -> "SubscribeOptions":
+    def AUDIO_ONLY(
+        publication: rtc.TrackPublication, participant: rtc.RemoteParticipant
+    ) -> bool:
         """
         Subscribe to audio tracks automatically
         """
-        return SubscribeOptions(
-            predicate=lambda p, _: p.kind == rtc.TrackKind.KIND_AUDIO
-        )
+        return publication.kind == rtc.TrackKind.KIND_AUDIO
 
 
 @dataclass
-class ShutdownOptions:
-    """
-    ShutdownOptions is used to configure when the agent should automatically disconnect from the room.
-    """
-
-    predicate: Callable[["JobContext"], bool]
-    """
-    Given a JobContext, decides whether the agent should automatically disconnect.
-    This is called whenever the participants in the room change or the track
-    publications in the room change. None indicates not to auto disconnect. Defaults to None.
-    """
-
-    task_timeout: Optional[float]
-    """
-    Grace period to wait before cancelling tasks created by JobContext.create_task().
-    """
+class AutoDisconnectCallbacks:
+    """Helper callbacks for common auto disconnect scenarios"""
 
     @staticmethod
-    def room_empty(
-        task_timeout: Optional[float] = 25,
-    ) -> "ShutdownOptions":
-        def predicate(ctx: JobContext) -> Coroutine:
-            # Hot path, if there are no participants, we don't need to check
-            if len(ctx.room.participants) == 0:
-                return True
+    def ROOM_EMPTY(ctx: JobContext) -> bool:
+        # Hot path, if there are no participants, we don't need to check
+        if len(ctx.room.participants) == 0:
+            return True
 
-            # Hot path, if there are more than 1 participants, we don't need to check
-            if len(ctx.room.participants) > 1:
-                return False
-
-            # If only participant is the agent
-            for p in ctx.room.participants.values():
-                if p.identity == ctx.agent_identity:
-                    return True
-
+        # Hot path, if there are more than 1 participants, we don't need to check
+        if len(ctx.room.participants) > 1:
             return False
 
-        return ShutdownOptions(predicate=predicate, task_timeout=10)
+        # If only participant is the agent
+        for p in ctx.room.participants.values():
+            if p.identity == ctx.agent_identity:
+                return True
+
+        return False
 
     @staticmethod
-    def job_publisher_left(task_timeout: Optional[float] = 25):
-        def predicate(ctx: "JobContext") -> Coroutine:
-            if ctx.participant is None:
-                logging.error(
-                    "Incorrect usage of ShutdownOptions, the JobContext is not tied to a Participant"
-                )
-                return False
+    def PUBLISHER_LEFT(ctx: JobContext) -> bool:
+        if ctx.participant is None:
+            logging.error(
+                "Incorrect usage of PUBLISHER_LEFT, JobContext is tied to a Participant"
+            )
+            return False
 
-            return ctx.room.participants.get(ctx.participant.sid) is None
-
-        return ShutdownOptions(predicate=predicate, task_timeout=task_timeout)
+        return ctx.room.participants.get(ctx.participant.sid) is None
 
     @staticmethod
-    def default(task_timeout: Optional[float] = 25):
+    def DEFAULT(ctx: JobContext):
         """
         Default shutdown options. If the agent is tied to a participant, it will shut down when that participant leaves.
         If the agent is not tied to a participant, it will shut down when the agent is the only remaining participant.
-
-        Args:
-            task_timeout (Optional[float], optional): _description_. Defaults to 25.
         """
+        if ctx.participant is not None:
+            return DisconnectHelper.PUBLISHER_LEFT(ctx)
 
-        def predicate(ctx: "JobContext") -> Coroutine:
-            part_so = ShutdownOptions.job_publisher_left(task_timeout=task_timeout)
-            room_so = ShutdownOptions.room_empty(task_timeout=task_timeout)
-            if ctx.participant is not None:
-                return part_so.predicate(ctx)
-
-            return room_so.predicate(ctx)
-
-        return ShutdownOptions(predicate=predicate, task_timeout=task_timeout)
-
-    @staticmethod
-    def auto_shutdown_disabled():
-        return ShutdownOptions(predicate=lambda _: False, task_timeout=None)
+        return DisconnectHelper.ROOM_EMPTY(ctx)
 
 
 class JobRequest:
@@ -178,8 +137,10 @@ class JobRequest:
     async def accept(
         self,
         agent: Callable[[JobContext], Coroutine],
-        subscribe_options: SubscribeOptions = SubscribeOptions.subscribe_none(),
-        shutdown_options: ShutdownOptions = ShutdownOptions.auto_shutdown_disabled(),
+        subscribe_cb: Callable[
+            [rtc.TrackPublication, rtc.RemoteParticipant], bool
+        ] = SubscribeHelper.SUBSCRIBE_NONE,
+        auto_disconnect_cb: Callable[[JobContext], bool] = DisconnectHelper.DEFAULT,
         grants: api.VideoGrants = None,
         name: str = "",
         identity: str = "",
@@ -192,9 +153,14 @@ class JobRequest:
             agent (Callable[[JobContext], Coroutine]):
                 Your agent entrypoint.
 
-            subscribe_options (Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool]):
+            subscribe_cb (Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool]):
+                Callback that is called when a track is published in the room. Return True to subscribe to the track.
 
-            shutdown_options (ShutdownOptions):
+            auto_disconnect_cb (Callable[[JobContext], bool]):
+                Callback that is called when the agent should disconnect from the room. Return True to disconnect.
+                The callback is called when:
+                - Initially once the agent has connected to the room
+                - A participant leaves the room
 
             grants (api.VideoGrants, optional):
                 Additional grants to give to the agent participant in its token.
@@ -237,7 +203,7 @@ class JobRequest:
 
             try:
                 options = rtc.RoomOptions(
-                    auto_subscribe=subscribe_options._livekit_auto_subscribe
+                    auto_subscribe=subscribe_cb == SubscribeHelper.SUBSCRIBE_ALL
                 )
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
@@ -293,9 +259,9 @@ class JobRequest:
             task.add_done_callback(done_callback)
 
             def shutdown_if_needed(*_):
-                if shutdown_options.predicate(job_ctx):
+                if subscribe_cb(job_ctx):
                     asyncio.ensure_future(
-                        job_ctx.shutdown(task_timeout=shutdown_options.task_timeout),
+                        job_ctx.shutdown(),
                         loop=self._worker._loop,
                     )
 
@@ -304,20 +270,16 @@ class JobRequest:
                 publication: rtc.RemoteTrackPublication,
                 participant: rtc.RemoteParticipant,
             ):
-                shutdown_if_needed()
-
-                if not subscribe_options.predicate(publication, participant):
+                if not subscribe_cb(publication, participant):
                     return
 
                 publication.set_subscribed(True)
 
-            self._room.on("participant_connected", shutdown_if_needed)
             self._room.on("participant_disconnected", shutdown_if_needed)
-            self._room.on("track_unpublished", shutdown_if_needed)
 
             for participant in self._room.participants.values():
                 for publication in participant.tracks.values():
-                    if not subscribe_options.predicate(publication, participant):
+                    if not subscribe_cb(publication, participant):
                         continue
 
                     publication.set_subscribed(True)

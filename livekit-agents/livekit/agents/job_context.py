@@ -77,7 +77,7 @@ class JobContext:
         t.add_done_callback(done_cb)
         return t
 
-    async def shutdown(self, task_timeout: Optional[float] = 25) -> None:
+    async def shutdown(self) -> None:
         """
         Disconnect the agent from the room, shutdown the job, and cleanup resources.
         This will also cancel all tasks created by this job if task_timeout is specified.
@@ -96,10 +96,8 @@ class JobContext:
             self._closed = True
             await self.room.disconnect()
 
-            if task_timeout is not None:
-                await asyncio.sleep(task_timeout)
-                for task in self._tasks:
-                    task.cancel()
+            for task in self._tasks:
+                task.cancel()
 
             logging.info("job %s shutdown", self.id)
 

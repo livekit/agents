@@ -22,5 +22,5 @@ from .worker import (
     JobType,
 )
 
-from .job_request import ShutdownOptions, SubscribeOptions, JobRequest
+from .job_request import SubscribeCallbacks, AutoDisconnectCallbacks, JobRequest
 from .job_context import JobContext

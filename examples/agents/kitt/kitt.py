@@ -221,8 +221,8 @@ if __name__ == "__main__":
         await job_request.accept(
             kitt.start,
             identity="kitt_agent",
-            subscribe_options=agents.SubscribeOptions.audio_only(),
-            shutdown_options=agents.ShutdownOptions.default(),
+            subscribe_cb=agents.SubscribeCallbacks.AUDIO_ONLY,
+            auto_disconnect_cb=agents.AutoDisconnectCallbacks.DEFAULT,
             auto_disconnect_task_timeout=10,
         )
 

@@ -71,8 +71,8 @@ if __name__ == "__main__":
 
         await job_request.accept(
             vad.start,
-            subscribe_options=agents.SubscribeOptions.audio_only(),
-            shutdown_options=agents.ShutdownOptions.default(),
+            subscribe_options=agents.SubscribeCallbacks.AUDIO_ONLY,
+            shutdown_options=agents.AutoDisconnectCallbacks.DEFAULT,
             identity="vad_agent",
         )
 
