@@ -16,11 +16,11 @@ from .version import __version__
 
 from .worker import (
     Worker,
-    JobRequest,
-    JobContext,
     JobCancelledError,
     AssignmentTimeoutError,
     run_app,
-    subscribe_all,
-    JobType
+    JobType,
 )
+
+from .job_request import ShutdownOptions, SubscribeOptions, JobRequest
+from .job_context import JobContext

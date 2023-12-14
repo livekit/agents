@@ -218,19 +218,11 @@ if __name__ == "__main__":
         logging.info("Accepting job for KITT")
         kitt = KITT()
 
-        def auto_disconnect(room: rtc.Room):
-            only_agents_left = True
-            for p in room.participants.values():
-                if p.identity != "kitt_agent":
-                    only_agents_left = False
-
-            return only_agents_left
-
         await job_request.accept(
             kitt.start,
             identity="kitt_agent",
-            should_subscribe=lambda pub, _: pub.kind == rtc.TrackKind.KIND_AUDIO,
-            auto_disconnect=auto_disconnect,
+            subscribe_options=agents.SubscribeOptions.audio_only(),
+            shutdown_options=agents.ShutdownOptions.default(),
             auto_disconnect_task_timeout=10,
         )
 

@@ -69,19 +69,10 @@ if __name__ == "__main__":
         logging.info("VAD agent received job request")
         vad = VAD()
 
-        def auto_disconnect(room: rtc.Room):
-            only_agents_left = True
-            for p in room.participants.values():
-                if p.identity != "vad_agent":
-                    only_agents_left = False
-
-            return only_agents_left
-
         await job_request.accept(
             vad.start,
-            should_subscribe=lambda pub, _: pub.kind == rtc.TrackKind.KIND_AUDIO,
-            auto_disconnect=auto_disconnect,
-            auto_disconnect_task_timeout=10,
+            subscribe_options=agents.SubscribeOptions.audio_only(),
+            shutdown_options=agents.ShutdownOptions.default(),
             identity="vad_agent",
         )
 
