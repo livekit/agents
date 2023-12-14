@@ -262,7 +262,7 @@ class Worker:
 
             await self._ws.close()
             # Close all running jobs
-            await asyncio.gather(*[job.shutdown() for job in self._running_jobs])
+            await asyncio.gather(*[job.disconnect() for job in self._running_jobs])
             self._running = False
 
     async def start(self) -> None:
