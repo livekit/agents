@@ -110,13 +110,19 @@ class KITT:
         await self.process_chatgpt_result(chatgpt_result)
 
     async def process_chatgpt_result(self, text_stream):
+        self.state.chat_gpt_working = True
+        all_text = ""
+
+        async for text in text_stream:
+            all_text += text
+
+        self.state.chat_gpt_working = False
+
         async def text_iterator():
-            self.state.chat_gpt_working = True
-            async for text in text_stream:
-                yield text
-            self.state.chat_gpt_working = False
+            yield all_text
 
         audio_stream = await self.tts_plugin.generate_speech(text_iterator())
+        await self.send_message_from_agent(all_text)
         await self.send_audio_stream(audio_stream)
 
     async def send_audio_stream(self, audio_stream):
@@ -124,6 +130,11 @@ class KITT:
         async for frame in audio_stream:
             await self.line_out.capture_frame(frame)
         self.state.agent_sending_audio = False
+
+    async def send_message_from_agent(self, text):
+        await self.ctx.room.local_participant.publish_data(
+            json.dumps({"type": "agent_chat_message", "text": text})
+        )
 
 
 if __name__ == "__main__":
