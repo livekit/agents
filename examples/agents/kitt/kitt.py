@@ -26,9 +26,13 @@ from livekit.plugins.openai import (
 from livekit.plugins.elevenlabs import TTSPlugin
 from livekit.plugins.vad import VADEventType, VADPlugin
 
-PROMPT = "You are KITT, a voice assistant in a meeting created by LiveKit. \
-          Keep your responses concise while still being friendly and personable. \
-          If your response is a question, please append a question mark symbol to the end of it."
+PROMPT = "You are KITT, a friendly voice assistant powered by LiveKit.  \
+          Conversation should be personable, and be sure to ask follow up questions. \
+          If your response is a question, please append a question mark symbol to the end of it.\
+          Don't respond with more than a few sentences."
+INTRO = "Hello, I am KITT, a friendly voice assistant powered by LiveKit, ChatGPT, and Eleven Labs. \
+        You can find my source code in the top right of this screen if you're curious how I work. \
+        Feel free to ask me anything — I'm here to help! Just start talking or type in the chat."
 
 ELEVEN_TTS_SAMPLE_RATE = 44100
 ELEVEN_TTS_CHANNELS = 1
@@ -60,6 +64,10 @@ class KITT:
         self.ctx.room.on("data_received", self.on_data_received)
         self.ctx.room.on("disconnected", self.cleanup)
         await self.publish_audio()
+        async def intro_text_stream():
+            yield INTRO
+
+        await self.process_chatgpt_result(intro_text_stream())
 
     def on_data_received(self, data: bytes, participant: rtc.RemoteParticipant, kind):
         payload = json.loads(data.decode("utf-8"))
