@@ -12,70 +12,62 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import json
 import logging
-from enum import Enum
-from typing import Optional
+from state_manager import StateManager, AgentState, UserState
 
-from PIL import Image, ImageSequence
-from livekit import agents, rtc
+from livekit import rtc, agents
 from livekit.plugins.openai import (
     ChatGPTMessage,
     ChatGPTMessageRole,
     ChatGPTPlugin,
-    TTSPlugin,
     WhisperAPITranscriber,
 )
+from livekit.plugins.elevenlabs import TTSPlugin
 from livekit.plugins.vad import VADEventType, VADPlugin
 
-WIDTH, HEIGHT = 1280, 720
+PROMPT = "You are KITT, a friendly voice assistant powered by LiveKit.  \
+          Conversation should be personable, and be sure to ask follow up questions. \
+          If your response is a question, please append a question mark symbol to the end of it.\
+          Don't respond with more than a few sentences."
+INTRO = "Hello, I am KITT, a friendly voice assistant powered by LiveKit, ChatGPT, and Eleven Labs. \
+        You can find my source code in the top right of this screen if you're curious how I work. \
+        Feel free to ask me anything — I'm here to help! Just start talking or type in the chat."
 
-PROMPT = "You are KITT, a voice assistant in a meeting created by LiveKit. \
-          Keep your responses concise while still being friendly and personable. \
-          If your response is a question, please append a question mark symbol to the end of it."
-
-OAI_TTS_SAMPLE_RATE = 24000
-OAI_TTS_CHANNELS = 1
-
-
-AgentState = Enum("AgentState", "LISTENING, THINKING, SPEAKING")
-UserState = Enum("UserState", "SPEAKING, SILENT")
+ELEVEN_TTS_SAMPLE_RATE = 44100
+ELEVEN_TTS_CHANNELS = 1
 
 
 class KITT:
-    def __init__(self):
+    @classmethod
+    async def create(cls, ctx: agents.JobContext):
+        kitt = KITT(ctx)
+        await kitt.start()
+
+    def __init__(self, ctx: agents.JobContext):
         # state
-        self.agent_sending_audio: bool = False
-        self.chat_gpt_working: bool = False
-        self.user_state: UserState = UserState.SILENT
+        self.state = StateManager(ctx)
 
         # plugins
-        self.vad_plugin = VADPlugin(left_padding_ms=1000, silence_threshold_ms=500)
+        self.vad_plugin = VADPlugin(left_padding_ms=100, silence_threshold_ms=250)
         self.chatgpt_plugin = ChatGPTPlugin(
-            prompt=PROMPT, message_capacity=20, model="gpt-3.5-turbo"
+            prompt=PROMPT, message_capacity=20, model="gpt-4-1106-preview"
         )
         self.stt_plugin = WhisperAPITranscriber()
         self.tts_plugin = TTSPlugin()
 
-        self.ctx: Optional[agents.JobContext] = None
-        self.line_out: Optional[rtc.AudioSource] = None
+        self.ctx: agents.JobContext = ctx
+        self.line_out = rtc.AudioSource(ELEVEN_TTS_SAMPLE_RATE, ELEVEN_TTS_CHANNELS)
 
-    async def start(self, ctx: agents.JobContext):
-        self.ctx = ctx
-        ctx.room.on("track_subscribed", self.on_track_subscribed)
-        ctx.room.on("data_received", self.on_data_received)
-        ctx.room.on("disconnected", self.cleanup)
+    async def start(self):
+        self.ctx.room.on("track_subscribed", self.on_track_subscribed)
+        self.ctx.room.on("data_received", self.on_data_received)
+        self.ctx.room.on("disconnected", self.cleanup)
         await self.publish_audio()
+        async def intro_text_stream():
+            yield INTRO
 
-        # publish a track
-        source = rtc.VideoSource(WIDTH, HEIGHT)
-        track = rtc.LocalVideoTrack.create_video_track("hue", source)
-        options = rtc.TrackPublishOptions()
-        options.source = rtc.TrackSource.SOURCE_CAMERA
-        publication = await ctx.room.local_participant.publish_track(track, options)
-        logging.info("published track %s", publication.sid)
-        asyncio.ensure_future(self.draw_gif_frames(source, "screensaver.gif"))
+        await self.process_chatgpt_result(intro_text_stream())
 
     def on_data_received(self, data: bytes, participant: rtc.RemoteParticipant, kind):
         payload = json.loads(data.decode("utf-8"))
@@ -87,7 +79,6 @@ class KITT:
             self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
 
     async def publish_audio(self):
-        self.line_out = rtc.AudioSource(OAI_TTS_SAMPLE_RATE, OAI_TTS_CHANNELS)
         track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.line_out)
         options = rtc.TrackPublishOptions()
         options.source = rtc.TrackSource.SOURCE_MICROPHONE
@@ -109,14 +100,9 @@ class KITT:
         async for vad_result in self.vad_plugin.start(audio_stream):
             if vad_result.type == VADEventType.STARTED:
                 self.user_state = UserState.SPEAKING
-                await self.send_state_update()
             elif vad_result.type == VADEventType.FINISHED:
                 self.user_state = UserState.SILENT
-                await self.send_state_update()
-                if (
-                    self.get_agent_state() == AgentState.SPEAKING
-                    or self.get_agent_state() == AgentState.THINKING
-                ):
+                if self.state.agent_state in [AgentState.SPEAKING, AgentState.THINKING]:
                     continue
                 stt_output = await self.stt_plugin.transcribe_frames(vad_result.frames)
                 if len(stt_output) == 0:
@@ -132,83 +118,31 @@ class KITT:
         await self.process_chatgpt_result(chatgpt_result)
 
     async def process_chatgpt_result(self, text_stream):
-        self.chat_gpt_working = True
-        await self.send_state_update()
+        self.state.chat_gpt_working = True
+        all_text = ""
 
-        sentence = ""
         async for text in text_stream:
-            sentence += text
+            all_text += text
 
-            if (
-                text.endswith("\n")
-                or text.endswith("?")
-                or text.endswith("!")
-                or text.endswith(".")
-            ):
-                audio_stream = await self.tts_plugin.generate_speech_from_text(sentence)
-                await self.ctx.room.local_participant.publish_data(
-                    json.dumps({"type": "agent_chat_message", "text": sentence})
-                )
-                await self.send_audio_stream(audio_stream)
-                sentence = ""
+        self.state.chat_gpt_working = False
 
-        if len(sentence) > 0:
-            audio_stream = await self.tts_plugin.generate_speech_from_text(sentence)
-            await self.send_audio_stream(audio_stream)
-            await self.ctx.room.local_participant.publish_data(
-                json.dumps({"type": "agent_chat_message", "text": sentence})
-            )
+        async def text_iterator():
+            yield all_text
 
-        self.chat_gpt_working = False
-        await self.send_state_update()
+        audio_stream = await self.tts_plugin.generate_speech(text_iterator())
+        await self.send_message_from_agent(all_text)
+        await self.send_audio_stream(audio_stream)
 
     async def send_audio_stream(self, audio_stream):
-        self.agent_sending_audio = True
-        await self.send_state_update()
+        self.state.agent_sending_audio = True
         async for frame in audio_stream:
             await self.line_out.capture_frame(frame)
-        self.agent_sending_audio = False
-        await self.send_state_update()
+        self.state.agent_sending_audio = False
 
-    def get_agent_state(self):
-        if self.agent_sending_audio:
-            return AgentState.SPEAKING
-
-        if self.chat_gpt_working:
-            return AgentState.THINKING
-
-        return AgentState.LISTENING
-
-    async def send_state_update(self):
-        msg = json.dumps(
-            {
-                "type": "state",
-                "user_state": self.user_state.name.lower(),
-                "agent_state": self.get_agent_state().name.lower(),
-            }
+    async def send_message_from_agent(self, text):
+        await self.ctx.room.local_participant.publish_data(
+            json.dumps({"type": "agent_chat_message", "text": text})
         )
-        await self.ctx.room.local_participant.publish_data(msg)
-
-    async def draw_gif_frames(self, source: rtc.VideoSource, gif_path: str):
-        gif = Image.open(gif_path)
-
-        while True:
-            for frame in ImageSequence.Iterator(gif):
-                frame = frame.convert("RGBA")
-                width, height = frame.size
-                frame_data = frame.tobytes()
-
-                argb_frame = rtc.ArgbFrame.create(
-                    rtc.VideoFormatType.FORMAT_ARGB, width, height
-                )
-                argb_frame.data[:] = frame_data
-
-                video_frame = rtc.VideoFrame(
-                    0, rtc.VideoRotation.VIDEO_ROTATION_0, argb_frame.to_i420()
-                )
-
-                source.capture_frame(video_frame)
-                await asyncio.sleep(1 / 30)
 
 
 if __name__ == "__main__":
@@ -216,14 +150,12 @@ if __name__ == "__main__":
 
     async def job_request_cb(job_request: agents.JobRequest):
         logging.info("Accepting job for KITT")
-        kitt = KITT()
 
         await job_request.accept(
-            kitt.start,
+            KITT.create,
             identity="kitt_agent",
             subscribe_cb=agents.SubscribeCallbacks.AUDIO_ONLY,
             auto_disconnect_cb=agents.AutoDisconnectCallbacks.DEFAULT,
-            auto_disconnect_task_timeout=10,
         )
 
     worker = agents.Worker(

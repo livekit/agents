@@ -20,8 +20,7 @@ from dataclasses import dataclass
 from typing import AsyncIterable
 from enum import Enum
 
-ChatGPTMessageRole = Enum(
-    'MessageRole', ["system", "user", "assistant", "function"])
+ChatGPTMessageRole = Enum("MessageRole", ["system", "user", "assistant", "function"])
 
 
 @dataclass
@@ -30,15 +29,11 @@ class ChatGPTMessage:
     content: str
 
     def to_api(self):
-        return {
-            "role": self.role.name,
-            "content": self.content
-        }
+        return {"role": self.role.name, "content": self.content}
 
 
 class ChatGPTPlugin:
-    """OpenAI ChatGPT Plugin
-    """
+    """OpenAI ChatGPT Plugin"""
 
     def __init__(self, prompt: str, message_capacity: int, model: str):
         """
@@ -56,8 +51,7 @@ class ChatGPTPlugin:
         self._needs_interrupt = False
 
     def interrupt(self):
-        """Interrupt a currently streaming response (if there is one)
-        """
+        """Interrupt a currently streaming response (if there is one)"""
         if self._producing_response:
             self._needs_interrupt = True
 
@@ -93,21 +87,35 @@ class ChatGPTPlugin:
 
     async def _generate_text_streamed(self, model: str) -> AsyncIterable[str]:
         prompt_message = ChatGPTMessage(
-            role=ChatGPTMessageRole.system, content=self._prompt)
+            role=ChatGPTMessageRole.system, content=self._prompt
+        )
         try:
-            chat_stream = await asyncio.wait_for(self._client.chat.completions.create(model=model,
-                                                                                      n=1,
-                                                                                      stream=True,
-                                                                                      messages=[prompt_message.to_api()] + [m.to_api() for m in self._messages]), 10)
+            chat_messages = [m.to_api() for m in self._messages]
+            chat_stream = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=model,
+                    n=1,
+                    stream=True,
+                    messages=[prompt_message.to_api()] + chat_messages,
+                ),
+                10,
+            )
         except TimeoutError:
             yield "Sorry, I'm taking too long to respond. Please try again later."
             return
 
         self._producing_response = True
         complete_response = ""
+
+        async def anext_util(aiter):
+            async for item in aiter:
+                return item
+
+            return None
+
         while True:
             try:
-                chunk = await asyncio.wait_for(anext(chat_stream, None), 5)
+                chunk = await asyncio.wait_for(anext_util(chat_stream), 5)
             except TimeoutError:
                 break
             except asyncio.CancelledError:
@@ -128,6 +136,7 @@ class ChatGPTPlugin:
                 complete_response += content
                 yield content
 
-        self._messages.append(ChatGPTMessage(
-            role=ChatGPTMessageRole.assistant, content=complete_response))
+        self._messages.append(
+            ChatGPTMessage(role=ChatGPTMessageRole.assistant, content=complete_response)
+        )
         self._producing_response = False
