@@ -16,10 +16,10 @@ import asyncio
 import io
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple, List
 
 import aiohttp
-from common import API_URL, generate_token
+from .common import API_URL, generate_token
 from livekit import rtc
 from PIL import Image
 
@@ -31,6 +31,13 @@ class Detector:
         examples_to_include: [str]
         examples_to_exclude: [str]
         detection_threshold: float
+
+    @dataclass
+    class DetectionResult:
+        top_left: Tuple[float, float]
+        bottom_right: Tuple[float, float]
+        score: float
+        name: str
 
     def __init__(
         self,
@@ -57,41 +64,62 @@ class Detector:
         self._http_session = aiohttp.ClientSession(base_url=API_URL)
         asyncio.ensure_future(self._deploy())
 
-    async def detect(self, frame: rtc.VideoFrame):
+    async def detect(self, frame: rtc.VideoFrame) -> List[DetectionResult]:
         deploy_id = await self._get_deploy_id()
+        argb_frame = rtc.ArgbFrame.create(
+            format=rtc.VideoFormatType.FORMAT_RGBA,
+            width=frame.buffer.width,
+            height=frame.buffer.height,
+        )
+        frame.buffer.to_argb(dst=argb_frame)
         image = Image.frombytes(
-            "RGBA", (frame.width, frame.height), frame.data
+            "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
         ).convert("RGB")
 
         output_stream = io.BytesIO()
         image.save(output_stream, format="JPEG")
-        data = aiohttp.FormData()
+        output_stream.seek(0)
 
         token = await self._get_token()
         headers = {"Authorization": f"Bearer {token}"}
 
+        data = aiohttp.FormData()
         data.add_field(
-            "image",
-            io.BytesIO(output_stream),
-            filename="image.jpg",
-            content_type="image/jpeg",
+            "data", output_stream, filename="image.jpeg", content_type="image/jpeg"
         )
 
-        url = f"{API_URL}/detect?deploy_id={deploy_id}"
+        url = f"/detect?deployed_id={deploy_id}"
         self._check_http_session()
         async with self._http_session.post(url, data=data, headers=headers) as response:
-            return await response.json()
+            result_json = await response.json()
+            print(result_json)
+            results = []
+            for class_results in result_json:
+                for r in class_results:
+                    results.append(
+                        Detector.DetectionResult(
+                            top_left=(r["tlbr"][0], r["tlbr"][1]),
+                            bottom_right=(r["tlbr"][2], r["tlbr"][3]),
+                            score=r["score"],
+                            name=r["class"],
+                        )
+                    )
+            return results
 
     async def _get_token(self):
-        with await self._token_lock:
+        async with self._token_lock:
             if self._token:
                 return self._token
             self._check_http_session()
-            self._token = await generate_token(self._http_session)
+            self._token = await generate_token(
+                http_session=self._http_session,
+                client_id=self._client_id,
+                client_secret=self._client_secret,
+            )
             return self._token
 
     async def _get_deploy_id(self):
-        with await self._deploy_lock:
+        async with self._deploy_lock:
             if self._deploy_id:
                 return self._deploy_id
 
@@ -114,7 +142,7 @@ class Detector:
         body = {"detector_configs": detector_configs}
         self._check_http_session()
         async with self._http_session.post(
-            f"{API_URL}/deploy_detector", headers=headers, json=body
+            "/deploy_detector", headers=headers, json=body
         ) as deploy_response:
             if deploy_response.status != 200:
                 error_message = (await deploy_response.json())["message"]

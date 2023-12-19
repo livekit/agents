@@ -27,7 +27,7 @@ async def generate_token(
 ):
     params = {"client_id": client_id, "client_secret": client_secret}
 
-    async with http_session.post("/token", data=params) as response:
+    async with http_session.post("/token", json=params) as response:
         if response.status != 200:
             raise ValueError("Invalid DirectAI Credentials")
         return (await response.json())["access_token"]

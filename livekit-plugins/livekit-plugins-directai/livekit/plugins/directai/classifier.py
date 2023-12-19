@@ -16,10 +16,10 @@ import asyncio
 import io
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict, List
 
 import aiohttp
-from common import API_URL, generate_token
+from .common import API_URL, generate_token
 from livekit import rtc
 from PIL import Image
 
@@ -30,6 +30,12 @@ class Classifier:
         name: str
         examples_to_include: [str]
         examples_to_exclude: [str]
+
+    @dataclass
+    class ClassificationResult:
+        scores: Dict[str, float]
+        raw_scores: Dict[str, float]
+        pred: str
 
     def __init__(
         self,
@@ -56,41 +62,53 @@ class Classifier:
         self._http_session = aiohttp.ClientSession(base_url=API_URL)
         asyncio.ensure_future(self._deploy())
 
-    async def classify(self, frame: rtc.VideoFrame):
+    async def classify(self, frame: rtc.VideoFrame) -> ClassificationResult:
         deploy_id = await self._get_deploy_id()
+        argb_frame = rtc.ArgbFrame.create(
+            format=rtc.VideoFormatType.FORMAT_RGBA,
+            width=frame.buffer.width,
+            height=frame.buffer.height,
+        )
+        frame.buffer.to_argb(dst=argb_frame)
         image = Image.frombytes(
-            "RGBA", (frame.width, frame.height), frame.data
+            "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
         ).convert("RGB")
 
         output_stream = io.BytesIO()
         image.save(output_stream, format="JPEG")
-        data = aiohttp.FormData()
+        output_stream.seek(0)
 
         token = await self._get_token()
         headers = {"Authorization": f"Bearer {token}"}
 
+        data = aiohttp.FormData()
         data.add_field(
-            "image",
-            io.BytesIO(output_stream),
-            filename="image.jpg",
-            content_type="image/jpeg",
+            "data", output_stream, filename="image.jpeg", content_type="image/jpeg"
         )
-
-        url = f"{API_URL}/classify?deploy_id={deploy_id}"
+        url = f"/classify?deployed_id={deploy_id}"
         self._check_http_session()
         async with self._http_session.post(url, data=data, headers=headers) as response:
-            return await response.json()
+            resp_json = await response.json()
+            return Classifier.ClassificationResult(
+                scores=resp_json["scores"],
+                raw_scores=resp_json["raw_scores"],
+                pred=resp_json["pred"],
+            )
 
     async def _get_token(self):
-        with await self._token_lock:
+        async with self._token_lock:
             if self._token:
                 return self._token
             self._check_http_session()
-            self._token = await generate_token(self._http_session)
+            self._token = await generate_token(
+                http_session=self._http_session,
+                client_id=self._client_id,
+                client_secret=self._client_secret,
+            )
             return self._token
 
     async def _get_deploy_id(self):
-        with await self._deploy_lock:
+        async with self._deploy_lock:
             if self._deploy_id:
                 return self._deploy_id
 
@@ -112,7 +130,7 @@ class Classifier:
         body = {"classifier_configs": classifier_configs}
         self._check_http_session()
         async with self._http_session.post(
-            f"{API_URL}/deploy_classifier", headers=headers, json=body
+            "/deploy_classifier", headers=headers, json=body
         ) as deploy_response:
             if deploy_response.status != 200:
                 error_message = (await deploy_response.json())["message"]
