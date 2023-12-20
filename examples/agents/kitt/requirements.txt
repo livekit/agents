@@ -2,5 +2,5 @@ livekit
 livekit-api
 livekit-agents
 livekit-plugins-openai
-livekit-plugins-vad
+livekit-plugins-silero
 Pillow
