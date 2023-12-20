@@ -28,10 +28,11 @@ class SDXLPlugin:
     Requires FAL_KEY_ID and FAL_KEY_SECRET environment variables to be set.
     """
 
-    def __init__(self, model='110602490-fast-sdxl'):
+    def __init__(self, model="110602490-fast-sdxl"):
         if not os.getenv("FAL_KEY_ID") and os.getenv("FAL_KEY_SECRET"):
             raise ValueError(
-                "The Fal plugin requires FAL_KEY_ID and FAL_KEY_SECRET environment variables to be set.")
+                "The Fal plugin requires FAL_KEY_ID and FAL_KEY_SECRET environment variables to be set."
+            )
 
         self.model = model
 
@@ -47,23 +48,22 @@ class SDXLPlugin:
 
         handler = fal.apps.submit(
             self.model,
-            arguments={
-                'prompt': prompt,
-                'sync_mode': False
-            },
+            arguments={"prompt": prompt, "sync_mode": False},
         )
         result = handler.get()
-        image_url = result['images'][0]['url']
-        image = await asyncio.get_event_loop().run_in_executor(None, self._fetch_image, image_url)
+        image_url = result["images"][0]["url"]
+        image = await asyncio.get_event_loop().run_in_executor(
+            None, self._fetch_image, image_url
+        )
         argb_array = bytearray(image.tobytes())
 
         argb_frame = rtc.ArgbFrame.create(
-            rtc.VideoFormatType.FORMAT_ARGB, image.shape[0], image.shape[1])
+            rtc.VideoFormatType.FORMAT_ARGB, image.shape[0], image.shape[1]
+        )
         argb_frame.data[:] = argb_array
         return rtc.VideoFrame(
-            0,
-            rtc.VideoRotation.VIDEO_ROTATION_0,
-            argb_frame.to_i420())
+            0, rtc.VideoRotation.VIDEO_ROTATION_0, argb_frame.to_i420()
+        )
 
     def _fetch_image(self, url):
         response = requests.get(url, timeout=10)

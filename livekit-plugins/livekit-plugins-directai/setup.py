@@ -21,14 +21,14 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, "livekit", "plugins", "google", "version.py"), "r") as f:
+with open(os.path.join(here, "livekit", "plugins", "directai", "version.py"), "r") as f:
     exec(f.read(), about)
 
 
 setuptools.setup(
-    name="livekit-plugins-google",
+    name="livekit-plugins-directai",
     version=about["__version__"],
-    description="LiveKit Python Plugins for Google Services",
+    description="LiveKit Python Plugins for DirectAI Services",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/python-agents",
@@ -40,25 +40,19 @@ setuptools.setup(
         "Topic :: Multimedia :: Video",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3 :: Only",
     ],
-    keywords=["webrtc", "realtime", "audio", "video", "livekit"],
+    keywords=["webrtc", "realtime", "audio", "video", "livekit", "directai"],
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
-    python_requires=">=3.7.0",
+    python_requires=">=3.8.0",
     install_requires=[
-        "numpy >= 1.24.0",
-        "google-api-core >= 2.11.1",
-        "google-auth >= 2.23.0",
-        "google-cloud-core >= 2.3.3",
-        "google-cloud-speech >= 2.21.0",
-        "google-cloud-texttospeech >= 2.14.1",
-        "google-cloud-translate >= 3.12.0",
-        "googleapis-common-protos >= 1.60.0",
+        "livekit",
+        "aiohttp >= 3.8.5",
+        "Pillow",
     ],
     package_data={},
     project_urls={
