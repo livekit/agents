@@ -27,8 +27,7 @@ WHISPER_CHANNELS = 1
 
 
 class WhisperAPITranscriber:
-    """Plugin that uses OpenAI's Whisper API to generate text from audio
-    """
+    """Plugin that uses OpenAI's Whisper API to generate text from audio"""
 
     def __init__(self):
         self._model = None
@@ -64,7 +63,14 @@ class WhisperAPITranscriber:
                 wave_file.setframerate(sample_rate)
                 wave_file.writeframes(full_buffer)
 
-            response = await asyncio.wait_for(self._client.audio.transcriptions.create(file=("input.wav", bytes_io), model="whisper-1", response_format="text"), 10)
+            response = await asyncio.wait_for(
+                self._client.audio.transcriptions.create(
+                    file=("input.wav", bytes_io),
+                    model="whisper-1",
+                    response_format="text",
+                ),
+                10,
+            )
             return response
         except Exception as e:
             logging.error("Error transcribing audio: %s", e)

@@ -64,6 +64,7 @@ class KITT:
         self.ctx.room.on("data_received", self.on_data_received)
         self.ctx.room.on("disconnected", self.cleanup)
         await self.publish_audio()
+
         async def intro_text_stream():
             yield INTRO
 

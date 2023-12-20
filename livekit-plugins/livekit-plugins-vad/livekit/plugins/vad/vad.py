@@ -27,8 +27,7 @@ VADEventType = Enum("VADEventType", "STARTED, FINISHED")
 
 
 class VADPlugin:
-    """Class for Voice Activity Detection (VAD)
-    """
+    """Class for Voice Activity Detection (VAD)"""
 
     @dataclass
     class Event:
@@ -52,7 +51,9 @@ class VADPlugin:
     async def close(self):
         pass
 
-    async def start(self, frame_iterator: AsyncIterable[rtc.AudioFrame]) -> AsyncIterable[Event]:
+    async def start(
+        self, frame_iterator: AsyncIterable[rtc.AudioFrame]
+    ) -> AsyncIterable[Event]:
         """Start detecting voice activity
 
         Args:
@@ -67,7 +68,6 @@ class VADPlugin:
                 yield event
 
     async def _push_frame(self, frame: rtc.AudioFrame):
-
         if self._model is None:
             await asyncio.get_event_loop().run_in_executor(None, self._load_model)
 
@@ -80,28 +80,33 @@ class VADPlugin:
         frame_queue_copy = self._frame_queue.copy()
         self._frame_queue = []
 
-        talking_detected = await asyncio.get_event_loop().run_in_executor(None, self._process_frames, frame_queue_copy)
+        talking_detected = await asyncio.get_event_loop().run_in_executor(
+            None, self._process_frames, frame_queue_copy
+        )
         if self._talking_state:
             if talking_detected:
                 self._silent_frame_count_since_voice = 0
                 self._voice_frames.extend(frame_queue_copy)
             else:
                 self._silent_frame_count_since_voice += len(frame_queue_copy)
-                if self._silent_frame_count_since_voice * 10 > self._silence_threshold_ms:
+                if (
+                    self._silent_frame_count_since_voice * 10
+                    > self._silence_threshold_ms
+                ):
                     self._talking_state = False
                     result = []
                     result.extend(self._left_padding_frames)
                     result.extend(self._voice_frames)
                     self._reset_frames()
-                    event = VADPlugin.Event(type=VADEventType.FINISHED,
-                                            frames=result)
+                    event = VADPlugin.Event(type=VADEventType.FINISHED, frames=result)
                     return event
         else:
             if talking_detected:
                 self._talking_state = True
                 self._voice_frames.extend(frame_queue_copy)
-                event = VADPlugin.Event(type=VADEventType.STARTED,
-                                        frames=self._voice_frames)
+                event = VADPlugin.Event(
+                    type=VADEventType.STARTED, frames=self._voice_frames
+                )
                 return event
             else:
                 self._add_left_padding(frame_queue_copy)
@@ -111,8 +116,7 @@ class VADPlugin:
     def _add_left_padding(self, frames: [rtc.AudioFrame]):
         current_padding_ms = 0
         for f in self._left_padding_frames:
-            current_padding_ms += f.sample_rate * \
-                len(f.data) * 1000 / f.num_channels
+            current_padding_ms += f.sample_rate * len(f.data) * 1000 / f.num_channels
         ms_length = 0
         for f in frames:
             ms_length += f.sample_rate * len(f.data) * 1000 / f.num_channels
@@ -130,29 +134,33 @@ class VADPlugin:
         for f in resampled:
             buffer_count += len(f.data)
 
-        assert buffer_count <= 512, "Buffer count should be less than the input to the VAD model"
+        assert (
+            buffer_count <= 512
+        ), "Buffer count should be less than the input to the VAD model"
 
         if self._copy_int16.shape[0] < buffer_count:
             self._copy_int16 = np.zeros(buffer_count, dtype=np.int16)
             self._copy_float32 = np.zeros(buffer_count, dtype=np.float32)
 
         for i, f in enumerate(resampled):
-            self._copy_int16[i * len(f.data): (i + 1) *
-                             len(f.data)] = np.ctypeslib.as_array(f.data)
-            self._copy_float32 = self._copy_int16.astype(
-                np.float32, copy=False) / 32768.0
+            self._copy_int16[
+                i * len(f.data) : (i + 1) * len(f.data)
+            ] = np.ctypeslib.as_array(f.data)
+            self._copy_float32 = (
+                self._copy_int16.astype(np.float32, copy=False) / 32768.0
+            )
 
-        self._window_buffer_scratch[:-
-                                    buffer_count] = self._window_buffer[buffer_count:]
+        self._window_buffer_scratch[:-buffer_count] = self._window_buffer[buffer_count:]
         self._window_buffer[-buffer_count:] = self._copy_float32
-        self._window_buffer[:-
-                            buffer_count] = self._window_buffer_scratch[:-
-                                                                        buffer_count]
+        self._window_buffer[:-buffer_count] = self._window_buffer_scratch[
+            :-buffer_count
+        ]
         tensor = torch.from_numpy(self._window_buffer)
         speech_prob = self._model(tensor, VAD_SAMPLE_RATE).item()
         return speech_prob > 0.5
 
     def _load_model(self):
         model_path = pkg_resources.resource_filename(
-            'livekit.plugins.vad', 'files/silero_vad.jit')
+            "livekit.plugins.vad", "files/silero_vad.jit"
+        )
         self._model = torch.jit.load(model_path)

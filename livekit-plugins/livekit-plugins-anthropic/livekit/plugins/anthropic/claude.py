@@ -20,8 +20,7 @@ from typing import AsyncIterable
 from anthropic import AsyncAnthropic, HUMAN_PROMPT, AI_PROMPT
 from enum import Enum
 
-ClaudeMessageRole = Enum(
-    'MessageRole', ["system", "human", "assistant"])
+ClaudeMessageRole = Enum("MessageRole", ["system", "human", "assistant"])
 
 
 @dataclass
@@ -41,9 +40,8 @@ class ClaudeMessage:
 
 
 class ClaudePlugin:
-    def __init__(self, model: str = 'claude-2', system_message: str = ''):
-        self._client = AsyncAnthropic(
-            api_key=os.environ["ANTHROPIC_API_KEY"])
+    def __init__(self, model: str = "claude-2", system_message: str = ""):
+        self._client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         self._model = model
         self._system_message = system_message
         self._messages: [ClaudeMessage] = []
@@ -64,10 +62,11 @@ class ClaudePlugin:
 
     async def _generate_text_streamed(self) -> AsyncIterable[str]:
         system_message = ClaudeMessage(
-            role=ClaudeMessageRole.system, content=self._system_message)
+            role=ClaudeMessageRole.system, content=self._system_message
+        )
 
         try:
-            '''
+            """
             Example Claude2 formatting for prompts:
 
             Cats are wonderful animals and loved by everyone, no matter how many legs they have.
@@ -79,18 +78,20 @@ class ClaudePlugin:
             Human: Yes, please do.
 
             Assistant:
-            '''
-            prompt = ''.join([system_message.to_api()] +
-                             [m.to_api() for m in self._messages] +
-                             [ClaudeMessage(role=ClaudeMessageRole.assistant, content="").to_api()])
+            """
+            prompt = "".join(
+                [system_message.to_api()]
+                + [m.to_api() for m in self._messages]
+                + [ClaudeMessage(role=ClaudeMessageRole.assistant, content="").to_api()]
+            )
             chat_stream = await asyncio.wait_for(
                 self._client.completions.create(
                     model=self._model,
                     max_tokens_to_sample=300,
                     stream=True,
-                    prompt=prompt
+                    prompt=prompt,
                 ),
-                10
+                10,
             )
         except TimeoutError:
             yield "Sorry, I'm taking too long to respond. Please try again later."
@@ -122,6 +123,7 @@ class ClaudePlugin:
                 full_response += content
                 yield content
 
-        self._messages.append(ClaudeMessage(
-            role=ClaudeMessageRole.assistant, content=full_response))
+        self._messages.append(
+            ClaudeMessage(role=ClaudeMessageRole.assistant, content=full_response)
+        )
         self._producing_response = False
