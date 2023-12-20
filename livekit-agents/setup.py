@@ -21,13 +21,13 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, 'livekit', 'agents', 'version.py'), 'r') as f:
+with open(os.path.join(here, "livekit", "agents", "version.py"), "r") as f:
     exec(f.read(), about)
 
 
 setuptools.setup(
     name="livekit-agents",
-    version=about['__version__'],
+    version=about["__version__"],
     description="LiveKit Python Agents",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
@@ -46,8 +46,7 @@ setuptools.setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3 :: Only",
     ],
-    keywords=["webrtc", "realtime", "audio",
-              "video", "livekit", "agents", "AI"],
+    keywords=["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"],
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
@@ -57,7 +56,7 @@ setuptools.setup(
         "livekit-api>=0.1.3",
         "livekit-protocol>=0.1.0",
         "livekit-protocol",
-        "websockets>=12.0"
+        "websockets>=12.0",
     ],
     package_data={},
     project_urls={

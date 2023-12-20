@@ -21,10 +21,9 @@ import openai
 
 
 class TTSPlugin:
-    """Text-to-speech plugin using OpenAI's API
-    """
+    """Text-to-speech plugin using OpenAI's API"""
 
-    def __init__(self, model = "tts-1", voice = "alloy"):
+    def __init__(self, model="tts-1", voice="alloy"):
         self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._model = model
         self._voice = voice
@@ -32,7 +31,9 @@ class TTSPlugin:
     async def close(self):
         pass
 
-    async def generate_speech_from_text(self, text: str) -> AsyncIterator[rtc.AudioFrame]:
+    async def generate_speech_from_text(
+        self, text: str
+    ) -> AsyncIterator[rtc.AudioFrame]:
         """Generate a stream of speech from text
 
         Args:
@@ -41,12 +42,15 @@ class TTSPlugin:
         Returns:
             AsyncIterator[rtc.AudioFrame]: Stream of 24000hz, 1 channel audio frames
         """
+
         async def iterator():
             yield text
 
         return self.generate_speech_from_stream(iterator())
 
-    async def generate_speech_from_stream(self, text_stream: AsyncIterator[str]) -> AsyncIterator[rtc.AudioFrame]:
+    async def generate_speech_from_stream(
+        self, text_stream: AsyncIterator[str]
+    ) -> AsyncIterator[rtc.AudioFrame]:
         """Generate a stream of speech from a stream of text
 
         Args:
@@ -71,6 +75,5 @@ class TTSPlugin:
             response.stream_to_file(filepath)
             with audioread.audio_open(filepath) as f:
                 for buf in f:
-                    frame = rtc.AudioFrame(
-                        buf, f.samplerate, f.channels, len(buf) // 2)
+                    frame = rtc.AudioFrame(buf, f.samplerate, f.channels, len(buf) // 2)
                     yield frame

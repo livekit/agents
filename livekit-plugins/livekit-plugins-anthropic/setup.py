@@ -21,13 +21,15 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, 'livekit', 'plugins', 'anthropic', 'version.py'), 'r') as f:
+with open(
+    os.path.join(here, "livekit", "plugins", "anthropic", "version.py"), "r"
+) as f:
     exec(f.read(), about)
 
 
 setuptools.setup(
     name="livekit-plugins-anthropic",
-    version=about['__version__'],
+    version=about["__version__"],
     description="LiveKit Python Plugins for Anthropic Models and Services",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
@@ -48,8 +50,7 @@ setuptools.setup(
     ],
     keywords=["webrtc", "realtime", "audio", "video", "livekit"],
     license="Apache-2.0",
-    packages=setuptools.find_namespace_packages(
-        include=["livekit.*"]),
+    packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.7.0",
     install_requires=[
         "anthropic >= 0.7.5",

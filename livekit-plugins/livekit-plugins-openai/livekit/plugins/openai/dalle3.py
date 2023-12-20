@@ -22,22 +22,22 @@ from livekit import rtc
 
 
 class DALLE3Plugin:
-    """DALL-E 3 Plugin
-    """
+    """DALL-E 3 Plugin"""
 
-    PORTRAIT = '1024x1792'
-    LANDSCAPE = '1792x1024'
-    SQUARE = '1024x1024'
+    PORTRAIT = "1024x1792"
+    LANDSCAPE = "1792x1024"
+    SQUARE = "1024x1024"
 
     def __init__(self):
         self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-    async def generate_image_from_prompt(self,
-                                         prompt: str,
-                                         size=LANDSCAPE,
-                                         model='dall-e-3',
-                                         quality="standard",
-                                         ) -> rtc.VideoFrame:
+    async def generate_image_from_prompt(
+        self,
+        prompt: str,
+        size=LANDSCAPE,
+        model="dall-e-3",
+        quality="standard",
+    ) -> rtc.VideoFrame:
         """Generate an image from a prompt
 
         Args:
@@ -47,23 +47,23 @@ class DALLE3Plugin:
         Returns:
             rtc.VideoFrame: Image generated from prompt
         """
-        response = await self._client.images.generate(model=model,
-                                                      prompt=prompt,
-                                                      size=size,
-                                                      quality=quality,
-                                                      n=1)
+        response = await self._client.images.generate(
+            model=model, prompt=prompt, size=size, quality=quality, n=1
+        )
         image_url = response.data[0].url
-        image = await asyncio.get_event_loop().run_in_executor(None, self._fetch_image, image_url)
+        image = await asyncio.get_event_loop().run_in_executor(
+            None, self._fetch_image, image_url
+        )
         argb_array = bytearray(image.tobytes())
 
         # shape is (height, width, channels)
         argb_frame = rtc.ArgbFrame.create(
-            rtc.VideoFormatType.FORMAT_ARGB, image.shape[1], image.shape[0])
+            rtc.VideoFormatType.FORMAT_ARGB, image.shape[1], image.shape[0]
+        )
         argb_frame.data[:] = argb_array
         return rtc.VideoFrame(
-            0,
-            rtc.VideoRotation.VIDEO_ROTATION_0,
-            argb_frame.to_i420())
+            0, rtc.VideoRotation.VIDEO_ROTATION_0, argb_frame.to_i420()
+        )
 
     def _fetch_image(self, url):
         response = requests.get(url, timeout=10)
