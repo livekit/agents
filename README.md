@@ -23,7 +23,7 @@ Plugins can be installed individually depending on what your agent needs. Availa
 
 - livekit-plugins-elevenlabs
 - livekit-plugins-openai
-- livekit-plugins-vad
+- livekit-plugins-silero
 - livekit-plugins-anthropic
 
 ## Terminology
