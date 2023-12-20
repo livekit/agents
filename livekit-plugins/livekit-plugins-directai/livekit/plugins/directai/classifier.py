@@ -28,8 +28,8 @@ class Classifier:
     @dataclass
     class ClassifierConfig:
         name: str
-        examples_to_include: [str]
-        examples_to_exclude: [str]
+        examples_to_include: List[str]
+        examples_to_exclude: List[str]
 
     @dataclass
     class ClassificationResult:
@@ -42,7 +42,7 @@ class Classifier:
         *,
         client_id: Optional[str],
         client_secret: Optional[str],
-        classifier_configs: [ClassifierConfig],
+        classifier_configs: List[ClassifierConfig],
     ):
         self._client_id = client_id
         self._client_secret = client_secret
