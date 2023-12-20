@@ -24,7 +24,7 @@ from livekit.plugins.openai import (
     WhisperAPITranscriber,
 )
 from livekit.plugins.elevenlabs import TTSPlugin
-from livekit.plugins.vad import VADEventType, VADPlugin
+from livekit.plugins.silero import VADEventType, VADPlugin
 
 PROMPT = "You are KITT, a friendly voice assistant powered by LiveKit.  \
           Conversation should be personable, and be sure to ask follow up questions. \
