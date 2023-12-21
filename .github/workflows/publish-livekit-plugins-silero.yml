@@ -1,4 +1,4 @@
-name: Publish livekit-plugins-vad
+name: Publish livekit-plugins-silero
 
 on:
   workflow_dispatch
