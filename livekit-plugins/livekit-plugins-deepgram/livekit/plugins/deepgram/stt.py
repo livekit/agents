@@ -6,11 +6,9 @@ from deepgram.transcription import (
     PrerecordedTranscriptionResponse,
     TranscriptionSource,
 )
-from livekit import rtc, agents
-from livekit.agents import stt
+from livekit import agents, rtc
 from dataclasses import dataclass
-from typing import Union, Optional
-from .models import DeepgramModels, DeepgramLanguages
+from typing import Literal, Optional
 import os
 import logging
 import asyncio
@@ -18,26 +16,101 @@ import deepgram
 import wave
 import io
 
+DeepgramModels = Literal[
+    "nova-general",
+    "nova-phonecall",
+    "nova-meeting",
+    "nova-2-general",
+    "nova-2-meeting",
+    "nova-2-phonecall",
+    "nova-2-finance",
+    "nova-2-conversationalai",
+    "nova-2-voicemail",
+    "nova-2-video",
+    "nova-2-medical",
+    "nova-2-drivethru",
+    "nova-2-automotive",
+    "enhanced-general",
+    "enhanced-meeting",
+    "enhanced-phonecall",
+    "enhanced-finance",
+    "base",
+    "meeting",
+    "phonecall",
+    "finance",
+    "conversationalai",
+    "voicemail",
+    "video",
+    "whisper-tiny",
+    "whisper-base",
+    "whisper-small",
+    "whisper-medium",
+    "whisper-large",
+]
+
+DeepgramLanguages = Literal[
+    "zh",
+    "zh-CN",
+    "zh-TW",
+    "da",
+    "nl",
+    "en",
+    "en-US",
+    "en-AU",
+    "en-GB",
+    "en-NZ",
+    "en-IN",
+    "fr",
+    "fr-CA",
+    "de",
+    "hi",
+    "hi-Latn",
+    "pt",
+    "pt-BR",
+    "es",
+    "es-419",
+    "hi",
+    "hi-Latn",
+    "it",
+    "ja",
+    "ko",
+    "no",
+    "pl",
+    "pt",
+    "pt-BR",
+    "es-LATAM",
+    "sv",
+    "ta",
+    "taq",
+    "uk",
+    "tr",
+    "sv",
+    "id",
+    "pt",
+    "pt-BR",
+    "ru",
+    "th",
+]
+
 
 @dataclass
-class StreamOptions(stt.StreamOptions):
+class StreamOptions(agents.StreamOptions):
     model: DeepgramModels = "nova-2-general"
-    language: Union[DeepgramLanguages, str] = "en-US"
+    language: DeepgramLanguages = "en-US"
     smart_format: bool = True
 
 
 @dataclass
-class RecognizeOptions(stt.RecognizeOptions):
+class RecognizeOptions(agents.RecognizeOptions):
     model: DeepgramModels = "nova-2-general"
-    language: Union[DeepgramLanguages, str] = "en-US"
+    language: DeepgramLanguages = "en-US"
     smart_format: bool = True
 
 
-class STT(stt.STT):
+class STT(agents.STT):
     def __init__(
         self, api_key: Optional[str] = None, api_url: Optional[str] = None
     ) -> None:
-        super().__init__(streaming_supported=True)
         api_key = api_key or os.environ.get("DG_API_KEY")
         if not api_key:
             raise ValueError("Deepgram API key is required")
@@ -52,7 +125,7 @@ class STT(stt.STT):
         self,
         buffer: agents.AudioBuffer,
         opts: RecognizeOptions = RecognizeOptions(),
-    ) -> stt.SpeechEvent:
+    ) -> agents.SpeechEvent:
         # Deepgram prerecorded API requires WAV/MP3, so we write our PCM into a file
         buffer = agents.utils.merge_frames(buffer)
         io_buffer = io.BytesIO()
@@ -71,7 +144,6 @@ class STT(stt.STT):
             "model": opts.model,
             "language": opts.language,
             "smart_format": opts.smart_format,
-            "punctuate": opts.punctuate,
         }
 
         dg_res = await self._client.transcription.prerecorded(source, dg_opts)
@@ -81,13 +153,12 @@ class STT(stt.STT):
         return SpeechStream(opts, self._client)
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(agents.SpeechStream):
     def __init__(self, opts: StreamOptions, client: deepgram.Deepgram) -> None:
-        super().__init__()
         self._opts = opts
         self._client = client
         self._queue = asyncio.Queue[rtc.AudioFrame]()
-        self._transcript_queue = asyncio.Queue[stt.SpeechEvent]()
+        self._transcript_queue = asyncio.Queue[agents.SpeechEvent]()
         self._closed = False
 
         self._main_task = asyncio.create_task(self._run(max_retry=32))
@@ -98,8 +169,8 @@ class SpeechStream(stt.SpeechStream):
 
         self._main_task.add_done_callback(log_exception)
 
-    async def _run(self, max_retry: int) -> None:
-        """Try to connect to Deepgram with exponential backoff and forward frames"""
+    async def _run(self, max_retry: int = 5) -> None:
+        """Try to connect to Deepgram with exponential backoff and send frames"""
         retry_count = 0
         while True:
             try:
@@ -111,7 +182,6 @@ class SpeechStream(stt.SpeechStream):
                     "channels": self._opts.num_channels,
                     "sample_rate": self._opts.sample_rate,
                     "smart_format": self._opts.smart_format,
-                    "punctuate": self._opts.punctuate,
                 }
 
                 self._live = await self._client.transcription.live(dg_opts)
@@ -143,7 +213,11 @@ class SpeechStream(stt.SpeechStream):
                     self._queue.task_done()
 
             except asyncio.CancelledError:
-                await asyncio.shield(self._live.finish())
+
+                async def _close() -> None:
+                    await self._live.finish()
+
+                await asyncio.shield(_close())
                 break
             except Exception as e:
                 if retry_count > max_retry and max_retry > 0:
@@ -178,7 +252,7 @@ class SpeechStream(stt.SpeechStream):
     def __aiter__(self) -> "SpeechStream":
         return self
 
-    async def __anext__(self) -> stt.SpeechEvent:
+    async def __anext__(self) -> agents.SpeechEvent:
         if self._closed and self._transcript_queue.empty():
             raise StopAsyncIteration
 
@@ -188,15 +262,15 @@ class SpeechStream(stt.SpeechStream):
 def live_transcription_to_speech_event(
     opts: StreamOptions,
     event: LiveTranscriptionResponse,
-) -> stt.SpeechEvent:
+) -> agents.SpeechEvent:
     dg_alts = event["channel"]["alternatives"]
-    return stt.SpeechEvent(
+    return agents.SpeechEvent(
         is_final=event["is_final"],
         alternatives=[
-            stt.SpeechData(
+            agents.SpeechData(
                 language=alt.get("detected_language", opts.language),
-                start_time=alt["words"][0]["start"] if alt["words"] else 0,
-                end_time=alt["words"][-1]["end"] if alt["words"] else 0,
+                start_time=0,  # alt["words"][0]["start"],
+                end_time=0,  # alt["words"][-1]["end"],
                 confidence=alt["confidence"],
                 text=alt["transcript"],
             )
@@ -208,12 +282,12 @@ def live_transcription_to_speech_event(
 def prerecorded_transcription_to_speech_event(
     opts: RecognizeOptions,
     event: PrerecordedTranscriptionResponse,
-) -> stt.SpeechEvent:
+) -> agents.SpeechEvent:
     dg_alts = event["results"]["channels"][0]["alternatives"]  # type: ignore
-    return stt.SpeechEvent(
+    return agents.SpeechEvent(
         is_final=True,
         alternatives=[
-            stt.SpeechData(
+            agents.SpeechData(
                 language=alt.get("detected_language", opts.language),
                 start_time=alt["words"][0]["start"],
                 end_time=alt["words"][-1]["end"],

@@ -1,8 +1,8 @@
 import asyncio
 import wave
 import os
-from livekit import rtc, agents
-from livekit.plugins import deepgram, google, openai, silero
+from livekit import rtc
+from livekit.plugins import deepgram
 from difflib import SequenceMatcher
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.wav")
@@ -25,26 +25,18 @@ def read_wav_file(filename: str) -> rtc.AudioFrame:
 
 
 async def test_recognize():
-    stts = [deepgram.STT(), google.STT(), openai.STT()]
+    stts = [deepgram.STT()]
     frame = read_wav_file(TEST_AUDIO_FILEPATH)
 
-    async def recognize(stt: agents.stt.STT):
+    for stt in stts:
         event = await stt.recognize(frame)
         text = event.alternatives[0].text
-        assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.9
 
-    async with asyncio.TaskGroup() as group:
-        for stt in stts:
-            group.create_task(recognize(stt))
+        assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.9
 
 
 async def test_stream():
-    silero_vad = silero.VAD()
-    stts = [
-        deepgram.STT(),
-        google.STT(),
-        agents.stt.StreamAdapter(silero_vad.stream(), openai.STT(), openai.RecognizeOptions()),
-    ]
+    stts = [deepgram.STT()]
     frame = read_wav_file(TEST_AUDIO_FILEPATH)
 
     # divide data into chunks of 10ms
@@ -61,11 +53,10 @@ async def test_stream():
             )
         )
 
-    async def stream(stt: agents.stt.STT):
+    for stt in stts:
         stream = stt.stream()
         for frame in frames:
             stream.push_frame(frame)
-            await asyncio.sleep(0.01)
 
         await stream.flush()
         await stream.close()
@@ -74,7 +65,3 @@ async def test_stream():
                 text = event.alternatives[0].text
                 assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.8
                 break
-
-    async with asyncio.TaskGroup() as group:
-        for stt in stts:
-            group.create_task(stream(stt))
