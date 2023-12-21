@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import List, Union
+from livekit import rtc
 from .version import __version__
 
 from .worker import (
@@ -20,7 +22,38 @@ from .worker import (
     AssignmentTimeoutError,
     run_app,
     JobType,
+    JobContext,
 )
 
 from .job_request import SubscribeCallbacks, AutoDisconnectCallbacks, JobRequest
-from .job_context import JobContext
+
+
+from .stt import (
+    SpeechData,
+    SpeechEvent,
+    SpeechStream,
+    STT,
+    StreamOptions,
+    RecognizeOptions,
+)
+
+from .utils import AudioBuffer, merge_frames
+
+__all__ = [
+    "__version__",
+    "Worker",
+    "JobRequest",
+    "JobContext",
+    "JobCancelledError",
+    "AssignmentTimeoutError",
+    "run_app",
+    "JobType",
+    "SpeechData",
+    "SpeechEvent",
+    "SpeechStream",
+    "STT",
+    "StreamOptions",
+    "RecognizeOptions",
+    "AudioBuffer",
+    "merge_frames",
+]
