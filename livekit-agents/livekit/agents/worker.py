@@ -68,9 +68,9 @@ class Worker:
         worker_type: JobType.ValueType,
         *,
         event_loop: Optional[asyncio.AbstractEventLoop] = None,
-        ws_url: str = os.environ.get("LIVEKIT_URL", "http://localhost:7880"),
-        api_key: str = os.environ.get("LIVEKIT_API_KEY", ""),
-        api_secret: str = os.environ.get("LIVEKIT_API_SECRET", ""),
+        ws_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
     ) -> None:
         """
         Args:
@@ -81,6 +81,11 @@ class Worker:
             api_key (str, optional): LiveKit API Key. Defaults to os.environ.get("LIVEKIT_API_KEY", "").
             api_secret (str, optional): LiveKit API Secret. Defaults to os.environ.get("LIVEKIT_API_SECRET", "").
         """
+
+        ws_url = ws_url or os.environ.get("LIVEKIT_URL", "http://localhost:7880")
+        api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
+        api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
+
         self._set_url(ws_url)
 
         self._loop = event_loop or asyncio.get_event_loop()
