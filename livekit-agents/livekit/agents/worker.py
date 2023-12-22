@@ -82,7 +82,7 @@ class Worker:
             api_secret (str, optional): LiveKit API Secret. Defaults to os.environ.get("LIVEKIT_API_SECRET", "").
         """
 
-        ws_url = ws_url or os.environ.get("LIVEKIT_URL", "http://localhost:7880")
+        ws_url = ws_url or os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
         api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
         api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
 
