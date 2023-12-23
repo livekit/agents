@@ -27,7 +27,7 @@ class FalAI:
 
     def __init__(self, ctx: agents.JobContext):
         # plugins
-        self.falai = SDXLPlugin()
+        self.falai = SDXLPlugin(initial_prompt="In the style of mozart")
         self.ctx: agents.JobContext = ctx
         self.video_out = rtc.VideoSource(640, 480)
 
@@ -58,13 +58,17 @@ class FalAI:
 
     async def process_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
-        count = 0
-        async for frame in video_stream:
-            count += 1
-            if count % 10 != 0:
-                continue
-            frame = await self.falai.generate_image_from_prompt("an image of a cat")
-            print("NEIL got frame")
+
+        async def frame_iter():
+            count = 0
+            async for frame in video_stream:
+                count += 1
+                if count % 10 == 0:
+                    count = 0
+                    yield frame
+
+        falai_output = self.falai.start_stream(frame_iter())
+        async for frame in falai_output:
             self.video_out.capture_frame(frame)
 
 
@@ -76,7 +80,7 @@ if __name__ == "__main__":
 
         await job_request.accept(
             FalAI.create,
-            identity="kitt_agent",
+            identity="falai_agent",
             subscribe_cb=agents.SubscribeCallbacks.VIDEO_ONLY,
             auto_disconnect_cb=agents.AutoDisconnectCallbacks.DEFAULT,
         )
