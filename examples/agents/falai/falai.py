@@ -27,9 +27,9 @@ class FalAI:
 
     def __init__(self, ctx: agents.JobContext):
         # plugins
-        self.falai = SDXLPlugin(initial_prompt="In the style of mozart")
         self.ctx: agents.JobContext = ctx
-        self.video_out = rtc.VideoSource(640, 480)
+        self.video_out = rtc.VideoSource(512, 512)
+        self.falai = SDXLPlugin(initial_prompt="In the style of mozart")
 
     async def start(self):
         await self.publish_video()
@@ -39,8 +39,7 @@ class FalAI:
         payload = json.loads(data.decode("utf-8"))
 
         if payload["type"] == "user_chat_message":
-            text = payload["text"]
-            print("Text")
+            self.falai.update_prompt(payload["text"])
 
     async def publish_video(self):
         track = rtc.LocalVideoTrack.create_video_track("agent-video", self.video_out)

@@ -15,6 +15,8 @@
 import aiohttp
 import logging
 from livekit import rtc
+from typing import Optional, AsyncIterable, Set
+import time
 import asyncio
 import os
 import io
@@ -23,6 +25,17 @@ from PIL import Image
 from dataclasses import dataclass
 
 FAL_URL = "wss://110602490-sd-turbo-real-time-high-fps-msgpack.gateway.alpha.fal.ai/ws"
+
+
+def _task_done_cb(task: asyncio.Task, set: Set[asyncio.Task]) -> None:
+    set.discard(task)
+    if task.cancelled():
+        logging.info("task cancelled: %s", task)
+        return
+
+    if task.exception():
+        logging.error("task exception: %s", task, exc_info=task.exception())
+        return
 
 
 class SDXLPlugin:
@@ -58,15 +71,15 @@ class SDXLPlugin:
     ) -> AsyncIterable[rtc.VideoFrame]:
         t = asyncio.create_task(self._queue_filler(input_stream))
         self._tasks.add(t)
-        t.add_done_callback(self._tasks.discard)
+        t.add_done_callback(lambda t: _task_done_cb(t, self._tasks))
 
         t = asyncio.create_task(self._ws_sender())
         self._tasks.add(t)
-        t.add_done_callback(self._tasks.discard)
+        t.add_done_callback(lambda t: _task_done_cb(t, self._tasks))
 
         t = asyncio.create_task(self._ws_receiver())
         self._tasks.add(t)
-        t.add_done_callback(self._tasks.discard)
+        t.add_done_callback(lambda t: _task_done_cb(t, self._tasks))
 
         async def output_stream() -> AsyncIterable[rtc.VideoFrame]:
             while True:
@@ -119,6 +132,9 @@ class SDXLPlugin:
             item = await self._input_queue.get()
             image_rgba = Image.frombytes("RGBA", (item.width, item.height), item.data)
             image_rgb = image_rgba.convert("RGB")
+            crop_x = (image_rgb.width - 512) // 2
+            crop_y = (image_rgb.height - 512) // 2
+            image_rgb = image_rgb.crop((crop_x, crop_y, crop_x + 512, crop_y + 512))
             jpg_img = io.BytesIO()
             image_rgb.save(jpg_img, format="JPEG")
             payload = {
@@ -159,7 +175,7 @@ class SDXLPlugin:
 
             data = ws_message.data
             output = msgpack.unpackb(data)
-            byte_stream = io.BytesIO(output)
+            byte_stream = io.BytesIO(output["image"])
             img = Image.open(byte_stream)
             img_rgba = img.convert("RGBA")
             argb_frame = rtc.ArgbFrame.create(
