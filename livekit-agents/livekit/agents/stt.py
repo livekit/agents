@@ -8,10 +8,10 @@ from .utils import AudioBuffer
 @dataclass
 class SpeechData:
     language: str
-    start_time: float
-    end_time: float
-    confidence: float  # [0, 1]
     text: str
+    start_time: float = 0.0
+    end_time: float = 0.0
+    confidence: float = 0.0 # [0, 1]
 
 
 @dataclass
