@@ -26,6 +26,7 @@ class RecognizeOptions:
     detect_language: bool = False
     num_channels: int = 1
     sample_rate: int = 16000
+    punctuate: bool = True
 
 
 @dataclass
@@ -35,6 +36,7 @@ class StreamOptions:
     interim_results: bool = True
     num_channels: int = 1
     sample_rate: int = 16000  # sane default for STT
+    punctuate: bool = True
 
 
 class SpeechStream(ABC):
@@ -50,16 +52,17 @@ class SpeechStream(ABC):
     async def close(self) -> None:
         pass
 
+    @abstractmethod
+    async def __anext__(self) -> SpeechEvent:
+        pass
+
     def __aiter__(self) -> "SpeechStream":
         return self
 
-    async def __anext__(self) -> SpeechEvent:
-        raise NotImplementedError
-
 
 class STT(ABC):
-    def __init__(self) -> None:
-        pass
+    def __init__(self, *, streaming_supported: bool) -> None:
+        self._streaming_supported = streaming_supported
 
     @abstractmethod
     async def recognize(
@@ -69,6 +72,11 @@ class STT(ABC):
     ) -> SpeechEvent:
         pass
 
-    @abstractmethod
     def stream(self, opts: StreamOptions = StreamOptions()) -> SpeechStream:
-        pass
+        raise NotImplementedError(
+            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
+        )
+
+    @property
+    def streaming_supported(self) -> bool:
+        return self._streaming_supported

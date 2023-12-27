@@ -8,7 +8,7 @@ from deepgram.transcription import (
 )
 from livekit import agents, rtc
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Union, Optional
 from .models import DeepgramModels, DeepgramLanguages
 import os
 import logging
@@ -21,14 +21,14 @@ import io
 @dataclass
 class StreamOptions(agents.StreamOptions):
     model: DeepgramModels = "nova-2-general"
-    language: DeepgramLanguages = "en-US"
+    language: Union[DeepgramLanguages, str] = "en-US"
     smart_format: bool = True
 
 
 @dataclass
 class RecognizeOptions(agents.RecognizeOptions):
     model: DeepgramModels = "nova-2-general"
-    language: DeepgramLanguages = "en-US"
+    language: Union[DeepgramLanguages, str] = "en-US"
     smart_format: bool = True
 
 
@@ -36,6 +36,7 @@ class STT(agents.STT):
     def __init__(
         self, api_key: Optional[str] = None, api_url: Optional[str] = None
     ) -> None:
+        super().__init__(streaming_supported=True)
         api_key = api_key or os.environ.get("DG_API_KEY")
         if not api_key:
             raise ValueError("Deepgram API key is required")
@@ -69,6 +70,7 @@ class STT(agents.STT):
             "model": opts.model,
             "language": opts.language,
             "smart_format": opts.smart_format,
+            "punctuate": opts.punctuate,
         }
 
         dg_res = await self._client.transcription.prerecorded(source, dg_opts)
@@ -80,6 +82,7 @@ class STT(agents.STT):
 
 class SpeechStream(agents.SpeechStream):
     def __init__(self, opts: StreamOptions, client: deepgram.Deepgram) -> None:
+        super().__init__()
         self._opts = opts
         self._client = client
         self._queue = asyncio.Queue[rtc.AudioFrame]()
@@ -95,7 +98,7 @@ class SpeechStream(agents.SpeechStream):
         self._main_task.add_done_callback(log_exception)
 
     async def _run(self, max_retry: int = 5) -> None:
-        """Try to connect to Deepgram with exponential backoff and send frames"""
+        """Try to connect to Deepgram with exponential backoff and forward frames"""
         retry_count = 0
         while True:
             try:
@@ -107,6 +110,7 @@ class SpeechStream(agents.SpeechStream):
                     "channels": self._opts.num_channels,
                     "sample_rate": self._opts.sample_rate,
                     "smart_format": self._opts.smart_format,
+                    "punctuate": self._opts.punctuate,
                 }
 
                 self._live = await self._client.transcription.live(dg_opts)
@@ -138,11 +142,7 @@ class SpeechStream(agents.SpeechStream):
                     self._queue.task_done()
 
             except asyncio.CancelledError:
-
-                async def _close() -> None:
-                    await self._live.finish()
-
-                await asyncio.shield(_close())
+                await asyncio.shield(self._live.finish())
                 break
             except Exception as e:
                 if retry_count > max_retry and max_retry > 0:
@@ -194,8 +194,8 @@ def live_transcription_to_speech_event(
         alternatives=[
             agents.SpeechData(
                 language=alt.get("detected_language", opts.language),
-                start_time=0,  # alt["words"][0]["start"],
-                end_time=0,  # alt["words"][-1]["end"],
+                start_time=alt["words"][0]["start"] if alt["words"] else 0,
+                end_time=alt["words"][-1]["end"] if alt["words"] else 0,
                 confidence=alt["confidence"],
                 text=alt["transcript"],
             )
