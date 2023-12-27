@@ -2,7 +2,7 @@ import asyncio
 import wave
 import os
 from livekit import rtc, agents
-from livekit.plugins import deepgram, google
+from livekit.plugins import deepgram, google, openai
 from difflib import SequenceMatcher
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.wav")
@@ -25,7 +25,7 @@ def read_wav_file(filename: str) -> rtc.AudioFrame:
 
 
 async def test_recognize():
-    stts = [deepgram.STT(), google.STT()]
+    stts = [deepgram.STT(), google.STT(), openai.STT()]
     frame = read_wav_file(TEST_AUDIO_FILEPATH)
 
     async def recognize(stt: agents.STT):
