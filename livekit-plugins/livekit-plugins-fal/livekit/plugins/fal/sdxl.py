@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import io
+import logging
+import os
+from typing import AsyncIterable, Optional, Set
+import heapq
+
 import aiohttp
 import logging
 from livekit import rtc
@@ -44,19 +51,17 @@ class SDXLPlugin:
     Requires FAL_KEY_ID and FAL_KEY_SECRET environment variables to be set.
     """
 
-    @dataclass
-    class Input:
-        data: bytes
-        width: int
-        height: int
-        prompt: str
-
-    def __init__(self, *, initial_prompt: str = ""):
-        if not os.getenv("FAL_KEY_ID") and os.getenv("FAL_KEY_SECRET"):
-            raise ValueError(
-                "The Fal plugin requires FAL_KEY_ID and FAL_KEY_SECRET environment variables to be set."
-            )
-
+    def __init__(
+        self,
+        *,
+        key_id: Optional[str] = None,
+        key_secret: Optional[str] = None,
+        initial_prompt: str = "",
+        initial_strength: float = 0.6,
+        initial_inference_steps: int = 5,
+    ):
+        self._key_id = key_id or os.environ.get("FAL_KEY_ID")
+        self._key_secret = key_secret or os.environ.get("FAL_KEY_SECRET")
         self._prompt = initial_prompt
         self._session = aiohttp.ClientSession()
         self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
@@ -101,9 +106,7 @@ class SDXLPlugin:
                     "Fal SDXL Plugin: websocket connection closed, creating a new connection"
                 )
 
-            client_id = os.environ.get("FAL_KEY_ID")
-            client_secret = os.environ.get("FAL_KEY_SECRET")
-            creds = f"{client_id}:{client_secret}"
+            creds = f"{self._key_id}:{self._key_secret}"
             self._ws = await self._session.ws_connect(
                 FAL_URL, headers={"Authorization": f"Key {creds}"}
             )
