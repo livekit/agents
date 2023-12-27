@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
+from typing import AsyncIterable, AsyncIterator, Optional
 from google.auth import credentials
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
 from google.api_core.gapic_v1.client_info import ClientInfo
 from livekit import rtc, agents
-from livekit.agents import stt
 from typing import Union
 from dataclasses import dataclass
 from .models import SpeechModels, SpeechLanguages
@@ -27,18 +26,18 @@ import logging
 
 
 @dataclass
-class StreamOptions(stt.StreamOptions):
+class StreamOptions(agents.StreamOptions):
     model: SpeechModels = "long"
     language: Union[SpeechLanguages, str] = "en-US"
 
 
 @dataclass
-class RecognizeOptions(stt.RecognizeOptions):
+class RecognizeOptions(agents.RecognizeOptions):
     model: SpeechModels = "long"
     language: Union[SpeechLanguages, str] = "en-US"
 
 
-class STT(stt.STT):
+class STT(agents.STT):
     def __init__(
         self,
         *,
@@ -68,7 +67,7 @@ class STT(stt.STT):
 
     async def recognize(
         self, buffer: agents.AudioBuffer, opts: RecognizeOptions = RecognizeOptions()
-    ) -> stt.SpeechEvent:
+    ) -> agents.SpeechEvent:
         buffer = agents.utils.merge_frames(buffer)
         config = cloud_speech.RecognitionConfig(
             explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
@@ -96,7 +95,7 @@ class STT(stt.STT):
         return SpeechStream(opts, self._client, self._creds, self._recognizer)
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(agents.SpeechStream):
     def __init__(
         self,
         opts: StreamOptions,
@@ -110,7 +109,7 @@ class SpeechStream(stt.SpeechStream):
         self._creds = creds
         self._recognizer = recognizer
         self._queue = asyncio.Queue[rtc.AudioFrame]()
-        self._transcript_queue = asyncio.Queue[stt.SpeechEvent]()
+        self._transcript_queue = asyncio.Queue[agents.SpeechEvent]()
         self._closed = False
 
         self._main_task = asyncio.create_task(self._run(max_retry=32))
@@ -121,7 +120,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._main_task.add_done_callback(log_exception)
 
-    async def _run(self, max_retry: int) -> None:
+    async def _run(self, max_retry: int = 5) -> None:
         """Try to connect to Google Speech API with exponential backoff and forward frames"""
         retry_count = 0
         while True:
@@ -209,7 +208,7 @@ class SpeechStream(stt.SpeechStream):
     def __aiter__(self) -> "SpeechStream":
         return self
 
-    async def __anext__(self) -> stt.SpeechEvent:
+    async def __anext__(self) -> agents.SpeechEvent:
         if self._closed and self._transcript_queue.empty():
             raise StopAsyncIteration
 
@@ -218,13 +217,13 @@ class SpeechStream(stt.SpeechStream):
 
 def recognize_response_to_speech_event(
     opts: RecognizeOptions, resp: cloud_speech.RecognizeResponse
-) -> stt.SpeechEvent:
+) -> agents.SpeechEvent:
     result = resp.results[0]
     gg_alts = result.alternatives
-    return stt.SpeechEvent(
+    return agents.SpeechEvent(
         is_final=True,
         alternatives=[
-            stt.SpeechData(
+            agents.SpeechData(
                 language=result.language_code,
                 start_time=alt.words[0].start_offset.seconds if alt.words else 0,
                 end_time=alt.words[-1].end_offset.seconds if alt.words else 0,
@@ -238,13 +237,13 @@ def recognize_response_to_speech_event(
 
 def streaming_recognize_response_to_speech_event(
     opts: RecognizeOptions, resp: cloud_speech.StreamingRecognizeResponse
-) -> stt.SpeechEvent:
+) -> agents.SpeechEvent:
     result = resp.results[0]
     gg_alts = result.alternatives
-    return stt.SpeechEvent(
+    return agents.SpeechEvent(
         is_final=result.is_final,
         alternatives=[
-            stt.SpeechData(
+            agents.SpeechData(
                 language=result.language_code,
                 start_time=alt.words[0].start_offset.seconds if alt.words else 0,
                 end_time=alt.words[-1].end_offset.seconds if alt.words else 0,
