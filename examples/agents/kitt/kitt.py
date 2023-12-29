@@ -105,21 +105,12 @@ class KITT:
 
     async def process_stt_stream(self, stream):
         async for event in stream:
-            if not event.is_final:
+            if not event.is_final or self.state.agent_state != AgentState.LISTENING:
                 continue
 
-            if self.state.agent_state != AgentState.LISTENING:
-                continue
-
-            # find highest confidence alternative
-            highest_confidence = 0
-            text = ""
-            for alt in event.alternatives:
-                if alt.confidence > highest_confidence:
-                    text = alt.text
-            text = event.alternatives[0].text
-
-            if text == "" or highest_confidence < 0.75:
+            alt = event.alternatives[0]
+            text = alt.text
+            if alt.confidence < 0.75 or text == "":
                 continue
 
             await self.ctx.room.local_participant.publish_data(
