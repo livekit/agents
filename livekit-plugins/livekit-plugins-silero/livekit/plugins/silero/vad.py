@@ -161,6 +161,6 @@ class VADPlugin:
 
     def _load_model(self):
         model_path = pkg_resources.resource_filename(
-            "livekit.plugins.vad", "files/silero_vad.jit"
+            "livekit.plugins.silero", "files/silero_vad.jit"
         )
         self._model = torch.jit.load(model_path)

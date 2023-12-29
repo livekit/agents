@@ -12,4 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.0.2"
+import os
+import aiohttp
+from typing import Optional
+
+API_URL = "https://api.alpha.directai.io"
+
+
+async def generate_token(
+    *,
+    http_session: aiohttp.ClientSession,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+):
+    params = {"client_id": client_id, "client_secret": client_secret}
+
+    async with http_session.post("/token", json=params) as response:
+        if response.status != 200:
+            raise ValueError("Invalid DirectAI Credentials")
+        return (await response.json())["access_token"]

@@ -21,12 +21,12 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, "livekit", "plugins", "vad", "version.py"), "r") as f:
+with open(os.path.join(here, "livekit", "plugins", "silero", "version.py"), "r") as f:
     exec(f.read(), about)
 
 
 setuptools.setup(
-    name="livekit-plugins-vad",
+    name="livekit-plugins-silero",
     version=about["__version__"],
     description="LiveKit Python Plugins for Voice Activity Detection",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
@@ -51,7 +51,7 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.7.0",
     install_requires=["livekit", "torch >= 2.0.0", "numpy >= 1.24.0"],
-    package_data={"livekit.plugins.vad": ["files/silero_vad.jit"]},
+    package_data={"livekit.plugins.silero": ["files/silero_vad.jit"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",
