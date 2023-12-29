@@ -66,13 +66,10 @@ class STT(agents.STT):
         return transcription_to_speech_event(opts, resp)
 
 
-def transcription_to_speech_event(opts: RecognizeOptions, transcription) -> agents.SpeechEvent:
+def transcription_to_speech_event(
+    opts: RecognizeOptions, transcription
+) -> agents.SpeechEvent:
     return agents.SpeechEvent(
         is_final=True,
-        alternatives=[
-            agents.SpeechData(
-                text=transcription.text,
-                language=""
-            )
-        ],
+        alternatives=[agents.SpeechData(text=transcription.text, language="")],
     )

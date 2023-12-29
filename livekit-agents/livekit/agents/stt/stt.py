@@ -11,7 +11,7 @@ class SpeechData:
     text: str
     start_time: float = 0.0
     end_time: float = 0.0
-    confidence: float = 0.0 # [0, 1]
+    confidence: float = 0.0  # [0, 1]
 
 
 @dataclass

@@ -164,7 +164,6 @@ class SpeechStream(agents.SpeechStream):
                             self._queue.task_done()
                     except Exception as e:
                         logging.error(f"an error occurred while streaming inputs: {e}")
-                            
 
                 stream = await self._client.streaming_recognize(requests=input_gen())
                 retry_count = 0
