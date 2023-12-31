@@ -60,6 +60,9 @@ class VADStream(agents.vad.VADStream):
         self._model = model
 
         self._closed = False
+        self._speaking = False
+        self._waiting_start = False
+        self._waiting_end = False
         self._current_sample = 0
         self._min_speaking_samples = (
             self._opts.min_speaking_duration * self._opts.sample_rate
@@ -158,7 +161,7 @@ class VADStream(agents.vad.VADStream):
         """
 
         samples_10ms = self._opts.sample_rate / 100
-        padding_count = (
+        padding_count = int(
             self._padding_duration_samples // samples_10ms
         )  # number of frames to keep for the padding (one side)
 
@@ -169,10 +172,10 @@ class VADStream(agents.vad.VADStream):
             and len(self._buffered_frames) > padding_count
         ):
             self._buffered_frames = self._buffered_frames[
-                len(self._buffered_frames - padding_count) :
+                len(self._buffered_frames) - padding_count :
             ]
 
-        max_buffer_len = padding_count = max(
+        max_buffer_len = padding_count + max(
             self._max_buffered_samples // samples_10ms,
             self._min_speaking_samples // samples_10ms,
         )
@@ -209,7 +212,7 @@ class VADStream(agents.vad.VADStream):
                 event = agents.vad.VADEvent(
                     type=agents.vad.VADEventType.SPEAKING,
                     samples_index=self._start_speech,
-                    speech=self.buffered_frames[padding_count:],
+                    speech=self._buffered_frames[padding_count:],
                 )
 
                 return
@@ -223,7 +226,7 @@ class VADStream(agents.vad.VADStream):
             )
             self._event_queue.put_nowait(event)
 
-        if speech_prob < self.threshold:
+        if speech_prob < self._opts.threshold:
             # stopped speaking, wait for min_silence_duration to trigger END_SPEAKING
             self._waiting_start = False
             if not self._waiting_end and self._speaking:

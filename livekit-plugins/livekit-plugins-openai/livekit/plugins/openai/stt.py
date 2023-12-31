@@ -56,11 +56,11 @@ class STT(stt.STT):
 
         lang = ""
         if not opts.detect_language:
-            lang = opts.language
+            lang = getattr(opts, "language", "en")
 
         resp = await self._client.audio.transcriptions.create(
             file=("a.wav", io_buffer),
-            model=opts.model,
+            model=getattr(opts, 'model', "whisper-1"),
             language=lang,
             response_format="json",
         )

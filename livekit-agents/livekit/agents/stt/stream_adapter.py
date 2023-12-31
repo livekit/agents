@@ -15,7 +15,6 @@ from livekit import rtc
 class StreamAdapter(STT):
     def __init__(
         self,
-        *,
         vad_stream: VADStream,
         stt: STT,
         recognize_options: RecognizeOptions = RecognizeOptions(),
