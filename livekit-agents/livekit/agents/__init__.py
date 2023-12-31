@@ -28,14 +28,8 @@ from .worker import (
 from .job_request import SubscribeCallbacks, AutoDisconnectCallbacks, JobRequest
 from .job_context import JobContext
 
-from .stt import (
-    SpeechData,
-    SpeechEvent,
-    SpeechStream,
-    STT,
-    StreamOptions,
-    RecognizeOptions,
-)
+from . import stt
+from . import vad
 
 from .utils import AudioBuffer, merge_frames
 
@@ -48,12 +42,6 @@ __all__ = [
     "AssignmentTimeoutError",
     "run_app",
     "JobType",
-    "SpeechData",
-    "SpeechEvent",
-    "SpeechStream",
-    "STT",
-    "StreamOptions",
-    "RecognizeOptions",
     "AudioBuffer",
     "merge_frames",
 ]
