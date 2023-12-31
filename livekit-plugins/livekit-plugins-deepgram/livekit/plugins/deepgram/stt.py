@@ -98,7 +98,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._main_task.add_done_callback(log_exception)
 
-    async def _run(self, max_retry: int = 5) -> None:
+    async def _run(self, max_retry: int) -> None:
         """Try to connect to Deepgram with exponential backoff and forward frames"""
         retry_count = 0
         while True:

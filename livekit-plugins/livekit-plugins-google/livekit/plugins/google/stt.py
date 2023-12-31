@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import AsyncIterable, AsyncIterator, Optional
+from typing import Optional
 from google.auth import credentials
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
@@ -121,7 +121,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._main_task.add_done_callback(log_exception)
 
-    async def _run(self, max_retry: int = 5) -> None:
+    async def _run(self, max_retry: int) -> None:
         """Try to connect to Google Speech API with exponential backoff and forward frames"""
         retry_count = 0
         while True:
