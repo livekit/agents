@@ -12,8 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .models import WhisperModels, TTSModels, TTSVoices
 from .stt import STT, RecognizeOptions
-from .models import WhisperModels
-from .tts import TTSPlugin
+from .tts import TTS, SynthesisOptions
 from .chatgpt import ChatGPTPlugin, ChatGPTMessage, ChatGPTMessageRole
 from .dalle3 import DALLE3Plugin
+
+__all__ = [
+    "STT",
+    "RecognizeOptions",
+    "TTS",
+    "SynthesisOptions",
+    "WhisperModels",
+    "TTSModels",
+    "TTSVoices",
+    "ChatGPTPlugin",
+    "ChatGPTMessage",
+    "ChatGPTMessageRole",
+    "DALLE3Plugin",
+]
