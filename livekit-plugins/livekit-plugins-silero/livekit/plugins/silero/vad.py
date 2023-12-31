@@ -198,7 +198,7 @@ class VADStream(agents.vad.VADStream):
                 self._waiting_start = False
                 self._speaking = True
                 event = agents.vad.VADEvent(
-                    type=agents.vad.VADType.START_SPEAKING,
+                    type=agents.vad.VADEventType.START_SPEAKING,
                     samples_index=self._start_speech,
                 )
                 self._event_queue.put_nowait(event)
@@ -207,7 +207,7 @@ class VADStream(agents.vad.VADStream):
                 # the SPEAKING data is missing the first few frames, trigger it here
                 # TODO(theomonnom): Maybe it is better to put the data inside the START_SPEAKING event?
                 event = agents.vad.VADEvent(
-                    type=agents.vad.VADType.SPEAKING,
+                    type=agents.vad.VADEventType.SPEAKING,
                     samples_index=self._start_speech,
                     speech=self.buffered_frames[padding_count:],
                 )
@@ -217,13 +217,13 @@ class VADStream(agents.vad.VADStream):
         if self._speaking:
             # we don't check the speech_prob here
             event = agents.vad.VADEvent(
-                type=agents.vad.VADType.SPEAKING,
+                type=agents.vad.VADEventType.SPEAKING,
                 samples_index=self._current_sample,
                 speech=original_frames,
             )
             self._event_queue.put_nowait(event)
 
-        if speech_prob < min(self.threshold - 0.15, self.threshold):
+        if speech_prob < self.threshold:
             # stopped speaking, wait for min_silence_duration to trigger END_SPEAKING
             self._waiting_start = False
             if not self._waiting_end and self._speaking:
@@ -237,7 +237,7 @@ class VADStream(agents.vad.VADStream):
                 self._waiting_end = False
                 self._speaking = False
                 event = agents.vad.VADEvent(
-                    type=agents.vad.VADType.END_SPEAKING,
+                    type=agents.vad.VADEventType.END_SPEAKING,
                     samples_index=self._end_speech,
                     duration=(self._current_sample - self._start_speech)
                     / self._opts.sample_rate,

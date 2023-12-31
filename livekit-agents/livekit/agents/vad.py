@@ -5,12 +5,6 @@ from livekit import rtc
 from enum import Enum
 
 
-class VADType(Enum):
-    START_SPEAKING = 1
-    SPEAKING = 2
-    END_SPEAKING = 3
-
-
 @dataclass
 class VADOptions:
     # minimum duration of speech to trigger a START_SPEAKING event
@@ -28,10 +22,16 @@ class VADOptions:
     max_buffered_speech: float = 45.0
 
 
+class VADEventType(Enum):
+    START_SPEAKING = 1
+    SPEAKING = 2
+    END_SPEAKING = 3
+
+
 @dataclass
 class VADEvent:
     # type of the event
-    type: VADType
+    type: VADEventType
     # index of the samples of the event (when the event was fired)
     samples_index: int
     # duration of the speech in seconds (only for END_SPEAKING event)
