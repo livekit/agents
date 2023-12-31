@@ -20,7 +20,6 @@ from .worker import (
     AssignmentTimeoutError,
     run_app,
     JobType,
-    JobContext,
 )
 
 from .job_request import SubscribeCallbacks, AutoDisconnectCallbacks, JobRequest
