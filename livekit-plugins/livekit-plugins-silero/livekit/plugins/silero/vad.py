@@ -12,155 +12,244 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pkg_resources
-import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterable
-from enum import Enum
-from livekit import rtc
+import logging
+import asyncio
+from typing import List, Optional
+from livekit import rtc, agents
 import torch
 import numpy as np
-
-VAD_SAMPLE_RATE = 16000
-
-VADEventType = Enum("VADEventType", "STARTED, FINISHED")
+from collections import deque
 
 
-class VADPlugin:
-    """Class for Voice Activity Detection (VAD)"""
+@dataclass
+class VADOptions(agents.vad.VADOptions):
+    # speech threshold, probabilities ABOVE this value are considered as SPEECH
+    threshold: float = 0.5
 
-    @dataclass
-    class Event:
-        type: VADEventType
-        frames: [rtc.AudioFrame]
 
-    def __init__(self, *, left_padding_ms: int, silence_threshold_ms: int):
-        self._silence_threshold_ms = silence_threshold_ms
-        self._left_padding_ms = left_padding_ms
-        self._window_buffer = np.zeros(512, dtype=np.float32)
-        self._window_buffer_scratch = np.zeros(512, dtype=np.float32)
-        self._model = None
-        self._copy_int16 = np.zeros(1, dtype=np.int16)
-        self._copy_float32 = np.zeros(1, dtype=np.float32)
-        self._silent_frame_count_since_voice = 0
-        self._voice_frames = []
-        self._left_padding_frames = []
-        self._frame_queue = []
-        self._talking_state = False
+class VAD(agents.vad.VAD):
+    def __init__(
+        self, *, model_path: Optional[str] = None, use_onnx: bool = False
+    ) -> None:
+        if model_path:
+            model = torch.jit.load(model_path)
+            model.eval()
+        else:
+            model, _ = torch.hub.load(
+                repo_or_dir="snakers4/silero-vad",
+                model="silero_vad",
+                onnx=use_onnx,
+            )
+        self._model = model
 
-    async def close(self):
-        pass
+    def stream(self, opts: VADOptions = VADOptions()) -> "VADStream":
+        return VADStream(opts, self._model)
 
-    async def start(
-        self, frame_iterator: AsyncIterable[rtc.AudioFrame]
-    ) -> AsyncIterable[Event]:
-        """Start detecting voice activity
 
-        Args:
-            frame_iterator (AsyncIterable[rtc.AudioFrame]): Stream of audio frames to check for voice
+# Based on https://github.com/snakers4/silero-vad/blob/94504ece54c8caeebb808410b08ae55ee82dba82/utils_vad.py#L428
+class VADStream(agents.vad.VADStream):
+    def __init__(self, opts: VADOptions, model) -> None:
+        self._opts = opts
 
-        Returns:
-            AsyncIterable[Event]: Stream of voice events
-        """
-        async for frame in frame_iterator:
-            event = await self._push_frame(frame)
-            if event is not None:
-                yield event
+        if opts.sample_rate not in [8000, 16000]:
+            raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
 
-    async def _push_frame(self, frame: rtc.AudioFrame):
-        if self._model is None:
-            await asyncio.get_event_loop().run_in_executor(None, self._load_model)
+        self._queue = asyncio.Queue[rtc.AudioFrame]()
+        self._event_queue = asyncio.Queue[agents.vad.VADEvent]()
+        self._model = model
 
-        self._frame_queue.append(frame)
+        self._closed = False
+        self._speaking = False
+        self._waiting_start = False
+        self._waiting_end = False
+        self._current_sample = 0
+        self._min_speaking_samples = (
+            self._opts.min_speaking_duration * self._opts.sample_rate
+        )
+        self._min_silence_samples = (
+            self._opts.min_silence_duration * self._opts.sample_rate
+        )
+        self._padding_duration_samples = (
+            self._opts.padding_duration * self._opts.sample_rate
+        )
+        self._max_buffered_samples = (
+            self._opts.max_buffered_speech * self._opts.sample_rate
+        )
 
-        # run inference every 30ms
-        if len(self._frame_queue) * 10 < 30:
+        self._queued_frames: deque[rtc.AudioFrame] = deque()
+        self._original_frames: deque[rtc.AudioFrame] = deque()
+        self._buffered_frames: List[rtc.AudioFrame] = []
+        self._main_task = asyncio.create_task(self._run())
+
+        def log_exception(task: asyncio.Task) -> None:
+            if not task.cancelled() and task.exception():
+                logging.error(f"silero vad task failed: {task.exception()}")
+
+        self._main_task.add_done_callback(log_exception)
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        self._queue.put_nowait(frame)
+
+    async def flush(self) -> None:
+        await self._queue.join()
+
+    async def close(self) -> None:
+        self._main_task.cancel()
+        try:
+            await self._main_task
+        except asyncio.CancelledError:
+            pass
+
+    async def _run(self):
+        while True:
+            try:
+                frame = await self._queue.get()
+            except asyncio.CancelledError:
+                break
+
+            self._queue.task_done()
+
+            # resample to silero's sample rate
+            resampled_frame = frame.remix_and_resample(
+                self._opts.sample_rate, 1
+            )  # TODO: This is technically wrong, fix when we have a better resampler
+            self._original_frames.append(frame)
+            self._queued_frames.append(resampled_frame)
+
+            # run inference by chunks of 40ms until we run out of data
+            while True:
+                available_length = sum(
+                    f.samples_per_channel for f in self._queued_frames
+                )
+
+                samples_40ms = self._opts.sample_rate // 1000 * 40
+                if available_length < samples_40ms:
+                    break
+
+                await asyncio.shield(self._run_inference())
+
+        self._closed = True
+
+    async def _run_inference(self) -> None:
+        # merge the first 4 frames (we know each is 10ms)
+        if len(self._queued_frames) < 4:
             return
 
-        frame_queue_copy = self._frame_queue.copy()
-        self._frame_queue = []
-
-        talking_detected = await asyncio.get_event_loop().run_in_executor(
-            None, self._process_frames, frame_queue_copy
+        original_frames = [self._original_frames.popleft() for _ in range(4)]
+        merged_frame = agents.utils.merge_frames(
+            [self._queued_frames.popleft() for _ in range(4)]
         )
-        if self._talking_state:
-            if talking_detected:
-                self._silent_frame_count_since_voice = 0
-                self._voice_frames.extend(frame_queue_copy)
-            else:
-                self._silent_frame_count_since_voice += len(frame_queue_copy)
-                if (
-                    self._silent_frame_count_since_voice * 10
-                    > self._silence_threshold_ms
-                ):
-                    self._talking_state = False
-                    result = []
-                    result.extend(self._left_padding_frames)
-                    result.extend(self._voice_frames)
-                    self._reset_frames()
-                    event = VADPlugin.Event(type=VADEventType.FINISHED, frames=result)
-                    return event
-        else:
-            if talking_detected:
-                self._talking_state = True
-                self._voice_frames.extend(frame_queue_copy)
-                event = VADPlugin.Event(
-                    type=VADEventType.STARTED, frames=self._voice_frames
-                )
-                return event
-            else:
-                self._add_left_padding(frame_queue_copy)
 
-        return None
+        # convert data_40ms to tensor & f32
+        tensor = torch.from_numpy(np.frombuffer(merged_frame.data, dtype=np.int16))
+        tensor = tensor.to(torch.float32) / 32768.0
 
-    def _add_left_padding(self, frames: [rtc.AudioFrame]):
-        current_padding_ms = 0
-        for f in self._left_padding_frames:
-            current_padding_ms += f.sample_rate * len(f.data) * 1000 / f.num_channels
-        ms_length = 0
-        for f in frames:
-            ms_length += f.sample_rate * len(f.data) * 1000 / f.num_channels
-            if ms_length + current_padding_ms > self._left_padding_ms:
-                return
-            self._left_padding_frames.append(f)
+        # run inference
+        speech_prob = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: self._model(tensor, self._opts.sample_rate).item()
+        )
+        self._dispatch_event(speech_prob, original_frames)
+        self._current_sample += merged_frame.samples_per_channel
 
-    def _reset_frames(self):
-        self._left_padding_frames = []
-        self._voice_frames = []
+    def _dispatch_event(self, speech_prob: int, original_frames: List[rtc.AudioFrame]):
+        """
+        Dispatches a VAD event based on the speech probability and VADOptions
+        Args:
+            speech_prob: speech probability of the current frame
+            original_frames: original frames of the current inference
+        """
 
-    def _process_frames(self, frames: [rtc.AudioFrame]) -> bool:
-        resampled = [f.remix_and_resample(VAD_SAMPLE_RATE, 1) for f in frames]
-        buffer_count = 0
-        for f in resampled:
-            buffer_count += len(f.data)
+        samples_10ms = self._opts.sample_rate / 100
+        padding_count = int(
+            self._padding_duration_samples // samples_10ms
+        )  # number of frames to keep for the padding (one side)
 
-        assert (
-            buffer_count <= 512
-        ), "Buffer count should be less than the input to the VAD model"
+        self._buffered_frames.extend(original_frames)
+        if (
+            not self._speaking
+            and not self._waiting_start
+            and len(self._buffered_frames) > padding_count
+        ):
+            self._buffered_frames = self._buffered_frames[
+                len(self._buffered_frames) - padding_count :
+            ]
 
-        if self._copy_int16.shape[0] < buffer_count:
-            self._copy_int16 = np.zeros(buffer_count, dtype=np.int16)
-            self._copy_float32 = np.zeros(buffer_count, dtype=np.float32)
-
-        for i, f in enumerate(resampled):
-            self._copy_int16[
-                i * len(f.data) : (i + 1) * len(f.data)
-            ] = np.ctypeslib.as_array(f.data)
-            self._copy_float32 = (
-                self._copy_int16.astype(np.float32, copy=False) / 32768.0
+        max_buffer_len = padding_count + max(
+            self._max_buffered_samples // samples_10ms,
+            self._min_speaking_samples // samples_10ms,
+        )
+        if len(self._buffered_frames) > max_buffer_len:
+            # if unaware of this, may be hard to debug, so logging seems ok here
+            logging.warning(
+                f"VAD buffer overflow, dropping {len(self._buffered_frames) - max_buffer_len} frames"
             )
+            self._buffered_frames = self._buffered_frames[
+                len(self._buffered_frames) - max_buffer_len :
+            ]
 
-        self._window_buffer_scratch[:-buffer_count] = self._window_buffer[buffer_count:]
-        self._window_buffer[-buffer_count:] = self._copy_float32
-        self._window_buffer[:-buffer_count] = self._window_buffer_scratch[
-            :-buffer_count
-        ]
-        tensor = torch.from_numpy(self._window_buffer)
-        speech_prob = self._model(tensor, VAD_SAMPLE_RATE).item()
-        return speech_prob > 0.5
+        if speech_prob >= self._opts.threshold:
+            # speaking, wait for min_speaking_duration to trigger START_SPEAKING
+            self._waiting_end = False
+            if not self._waiting_start and not self._speaking:
+                self._waiting_start = True
+                self._start_speech = self._current_sample
 
-    def _load_model(self):
-        model_path = pkg_resources.resource_filename(
-            "livekit.plugins.silero", "files/silero_vad.jit"
-        )
-        self._model = torch.jit.load(model_path)
+            if self._waiting_start and (
+                self._current_sample - self._start_speech >= self._min_speaking_samples
+            ):
+                self._waiting_start = False
+                self._speaking = True
+                event = agents.vad.VADEvent(
+                    type=agents.vad.VADEventType.START_SPEAKING,
+                    samples_index=self._start_speech,
+                )
+                self._event_queue.put_nowait(event)
+
+                # since we're waiting for the min_spaking_duration to trigger START_SPEAKING,
+                # the SPEAKING data is missing the first few frames, trigger it here
+                # TODO(theomonnom): Maybe it is better to put the data inside the START_SPEAKING event?
+                event = agents.vad.VADEvent(
+                    type=agents.vad.VADEventType.SPEAKING,
+                    samples_index=self._start_speech,
+                    speech=self._buffered_frames[padding_count:],
+                )
+
+                return
+
+        if self._speaking:
+            # we don't check the speech_prob here
+            event = agents.vad.VADEvent(
+                type=agents.vad.VADEventType.SPEAKING,
+                samples_index=self._current_sample,
+                speech=original_frames,
+            )
+            self._event_queue.put_nowait(event)
+
+        if speech_prob < self._opts.threshold:
+            # stopped speaking, wait for min_silence_duration to trigger END_SPEAKING
+            self._waiting_start = False
+            if not self._waiting_end and self._speaking:
+                self._waiting_end = True
+                self._end_speech = self._current_sample
+
+            if self._waiting_end and (
+                self._current_sample - self._end_speech
+                >= max(self._min_silence_samples, self._padding_duration_samples)
+            ):
+                self._waiting_end = False
+                self._speaking = False
+                event = agents.vad.VADEvent(
+                    type=agents.vad.VADEventType.END_SPEAKING,
+                    samples_index=self._end_speech,
+                    duration=(self._current_sample - self._start_speech)
+                    / self._opts.sample_rate,
+                    speech=self._buffered_frames,
+                )
+                self._event_queue.put_nowait(event)
+
+    async def __anext__(self) -> agents.vad.VADEvent:
+        if self._closed and self._event_queue.empty():
+            raise StopAsyncIteration
+
+        return await self._event_queue.get()
