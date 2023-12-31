@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Union
-from livekit import rtc
 from .version import __version__
 
 from .worker import (
@@ -37,6 +35,8 @@ __all__ = [
     "__version__",
     "Worker",
     "JobRequest",
+    "SubscribeCallbacks",
+    "AutoDisconnectCallbacks",
     "JobContext",
     "JobCancelledError",
     "AssignmentTimeoutError",
@@ -44,4 +44,6 @@ __all__ = [
     "JobType",
     "AudioBuffer",
     "merge_frames",
+    "stt",
+    "vad",
 ]
