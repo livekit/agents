@@ -18,6 +18,7 @@ from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
 from google.api_core.gapic_v1.client_info import ClientInfo
 from livekit import rtc, agents
+from livekit.agents import stt
 from typing import Union
 from dataclasses import dataclass
 from .models import SpeechModels, SpeechLanguages
@@ -26,18 +27,18 @@ import logging
 
 
 @dataclass
-class StreamOptions(agents.StreamOptions):
+class StreamOptions(stt.StreamOptions):
     model: SpeechModels = "long"
     language: Union[SpeechLanguages, str] = "en-US"
 
 
 @dataclass
-class RecognizeOptions(agents.RecognizeOptions):
+class RecognizeOptions(stt.RecognizeOptions):
     model: SpeechModels = "long"
     language: Union[SpeechLanguages, str] = "en-US"
 
 
-class STT(agents.STT):
+class STT(stt.STT):
     def __init__(
         self,
         *,
@@ -67,7 +68,7 @@ class STT(agents.STT):
 
     async def recognize(
         self, buffer: agents.AudioBuffer, opts: RecognizeOptions = RecognizeOptions()
-    ) -> agents.SpeechEvent:
+    ) -> stt.SpeechEvent:
         buffer = agents.utils.merge_frames(buffer)
         config = cloud_speech.RecognitionConfig(
             explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
@@ -95,7 +96,7 @@ class STT(agents.STT):
         return SpeechStream(opts, self._client, self._creds, self._recognizer)
 
 
-class SpeechStream(agents.SpeechStream):
+class SpeechStream(stt.SpeechStream):
     def __init__(
         self,
         opts: StreamOptions,
@@ -109,7 +110,7 @@ class SpeechStream(agents.SpeechStream):
         self._creds = creds
         self._recognizer = recognizer
         self._queue = asyncio.Queue[rtc.AudioFrame]()
-        self._transcript_queue = asyncio.Queue[agents.SpeechEvent]()
+        self._transcript_queue = asyncio.Queue[stt.SpeechEvent]()
         self._closed = False
 
         self._main_task = asyncio.create_task(self._run(max_retry=32))
@@ -208,7 +209,7 @@ class SpeechStream(agents.SpeechStream):
     def __aiter__(self) -> "SpeechStream":
         return self
 
-    async def __anext__(self) -> agents.SpeechEvent:
+    async def __anext__(self) -> stt.SpeechEvent:
         if self._closed and self._transcript_queue.empty():
             raise StopAsyncIteration
 
@@ -217,13 +218,13 @@ class SpeechStream(agents.SpeechStream):
 
 def recognize_response_to_speech_event(
     opts: RecognizeOptions, resp: cloud_speech.RecognizeResponse
-) -> agents.SpeechEvent:
+) -> stt.SpeechEvent:
     result = resp.results[0]
     gg_alts = result.alternatives
-    return agents.SpeechEvent(
+    return stt.SpeechEvent(
         is_final=True,
         alternatives=[
-            agents.SpeechData(
+            stt.SpeechData(
                 language=result.language_code,
                 start_time=alt.words[0].start_offset.seconds if alt.words else 0,
                 end_time=alt.words[-1].end_offset.seconds if alt.words else 0,
@@ -237,13 +238,13 @@ def recognize_response_to_speech_event(
 
 def streaming_recognize_response_to_speech_event(
     opts: RecognizeOptions, resp: cloud_speech.StreamingRecognizeResponse
-) -> agents.SpeechEvent:
+) -> stt.SpeechEvent:
     result = resp.results[0]
     gg_alts = result.alternatives
-    return agents.SpeechEvent(
+    return stt.SpeechEvent(
         is_final=result.is_final,
         alternatives=[
-            agents.SpeechData(
+            stt.SpeechData(
                 language=result.language_code,
                 start_time=alt.words[0].start_offset.seconds if alt.words else 0,
                 end_time=alt.words[-1].end_offset.seconds if alt.words else 0,

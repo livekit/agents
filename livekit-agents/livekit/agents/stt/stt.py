@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from livekit import rtc
 from typing import List
 from dataclasses import dataclass
-from .utils import AudioBuffer
+from ..utils import AudioBuffer
 
 
 @dataclass

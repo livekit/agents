@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from ..vad import VAD, VADStream, VADEvent, VADEventType
+from ..vad import VADStream, VADEventType
 from ..utils import AudioBuffer, merge_frames
 from .stt import (
     STT,
@@ -8,10 +8,7 @@ from .stt import (
     SpeechStream,
     StreamOptions,
     SpeechEvent,
-    SpeechData,
 )
-from typing import Optional
-from enum import Enum
 from livekit import rtc
 
 

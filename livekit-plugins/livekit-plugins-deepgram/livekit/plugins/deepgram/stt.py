@@ -6,7 +6,8 @@ from deepgram.transcription import (
     PrerecordedTranscriptionResponse,
     TranscriptionSource,
 )
-from livekit import agents, rtc
+from livekit import rtc, agents
+from livekit.agents import stt
 from dataclasses import dataclass
 from typing import Union, Optional
 from .models import DeepgramModels, DeepgramLanguages
@@ -19,20 +20,20 @@ import io
 
 
 @dataclass
-class StreamOptions(agents.StreamOptions):
+class StreamOptions(stt.StreamOptions):
     model: DeepgramModels = "nova-2-general"
     language: Union[DeepgramLanguages, str] = "en-US"
     smart_format: bool = True
 
 
 @dataclass
-class RecognizeOptions(agents.RecognizeOptions):
+class RecognizeOptions(stt.RecognizeOptions):
     model: DeepgramModels = "nova-2-general"
     language: Union[DeepgramLanguages, str] = "en-US"
     smart_format: bool = True
 
 
-class STT(agents.STT):
+class STT(stt.STT):
     def __init__(
         self, api_key: Optional[str] = None, api_url: Optional[str] = None
     ) -> None:
@@ -51,7 +52,7 @@ class STT(agents.STT):
         self,
         buffer: agents.AudioBuffer,
         opts: RecognizeOptions = RecognizeOptions(),
-    ) -> agents.SpeechEvent:
+    ) -> stt.SpeechEvent:
         # Deepgram prerecorded API requires WAV/MP3, so we write our PCM into a file
         buffer = agents.utils.merge_frames(buffer)
         io_buffer = io.BytesIO()
@@ -80,13 +81,13 @@ class STT(agents.STT):
         return SpeechStream(opts, self._client)
 
 
-class SpeechStream(agents.SpeechStream):
+class SpeechStream(stt.SpeechStream):
     def __init__(self, opts: StreamOptions, client: deepgram.Deepgram) -> None:
         super().__init__()
         self._opts = opts
         self._client = client
         self._queue = asyncio.Queue[rtc.AudioFrame]()
-        self._transcript_queue = asyncio.Queue[agents.SpeechEvent]()
+        self._transcript_queue = asyncio.Queue[stt.SpeechEvent]()
         self._closed = False
 
         self._main_task = asyncio.create_task(self._run(max_retry=32))
@@ -177,7 +178,7 @@ class SpeechStream(agents.SpeechStream):
     def __aiter__(self) -> "SpeechStream":
         return self
 
-    async def __anext__(self) -> agents.SpeechEvent:
+    async def __anext__(self) -> stt.SpeechEvent:
         if self._closed and self._transcript_queue.empty():
             raise StopAsyncIteration
 
@@ -187,12 +188,12 @@ class SpeechStream(agents.SpeechStream):
 def live_transcription_to_speech_event(
     opts: StreamOptions,
     event: LiveTranscriptionResponse,
-) -> agents.SpeechEvent:
+) -> stt.SpeechEvent:
     dg_alts = event["channel"]["alternatives"]
-    return agents.SpeechEvent(
+    return stt.SpeechEvent(
         is_final=event["is_final"],
         alternatives=[
-            agents.SpeechData(
+            stt.SpeechData(
                 language=alt.get("detected_language", opts.language),
                 start_time=alt["words"][0]["start"] if alt["words"] else 0,
                 end_time=alt["words"][-1]["end"] if alt["words"] else 0,
@@ -207,12 +208,12 @@ def live_transcription_to_speech_event(
 def prerecorded_transcription_to_speech_event(
     opts: RecognizeOptions,
     event: PrerecordedTranscriptionResponse,
-) -> agents.SpeechEvent:
+) -> stt.SpeechEvent:
     dg_alts = event["results"]["channels"][0]["alternatives"]  # type: ignore
-    return agents.SpeechEvent(
+    return stt.SpeechEvent(
         is_final=True,
         alternatives=[
-            agents.SpeechData(
+            stt.SpeechData(
                 language=alt.get("detected_language", opts.language),
                 start_time=alt["words"][0]["start"],
                 end_time=alt["words"][-1]["end"],

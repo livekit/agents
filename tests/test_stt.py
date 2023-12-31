@@ -28,7 +28,7 @@ async def test_recognize():
     stts = [deepgram.STT(), google.STT(), openai.STT()]
     frame = read_wav_file(TEST_AUDIO_FILEPATH)
 
-    async def recognize(stt: agents.STT):
+    async def recognize(stt: agents.stt.STT):
         event = await stt.recognize(frame)
         text = event.alternatives[0].text
         assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.9
@@ -56,7 +56,7 @@ async def test_stream():
             )
         )
 
-    async def stream(stt: agents.STT):
+    async def stream(stt: agents.stt.STT):
         stream = stt.stream()
         for frame in frames:
             stream.push_frame(frame)
