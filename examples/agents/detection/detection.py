@@ -58,10 +58,10 @@ class Detection:
         self.detecting = False
 
     async def start(self):
-        await self.send_message_from_agent(INTRO_MESSAGE)
-        await self.publish_video()
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
         self.ctx.room.on("data_received", self.on_data_received)
+        await self.send_message_from_agent(INTRO_MESSAGE)
+        await self.publish_video()
 
     def on_data_received(self, data: bytes, participant: rtc.RemoteParticipant, kind):
         payload = json.loads(data.decode("utf-8"))
