@@ -1,0 +1,12 @@
+name: Publish livekit-plugins-directai
+
+on:
+  workflow_dispatch
+
+jobs:
+  call-publish-workflow:
+    uses: ./.github/workflows/publish-package.yml
+    with:
+      package_name: 'livekit-plugins/livekit-plugins-directai'
+      package_module: 'livekit.plugins.directai'
+    secrets: inherit

@@ -8,5 +8,5 @@ jobs:
     uses: ./.github/workflows/publish-package.yml
     with:
       package_name: 'livekit-plugins/livekit-plugins-deepgram'
-      docs_entrypoint: 'livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram'
+      package_module: 'livekit.plugins.deepgram'
     secrets: inherit

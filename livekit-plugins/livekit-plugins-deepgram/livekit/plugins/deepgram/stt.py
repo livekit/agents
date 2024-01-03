@@ -1,3 +1,15 @@
+import asyncio
+import io
+import logging
+import os
+import wave
+from dataclasses import dataclass
+from typing import Optional, Union
+
+from livekit import agents, rtc
+from livekit.agents import stt
+
+import deepgram
 from deepgram.transcription import (
     LiveOptions,
     LiveTranscriptionEvent,
@@ -6,17 +18,8 @@ from deepgram.transcription import (
     PrerecordedTranscriptionResponse,
     TranscriptionSource,
 )
-from livekit import rtc, agents
-from livekit.agents import stt
-from dataclasses import dataclass
-from typing import Union, Optional
-from .models import DeepgramModels, DeepgramLanguages
-import os
-import logging
-import asyncio
-import deepgram
-import wave
-import io
+
+from .models import DeepgramLanguages, DeepgramModels
 
 
 @dataclass
