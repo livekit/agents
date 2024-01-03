@@ -42,8 +42,8 @@ class Detector:
     def __init__(
         self,
         *,
-        client_id: Optional[str],
-        client_secret: Optional[str],
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
         detector_configs: List[DetectorConfig],
     ):
         self._client_id = client_id
@@ -92,7 +92,6 @@ class Detector:
         self._check_http_session()
         async with self._http_session.post(url, data=data, headers=headers) as response:
             result_json = await response.json()
-            print(result_json)
             results = []
             for class_results in result_json:
                 for r in class_results:
