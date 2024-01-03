@@ -39,14 +39,16 @@ setuptools.setup(
         "Topic :: Multimedia :: Sound/Audio",
         "Topic :: Multimedia :: Video",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3 :: Only",
     ],
     keywords=["webrtc", "realtime", "audio", "video", "livekit"],
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
-    python_requires=">=3.10.0",  # deepgram-sdk requires 3.10
-    install_requires=[],
+    python_requires=">=3.9.0",
+    install_requires=["deepgram-sdk >= 2.0, < 3.0"],
     package_data={},
     project_urls={
         "Documentation": "https://docs.livekit.io",

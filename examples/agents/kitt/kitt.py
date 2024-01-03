@@ -14,17 +14,16 @@
 
 import json
 import logging
-from state_manager import StateManager, AgentState, UserState
+from state_manager import StateManager, AgentState
 
 from livekit import rtc, agents
 from livekit.plugins.openai import (
     ChatGPTMessage,
     ChatGPTMessageRole,
     ChatGPTPlugin,
-    WhisperAPITranscriber,
 )
+from livekit.plugins.deepgram import STT
 from livekit.plugins.elevenlabs import TTSPlugin
-from livekit.plugins.silero import VADEventType, VADPlugin
 
 PROMPT = "You are KITT, a friendly voice assistant powered by LiveKit.  \
           Conversation should be personable, and be sure to ask follow up questions. \
@@ -49,11 +48,10 @@ class KITT:
         self.state = StateManager(ctx)
 
         # plugins
-        self.vad_plugin = VADPlugin(left_padding_ms=100, silence_threshold_ms=250)
         self.chatgpt_plugin = ChatGPTPlugin(
             prompt=PROMPT, message_capacity=20, model="gpt-4-1106-preview"
         )
-        self.stt_plugin = WhisperAPITranscriber()
+        self.stt_plugin = STT()
         self.tts_plugin = TTSPlugin()
 
         self.ctx: agents.JobContext = ctx
@@ -98,25 +96,30 @@ class KITT:
 
     async def process_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        async for vad_result in self.vad_plugin.start(audio_stream):
-            if vad_result.type == VADEventType.STARTED:
-                self.user_state = UserState.SPEAKING
-            elif vad_result.type == VADEventType.FINISHED:
-                self.user_state = UserState.SILENT
-                if self.state.agent_state in [AgentState.SPEAKING, AgentState.THINKING]:
-                    continue
-                stt_output = await self.stt_plugin.transcribe_frames(vad_result.frames)
-                if len(stt_output) == 0:
-                    continue
-                self.ctx.create_task(self.process_stt_result(stt_output))
+        stream = self.stt_plugin.stream()
+        self.ctx.create_task(self.process_stt_stream(stream))
+        async for audio_frame in audio_stream:
+            if self.state.agent_state != AgentState.LISTENING:
+                continue
+            stream.push_frame(audio_frame)
 
-    async def process_stt_result(self, text):
-        await self.ctx.room.local_participant.publish_data(
-            json.dumps({"type": "transcription", "text": text})
-        )
-        msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=text)
-        chatgpt_result = self.chatgpt_plugin.add_message(msg)
-        await self.process_chatgpt_result(chatgpt_result)
+    async def process_stt_stream(self, stream):
+        async for event in stream:
+            if not event.is_final or self.state.agent_state != AgentState.LISTENING:
+                continue
+
+            alt = event.alternatives[0]
+            text = alt.text
+            if alt.confidence < 0.75 or text == "":
+                continue
+
+            await self.ctx.room.local_participant.publish_data(
+                json.dumps({"type": "transcription", "text": text})
+            )
+
+            msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=text)
+            chatgpt_stream = self.chatgpt_plugin.add_message(msg)
+            self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
 
     async def process_chatgpt_result(self, text_stream):
         self.state.chat_gpt_working = True
