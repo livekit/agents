@@ -246,7 +246,7 @@ class SpeechStream(stt.SpeechStream):
 
 
 def recognize_response_to_speech_event(
-    resp: cloud_speech.RecognizeResponse
+    resp: cloud_speech.RecognizeResponse,
 ) -> stt.SpeechEvent:
     result = resp.results[0]
     gg_alts = result.alternatives
@@ -266,7 +266,7 @@ def recognize_response_to_speech_event(
 
 
 def streaming_recognize_response_to_speech_event(
-    resp: cloud_speech.StreamingRecognizeResponse
+    resp: cloud_speech.StreamingRecognizeResponse,
 ) -> stt.SpeechEvent:
     result = resp.results[0]
     gg_alts = result.alternatives
