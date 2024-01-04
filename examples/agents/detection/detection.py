@@ -38,9 +38,6 @@ class Detection:
         await instance.start()
 
     def __init__(self, ctx: agents.JobContext):
-        # state
-        self.state = StateManager(ctx)
-
         self.ctx: agents.JobContext = ctx
         self.detector = Detector(
             detector_configs=[
@@ -152,65 +149,6 @@ class Detection:
         await self.ctx.room.local_participant.publish_data(
             json.dumps({"type": "agent_chat_message", "text": text})
         )
-
-
-UserState = Enum("UserState", "SPEAKING, SILENT")
-AgentState = Enum("AgentState", "LISTENING, THINKING, SPEAKING")
-
-
-class StateManager:
-    def __init__(self, ctx: agents.JobContext):
-        self._agent_sending_audio = False
-        self._chat_gpt_working = False
-        self._user_state = UserState.SILENT
-        self._ctx = ctx
-
-    async def _send_datachannel_message(self):
-        msg = json.dumps(
-            {
-                "type": "state",
-                "user_state": self.user_state.name.lower(),
-                "agent_state": self.agent_state.name.lower(),
-            }
-        )
-        await self._ctx.room.local_participant.publish_data(msg)
-
-    @property
-    def agent_sending_audio(self):
-        return self._agent_sending_audio
-
-    @agent_sending_audio.setter
-    def agent_sending_audio(self, value):
-        self._agent_sending_audio = value
-        asyncio.create_task(self._send_datachannel_message())
-
-    @property
-    def chat_gpt_working(self):
-        return self._chat_gpt_working
-
-    @chat_gpt_working.setter
-    def chat_gpt_working(self, value):
-        self._chat_gpt_working = value
-        asyncio.create_task(self._send_datachannel_message())
-
-    @property
-    def user_state(self):
-        return self._user_state
-
-    @user_state.setter
-    def user_state(self, value):
-        self._user_state = value
-        asyncio.create_task(self._send_datachannel_message())
-
-    @property
-    def agent_state(self):
-        if self.agent_sending_audio:
-            return AgentState.SPEAKING
-
-        if self.chat_gpt_working:
-            return AgentState.THINKING
-
-        return AgentState.LISTENING
 
 
 if __name__ == "__main__":
