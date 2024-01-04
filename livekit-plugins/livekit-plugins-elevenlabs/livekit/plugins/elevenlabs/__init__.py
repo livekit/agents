@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .tts import TTSPlugin
+from .tts import TTS, Voice, VoiceSettings, DEFAULT_VOICE

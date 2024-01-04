@@ -19,25 +19,40 @@ class SpeechEvent:
     is_final: bool
     alternatives: List[SpeechData]
 
+class STT(ABC):
+    def __init__(self, *, streaming_supported: bool) -> None:
+        self._streaming_supported = streaming_supported
 
-@dataclass
-class RecognizeOptions:
-    language: str = "en-US"
-    detect_language: bool = False
-    num_channels: int = 1
-    sample_rate: int = 16000
-    punctuate: bool = True
+    @abstractmethod
+    async def recognize(
+        self,
+        *,
+        buffer: AudioBuffer,
+        language: str = "en-US",
+        detect_language: bool = False,
+        num_channels: int = 1,
+        sample_rate: int = 16000,
+        punctuate: bool = True,
+    ) -> SpeechEvent:
+        pass
 
+    def stream(
+        self,
+        *,
+        language: str = "en-US",
+        detect_language: bool = False,
+        interim_results: bool = True,
+        num_channels: int = 1,
+        sample_rate: int = 16000,
+        punctuate: bool = True,
+    ) -> "SpeechStream":
+        raise NotImplementedError(
+            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
+        )
 
-@dataclass
-class StreamOptions:
-    language: str = "en-US"
-    detect_language: bool = False
-    interim_results: bool = True
-    num_channels: int = 1
-    sample_rate: int = 16000  # sane default for STT
-    punctuate: bool = True
-
+    @property
+    def streaming_supported(self) -> bool:
+        return self._streaming_supported
 
 class SpeechStream(ABC):
     @abstractmethod
@@ -58,7 +73,6 @@ class SpeechStream(ABC):
 
     def __aiter__(self) -> "SpeechStream":
         return self
-
 
 class STT(ABC):
     def __init__(self, *, streaming_supported: bool) -> None:

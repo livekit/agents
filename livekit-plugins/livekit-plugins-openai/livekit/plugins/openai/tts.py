@@ -12,68 +12,56 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dataclasses import dataclass
 import os
-import tempfile
-from typing import AsyncIterator
+import io
+import torchaudio
+import torch
+from typing import Optional
 from livekit import rtc
-import audioread
+from livekit.agents import tts
 import openai
+from .models import TTSModels, TTSVoices
 
 
-class TTSPlugin:
-    """Text-to-speech plugin using OpenAI's API"""
+@dataclass
+class SynthesisOptions:
+    model: TTSModels = "tts-1"
+    voice: TTSVoices = "alloy"
 
-    def __init__(self, model="tts-1", voice="alloy"):
-        self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        self._model = model
-        self._voice = voice
 
-    async def close(self):
-        pass
+class TTS(tts.TTS):
+    def __init__(self, api_key: Optional[str] = None) -> None:
+        super().__init__(streaming_supported=False)
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY must be set")
 
-    async def generate_speech_from_text(
-        self, text: str
-    ) -> AsyncIterator[rtc.AudioFrame]:
-        """Generate a stream of speech from text
+        self._client = openai.AsyncOpenAI(api_key=api_key)
 
-        Args:
-            text (str): Text to generate speech from
+    async def synthesize(
+        self, text: str, opts: tts.SynthesisOptions = tts.SynthesisOptions()
+    ) -> tts.SynthesizedAudio:
+        speech_res = await self._client.audio.speech.create(
+            model=getattr(opts, "model", "tts-1"),
+            voice=getattr(opts, "voice", "alloy"),
+            response_format="mp3",
+            input=text,
+        )
 
-        Returns:
-            AsyncIterator[rtc.AudioFrame]: Stream of 24000hz, 1 channel audio frames
-        """
+        data = await speech_res.aread()
+        tensor, sample_rate = torchaudio.load(io.BytesIO(data), format="mp3")
 
-        async def iterator():
-            yield text
+        with io.BytesIO() as buffer:
+            torch.save(tensor, buffer)
+            data = buffer.getvalue()
 
-        return self.generate_speech_from_stream(iterator())
+        num_channels = tensor.shape[0]
+        frame = rtc.AudioFrame(
+            data=data,
+            sample_rate=sample_rate,
+            num_channels=num_channels,
+            samples_per_channel=tensor.shape[-1],
+        )
 
-    async def generate_speech_from_stream(
-        self, text_stream: AsyncIterator[str]
-    ) -> AsyncIterator[rtc.AudioFrame]:
-        """Generate a stream of speech from a stream of text
-
-        Args:
-            text_stream (AsyncIterator[str]): Stream of text to generate speech from
-
-        Returns:
-            AsyncIterator[rtc.AudioFrame]: Stream of 24000hz, 1 channel audio frames
-        """
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            complete_text = ""
-            async for text in text_stream:
-                complete_text += text
-
-            response = await self._client.audio.speech.create(
-                model=self._model,
-                voice=self._voice,
-                response_format="mp3",
-                input=complete_text,
-            )
-            filepath = os.path.join(tmpdir, "output.mp3")
-            response.stream_to_file(filepath)
-            with audioread.audio_open(filepath) as f:
-                for buf in f:
-                    frame = rtc.AudioFrame(buf, f.samplerate, f.channels, len(buf) // 2)
-                    yield frame
+        return tts.SynthesizedAudio(text=text, data=frame)

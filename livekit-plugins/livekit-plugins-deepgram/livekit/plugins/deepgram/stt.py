@@ -1,15 +1,3 @@
-import asyncio
-import io
-import logging
-import os
-import wave
-from dataclasses import dataclass
-from typing import Optional, Union
-
-from livekit import agents, rtc
-from livekit.agents import stt
-
-import deepgram
 from deepgram.transcription import (
     LiveOptions,
     LiveTranscriptionEvent,
@@ -18,8 +6,17 @@ from deepgram.transcription import (
     PrerecordedTranscriptionResponse,
     TranscriptionSource,
 )
-
-from .models import DeepgramLanguages, DeepgramModels
+from livekit import rtc, agents
+from livekit.agents import stt
+from dataclasses import dataclass
+from typing import Union, Optional
+from .models import DeepgramModels, DeepgramLanguages
+import os
+import logging
+import asyncio
+import deepgram
+import wave
+import io
 
 
 @dataclass
@@ -41,7 +38,7 @@ class STT(stt.STT):
         self, api_key: Optional[str] = None, api_url: Optional[str] = None
     ) -> None:
         super().__init__(streaming_supported=True)
-        api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
+        api_key = api_key or os.environ.get("DG_API_KEY")
         if not api_key:
             raise ValueError("Deepgram API key is required")
 

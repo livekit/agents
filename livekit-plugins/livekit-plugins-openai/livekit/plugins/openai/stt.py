@@ -44,7 +44,9 @@ class STT(stt.STT):
         self._client = openai.AsyncOpenAI(api_key=api_key)
 
     async def recognize(
-        self, buffer: agents.AudioBuffer, opts: RecognizeOptions = RecognizeOptions()
+        self,
+        buffer: agents.AudioBuffer,
+        opts: stt.RecognizeOptions = stt.RecognizeOptions(),
     ) -> stt.SpeechEvent:
         buffer = agents.utils.merge_frames(buffer)
         io_buffer = io.BytesIO()
@@ -60,7 +62,7 @@ class STT(stt.STT):
 
         resp = await self._client.audio.transcriptions.create(
             file=("a.wav", io_buffer),
-            model=getattr(opts, 'model', "whisper-1"),
+            model=getattr(opts, "model", "whisper-1"),
             language=lang,
             response_format="json",
         )

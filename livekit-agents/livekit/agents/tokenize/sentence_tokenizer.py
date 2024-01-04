@@ -1,0 +1,37 @@
+from typing import List
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+
+@dataclass
+class SegmentedSentence:
+    text: str
+
+
+class SentenceTokenizer(ABC):
+    @abstractmethod
+    def tokenize(
+        self, *, text: str, language: str = "en-US"
+    ) -> List[SegmentedSentence]:
+        pass
+
+    @abstractmethod
+    def stream(self, *, language: str = "en-US") -> "SentenceStream":
+        pass
+
+
+class SentenceStream(ABC):
+    @abstractmethod
+    def push_text(self, text: str) -> None:
+        pass
+
+    @abstractmethod
+    async def flush(self) -> None:
+        pass
+
+    @abstractmethod
+    async def __anext__(self) -> SegmentedSentence:
+        pass
+
+    def __aiter__(self) -> "SentenceStream":
+        return self

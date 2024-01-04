@@ -2,19 +2,14 @@ from .stt import (
     SpeechEvent,
     SpeechData,
     SpeechStream,
-    RecognizeOptions,
-    StreamOptions,
     STT,
 )
-from .stream_adapter import StreamAdapter, AdapterStreamWrapper
-
+from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 
 __all__ = [
     "SpeechEvent",
     "SpeechData",
     "SpeechStream",
-    "RecognizeOptions",
-    "StreamOptions",
     "STT",
     "StreamAdapter",
     "AdapterStreamWrapper",
