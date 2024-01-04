@@ -98,7 +98,7 @@ class TTS(tts.TTS):
                 data=data,
                 sample_rate=44100,
                 num_channels=1,
-                samples_per_channel=len(data) // 2, # 16-bit
+                samples_per_channel=len(data) // 2,  # 16-bit
             )
 
 
