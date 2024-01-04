@@ -39,7 +39,7 @@ class STT(stt.STT):
         self,
         *,
         buffer: AudioBuffer,
-        language: str = "en-US",
+        language: str = "en",
         detect_language: bool = False,
         num_channels: int = 1,
         sample_rate: int = 16000,

@@ -29,7 +29,7 @@ async def test_recognize():
     frame = read_wav_file(TEST_AUDIO_FILEPATH)
 
     async def recognize(stt: agents.stt.STT):
-        event = await stt.recognize(frame)
+        event = await stt.recognize(buffer=frame)
         text = event.alternatives[0].text
         assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.9
 
@@ -44,7 +44,7 @@ async def test_stream():
         deepgram.STT(),
         google.STT(),
         agents.stt.StreamAdapter(
-            openai.STT(), silero_vad.stream(), openai.RecognizeOptions()
+            openai.STT(), silero_vad.stream()
         ),
     ]
     frame = read_wav_file(TEST_AUDIO_FILEPATH)
