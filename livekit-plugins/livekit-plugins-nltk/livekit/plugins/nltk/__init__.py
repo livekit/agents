@@ -31,7 +31,7 @@ class NltkPlugin(Plugin):
     def __init__(self):
         super().__init__(__name__, __version__)
 
-    def setup(self):
+    def download_files(self):
         try:
             _ = nltk.data.find("tokenizers/punkt")
         except LookupError:

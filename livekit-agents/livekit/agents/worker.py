@@ -434,6 +434,6 @@ def run_app(worker: Worker) -> None:
     def download_files() -> None:
         for plugin in Plugin.registered_plugins:
             logging.info("Setup data for plugin %s", plugin.title)
-            plugin.setup()
+            plugin.download_files()
 
     cli()

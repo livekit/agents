@@ -17,7 +17,7 @@ class DeepgramPlugin(Plugin):
     def __init__(self):
         super().__init__(__name__, __version__)
 
-    def setup(self):
+    def download_files(self):
         pass
 
 

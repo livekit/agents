@@ -14,7 +14,7 @@ class Plugin(ABC):
         cls.registered_plugins.append(plugin)
 
     @abstractmethod
-    def setup(self) -> None:
+    def download_files(self) -> None:
         """
         Blocking is allowed inside this method
         This is the perfect place to download models for e.g
