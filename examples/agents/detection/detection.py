@@ -46,10 +46,10 @@ class Detection:
         self.detector = Detector(
             detector_configs=[
                 Detector.DetectorConfig(
-                    name="phone",
+                    name="item",
                     examples_to_include=["cell phone"],
                     examples_to_exclude=[],
-                    detection_threshold=0.3,
+                    detection_threshold=0.2,
                 )
             ]
         )
@@ -77,10 +77,10 @@ class Detection:
             self.detector = Detector(
                 detector_configs=[
                     Detector.DetectorConfig(
-                        name="phone",
+                        name="item",
                         examples_to_include=includes,
                         examples_to_exclude=[],
-                        detection_threshold=0.5,
+                        detection_threshold=0.2,
                     )
                 ]
             )

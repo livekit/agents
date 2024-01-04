@@ -67,14 +67,19 @@ class Detector:
     async def detect(self, frame: rtc.VideoFrame) -> List[DetectionResult]:
         deploy_id = await self._get_deploy_id()
         argb_frame = rtc.ArgbFrame.create(
-            format=rtc.VideoFormatType.FORMAT_RGBA,
+            format=rtc.VideoFormatType.FORMAT_ARGB,
             width=frame.buffer.width,
             height=frame.buffer.height,
         )
+        # Livekit is big-endian so it's really BGRA
         frame.buffer.to_argb(dst=argb_frame)
         image = Image.frombytes(
             "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
-        ).convert("RGB")
+        ).convert("RGB")  # Underlying data is BGR which is not supported by PIL
+
+        # Convert to actually RGB
+        b, g, r = image.split()
+        image = Image.merge("RGB", (r, g, b))
 
         output_stream = io.BytesIO()
         image.save(output_stream, format="JPEG")
