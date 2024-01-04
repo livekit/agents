@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .vad import VAD, VADOptions, VADStream
+from .vad import VAD, VADStream
 from .version import __version__
 
-__all__ = ["VAD", "VADOptions", "VADStream", "__version__"]
+__all__ = ["VAD", "VADStream", "__version__"]
 
 from livekit.agents import Plugin
 import torch

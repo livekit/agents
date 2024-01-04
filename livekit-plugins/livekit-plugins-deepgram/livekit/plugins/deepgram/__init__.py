@@ -1,10 +1,8 @@
-from .stt import STT, StreamOptions, RecognizeOptions, SpeechStream
+from .stt import STT, SpeechStream
 from .version import __version__
 
 __all__ = [
     "STT",
-    "StreamOptions",
-    "RecognizeOptions",
     "SpeechStream",
     "__version__",
 ]
