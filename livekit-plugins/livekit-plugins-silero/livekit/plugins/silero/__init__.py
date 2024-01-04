@@ -13,3 +13,5 @@
 # limitations under the License.
 
 from .vad import VAD, VADOptions, VADStream
+
+__all__ = ["VAD", "VADOptions", "VADStream"]

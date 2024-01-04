@@ -12,5 +12,5 @@ __all__ = [
     "SpeechStream",
     "STT",
     "StreamAdapter",
-    "AdapterStreamWrapper",
+    "StreamAdapterWrapper",
 ]

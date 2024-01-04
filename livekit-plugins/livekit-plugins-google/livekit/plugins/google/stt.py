@@ -16,7 +16,6 @@ from typing import Optional
 from google.auth import credentials
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
-from google.api_core.gapic_v1.client_info import ClientInfo
 from livekit import rtc, agents
 from livekit.agents import stt
 from typing import Union

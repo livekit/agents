@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, List
 
 import aiohttp
-from .common import API_URL, generate_token
+from ._utils import API_URL, generate_token
 from livekit import rtc
 from PIL import Image
 

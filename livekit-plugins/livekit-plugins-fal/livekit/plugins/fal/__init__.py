@@ -13,3 +13,5 @@
 # limitations under the License.
 
 from .sdxl import SDXL
+
+__all__ = ["SDXL"]

@@ -13,3 +13,5 @@
 # limitations under the License.
 
 from .claude import ClaudePlugin, ClaudeMessage, ClaudeMessageRole
+
+__all__ = ["ClaudePlugin", "ClaudeMessage", "ClaudeMessageRole"]
