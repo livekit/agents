@@ -24,12 +24,6 @@ import openai
 from .models import TTSModels, TTSVoices
 
 
-@dataclass
-class SynthesisOptions:
-    model: TTSModels = "tts-1"
-    voice: TTSVoices = "alloy"
-
-
 class TTS(tts.TTS):
     def __init__(self, api_key: Optional[str] = None) -> None:
         super().__init__(streaming_supported=False)
@@ -40,11 +34,11 @@ class TTS(tts.TTS):
         self._client = openai.AsyncOpenAI(api_key=api_key)
 
     async def synthesize(
-        self, text: str, opts: tts.SynthesisOptions = tts.SynthesisOptions()
+        self, text: str, model: TTSModels = "tts-1", voice: TTSVoices = "alloy"
     ) -> tts.SynthesizedAudio:
         speech_res = await self._client.audio.speech.create(
-            model=getattr(opts, "model", "tts-1"),
-            voice=getattr(opts, "voice", "alloy"),
+            model=model,
+            voice=voice,
             response_format="mp3",
             input=text,
         )

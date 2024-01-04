@@ -432,6 +432,8 @@ def run_app(worker: Worker) -> None:
 
     @cli.command(help="Download files of imported plugins")
     def download_files() -> None:
-        print(Plugin.registered_plugins)
+        for plugin in Plugin.registered_plugins:
+            logging.info("Setup data for plugin %s", plugin.title)
+            plugin.setup()
 
     cli()

@@ -17,24 +17,13 @@ from google.auth import credentials
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
 from livekit import rtc, agents
+from livekit.agents.utils import AudioBuffer
 from livekit.agents import stt
 from typing import Union
 from dataclasses import dataclass
 from .models import SpeechModels, SpeechLanguages
 import asyncio
 import logging
-
-
-@dataclass
-class StreamOptions(stt.StreamOptions):
-    model: SpeechModels = "long"
-    language: Union[SpeechLanguages, str] = "en-US"
-
-
-@dataclass
-class RecognizeOptions(stt.RecognizeOptions):
-    model: SpeechModels = "long"
-    language: Union[SpeechLanguages, str] = "en-US"
 
 
 class STT(stt.STT):
@@ -66,7 +55,15 @@ class STT(stt.STT):
         return f"projects/{self._creds.project_id}/locations/global/recognizers/_"  # type: ignore
 
     async def recognize(
-        self, buffer: agents.AudioBuffer, opts: RecognizeOptions = RecognizeOptions()
+        self,
+        *,
+        buffer: AudioBuffer,
+        language: Union[SpeechLanguages, str] = "en-US",
+        detect_language: bool = False,
+        num_channels: int = 1,
+        sample_rate: int = 16000,
+        punctuate: bool = True,
+        model: SpeechModels = "long",
     ) -> stt.SpeechEvent:
         buffer = agents.utils.merge_frames(buffer)
         config = cloud_speech.RecognitionConfig(
@@ -76,10 +73,10 @@ class STT(stt.STT):
                 audio_channel_count=buffer.num_channels,
             ),
             features=cloud_speech.RecognitionFeatures(
-                enable_automatic_punctuation=opts.punctuate,
+                enable_automatic_punctuation=punctuate,
             ),
-            language_codes=[opts.language],
-            model=opts.model,
+            language_codes=[language],
+            model=model,
         )
 
         resp = await self._client.recognize(
@@ -91,7 +88,16 @@ class STT(stt.STT):
         )
         return recognize_response_to_speech_event(opts, resp)
 
-    def stream(self, opts: StreamOptions = StreamOptions()) -> "SpeechStream":
+    def stream(
+        self,
+        *,
+        language: str = "en-US",
+        detect_language: bool = False,
+        interim_results: bool = True,
+        num_channels: int = 1,
+        sample_rate: int = 16000,
+        punctuate: bool = True,
+    ) -> "SpeechStream":
         return SpeechStream(opts, self._client, self._creds, self._recognizer)
 
 
