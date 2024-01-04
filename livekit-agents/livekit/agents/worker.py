@@ -35,6 +35,7 @@ from livekit.protocol import models as proto_models
 from livekit.protocol.agent import JobType as ProtoJobType
 from .job_request import JobRequest
 from .job_context import JobContext
+from .plugin import Plugin
 
 MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_INTERVAL = 5
@@ -428,5 +429,9 @@ def run_app(worker: Worker) -> None:
         _run_worker(
             worker, started_cb=lambda _: worker._simulate_job(room_info, participant)
         )
+
+    @cli.command(help="Download files of imported plugins")
+    def download_files() -> None:
+        print(Plugin.registered_plugins)
 
     cli()
