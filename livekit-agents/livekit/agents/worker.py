@@ -430,9 +430,18 @@ def run_app(worker: Worker) -> None:
             worker, started_cb=lambda _: worker._simulate_job(room_info, participant)
         )
 
-    @cli.command(help="Download files of imported plugins")
-    def download_files() -> None:
+    @cli.command(help="List used plugins")
+    def plugins() -> None:
         for plugin in Plugin.registered_plugins:
+            logging.info(plugin.title)
+
+    @cli.command(help="Download files of imported plugins")
+    @click.option("--exclude", help="Exclude plugins", multiple=True)
+    def download_files(exclude: Tuple[str]) -> None:
+        for plugin in Plugin.registered_plugins:
+            if plugin.title in exclude:
+                continue
+
             logging.info("Setup data for plugin %s", plugin.title)
             plugin.download_files()
 
