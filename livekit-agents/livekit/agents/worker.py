@@ -87,6 +87,16 @@ class Worker:
         api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
         api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
 
+        if not api_key:
+            raise ValueError(
+                "No api key provided, set LIVEKIT_API_KEY or use the api-key parameter inside the CLI"
+            )
+
+        if not api_secret:
+            raise ValueError(
+                "No api secret provided, set LIVEKIT_API_SECRET or use the api-secret parameter inside the CLI"
+            )
+
         self._set_url(ws_url)
 
         self._loop = event_loop or asyncio.get_event_loop()
@@ -435,7 +445,7 @@ def run_app(worker: Worker) -> None:
         for plugin in Plugin.registered_plugins:
             logging.info(plugin.title)
 
-    @cli.command(help="Download files of imported plugins")
+    @cli.command(help="Download required files of used plugins")
     @click.option("--exclude", help="Exclude plugins", multiple=True)
     def download_files(exclude: Tuple[str]) -> None:
         for plugin in Plugin.registered_plugins:
