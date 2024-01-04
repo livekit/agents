@@ -13,3 +13,5 @@
 # limitations under the License.
 
 from .stt import STT, SpeechStream, StreamOptions, RecognizeOptions
+
+__all__ = ["STT", "SpeechStream", "StreamOptions", "RecognizeOptions"]

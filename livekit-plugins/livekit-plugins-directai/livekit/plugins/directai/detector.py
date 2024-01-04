@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, List
 
 import aiohttp
-from .common import API_URL, generate_token
+from ._utils import API_URL, generate_token
 from livekit import rtc
 from PIL import Image
 
@@ -28,8 +28,8 @@ class Detector:
     @dataclass
     class DetectorConfig:
         name: str
-        examples_to_include: [str]
-        examples_to_exclude: [str]
+        examples_to_include: List[str]
+        examples_to_exclude: List[str]
         detection_threshold: float
 
     @dataclass
@@ -44,7 +44,7 @@ class Detector:
         *,
         client_id: Optional[str],
         client_secret: Optional[str],
-        detector_configs: [DetectorConfig],
+        detector_configs: List[DetectorConfig],
     ):
         self._client_id = client_id
         self._client_secret = client_secret

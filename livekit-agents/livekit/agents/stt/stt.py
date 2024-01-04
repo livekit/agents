@@ -77,23 +77,3 @@ class SpeechStream(ABC):
         return self
 
 
-class STT(ABC):
-    def __init__(self, *, streaming_supported: bool) -> None:
-        self._streaming_supported = streaming_supported
-
-    @abstractmethod
-    async def recognize(
-        self,
-        buffer: AudioBuffer,
-        opts: RecognizeOptions = RecognizeOptions(),
-    ) -> SpeechEvent:
-        pass
-
-    def stream(self, opts: StreamOptions = StreamOptions()) -> SpeechStream:
-        raise NotImplementedError(
-            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
-        )
-
-    @property
-    def streaming_supported(self) -> bool:
-        return self._streaming_supported

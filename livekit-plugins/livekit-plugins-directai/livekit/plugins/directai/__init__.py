@@ -14,3 +14,5 @@
 
 from .detector import Detector
 from .classifier import Classifier
+
+__all__ = ["Detector", "Classifier"]
