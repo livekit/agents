@@ -12,6 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
+from livekit.agents import Plugin
+from .version import __version__
+
+
+class ElevenLabsPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def setup(self):
+        pass
+
+
+Plugin.register_plugin(ElevenLabsPlugin())
+
 from .tts import TTS, Voice, VoiceSettings, DEFAULT_VOICE
 
-__all__ = ["TTS", "Voice", "VoiceSettings", "DEFAULT_VOICE"]
+__all__ = ["TTS", "Voice", "VoiceSettings", "DEFAULT_VOICE", "__version__"]

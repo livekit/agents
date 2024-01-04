@@ -39,7 +39,7 @@ class ClaudeMessage:
             raise ValueError("Invalid message role")
 
 
-class ClaudePlugin:
+class Claude:
     def __init__(self, model: str = "claude-2", system_message: str = ""):
         self._client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         self._model = model

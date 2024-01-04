@@ -12,6 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from livekit.agents import Plugin
+from .version import __version__
+
+
+class FalPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def setup(self):
+        pass
+
+
+Plugin.register_plugin(FalPlugin())
+
 from .sdxl import SDXL
 
-__all__ = ["SDXL"]
+__all__ = ["SDXL", "__version__"]

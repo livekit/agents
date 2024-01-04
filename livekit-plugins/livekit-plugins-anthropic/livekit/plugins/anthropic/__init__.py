@@ -12,6 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .claude import ClaudePlugin, ClaudeMessage, ClaudeMessageRole
+from livekit.agents import Plugin
+from .version import __version__
 
-__all__ = ["ClaudePlugin", "ClaudeMessage", "ClaudeMessageRole"]
+
+class AnthropicPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def setup(self):
+        pass
+
+
+Plugin.register_plugin(AnthropicPlugin())
+
+from .claude import Claude, ClaudeMessage, ClaudeMessageRole
+
+__all__ = ["Claude", "ClaudeMessage", "ClaudeMessageRole", "__version__"]

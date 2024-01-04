@@ -21,7 +21,7 @@ from .worker import (
     JobType,
     run_app,
 )
-
+from .plugin import Plugin
 from .utils import AudioBuffer, merge_frames
 from .job_request import SubscribeCallbacks, AutoDisconnectCallbacks, JobRequest
 from .job_context import JobContext
@@ -40,6 +40,7 @@ __all__ = [
     "JobContext",
     "JobCancelledError",
     "AssignmentTimeoutError",
+    "Plugin",
     "run_app",
     "JobType",
     "AudioBuffer",

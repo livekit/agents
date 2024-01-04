@@ -12,7 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from livekit.agents import Plugin
+from .version import __version__
+
+
+class DirectAIPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def setup(self):
+        pass
+
+
+Plugin.register_plugin(DirectAIPlugin())
+
 from .detector import Detector
 from .classifier import Classifier
 
-__all__ = ["Detector", "Classifier"]
+__all__ = ["Detector", "Classifier", "__version__"]

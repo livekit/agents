@@ -12,6 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from livekit.agents import Plugin
+from .version import __version__
+
+
+class GooglePlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def setup(self):
+        pass
+
+
+Plugin.register_plugin(GooglePlugin())
+
 from .stt import STT, SpeechStream, StreamOptions, RecognizeOptions
 
-__all__ = ["STT", "SpeechStream", "StreamOptions", "RecognizeOptions"]
+__all__ = ["STT", "SpeechStream", "StreamOptions", "RecognizeOptions", "__version__"]
