@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
 import os
 import io
 import torchaudio
@@ -22,12 +21,6 @@ from livekit import rtc
 from livekit.agents import tts
 import openai
 from .models import TTSModels, TTSVoices
-
-
-@dataclass
-class SynthesisOptions:
-    model: TTSModels = "tts-1"
-    voice: TTSVoices = "alloy"
 
 
 class TTS(tts.TTS):
@@ -40,11 +33,11 @@ class TTS(tts.TTS):
         self._client = openai.AsyncOpenAI(api_key=api_key)
 
     async def synthesize(
-        self, text: str, opts: tts.SynthesisOptions = tts.SynthesisOptions()
+        self, text: str, model: TTSModels = "tts-1", voice: TTSVoices = "alloy"
     ) -> tts.SynthesizedAudio:
         speech_res = await self._client.audio.speech.create(
-            model=getattr(opts, "model", "tts-1"),
-            voice=getattr(opts, "voice", "alloy"),
+            model=model,
+            voice=voice,
             response_format="mp3",
             input=text,
         )

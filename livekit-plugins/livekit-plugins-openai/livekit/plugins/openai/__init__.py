@@ -13,21 +13,34 @@
 # limitations under the License.
 
 from .models import WhisperModels, TTSModels, TTSVoices
-from .stt import STT, RecognizeOptions
-from .tts import TTS, SynthesisOptions
+from .stt import STT
+from .tts import TTS
 from .chatgpt import ChatGPTPlugin, ChatGPTMessage, ChatGPTMessageRole
-from .dalle3 import DALLE3Plugin
+from .dalle3 import Dalle3
+from .version import __version__
 
 __all__ = [
     "STT",
-    "RecognizeOptions",
     "TTS",
-    "SynthesisOptions",
     "WhisperModels",
     "TTSModels",
     "TTSVoices",
     "ChatGPTPlugin",
     "ChatGPTMessage",
     "ChatGPTMessageRole",
-    "DALLE3Plugin",
+    "Dalle3",
+    "__version__",
 ]
+
+from livekit.agents import Plugin
+
+
+class OpenAIPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def download_files(self):
+        pass
+
+
+Plugin.register_plugin(OpenAIPlugin())

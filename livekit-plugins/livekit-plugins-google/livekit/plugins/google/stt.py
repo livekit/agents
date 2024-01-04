@@ -17,24 +17,12 @@ from google.auth import credentials
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
 from livekit import rtc, agents
+from livekit.agents.utils import AudioBuffer
 from livekit.agents import stt
 from typing import Union
-from dataclasses import dataclass
 from .models import SpeechModels, SpeechLanguages
 import asyncio
 import logging
-
-
-@dataclass
-class StreamOptions(stt.StreamOptions):
-    model: SpeechModels = "long"
-    language: Union[SpeechLanguages, str] = "en-US"
-
-
-@dataclass
-class RecognizeOptions(stt.RecognizeOptions):
-    model: SpeechModels = "long"
-    language: Union[SpeechLanguages, str] = "en-US"
 
 
 class STT(stt.STT):
@@ -66,7 +54,15 @@ class STT(stt.STT):
         return f"projects/{self._creds.project_id}/locations/global/recognizers/_"  # type: ignore
 
     async def recognize(
-        self, buffer: agents.AudioBuffer, opts: RecognizeOptions = RecognizeOptions()
+        self,
+        *,
+        buffer: AudioBuffer,
+        language: Union[SpeechLanguages, str] = "en-US",
+        detect_language: bool = False,
+        num_channels: int = 1,
+        sample_rate: int = 16000,
+        punctuate: bool = True,
+        model: SpeechModels = "long",
     ) -> stt.SpeechEvent:
         buffer = agents.utils.merge_frames(buffer)
         config = cloud_speech.RecognitionConfig(
@@ -76,10 +72,10 @@ class STT(stt.STT):
                 audio_channel_count=buffer.num_channels,
             ),
             features=cloud_speech.RecognitionFeatures(
-                enable_automatic_punctuation=opts.punctuate,
+                enable_automatic_punctuation=punctuate,
             ),
-            language_codes=[opts.language],
-            model=opts.model,
+            language_codes=[language],
+            model=model,
         )
 
         resp = await self._client.recognize(
@@ -89,29 +85,63 @@ class STT(stt.STT):
                 content=buffer.data.tobytes(),
             )
         )
-        return recognize_response_to_speech_event(opts, resp)
+        return recognize_response_to_speech_event(resp)
 
-    def stream(self, opts: StreamOptions = StreamOptions()) -> "SpeechStream":
-        return SpeechStream(opts, self._client, self._creds, self._recognizer)
+    def stream(
+        self,
+        *,
+        language: str = "en-US",
+        detect_language: bool = False,
+        interim_results: bool = True,
+        num_channels: int = 1,
+        sample_rate: int = 16000,
+        punctuate: bool = True,
+        model: SpeechModels = "long",
+    ) -> "SpeechStream":
+        return SpeechStream(
+            self._client,
+            self._creds,
+            self._recognizer,
+            language=language,
+            detect_language=detect_language,
+            interim_results=interim_results,
+            num_channels=num_channels,
+            sample_rate=sample_rate,
+            punctuate=punctuate,
+            model=model,
+        )
 
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
         self,
-        opts: StreamOptions,
         client: SpeechAsyncClient,
         creds: credentials.Credentials,
         recognizer: str,
+        *,
+        language: str,
+        detect_language: bool,
+        interim_results: bool,
+        num_channels: int,
+        sample_rate: int,
+        punctuate: bool,
+        model: SpeechModels,
     ) -> None:
         super().__init__()
-        self._opts = opts
+        self._language = language
+        self._detect_language = detect_language
+        self._interim_results = interim_results
+        self._num_channels = num_channels
+        self._sample_rate = sample_rate
+        self._punctuate = punctuate
+        self._model = model
+
         self._client = client
         self._creds = creds
         self._recognizer = recognizer
         self._queue = asyncio.Queue[rtc.AudioFrame]()
         self._transcript_queue = asyncio.Queue[stt.SpeechEvent]()
         self._closed = False
-
         self._main_task = asyncio.create_task(self._run(max_retry=32))
 
         def log_exception(task: asyncio.Task) -> None:
@@ -129,13 +159,13 @@ class SpeechStream(stt.SpeechStream):
                     config=cloud_speech.RecognitionConfig(
                         explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
                             encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
-                            sample_rate_hertz=self._opts.sample_rate,
-                            audio_channel_count=self._opts.num_channels,
+                            sample_rate_hertz=self._sample_rate,
+                            audio_channel_count=self._num_channels,
                         ),
-                        language_codes=[self._opts.language],
-                        model=self._opts.model,
+                        language_codes=[self._language],
+                        model=self._model,
                         features=cloud_speech.RecognitionFeatures(
-                            enable_automatic_punctuation=self._opts.punctuate,
+                            enable_automatic_punctuation=self._punctuate,
                         ),
                     ),
                     streaming_features=cloud_speech.StreamingRecognitionFeatures(
@@ -154,7 +184,7 @@ class SpeechStream(stt.SpeechStream):
                         while True:
                             frame = await self._queue.get()
                             frame = frame.remix_and_resample(
-                                self._opts.sample_rate, self._opts.num_channels
+                                self._sample_rate, self._num_channels
                             )
                             yield cloud_speech.StreamingRecognizeRequest(
                                 recognizer=self._recognizer,
@@ -170,7 +200,7 @@ class SpeechStream(stt.SpeechStream):
 
                 async for resp in stream:
                     self._transcript_queue.put_nowait(
-                        streaming_recognize_response_to_speech_event(self._opts, resp)
+                        streaming_recognize_response_to_speech_event(resp)
                     )
 
             except asyncio.CancelledError:
@@ -216,7 +246,7 @@ class SpeechStream(stt.SpeechStream):
 
 
 def recognize_response_to_speech_event(
-    opts: RecognizeOptions, resp: cloud_speech.RecognizeResponse
+    resp: cloud_speech.RecognizeResponse,
 ) -> stt.SpeechEvent:
     result = resp.results[0]
     gg_alts = result.alternatives
@@ -236,7 +266,7 @@ def recognize_response_to_speech_event(
 
 
 def streaming_recognize_response_to_speech_event(
-    opts: RecognizeOptions, resp: cloud_speech.StreamingRecognizeResponse
+    resp: cloud_speech.StreamingRecognizeResponse,
 ) -> stt.SpeechEvent:
     result = resp.results[0]
     gg_alts = result.alternatives

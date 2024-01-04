@@ -12,9 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 from .sentence_tokenizer import SentenceTokenizer, SentenceStream
+from .version import __version__
 
 __all__ = [
     "SentenceTokenizer",
     "SentenceStream",
+    "__version__",
 ]
+
+
+from livekit.agents import Plugin
+import nltk
+
+
+class NltkPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def download_files(self):
+        try:
+            _ = nltk.data.find("tokenizers/punkt")
+        except LookupError:
+            nltk.download("punkt")
+
+
+Plugin.register_plugin(NltkPlugin())

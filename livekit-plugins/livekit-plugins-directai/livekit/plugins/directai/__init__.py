@@ -14,5 +14,20 @@
 
 from .detector import Detector
 from .classifier import Classifier
+from .version import __version__
 
-__all__ = ["Detector", "Classifier"]
+__all__ = ["Detector", "Classifier", "__version__"]
+
+
+from livekit.agents import Plugin
+
+
+class DirectAIPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def download_files(self):
+        pass
+
+
+Plugin.register_plugin(DirectAIPlugin())

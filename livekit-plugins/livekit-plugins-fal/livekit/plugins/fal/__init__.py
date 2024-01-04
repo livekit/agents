@@ -13,5 +13,19 @@
 # limitations under the License.
 
 from .sdxl import SDXL
+from .version import __version__
 
-__all__ = ["SDXL"]
+__all__ = ["SDXL", "__version__"]
+
+from livekit.agents import Plugin
+
+
+class FalPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def download_files(self):
+        pass
+
+
+Plugin.register_plugin(FalPlugin())

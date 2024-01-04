@@ -8,7 +8,7 @@ from deepgram.transcription import (
 )
 from livekit import rtc, agents
 from livekit.agents import stt
-from dataclasses import dataclass
+from livekit.agents.utils import AudioBuffer
 from typing import Union, Optional
 from .models import DeepgramModels, DeepgramLanguages
 import os
@@ -17,20 +17,6 @@ import asyncio
 import deepgram
 import wave
 import io
-
-
-@dataclass
-class StreamOptions(stt.StreamOptions):
-    model: DeepgramModels = "nova-2-general"
-    language: Union[DeepgramLanguages, str] = "en-US"
-    smart_format: bool = True
-
-
-@dataclass
-class RecognizeOptions(stt.RecognizeOptions):
-    model: DeepgramModels = "nova-2-general"
-    language: Union[DeepgramLanguages, str] = "en-US"
-    smart_format: bool = True
 
 
 class STT(stt.STT):
@@ -50,8 +36,15 @@ class STT(stt.STT):
 
     async def recognize(
         self,
-        buffer: agents.AudioBuffer,
-        opts: RecognizeOptions = RecognizeOptions(),
+        *,
+        buffer: AudioBuffer,
+        language: Union[DeepgramLanguages, str] = "en-US",
+        detect_language: bool = False,
+        num_channels: int = 1,
+        sample_rate: int = 16000,
+        punctuate: bool = True,
+        model: DeepgramModels = "nova-2-general",
+        smart_format: bool = True,
     ) -> stt.SpeechEvent:
         # Deepgram prerecorded API requires WAV/MP3, so we write our PCM into a file
         buffer = agents.utils.merge_frames(buffer)
@@ -68,28 +61,68 @@ class STT(stt.STT):
         }
 
         dg_opts: PrerecordedOptions = {
-            "model": opts.model,
-            "language": opts.language,
-            "smart_format": opts.smart_format,
-            "punctuate": opts.punctuate,
+            "model": model,
+            "language": language,
+            "smart_format": smart_format,
+            "punctuate": punctuate,
         }
 
         dg_res = await self._client.transcription.prerecorded(source, dg_opts)
-        return prerecorded_transcription_to_speech_event(opts, dg_res)
+        return prerecorded_transcription_to_speech_event(language, dg_res)
 
-    def stream(self, opts: StreamOptions = StreamOptions()) -> "SpeechStream":
-        return SpeechStream(opts, self._client)
+    def stream(
+        self,
+        *,
+        language: str = "en-US",
+        detect_language: bool = False,
+        interim_results: bool = True,
+        num_channels: int = 1,
+        sample_rate: int = 16000,
+        punctuate: bool = True,
+        model: DeepgramModels = "nova-2-general",
+        smart_format: bool = True,
+    ) -> "SpeechStream":
+        return SpeechStream(
+            self._client,
+            language=language,
+            detect_language=detect_language,
+            interim_results=interim_results,
+            num_channels=num_channels,
+            sample_rate=sample_rate,
+            punctuate=punctuate,
+            model=model,
+            smart_format=smart_format,
+        )
 
 
 class SpeechStream(stt.SpeechStream):
-    def __init__(self, opts: StreamOptions, client: deepgram.Deepgram) -> None:
+    def __init__(
+        self,
+        client: deepgram.Deepgram,
+        *,
+        language: str,
+        detect_language: bool,
+        interim_results: bool,
+        num_channels: int,
+        sample_rate: int,
+        punctuate: bool,
+        model: DeepgramModels,
+        smart_format: bool,
+    ) -> None:
         super().__init__()
-        self._opts = opts
+        self._language = language
+        self._detect_language = detect_language
+        self._interim_results = interim_results
+        self._num_channels = num_channels
+        self._sample_rate = sample_rate
+        self._punctuate = punctuate
+        self._model = model
+        self._smart_format = smart_format
+
         self._client = client
         self._queue = asyncio.Queue[rtc.AudioFrame]()
         self._transcript_queue = asyncio.Queue[stt.SpeechEvent]()
         self._closed = False
-
         self._main_task = asyncio.create_task(self._run(max_retry=32))
 
         def log_exception(task: asyncio.Task) -> None:
@@ -104,14 +137,14 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 dg_opts: LiveOptions = {
-                    "model": self._opts.model,
-                    "language": self._opts.language,
+                    "model": self._model,
+                    "language": self._language,
                     "encoding": "linear16",
-                    "interim_results": self._opts.interim_results,
-                    "channels": self._opts.num_channels,
-                    "sample_rate": self._opts.sample_rate,
-                    "smart_format": self._opts.smart_format,
-                    "punctuate": self._opts.punctuate,
+                    "interim_results": self._interim_results,
+                    "channels": self._num_channels,
+                    "sample_rate": self._sample_rate,
+                    "smart_format": self._smart_format,
+                    "punctuate": self._punctuate,
                 }
 
                 self._live = await self._client.transcription.live(dg_opts)
@@ -125,7 +158,9 @@ class SpeechStream(stt.SpeechStream):
                 def on_transcript_received(event: LiveTranscriptionResponse) -> None:
                     if event.get("type") != "Results":  # not documented by Deepgram
                         return
-                    speech_event = live_transcription_to_speech_event(self._opts, event)
+                    speech_event = live_transcription_to_speech_event(
+                        self._language, event
+                    )
                     self._transcript_queue.put_nowait(speech_event)
 
                 self._live.register_handler(LiveTranscriptionEvent.CLOSE, on_close)
@@ -137,7 +172,7 @@ class SpeechStream(stt.SpeechStream):
                 while opened:
                     frame = await self._queue.get()
                     frame = frame.remix_and_resample(
-                        self._opts.sample_rate, self._opts.num_channels
+                        self._sample_rate, self._num_channels
                     )
                     self._live.send(frame.data.tobytes())
                     self._queue.task_done()
@@ -186,7 +221,7 @@ class SpeechStream(stt.SpeechStream):
 
 
 def live_transcription_to_speech_event(
-    opts: StreamOptions,
+    language: str,
     event: LiveTranscriptionResponse,
 ) -> stt.SpeechEvent:
     dg_alts = event["channel"]["alternatives"]
@@ -194,7 +229,7 @@ def live_transcription_to_speech_event(
         is_final=event["is_final"],
         alternatives=[
             stt.SpeechData(
-                language=alt.get("detected_language", opts.language),
+                language=alt.get("detected_language", language),
                 start_time=alt["words"][0]["start"] if alt["words"] else 0,
                 end_time=alt["words"][-1]["end"] if alt["words"] else 0,
                 confidence=alt["confidence"],
@@ -206,7 +241,7 @@ def live_transcription_to_speech_event(
 
 
 def prerecorded_transcription_to_speech_event(
-    opts: RecognizeOptions,
+    language: str,
     event: PrerecordedTranscriptionResponse,
 ) -> stt.SpeechEvent:
     dg_alts = event["results"]["channels"][0]["alternatives"]  # type: ignore
@@ -214,7 +249,7 @@ def prerecorded_transcription_to_speech_event(
         is_final=True,
         alternatives=[
             stt.SpeechData(
-                language=alt.get("detected_language", opts.language),
+                language=alt.get("detected_language", language),
                 start_time=alt["words"][0]["start"],
                 end_time=alt["words"][-1]["end"],
                 confidence=alt["confidence"],

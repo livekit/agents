@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
 import logging
 import asyncio
 from typing import List, Optional
@@ -20,12 +19,6 @@ from livekit import rtc, agents
 import torch
 import numpy as np
 from collections import deque
-
-
-@dataclass
-class VADOptions(agents.vad.VADOptions):
-    # speech threshold, probabilities ABOVE this value are considered as SPEECH
-    threshold: float = 0.5
 
 
 class VAD(agents.vad.VAD):
@@ -43,16 +36,47 @@ class VAD(agents.vad.VAD):
             )
         self._model = model
 
-    def stream(self, opts: VADOptions = VADOptions()) -> "VADStream":
-        return VADStream(opts, self._model)
+    def stream(
+        self,
+        min_speaking_duration: float = 0.5,
+        min_silence_duration: float = 0.5,
+        padding_duration: float = 0.1,
+        sample_rate: int = 16000,
+        max_buffered_speech: float = 45.0,
+        threshold: float = 0.5,
+    ) -> "VADStream":
+        return VADStream(
+            self._model,
+            min_speaking_duration=min_speaking_duration,
+            min_silence_duration=min_silence_duration,
+            padding_duration=padding_duration,
+            sample_rate=sample_rate,
+            max_buffered_speech=max_buffered_speech,
+            threshold=threshold,
+        )
 
 
 # Based on https://github.com/snakers4/silero-vad/blob/94504ece54c8caeebb808410b08ae55ee82dba82/utils_vad.py#L428
 class VADStream(agents.vad.VADStream):
-    def __init__(self, opts: VADOptions, model) -> None:
-        self._opts = opts
+    def __init__(
+        self,
+        model,
+        *,
+        min_speaking_duration: float,
+        min_silence_duration: float,
+        padding_duration: float,
+        sample_rate: int,
+        max_buffered_speech: float,
+        threshold: float,
+    ) -> None:
+        self._min_speaking_duration = min_speaking_duration
+        self._min_silence_duration = min_silence_duration
+        self._padding_duration = padding_duration
+        self._sample_rate = sample_rate
+        self._max_buffered_speech = max_buffered_speech
+        self._threshold = threshold
 
-        if opts.sample_rate not in [8000, 16000]:
+        if sample_rate not in [8000, 16000]:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
 
         self._queue = asyncio.Queue[rtc.AudioFrame]()
@@ -64,18 +88,10 @@ class VADStream(agents.vad.VADStream):
         self._waiting_start = False
         self._waiting_end = False
         self._current_sample = 0
-        self._min_speaking_samples = (
-            self._opts.min_speaking_duration * self._opts.sample_rate
-        )
-        self._min_silence_samples = (
-            self._opts.min_silence_duration * self._opts.sample_rate
-        )
-        self._padding_duration_samples = (
-            self._opts.padding_duration * self._opts.sample_rate
-        )
-        self._max_buffered_samples = (
-            self._opts.max_buffered_speech * self._opts.sample_rate
-        )
+        self._min_speaking_samples = min_speaking_duration * sample_rate
+        self._min_silence_samples = min_silence_duration * sample_rate
+        self._padding_duration_samples = padding_duration * sample_rate
+        self._max_buffered_samples = max_buffered_speech * sample_rate
 
         self._queued_frames: deque[rtc.AudioFrame] = deque()
         self._original_frames: deque[rtc.AudioFrame] = deque()
@@ -112,7 +128,7 @@ class VADStream(agents.vad.VADStream):
 
             # resample to silero's sample rate
             resampled_frame = frame.remix_and_resample(
-                self._opts.sample_rate, 1
+                self._sample_rate, 1
             )  # TODO: This is technically wrong, fix when we have a better resampler
             self._original_frames.append(frame)
             self._queued_frames.append(resampled_frame)
@@ -123,7 +139,7 @@ class VADStream(agents.vad.VADStream):
                     f.samples_per_channel for f in self._queued_frames
                 )
 
-                samples_40ms = self._opts.sample_rate // 1000 * 40
+                samples_40ms = self._sample_rate // 1000 * 40
                 if available_length < samples_40ms:
                     break
 
@@ -147,20 +163,20 @@ class VADStream(agents.vad.VADStream):
 
         # run inference
         speech_prob = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: self._model(tensor, self._opts.sample_rate).item()
+            None, lambda: self._model(tensor, self._sample_rate).item()
         )
         self._dispatch_event(speech_prob, original_frames)
         self._current_sample += merged_frame.samples_per_channel
 
     def _dispatch_event(self, speech_prob: int, original_frames: List[rtc.AudioFrame]):
         """
-        Dispatches a VAD event based on the speech probability and VADOptions
+        Dispatches a VAD event based on the speech probability and the options
         Args:
             speech_prob: speech probability of the current frame
             original_frames: original frames of the current inference
         """
 
-        samples_10ms = self._opts.sample_rate / 100
+        samples_10ms = self._sample_rate / 100
         padding_count = int(
             self._padding_duration_samples // samples_10ms
         )  # number of frames to keep for the padding (one side)
@@ -188,7 +204,7 @@ class VADStream(agents.vad.VADStream):
                 len(self._buffered_frames) - max_buffer_len :
             ]
 
-        if speech_prob >= self._opts.threshold:
+        if speech_prob >= self._threshold:
             # speaking, wait for min_speaking_duration to trigger START_SPEAKING
             self._waiting_end = False
             if not self._waiting_start and not self._speaking:
@@ -226,7 +242,7 @@ class VADStream(agents.vad.VADStream):
             )
             self._event_queue.put_nowait(event)
 
-        if speech_prob < self._opts.threshold:
+        if speech_prob < self._threshold:
             # stopped speaking, wait for min_silence_duration to trigger END_SPEAKING
             self._waiting_start = False
             if not self._waiting_end and self._speaking:
@@ -243,7 +259,7 @@ class VADStream(agents.vad.VADStream):
                     type=agents.vad.VADEventType.END_SPEAKING,
                     samples_index=self._end_speech,
                     duration=(self._current_sample - self._start_speech)
-                    / self._opts.sample_rate,
+                    / self._sample_rate,
                     speech=self._buffered_frames,
                 )
                 self._event_queue.put_nowait(event)

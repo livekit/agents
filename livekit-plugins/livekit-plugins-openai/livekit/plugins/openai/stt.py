@@ -17,21 +17,13 @@ import io
 import wave
 from typing import Optional
 from livekit import agents
+from livekit.agents.utils import AudioBuffer
 from livekit.agents import stt
-from dataclasses import dataclass
 import openai
 from .models import WhisperModels
 
 WHISPER_SAMPLE_RATE = 16000
 WHISPER_CHANNELS = 1
-
-
-@dataclass
-class RecognizeOptions(stt.RecognizeOptions):
-    model: WhisperModels = "whisper-1"
-
-    # https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes
-    language: str = "en"
 
 
 class STT(stt.STT):
@@ -45,8 +37,14 @@ class STT(stt.STT):
 
     async def recognize(
         self,
-        buffer: agents.AudioBuffer,
-        opts: stt.RecognizeOptions = stt.RecognizeOptions(),
+        *,
+        buffer: AudioBuffer,
+        language: str = "en-US",
+        detect_language: bool = False,
+        num_channels: int = 1,
+        sample_rate: int = 16000,
+        punctuate: bool = True,
+        model: WhisperModels = "whisper-1",
     ) -> stt.SpeechEvent:
         buffer = agents.utils.merge_frames(buffer)
         io_buffer = io.BytesIO()
@@ -57,21 +55,19 @@ class STT(stt.STT):
             wav.writeframes(buffer.data)
 
         lang = ""
-        if not opts.detect_language:
-            lang = getattr(opts, "language", "en")
+        if not detect_language:
+            lang = language
 
         resp = await self._client.audio.transcriptions.create(
             file=("a.wav", io_buffer),
-            model=getattr(opts, "model", "whisper-1"),
+            model=model,
             language=lang,
             response_format="json",
         )
-        return transcription_to_speech_event(opts, resp)
+        return transcription_to_speech_event(resp)
 
 
-def transcription_to_speech_event(
-    opts: RecognizeOptions, transcription
-) -> stt.SpeechEvent:
+def transcription_to_speech_event(transcription) -> stt.SpeechEvent:
     return stt.SpeechEvent(
         is_final=True,
         alternatives=[stt.SpeechData(text=transcription.text, language="")],

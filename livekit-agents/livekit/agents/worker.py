@@ -35,6 +35,7 @@ from livekit.protocol import models as proto_models
 from livekit.protocol.agent import JobType as ProtoJobType
 from .job_request import JobRequest
 from .job_context import JobContext
+from .plugin import Plugin
 
 MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_INTERVAL = 5
@@ -85,6 +86,16 @@ class Worker:
         ws_url = ws_url or os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
         api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
         api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
+
+        if not api_key:
+            raise ValueError(
+                "No api key provided, set LIVEKIT_API_KEY or use the api-key parameter inside the CLI"
+            )
+
+        if not api_secret:
+            raise ValueError(
+                "No api secret provided, set LIVEKIT_API_SECRET or use the api-secret parameter inside the CLI"
+            )
 
         self._set_url(ws_url)
 
@@ -428,5 +439,20 @@ def run_app(worker: Worker) -> None:
         _run_worker(
             worker, started_cb=lambda _: worker._simulate_job(room_info, participant)
         )
+
+    @cli.command(help="List used plugins")
+    def plugins() -> None:
+        for plugin in Plugin.registered_plugins:
+            logging.info(plugin.title)
+
+    @cli.command(help="Download required files of used plugins")
+    @click.option("--exclude", help="Exclude plugins", multiple=True)
+    def download_files(exclude: Tuple[str]) -> None:
+        for plugin in Plugin.registered_plugins:
+            if plugin.title in exclude:
+                continue
+
+            logging.info("Setup data for plugin %s", plugin.title)
+            plugin.download_files()
 
     cli()
