@@ -12,8 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from livekit.agents import Plugin
+
+from .sentence_tokenizer import SentenceTokenizer, SentenceStream
 from .version import __version__
+
+__all__ = [
+    "SentenceTokenizer",
+    "SentenceStream",
+    "__version__",
+]
+
+
+from livekit.agents import Plugin
 
 
 class NltkPlugin(Plugin):
@@ -25,12 +35,3 @@ class NltkPlugin(Plugin):
 
 
 Plugin.register_plugin(NltkPlugin())
-
-
-from .sentence_tokenizer import SentenceTokenizer, SentenceStream
-
-__all__ = [
-    "SentenceTokenizer",
-    "SentenceStream",
-    "__version__",
-]

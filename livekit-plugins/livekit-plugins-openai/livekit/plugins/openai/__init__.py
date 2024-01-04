@@ -12,25 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from livekit.agents import Plugin
-from .version import __version__
-
-
-class OpenAIPlugin(Plugin):
-    def __init__(self):
-        super().__init__(__name__, __version__)
-
-    def setup(self):
-        pass
-
-
-Plugin.register_plugin(OpenAIPlugin())
-
 from .models import WhisperModels, TTSModels, TTSVoices
 from .stt import STT, RecognizeOptions
 from .tts import TTS, SynthesisOptions
 from .chatgpt import ChatGPTPlugin, ChatGPTMessage, ChatGPTMessageRole
 from .dalle3 import Dalle3
+from .version import __version__
 
 __all__ = [
     "STT",
@@ -46,3 +33,16 @@ __all__ = [
     "Dalle3",
     "__version__",
 ]
+
+from livekit.agents import Plugin
+
+
+class OpenAIPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def setup(self):
+        pass
+
+
+Plugin.register_plugin(OpenAIPlugin())

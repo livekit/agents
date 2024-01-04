@@ -13,8 +13,12 @@
 # limitations under the License.
 
 
-from livekit.agents import Plugin
+from .tts import TTS, Voice, VoiceSettings, DEFAULT_VOICE
 from .version import __version__
+
+__all__ = ["TTS", "Voice", "VoiceSettings", "DEFAULT_VOICE", "__version__"]
+
+from livekit.agents import Plugin
 
 
 class ElevenLabsPlugin(Plugin):
@@ -26,7 +30,3 @@ class ElevenLabsPlugin(Plugin):
 
 
 Plugin.register_plugin(ElevenLabsPlugin())
-
-from .tts import TTS, Voice, VoiceSettings, DEFAULT_VOICE
-
-__all__ = ["TTS", "Voice", "VoiceSettings", "DEFAULT_VOICE", "__version__"]

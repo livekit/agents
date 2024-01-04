@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from livekit.agents import Plugin
+from .sdxl import SDXL
 from .version import __version__
+
+__all__ = ["SDXL", "__version__"]
+
+from livekit.agents import Plugin
 
 
 class FalPlugin(Plugin):
@@ -25,7 +29,3 @@ class FalPlugin(Plugin):
 
 
 Plugin.register_plugin(FalPlugin())
-
-from .sdxl import SDXL
-
-__all__ = ["SDXL", "__version__"]

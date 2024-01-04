@@ -12,8 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from livekit.agents import Plugin
+from .detector import Detector
+from .classifier import Classifier
 from .version import __version__
+
+__all__ = ["Detector", "Classifier", "__version__"]
+
+
+from livekit.agents import Plugin
 
 
 class DirectAIPlugin(Plugin):
@@ -25,8 +31,3 @@ class DirectAIPlugin(Plugin):
 
 
 Plugin.register_plugin(DirectAIPlugin())
-
-from .detector import Detector
-from .classifier import Classifier
-
-__all__ = ["Detector", "Classifier", "__version__"]

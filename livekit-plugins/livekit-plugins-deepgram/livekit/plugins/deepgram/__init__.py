@@ -1,5 +1,16 @@
-from livekit.agents import Plugin
+from .stt import STT, StreamOptions, RecognizeOptions, SpeechStream
 from .version import __version__
+
+__all__ = [
+    "STT",
+    "StreamOptions",
+    "RecognizeOptions",
+    "SpeechStream",
+    "__version__",
+]
+
+
+from livekit.agents import Plugin
 
 
 class DeepgramPlugin(Plugin):
@@ -11,13 +22,3 @@ class DeepgramPlugin(Plugin):
 
 
 Plugin.register_plugin(DeepgramPlugin())
-
-from .stt import STT, StreamOptions, RecognizeOptions, SpeechStream
-
-__all__ = [
-    "STT",
-    "StreamOptions",
-    "RecognizeOptions",
-    "SpeechStream",
-    "__version__",
-]

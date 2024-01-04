@@ -12,8 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from livekit.agents import Plugin
+from .claude import Claude, ClaudeMessage, ClaudeMessageRole
 from .version import __version__
+
+__all__ = ["Claude", "ClaudeMessage", "ClaudeMessageRole", "__version__"]
+
+
+from livekit.agents import Plugin
 
 
 class AnthropicPlugin(Plugin):
@@ -25,7 +30,3 @@ class AnthropicPlugin(Plugin):
 
 
 Plugin.register_plugin(AnthropicPlugin())
-
-from .claude import Claude, ClaudeMessage, ClaudeMessageRole
-
-__all__ = ["Claude", "ClaudeMessage", "ClaudeMessageRole", "__version__"]

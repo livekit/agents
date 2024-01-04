@@ -12,8 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from livekit.agents import Plugin
+
+from .vad import VAD, VADOptions, VADStream
 from .version import __version__
+
+__all__ = ["VAD", "VADOptions", "VADStream", "__version__"]
+
+from livekit.agents import Plugin
 
 
 class SileroPlugin(Plugin):
@@ -25,7 +30,3 @@ class SileroPlugin(Plugin):
 
 
 Plugin.register_plugin(SileroPlugin())
-
-from .vad import VAD, VADOptions, VADStream
-
-__all__ = ["VAD", "VADOptions", "VADStream", "__version__"]
