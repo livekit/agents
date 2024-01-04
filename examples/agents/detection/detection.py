@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import json
 import logging
 import time
-from enum import Enum
 
 from livekit import agents, rtc
 from livekit.plugins.directai import Detector
