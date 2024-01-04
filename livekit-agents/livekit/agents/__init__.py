@@ -18,17 +18,18 @@ from .worker import (
     Worker,
     JobCancelledError,
     AssignmentTimeoutError,
-    run_app,
     JobType,
+    run_app,
 )
 
+from .utils import AudioBuffer, merge_frames
 from .job_request import SubscribeCallbacks, AutoDisconnectCallbacks, JobRequest
 from .job_context import JobContext
 
 from . import stt
 from . import vad
-
-from .utils import AudioBuffer, merge_frames
+from . import tts
+from . import tokenize
 
 __all__ = [
     "__version__",
@@ -45,4 +46,6 @@ __all__ = [
     "merge_frames",
     "stt",
     "vad",
+    "tts",
+    "tokenize",
 ]

@@ -61,7 +61,7 @@ class TTS(tts.TTS):
             data=data,
             sample_rate=sample_rate,
             num_channels=num_channels,
-            samples_per_channel=tensor.shape[-1]
+            samples_per_channel=tensor.shape[-1],
         )
 
         return tts.SynthesizedAudio(text=text, data=frame)

@@ -1,9 +1,7 @@
-from livekit.plugins import openai
+from livekit.plugins import elevenlabs
 
 
 async def test_synthetize():
-    tts = openai.TTS()
-    audio = await tts.synthesize("Hello world")
+    tts = elevenlabs.TTS()
+    audio = await tts.synthesize(text="Hello world")
     print(audio)
-    print(audio.data.samples_per_channel)
-    print(audio.data.data)

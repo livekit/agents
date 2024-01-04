@@ -1,12 +1,10 @@
 import asyncio
 import logging
 from ..vad import VADStream, VADEventType
-from ..utils import AudioBuffer, merge_frames
+from ..utils import merge_frames
 from .stt import (
     STT,
-    RecognizeOptions,
     SpeechStream,
-    StreamOptions,
     SpeechEvent,
 )
 from livekit import rtc
@@ -15,41 +13,35 @@ from livekit import rtc
 class StreamAdapter(STT):
     def __init__(
         self,
-        vad_stream: VADStream,
         stt: STT,
-        recognize_options: RecognizeOptions = RecognizeOptions(),
+        vad_stream: VADStream,
     ) -> None:
         super().__init__(streaming_supported=True)
         self._vad_stream = vad_stream
         self._stt = stt
-        self._recognize_options = recognize_options
 
-    async def recognize(
-        self, buffer: AudioBuffer, opts: RecognizeOptions = RecognizeOptions()
-    ):
-        return await self._stt.recognize(buffer, opts)
+    async def recognize(self, *args, **kwargs):
+        return await self._stt.recognize(*args, **kwargs)
 
-    def stream(self, opts: StreamOptions = StreamOptions()) -> SpeechStream:
-        return AdapterStreamWrapper(
-            self._vad_stream, self._stt, self._recognize_options, opts
-        )
+    def stream(self, *args, **kwargs) -> SpeechStream:
+        return StreamAdapterWrapper(self._vad_stream, self._stt, *args, **kwargs)
 
 
-class AdapterStreamWrapper(SpeechStream):
+class StreamAdapterWrapper(SpeechStream):
     def __init__(
         self,
         vad_stream: VADStream,
         stt: STT,
-        recognize_options: RecognizeOptions,
-        stream_options: StreamOptions,
+        *args,
+        **kwargs,
     ) -> None:
         super().__init__()
         self._vad_stream = vad_stream
         self._stt = stt
-        self._recognize_options = recognize_options
-        self._stream_options = stream_options
         self._event_queue = asyncio.Queue[SpeechEvent]()
         self._closed = False
+        self._args = args
+        self._kwargs = kwargs
 
         self._main_task = asyncio.create_task(self._run())
 
@@ -63,12 +55,14 @@ class AdapterStreamWrapper(SpeechStream):
         # listen to vad events and send to stt on END_SPEAKING
         try:
             async for event in self._vad_stream:
-                if event.type == VADEventType.END_SPEAKING:
-                    merged_frames = merge_frames(event.speech)
-                    event = await self._stt.recognize(
-                        merged_frames, self._recognize_options
-                    )
-                    self._event_queue.put_nowait(event)
+                if event.type != VADEventType.END_SPEAKING:
+                    continue
+
+                merged_frames = merge_frames(event.speech)
+                event = await self._stt.recognize(
+                    buffer=merged_frames, *self._args, **self._kwargs
+                )
+                self._event_queue.put_nowait(event)
         except asyncio.CancelledError:
             pass
 

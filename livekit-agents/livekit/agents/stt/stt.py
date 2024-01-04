@@ -20,23 +20,40 @@ class SpeechEvent:
     alternatives: List[SpeechData]
 
 
-@dataclass
-class RecognizeOptions:
-    language: str = "en-US"
-    detect_language: bool = False
-    num_channels: int = 1
-    sample_rate: int = 16000
-    punctuate: bool = True
+class STT(ABC):
+    def __init__(self, *, streaming_supported: bool) -> None:
+        self._streaming_supported = streaming_supported
 
+    @abstractmethod
+    async def recognize(
+        self,
+        *,
+        buffer: AudioBuffer,
+        language: str = "en-US",
+        detect_language: bool = False,
+        num_channels: int = 1,
+        sample_rate: int = 16000,
+        punctuate: bool = True,
+    ) -> SpeechEvent:
+        pass
 
-@dataclass
-class StreamOptions:
-    language: str = "en-US"
-    detect_language: bool = False
-    interim_results: bool = True
-    num_channels: int = 1
-    sample_rate: int = 16000  # sane default for STT
-    punctuate: bool = True
+    def stream(
+        self,
+        *,
+        language: str = "en-US",
+        detect_language: bool = False,
+        interim_results: bool = True,
+        num_channels: int = 1,
+        sample_rate: int = 16000,
+        punctuate: bool = True,
+    ) -> "SpeechStream":
+        raise NotImplementedError(
+            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
+        )
+
+    @property
+    def streaming_supported(self) -> bool:
+        return self._streaming_supported
 
 
 class SpeechStream(ABC):
@@ -58,25 +75,3 @@ class SpeechStream(ABC):
 
     def __aiter__(self) -> "SpeechStream":
         return self
-
-
-class STT(ABC):
-    def __init__(self, *, streaming_supported: bool) -> None:
-        self._streaming_supported = streaming_supported
-
-    @abstractmethod
-    async def recognize(
-        self,
-        buffer: AudioBuffer,
-        opts: RecognizeOptions = RecognizeOptions(),
-    ) -> SpeechEvent:
-        pass
-
-    def stream(self, opts: StreamOptions = StreamOptions()) -> SpeechStream:
-        raise NotImplementedError(
-            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
-        )
-
-    @property
-    def streaming_supported(self) -> bool:
-        return self._streaming_supported

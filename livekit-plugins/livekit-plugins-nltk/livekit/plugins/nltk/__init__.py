@@ -12,4 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .tts import TTS, Voice, VoiceSettings, DEFAULT_VOICE
+from .sentence_tokenizer import SentenceTokenizer, SentenceStream
+
+__all__ = [
+    "SentenceTokenizer",
+    "SentenceStream",
+]

@@ -44,7 +44,7 @@ async def test_stream():
         deepgram.STT(),
         google.STT(),
         agents.stt.StreamAdapter(
-            silero_vad.stream(), openai.STT(), openai.RecognizeOptions()
+            openai.STT(), silero_vad.stream(), openai.RecognizeOptions()
         ),
     ]
     frame = read_wav_file(TEST_AUDIO_FILEPATH)

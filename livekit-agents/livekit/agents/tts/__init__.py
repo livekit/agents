@@ -1,9 +1,13 @@
-from .tts import TTS, SynthesisOptions, SynthesisEvent, SynthesizedAudio,  TranscriptionStream
+from .tts import (
+    TTS,
+    SynthesisEvent,
+    SynthesizedAudio,
+    SynthesizeStream,
+)
 
 __all__ = [
     "TTS",
-    "SynthesisOptions",
     "SynthesisEvent",
     "SynthesizedAudio",
-    "TranscriptionStream",
+    "SynthesizeStream",
 ]
