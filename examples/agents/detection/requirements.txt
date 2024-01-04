@@ -1,6 +1,5 @@
 livekit
 livekit-api
 livekit-agents
-livekit-plugins-deepgram
 livekit-plugins-directai
 Pillow
