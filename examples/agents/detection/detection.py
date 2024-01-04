@@ -17,7 +17,6 @@ import json
 import logging
 import time
 from enum import Enum
-from typing import Optional
 
 from livekit import agents, rtc
 from livekit.plugins.directai import Detector
