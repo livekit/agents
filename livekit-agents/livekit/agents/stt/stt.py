@@ -75,5 +75,3 @@ class SpeechStream(ABC):
 
     def __aiter__(self) -> "SpeechStream":
         return self
-
-

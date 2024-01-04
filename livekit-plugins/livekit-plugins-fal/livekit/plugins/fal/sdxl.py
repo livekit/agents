@@ -20,8 +20,9 @@ from livekit import rtc
 import asyncio
 import os
 
+
 class SDXL:
-    def __init__(self, model: str ="110602490-fast-sdxl") -> None:
+    def __init__(self, model: str = "110602490-fast-sdxl") -> None:
         if not os.getenv("FAL_KEY_ID") and os.getenv("FAL_KEY_SECRET"):
             raise ValueError(
                 "The Fal plugin requires FAL_KEY_ID and FAL_KEY_SECRET environment variables to be set."
@@ -46,7 +47,6 @@ class SDXL:
         )
         argb_frame.data[:] = argb_array
         return argb_frame
-
 
     def _fetch_image(self, url):
         response = requests.get(url, timeout=10)

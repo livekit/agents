@@ -22,6 +22,7 @@ from livekit import rtc
 from typing import Literal, Optional
 from .models import DalleModels
 
+
 class Dalle3:
     def __init__(self, api_key: Optional[str] = None) -> None:
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
