@@ -19,34 +19,24 @@ import cv2
 import openai
 import numpy as np
 from livekit import rtc
+from typing import Literal, Optional
+from .models import DalleModels
 
+class Dalle3:
+    def __init__(self, api_key: Optional[str] = None) -> None:
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY must be set")
 
-class DALLE3Plugin:
-    """DALL-E 3 Plugin"""
+        self._client = openai.AsyncOpenAI(api_key=api_key)
 
-    PORTRAIT = "1024x1792"
-    LANDSCAPE = "1792x1024"
-    SQUARE = "1024x1024"
-
-    def __init__(self):
-        self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
-    async def generate_image_from_prompt(
+    async def generate(
         self,
         prompt: str,
-        size=LANDSCAPE,
-        model="dall-e-3",
-        quality="standard",
-    ) -> rtc.VideoFrame:
-        """Generate an image from a prompt
-
-        Args:
-            prompt (str): Prompt to generate an image from
-            size (str, optional): Size of image to generate (1024x1024, 1024x1792 or 1792x1024). Defaults to '1024x1024'.
-
-        Returns:
-            rtc.VideoFrame: Image generated from prompt
-        """
+        size: Literal["256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"],
+        model: DalleModels = "dall-e-3",
+        quality: Literal["standard", "hd"] = "standard",
+    ) -> rtc.ArgbFrame:
         response = await self._client.images.generate(
             model=model, prompt=prompt, size=size, quality=quality, n=1
         )
@@ -61,9 +51,7 @@ class DALLE3Plugin:
             rtc.VideoFormatType.FORMAT_ARGB, image.shape[1], image.shape[0]
         )
         argb_frame.data[:] = argb_array
-        return rtc.VideoFrame(
-            0, rtc.VideoRotation.VIDEO_ROTATION_0, argb_frame.to_i420()
-        )
+        return argb_frame
 
     def _fetch_image(self, url):
         response = requests.get(url, timeout=10)

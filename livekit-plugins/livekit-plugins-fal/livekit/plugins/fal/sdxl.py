@@ -30,14 +30,6 @@ class SDXL:
         self.model = model
 
     async def generate(self, prompt: str) -> rtc.ArgbFrame:
-        """Generate an image from a prompt
-        Args:
-            prompt (str): Prompt to generate an image from
-
-        Returns:
-            rtc.VideoFrame: Image generated from prompt
-        """
-
         handler = fal.apps.submit(
             self.model,
             arguments={"prompt": prompt, "sync_mode": False},
