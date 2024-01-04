@@ -19,7 +19,6 @@ from typing import Optional
 from livekit import agents
 from livekit.agents.utils import AudioBuffer
 from livekit.agents import stt
-from dataclasses import dataclass
 import openai
 from .models import WhisperModels
 
