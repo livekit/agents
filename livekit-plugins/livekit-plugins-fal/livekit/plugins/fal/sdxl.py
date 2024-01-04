@@ -17,18 +17,11 @@ import cv2
 import requests
 import numpy as np
 from livekit import rtc
-import time
 import asyncio
 import os
 
-
-class SDXLPlugin:
-    """Fal SDXL Plugin
-
-    Requires FAL_KEY_ID and FAL_KEY_SECRET environment variables to be set.
-    """
-
-    def __init__(self, model="110602490-fast-sdxl"):
+class SDXL:
+    def __init__(self, model: str ="110602490-fast-sdxl") -> None:
         if not os.getenv("FAL_KEY_ID") and os.getenv("FAL_KEY_SECRET"):
             raise ValueError(
                 "The Fal plugin requires FAL_KEY_ID and FAL_KEY_SECRET environment variables to be set."
@@ -36,16 +29,7 @@ class SDXLPlugin:
 
         self.model = model
 
-    async def generate_image_from_prompt(self, prompt: str) -> rtc.VideoFrame:
-        """Generate an image from a prompt
-
-        Args:
-            prompt (str): Prompt to generate an image from
-
-        Returns:
-            rtc.VideoFrame: Image generated from prompt
-        """
-
+    async def generate(self, prompt: str) -> rtc.ArgbFrame:
         handler = fal.apps.submit(
             self.model,
             arguments={"prompt": prompt, "sync_mode": False},
@@ -61,9 +45,8 @@ class SDXLPlugin:
             rtc.VideoFormatType.FORMAT_ARGB, image.shape[0], image.shape[1]
         )
         argb_frame.data[:] = argb_array
-        return rtc.VideoFrame(
-            0, rtc.VideoRotation.VIDEO_ROTATION_0, argb_frame.to_i420()
-        )
+        return argb_frame
+
 
     def _fetch_image(self, url):
         response = requests.get(url, timeout=10)
