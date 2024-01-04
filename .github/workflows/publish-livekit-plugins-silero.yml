@@ -8,5 +8,5 @@ jobs:
     uses: ./.github/workflows/publish-package.yml
     with:
       package_name: 'livekit-plugins/livekit-plugins-silero'
-      docs_entrypoint: 'livekit-plugins/livekit-plugins-silero/livekit/plugins/silero'
+      package_module: 'livekit.plugins.silero'
     secrets: inherit
