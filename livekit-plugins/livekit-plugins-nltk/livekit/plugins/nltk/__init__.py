@@ -24,6 +24,7 @@ __all__ = [
 
 
 from livekit.agents import Plugin
+import nltk
 
 
 class NltkPlugin(Plugin):
@@ -31,7 +32,10 @@ class NltkPlugin(Plugin):
         super().__init__(__name__, __version__)
 
     def setup(self):
-        pass
+        try:
+            _ = nltk.data.find('tokenizers/punkt') 
+        except LookupError:
+            nltk.download('punkt')
 
 
 Plugin.register_plugin(NltkPlugin())
