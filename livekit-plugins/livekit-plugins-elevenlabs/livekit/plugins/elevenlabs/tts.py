@@ -12,14 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import base64
+import dataclasses
 import json
 import os
-from livekit import rtc
-from livekit.agents import tts
-import dataclasses
+from typing import ClassVar
 from dataclasses import dataclass
 from typing import List, Optional
+
 import aiohttp
+from livekit import rtc
+from livekit.agents import tts
+
 from .models import TTSModels
 
 
@@ -50,14 +55,14 @@ DEFAULT_VOICE = Voice(
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
-STREAM_EOS = json.dumps(dict(test=""))
+STREAM_EOS = json.dumps(dict(text=""))
 
 
 class TTS(tts.TTS):
     def __init__(
         self, api_key: Optional[str] = None, base_url: Optional[str] = None
     ) -> None:
-        super().__init__(streaming_supported=False)
+        super().__init__(streaming_supported=True)
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
         if not api_key:
             raise ValueError("ELEVEN_API_KEY must be set")
@@ -101,6 +106,21 @@ class TTS(tts.TTS):
                 samples_per_channel=len(data) // 2,  # 16-bit
             )
 
+    async def stream(
+        self,
+        *,
+        model_id: TTSModels = "eleven_multilingual_v2",
+        voice: Voice = DEFAULT_VOICE,
+        latency: int = 2,
+    ) -> tts.SynthesizeStream:
+        return Stream(
+            url=self._base_url,
+            api_key=self._api_key,
+            voice_id=voice.voice_id,
+            model_id=model_id,
+            latency=latency,
+        )
+
 
 def dict_to_voices_list(data: dict) -> List[Voice]:
     voices = []
@@ -114,3 +134,112 @@ def dict_to_voices_list(data: dict) -> List[Voice]:
             )
         )
     return voices
+
+
+class Stream(tts.SynthesizeStream):
+    @dataclass
+    class _Session:
+        next_id: ClassVar[int] = 1
+
+        def __init__(self, ws: aiohttp.ClientWebSocketResponse, id: int):
+            self.ws: aiohttp.ClientWebSocketResponse = ws
+            self.id = id
+            self.final_future = asyncio.Future()
+            Stream._Session.next_id += 1
+
+    def __init__(
+        self, url: str, api_key: str, voice_id: str, model_id: str, latency: int
+    ):
+        self._api_key = api_key
+        self._uri = f"{url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format=pcm_44100&optimize_streaming_latency={latency}"
+        self._http_session = aiohttp.ClientSession()
+        self._session: Optional[Stream._Session] = None
+        self._session_lock = asyncio.Lock()
+        self._tasks = set()
+        self._output_queue = asyncio.Queue()
+
+    async def warmup(self):
+        await self._new_session_if_needed()
+
+    async def _new_session_if_needed(self):
+        async with self._session_lock:
+            if self._session is not None:
+                return
+
+            ws = await self._http_session.ws_connect(
+                self._uri, headers={AUTHORIZATION_HEADER: self._api_key}
+            )
+            payload = json.dumps(dict(text=" ", try_trigger_generation=False))
+            await ws.send_str(payload)
+            self._session = Stream._Session(ws=ws, id=Stream._Session.next_id)
+            t = asyncio.create_task(self._result_loop(self._session))
+            self._tasks.add(t)
+            t.add_done_callback(self._tasks.discard)
+
+    def push_text(self, token: str):
+        asyncio.create_task(self._push_text(token))
+
+    async def _push_text(self, token: str):
+        if self._session is None:
+            await self._new_session_if_needed()
+
+        payload = json.dumps(dict(text=token, try_trigger_generation=False))
+        await self._session.ws.send_str(payload)
+
+    async def flush(self) -> None:
+        async with self._session_lock:
+            # Lock so that if we call flush while a session is still being created, we wait for it to finish
+            if self._session is None:
+                raise RuntimeError("Haven't started a session, cannot flush")
+
+            await self._session.ws.send_str(STREAM_EOS)
+            await self._session.final_future
+            await self._session.ws.close()
+            self._session = None
+
+    async def close(self) -> None:
+        if self._session is not None:
+            await self.flush()
+
+        await self._output_queue.put(None)
+
+    async def _result_loop(self, session: "Stream._Session"):
+        while True:
+            msg = await session.ws.receive()
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                bytes_audio = b""
+                if data["audio"] is not None:
+                    bytes_audio = base64.b64decode(data["audio"])
+                audio_frame = rtc.AudioFrame(
+                    data=bytes_audio,
+                    sample_rate=44100,
+                    num_channels=1,
+                    samples_per_channel=len(bytes_audio) // 2,
+                )
+                await self._output_queue.put(
+                    tts.SynthesisEvent(
+                        audio=tts.SynthesizedAudio(text="", data=audio_frame)
+                    )
+                )
+                if data["isFinal"]:
+                    session.final_future.set_result(None)
+                    break
+            else:
+                break
+
+        # If this session is still the current session, clear it
+        async with self._session_lock:
+            if self._session == session:
+                if not session.final_future.done():
+                    session.final_future.set_result(None)
+                self._session = None
+
+    async def __anext__(self) -> tts.SynthesisEvent:
+        item = await self._output_queue.get()
+        if item is None:
+            raise StopAsyncIteration
+        return item
+
+    def __aiter__(self) -> "Stream":
+        return self
