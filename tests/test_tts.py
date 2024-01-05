@@ -38,7 +38,3 @@ async def test_stream():
 
     async with asyncio.TaskGroup() as group:
         group.create_task(stream(tts))
-
-
-if __name__ == "__main__":
-    asyncio.get_event_loop().run_until_complete(test_stream())
