@@ -1,0 +1,5 @@
+livekit
+livekit-api
+livekit-agents
+livekit-plugins-directai
+Pillow
