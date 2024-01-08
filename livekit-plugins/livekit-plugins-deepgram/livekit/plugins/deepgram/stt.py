@@ -25,6 +25,7 @@ class STT(stt.STT):
     ) -> None:
         super().__init__(streaming_supported=True)
         api_key = api_key or os.environ.get("DG_API_KEY")
+        api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
         if not api_key:
             raise ValueError("Deepgram API key is required")
 
