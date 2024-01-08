@@ -17,7 +17,7 @@ import logging
 import asyncio
 import openai
 from dataclasses import dataclass
-from typing import AsyncIterable
+from typing import AsyncIterable, List, Optional
 from enum import Enum
 
 ChatGPTMessageRole = Enum("MessageRole", ["system", "user", "assistant", "function"])
@@ -46,7 +46,7 @@ class ChatGPTPlugin:
         self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._prompt = prompt
         self._message_capacity = message_capacity
-        self._messages: [ChatGPTMessage] = []
+        self._messages: List[ChatGPTMessage] = []
         self._producing_response = False
         self._needs_interrupt = False
 
@@ -67,7 +67,9 @@ class ChatGPTPlugin:
         async for text in self.add_message(None):
             yield text
 
-    async def add_message(self, message: ChatGPTMessage) -> AsyncIterable[str]:
+    async def add_message(
+        self, message: Optional[ChatGPTMessage]
+    ) -> AsyncIterable[str]:
         """Add a message to the chat and generate a streamed response
 
         Args:

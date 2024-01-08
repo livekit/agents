@@ -15,7 +15,6 @@
 from .models import WhisperModels, TTSModels, TTSVoices
 from .stt import STT
 from .tts import TTS
-from .chatgpt import ChatGPTPlugin, ChatGPTMessage, ChatGPTMessageRole
 from .dalle3 import Dalle3
 from .version import __version__
 
@@ -25,9 +24,6 @@ __all__ = [
     "WhisperModels",
     "TTSModels",
     "TTSVoices",
-    "ChatGPTPlugin",
-    "ChatGPTMessage",
-    "ChatGPTMessageRole",
     "Dalle3",
     "__version__",
 ]
