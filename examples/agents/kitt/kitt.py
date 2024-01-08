@@ -17,7 +17,7 @@ import logging
 from state_manager import StateManager, AgentState
 
 from livekit import rtc, agents
-from livekit.plugins.openai import (
+from chatgpt import (
     ChatGPTMessage,
     ChatGPTMessageRole,
     ChatGPTPlugin,
