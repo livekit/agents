@@ -50,7 +50,9 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit",
+        "livekit-agents",
         "torch >= 2.1.0",
+        "torchaudio",
         "numpy >= 1.24.0",
         "openai >= 0.28.0",
         "openai-whisper",

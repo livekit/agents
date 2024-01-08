@@ -1,6 +1,6 @@
 livekit
 livekit-api
 livekit-agents
-livekit-plugins-openai
-livekit-plugins-silero
+livekit-plugins-deepgram
+livekit-plugins-elevenlabs
 Pillow
