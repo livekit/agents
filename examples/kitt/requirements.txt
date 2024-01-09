@@ -3,4 +3,5 @@ livekit-api
 livekit-agents
 livekit-plugins-deepgram
 livekit-plugins-elevenlabs
+openai
 Pillow

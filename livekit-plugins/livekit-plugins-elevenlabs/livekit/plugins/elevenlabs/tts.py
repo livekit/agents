@@ -17,7 +17,6 @@ import base64
 import dataclasses
 import json
 import os
-from typing import ClassVar
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -106,7 +105,7 @@ class TTS(tts.TTS):
                 samples_per_channel=len(data) // 2,  # 16-bit
             )
 
-    async def stream(
+    def stream(
         self,
         *,
         model_id: TTSModels = "eleven_multilingual_v2",
@@ -139,13 +138,8 @@ def dict_to_voices_list(data: dict) -> List[Voice]:
 class Stream(tts.SynthesizeStream):
     @dataclass
     class _Session:
-        next_id: ClassVar[int] = 1
-
-        def __init__(self, ws: aiohttp.ClientWebSocketResponse, id: int):
-            self.ws: aiohttp.ClientWebSocketResponse = ws
-            self.id = id
-            self.final_future = asyncio.Future()
-            Stream._Session.next_id += 1
+        ws: aiohttp.ClientWebSocketResponse
+        final_future = asyncio.Future()
 
     def __init__(
         self, url: str, api_key: str, voice_id: str, model_id: str, latency: int
@@ -156,6 +150,7 @@ class Stream(tts.SynthesizeStream):
         self._session: Optional[Stream._Session] = None
         self._session_lock = asyncio.Lock()
         self._tasks = set()
+        self._output_lock = asyncio.Lock()
         self._output_queue = asyncio.Queue()
 
     async def warmup(self):
@@ -171,7 +166,7 @@ class Stream(tts.SynthesizeStream):
             )
             payload = json.dumps(dict(text=" ", try_trigger_generation=False))
             await ws.send_str(payload)
-            self._session = Stream._Session(ws=ws, id=Stream._Session.next_id)
+            self._session = Stream._Session(ws=ws)
             t = asyncio.create_task(self._result_loop(self._session))
             self._tasks.add(t)
             t.add_done_callback(self._tasks.discard)
@@ -187,15 +182,19 @@ class Stream(tts.SynthesizeStream):
         await self._session.ws.send_str(payload)
 
     async def flush(self) -> None:
+        flush_session: Optional[Stream._Session] = None
         async with self._session_lock:
             # Lock so that if we call flush while a session is still being created, we wait for it to finish
             if self._session is None:
                 raise RuntimeError("Haven't started a session, cannot flush")
 
-            await self._session.ws.send_str(STREAM_EOS)
-            await self._session.final_future
-            await self._session.ws.close()
+            flush_session = self._session
             self._session = None
+
+        if flush_session is not None:
+            await flush_session.ws.send_str(STREAM_EOS)
+            await flush_session.final_future
+            await flush_session.ws.close()
 
     async def close(self) -> None:
         if self._session is not None:
@@ -204,29 +203,30 @@ class Stream(tts.SynthesizeStream):
         await self._output_queue.put(None)
 
     async def _result_loop(self, session: "Stream._Session"):
-        while True:
-            msg = await session.ws.receive()
-            if msg.type == aiohttp.WSMsgType.TEXT:
-                data = json.loads(msg.data)
-                bytes_audio = b""
-                if data["audio"] is not None:
+        async with self._output_lock:
+            while True:
+                msg = await session.ws.receive()
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    data = json.loads(msg.data)
+                    bytes_audio = b""
+                    if data["isFinal"]:
+                        session.final_future.set_result(None)
+                        break
                     bytes_audio = base64.b64decode(data["audio"])
-                audio_frame = rtc.AudioFrame(
-                    data=bytes_audio,
-                    sample_rate=44100,
-                    num_channels=1,
-                    samples_per_channel=len(bytes_audio) // 2,
-                )
-                await self._output_queue.put(
-                    tts.SynthesisEvent(
-                        audio=tts.SynthesizedAudio(text="", data=audio_frame)
+                    audio_frame = rtc.AudioFrame(
+                        data=bytes_audio,
+                        sample_rate=44100,
+                        num_channels=1,
+                        samples_per_channel=len(bytes_audio) // 2,
                     )
-                )
-                if data["isFinal"]:
-                    session.final_future.set_result(None)
+                    await self._output_queue.put(
+                        tts.SynthesisEvent(
+                            audio=tts.SynthesizedAudio(text="", data=audio_frame)
+                        )
+                    )
+
+                else:
                     break
-            else:
-                break
 
         # If this session is still the current session, clear it
         async with self._session_lock:

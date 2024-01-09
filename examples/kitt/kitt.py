@@ -15,6 +15,7 @@
 import json
 import logging
 from state_manager import StateManager, AgentState
+from typing import AsyncIterable
 
 from livekit import rtc, agents
 from chatgpt import (
@@ -23,7 +24,7 @@ from chatgpt import (
     ChatGPTPlugin,
 )
 from livekit.plugins.deepgram import STT
-from livekit.plugins.elevenlabs import TTSPlugin
+from livekit.plugins.elevenlabs import TTS
 
 PROMPT = "You are KITT, a friendly voice assistant powered by LiveKit.  \
           Conversation should be personable, and be sure to ask follow up questions. \
@@ -52,7 +53,7 @@ class KITT:
             prompt=PROMPT, message_capacity=20, model="gpt-4-1106-preview"
         )
         self.stt_plugin = STT()
-        self.tts_plugin = TTSPlugin()
+        self.tts_plugin = TTS()
 
         self.ctx: agents.JobContext = ctx
         self.line_out = rtc.AudioSource(ELEVEN_TTS_SAMPLE_RATE, ELEVEN_TTS_CHANNELS)
@@ -122,25 +123,26 @@ class KITT:
             self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
 
     async def process_chatgpt_result(self, text_stream):
+        stream = self.tts_plugin.stream()
+        self.ctx.create_task(self.send_audio_stream(stream))
         self.state.chat_gpt_working = True
         all_text = ""
 
         async for text in text_stream:
+            stream.push_text(text)
             all_text += text
 
         self.state.chat_gpt_working = False
 
-        async def text_iterator():
-            yield all_text
-
-        audio_stream = await self.tts_plugin.generate_speech(text_iterator())
         await self.send_message_from_agent(all_text)
-        await self.send_audio_stream(audio_stream)
+        await stream.flush()
 
-    async def send_audio_stream(self, audio_stream):
+    async def send_audio_stream(
+        self, tts_events: AsyncIterable[agents.tts.SynthesisEvent]
+    ):
         self.state.agent_sending_audio = True
-        async for frame in audio_stream:
-            await self.line_out.capture_frame(frame)
+        async for e in tts_events:
+            await self.line_out.capture_frame(e.audio.data)
         self.state.agent_sending_audio = False
 
     async def send_message_from_agent(self, text):
