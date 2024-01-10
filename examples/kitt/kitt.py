@@ -97,7 +97,7 @@ class KITT:
 
     async def process_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        stream = self.stt_plugin.stream()
+        stream = self.stt_plugin.stream(sample_rate=44100)
         self.ctx.create_task(self.process_stt_stream(stream))
         async for audio_frame in audio_stream:
             if self.state.agent_state != AgentState.LISTENING:
@@ -135,7 +135,7 @@ class KITT:
         self.state.chat_gpt_working = False
 
         await self.send_message_from_agent(all_text)
-        await stream.flush()
+        await stream.close()
 
     async def send_audio_stream(
         self, tts_events: AsyncIterable[agents.tts.SynthesisEvent]
