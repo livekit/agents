@@ -123,7 +123,7 @@ class KITT:
             self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
 
     async def process_chatgpt_result(self, text_stream):
-        stream = self.tts_plugin.stream()
+        stream = self.tts_plugin.stream(model_id="eleven_turbo_v2")
         self.ctx.create_task(self.send_audio_stream(stream))
         self.state.chat_gpt_working = True
         all_text = ""

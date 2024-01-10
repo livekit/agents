@@ -136,10 +136,10 @@ def dict_to_voices_list(data: dict) -> List[Voice]:
 
 
 class Stream(tts.SynthesizeStream):
-    @dataclass
     class _Session:
-        ws: aiohttp.ClientWebSocketResponse
-        final_future = asyncio.Future()
+        def __init__(self, ws: aiohttp.ClientWebSocketResponse):
+            self.ws = ws
+            self.final_future = asyncio.Future()
 
     def __init__(
         self, url: str, api_key: str, voice_id: str, model_id: str, latency: int
@@ -178,13 +178,12 @@ class Stream(tts.SynthesizeStream):
         if self._session is None:
             await self._new_session_if_needed()
 
-        payload = json.dumps(dict(text=token, try_trigger_generation=False))
+        payload = json.dumps(dict(text=token + " ", try_trigger_generation=False))
         await self._session.ws.send_str(payload)
 
     async def flush(self) -> None:
         flush_session: Optional[Stream._Session] = None
         async with self._session_lock:
-            # Lock so that if we call flush while a session is still being created, we wait for it to finish
             if self._session is None:
                 raise RuntimeError("Haven't started a session, cannot flush")
 
@@ -208,7 +207,6 @@ class Stream(tts.SynthesizeStream):
                 msg = await session.ws.receive()
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     data = json.loads(msg.data)
-                    bytes_audio = b""
                     if data["isFinal"]:
                         session.final_future.set_result(None)
                         break
@@ -228,11 +226,12 @@ class Stream(tts.SynthesizeStream):
                 else:
                     break
 
+        if not session.final_future.done():
+            session.final_future.set_result(None)
+
         # If this session is still the current session, clear it
         async with self._session_lock:
             if self._session == session:
-                if not session.final_future.done():
-                    session.final_future.set_result(None)
                 self._session = None
 
     async def __anext__(self) -> tts.SynthesisEvent:
