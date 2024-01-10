@@ -128,7 +128,7 @@ class STT(stt.STT):
                 enable_spoken_punctuation=config.spoken_punctuation,
             ),
             model=config.model,
-            language_codes=language,
+            language_codes=config.languages,
         )
 
         return recognize_response_to_speech_event(

@@ -30,7 +30,7 @@ class StreamAdapter(STT):
     def stream(
         self,
         *,
-        language: Optional[str] = "en-US",
+        language: Optional[str] = None,
     ) -> SpeechStream:
         return StreamAdapterWrapper(
             self._vad_stream,

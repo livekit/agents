@@ -163,27 +163,27 @@ class SpeechStream(stt.SpeechStream):
         retry_count = 0
         while True:
             try:
-                self._live = await self._client.listen.asynclive.v("1")
+                self._live = self._client.listen.asynclive.v("1")
 
                 opened = False
 
-                def on_close(_: int) -> None:
+                async def on_close(_, **kwargs) -> None:
                     nonlocal opened
                     opened = False
 
-                def on_transcript_received(event: deepgram.LiveResultResponse) -> None:
-                    if event.type != "Results":  # not documented by Deepgram
+                async def on_transcript_received(_, result: deepgram.LiveResultResponse, **kwargs) -> None:
+                    if result.type != "Results":
                         return
 
                     speech_event = live_transcription_to_speech_event(
-                        self._config.language, event
+                        self._config.language, result
                     )
                     self._event_queue.put_nowait(speech_event)
 
-                self._live.register_handler(
+                self._live.on(
                     deepgram.LiveTranscriptionEvents.Close, on_close
                 )
-                self._live.register_handler(
+                self._live.on(
                     deepgram.LiveTranscriptionEvents.Transcript,
                     on_transcript_received,
                 )
@@ -207,7 +207,7 @@ class SpeechStream(stt.SpeechStream):
                     frame = frame.remix_and_resample(
                         self._sample_rate, self._num_channels
                     )
-                    self._live.send(frame.data.tobytes())
+                    await self._live.send(frame.data.tobytes())
                     self._queue.task_done()
 
             except asyncio.CancelledError:
@@ -239,16 +239,19 @@ def live_transcription_to_speech_event(
     language: Optional[str],
     event: deepgram.LiveResultResponse,
 ) -> stt.SpeechEvent:
-    dg_alts = event["channel"]["alternatives"]
+    dg_alts = event.channel.alternatives # type: ignore
+    if not dg_alts:
+        raise ValueError("no alternatives in response")
+
     return stt.SpeechEvent(
-        is_final=event["is_final"],
+        is_final=event.is_final,
         alternatives=[
             stt.SpeechData(
-                language=alt.get("detected_language", language),
-                start_time=alt["words"][0]["start"] if alt["words"] else 0,
-                end_time=alt["words"][-1]["end"] if alt["words"] else 0,
-                confidence=alt["confidence"],
-                text=alt["transcript"],
+                language=language,
+                start_time=alt.words[0].start if alt.words else 0, 
+                end_time=alt.words[-1].end if alt.words else 0,
+                confidence=alt.confidence,
+                text=alt.transcript,
             )
             for alt in dg_alts
         ],
@@ -259,16 +262,20 @@ def prerecorded_transcription_to_speech_event(
     language: Optional[str],
     event: deepgram.PrerecordedResponse,
 ) -> stt.SpeechEvent:
-    dg_alts = event["results"]["channels"][0]["alternatives"]  # type: ignore
+    dg_alts = event.results.channels[0].alternatives # type: ignore
+    if not dg_alts:
+        raise ValueError("no alternatives in response")
+
     return stt.SpeechEvent(
         is_final=True,
         alternatives=[
             stt.SpeechData(
-                language=alt.get("detected_language", language),
-                start_time=alt["words"][0]["start"],
-                end_time=alt["words"][-1]["end"],
-                confidence=alt["confidence"],
-                text=alt["transcript"],
+                language=language,
+                start_time=alt.words[0].start if alt.words else 0,
+                end_time=alt.words[-1].end if alt.words else 0,
+                confidence=alt.confidence or 0,
+                # not sure why transcript is Optional inside DG SDK ...
+                text=alt.transcript or "",
             )
             for alt in dg_alts
         ],

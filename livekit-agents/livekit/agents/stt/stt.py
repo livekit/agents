@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from livekit import rtc
-from typing import Optional, List, Union
+from typing import Optional, List
 from dataclasses import dataclass
 from ..utils import AudioBuffer
 
