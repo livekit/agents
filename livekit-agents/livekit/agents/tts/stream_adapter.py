@@ -1,9 +1,8 @@
 from .tts import (
     TTS,
-    TranscriptionStream,
+    SynthesizeStream,
     SynthesisEvent,
     SynthesizedAudio,
-    SynthesisOptions,
 )
 
 
@@ -12,18 +11,14 @@ class StreamAdapter(TTS):
         super().__init__(streaming_supported=True)
         self._tts = tts
 
-    async def synthesize(
-        self, text: str, opts: SynthesisOptions = SynthesisOptions()
-    ) -> SynthesizedAudio:
-        return await self._tts.synthesize(text, opts)
+    async def synthesize(self, *, text: str) -> SynthesizedAudio:
+        return await self._tts.synthesize(text=text)
 
-    def stream(
-        self, opts: SynthesisOptions = SynthesisOptions()
-    ) -> TranscriptionStream:
+    def stream(self) -> SynthesizeStream:
         return StreamAdapterWrapper()
 
 
-class StreamAdapterWrapper(TranscriptionStream):
+class StreamAdapterWrapper(SynthesizeStream):
     def __init__(self) -> None:
         super().__init__()
         self._closed = False

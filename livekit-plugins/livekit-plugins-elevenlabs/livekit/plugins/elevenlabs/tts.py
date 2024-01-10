@@ -153,9 +153,6 @@ class Stream(tts.SynthesizeStream):
         self._output_lock = asyncio.Lock()
         self._output_queue = asyncio.Queue()
 
-    async def warmup(self):
-        await self._new_session_if_needed()
-
     async def _new_session_if_needed(self):
         async with self._session_lock:
             if self._session is not None:
