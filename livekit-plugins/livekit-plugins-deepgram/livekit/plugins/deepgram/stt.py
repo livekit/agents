@@ -1,7 +1,7 @@
 from livekit import rtc, agents
 from livekit.agents import stt
 from livekit.agents.utils import AudioBuffer
-from typing import Union, Optional, List
+from typing import Union, Optional
 from .models import DeepgramModels, DeepgramLanguages
 from dataclasses import dataclass
 import dataclasses
@@ -171,7 +171,9 @@ class SpeechStream(stt.SpeechStream):
                     nonlocal opened
                     opened = False
 
-                async def on_transcript_received(_, result: deepgram.LiveResultResponse, **kwargs) -> None:
+                async def on_transcript_received(
+                    _, result: deepgram.LiveResultResponse, **kwargs
+                ) -> None:
                     if result.type != "Results":
                         return
 
@@ -180,9 +182,7 @@ class SpeechStream(stt.SpeechStream):
                     )
                     self._event_queue.put_nowait(speech_event)
 
-                self._live.on(
-                    deepgram.LiveTranscriptionEvents.Close, on_close
-                )
+                self._live.on(deepgram.LiveTranscriptionEvents.Close, on_close)
                 self._live.on(
                     deepgram.LiveTranscriptionEvents.Transcript,
                     on_transcript_received,
@@ -239,7 +239,7 @@ def live_transcription_to_speech_event(
     language: Optional[str],
     event: deepgram.LiveResultResponse,
 ) -> stt.SpeechEvent:
-    dg_alts = event.channel.alternatives # type: ignore
+    dg_alts = event.channel.alternatives  # type: ignore
     if not dg_alts:
         raise ValueError("no alternatives in response")
 
@@ -248,7 +248,7 @@ def live_transcription_to_speech_event(
         alternatives=[
             stt.SpeechData(
                 language=language,
-                start_time=alt.words[0].start if alt.words else 0, 
+                start_time=alt.words[0].start if alt.words else 0,
                 end_time=alt.words[-1].end if alt.words else 0,
                 confidence=alt.confidence,
                 text=alt.transcript,
@@ -262,7 +262,7 @@ def prerecorded_transcription_to_speech_event(
     language: Optional[str],
     event: deepgram.PrerecordedResponse,
 ) -> stt.SpeechEvent:
-    dg_alts = event.results.channels[0].alternatives # type: ignore
+    dg_alts = event.results.channels[0].alternatives  # type: ignore
     if not dg_alts:
         raise ValueError("no alternatives in response")
 

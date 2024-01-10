@@ -19,7 +19,6 @@ from google.cloud.speech_v2.types import cloud_speech
 from livekit import rtc, agents
 from livekit.agents.utils import AudioBuffer
 from livekit.agents import stt
-from typing import Union
 from .models import SpeechModels, SpeechLanguages
 from dataclasses import dataclass
 import dataclasses
