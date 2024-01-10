@@ -244,14 +244,14 @@ def live_transcription_to_speech_event(
         raise ValueError("no alternatives in response")
 
     return stt.SpeechEvent(
-        is_final=event.is_final,
+        is_final=event.is_final or False,  # could be None?
         alternatives=[
             stt.SpeechData(
                 language=language,
                 start_time=alt.words[0].start if alt.words else 0,
                 end_time=alt.words[-1].end if alt.words else 0,
-                confidence=alt.confidence,
-                text=alt.transcript,
+                confidence=alt.confidence or 0,
+                text=alt.transcript or "",
             )
             for alt in dg_alts
         ],
