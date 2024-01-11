@@ -1,5 +1,8 @@
 from typing import List
 from livekit import agents
+from dataclasses import dataclass
+import dataclasses
+from typing import Optional
 import asyncio
 import nltk
 
@@ -9,16 +12,43 @@ import nltk
 # (languages such as Chinese and Japanese are not yet supported)
 
 
+@dataclass
+class TokenizerOptions:
+    language: str
+    min_sentence_len: int
+    stream_context_len: int
+
+
 class SentenceTokenizer(agents.tokenize.SentenceTokenizer):
+    def __init__(
+        self,
+        language: str = "en-US",
+        min_sentence_len: int = 20,
+        stream_context_len: int = 10,
+    ) -> None:
+        super().__init__()
+        self._config = TokenizerOptions(
+            language=language,
+            min_sentence_len=min_sentence_len,
+            stream_context_len=stream_context_len,
+        )
+
+    def _sanitize_options(self, language: Optional[str] = None) -> TokenizerOptions:
+        config = dataclasses.replace(self._config)
+        if language:
+            config.language = language
+        return config
+
     def tokenize(
-        self, *, text: str, language: str = "en-US", min_sentence_len: int = 20
+        self, *, text: str, language: Optional[str] = None
     ) -> List[agents.tokenize.SegmentedSentence]:
-        sentences = nltk.tokenize.sent_tokenize(text, language)
+        config = self._sanitize_options(language=language)
+        sentences = nltk.tokenize.sent_tokenize(text, config.language)
         new_sentences = []
         buff = ""
         for sentence in sentences:
             buff += sentence + " "
-            if len(buff) - 1 >= min_sentence_len:
+            if len(buff) - 1 >= config.min_sentence_len:
                 new_sentences.append(buff.rstrip())
                 buff = ""
 
@@ -28,12 +58,15 @@ class SentenceTokenizer(agents.tokenize.SentenceTokenizer):
         return [agents.tokenize.SegmentedSentence(text=text) for text in new_sentences]
 
     def stream(
-        self, *, language="en-US", min_sentence_len: int = 20, context_len: int = 10
+        self,
+        *,
+        language: Optional[str] = None,
     ) -> agents.tokenize.SentenceStream:
+        config = self._sanitize_options(language=language)
         return SentenceStream(
-            language=language,
-            min_sentence_len=min_sentence_len,
-            context_len=context_len,
+            language=config.language,
+            min_sentence_len=config.min_sentence_len,
+            context_len=config.stream_context_len,
         )
 
 

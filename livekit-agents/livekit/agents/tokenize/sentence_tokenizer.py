@@ -1,6 +1,7 @@
 from typing import List
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -11,12 +12,12 @@ class SegmentedSentence:
 class SentenceTokenizer(ABC):
     @abstractmethod
     def tokenize(
-        self, *, text: str, language: str = "en-US"
+        self, *, text: str, language: Optional[str] = None
     ) -> List[SegmentedSentence]:
         pass
 
     @abstractmethod
-    def stream(self, *, language: str = "en-US") -> "SentenceStream":
+    def stream(self, *, language: Optional[str] = None) -> "SentenceStream":
         pass
 
 

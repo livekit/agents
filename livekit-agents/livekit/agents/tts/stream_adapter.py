@@ -4,28 +4,17 @@ from .tts import (
     SynthesisEvent,
     SynthesizedAudio,
 )
-
-
-class StreamAdapter(TTS):
-    def __init__(self, tts: TTS) -> None:
-        super().__init__(streaming_supported=True)
-        self._tts = tts
-
-    async def synthesize(self, *, text: str) -> SynthesizedAudio:
-        return await self._tts.synthesize(text=text)
-
-    def stream(self) -> SynthesizeStream:
-        return StreamAdapterWrapper()
+from ..tokenize import SentenceTokenizer, SentenceStream
 
 
 class StreamAdapterWrapper(SynthesizeStream):
-    def __init__(self) -> None:
+    def __init__(self, tts: TTS, sentence_stream: SentenceStream) -> None:
         super().__init__()
         self._closed = False
 
         self._text = ""
 
-    def push_token(self, token: str):
+    def push_text(self, token: str) -> None:
         self._text += token
 
         # Divide the text into sentences and push them to the queue
@@ -38,3 +27,16 @@ class StreamAdapterWrapper(SynthesizeStream):
 
     async def __anext__(self) -> SynthesisEvent:
         raise StopAsyncIteration
+
+
+class StreamAdapter(TTS):
+    def __init__(self, tts: TTS, tokenizer: SentenceTokenizer) -> None:
+        super().__init__(streaming_supported=True)
+        self._tts = tts
+        self._tokenizer = tokenizer
+
+    async def synthesize(self, *, text: str) -> SynthesizedAudio:
+        return await self._tts.synthesize(text=text)
+
+    def stream(self) -> SynthesizeStream:
+        return StreamAdapterWrapper(self._tts, self._tokenizer.stream())
