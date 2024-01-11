@@ -137,7 +137,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._latency = latency
 
         self._queue = asyncio.Queue[str]()
-        self._output_queue = asyncio.Queue[tts.SynthesisEvent]()
+        self._event_queue = asyncio.Queue[tts.SynthesisEvent]()
         self._closed = False
 
         self._main_task = asyncio.create_task(self._run(max_retry=32))
@@ -180,7 +180,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 retry_count = 0  # reset retry count
                 listen_task = asyncio.create_task(self._listen_task(ws))
 
-                self._output_queue.put_nowait(
+                self._event_queue.put_nowait(
                     tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
                 )
 
@@ -195,7 +195,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     self._queue.task_done()
 
                 # We know 11labs is closing the stream after each request/flush
-                self._output_queue.put_nowait(
+                self._event_queue.put_nowait(
                     tts.SynthesisEvent(type=tts.SynthesisEventType.COMPLETED)
                 )
                 await listen_task
@@ -247,7 +247,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     num_channels=1,
                     samples_per_channel=len(data) // 2,
                 )
-                self._output_queue.put_nowait(
+                self._event_queue.put_nowait(
                     tts.SynthesisEvent(
                         type=tts.SynthesisEventType.AUDIO,
                         audio=tts.SynthesizedAudio(text="", data=audio_frame),

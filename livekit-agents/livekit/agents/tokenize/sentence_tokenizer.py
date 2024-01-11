@@ -30,6 +30,9 @@ class SentenceStream(ABC):
     async def flush(self) -> None:
         pass
 
+    async def close(self) -> None:
+        pass
+
     @abstractmethod
     async def __anext__(self) -> SegmentedSentence:
         pass

@@ -1,7 +1,10 @@
+import logging
+import asyncio
 from .tts import (
     TTS,
     SynthesizeStream,
     SynthesisEvent,
+    SynthesisEventType,
     SynthesizedAudio,
 )
 from ..tokenize import SentenceTokenizer, SentenceStream
@@ -11,22 +14,50 @@ class StreamAdapterWrapper(SynthesizeStream):
     def __init__(self, tts: TTS, sentence_stream: SentenceStream) -> None:
         super().__init__()
         self._closed = False
+        self._tts = tts
+        self._sentence_stream = sentence_stream
+        self._queue = asyncio.Queue[str]()
+        self._event_queue = asyncio.Queue[SynthesisEvent]()
 
-        self._text = ""
+        self._main_task = asyncio.create_task(self._run())
+
+        def log_exception(task: asyncio.Task) -> None:
+            if not task.cancelled() and task.exception():
+                logging.error(f"google speech task failed: {task.exception()}")
+
+        self._main_task.add_done_callback(log_exception)
+
+    async def _run(self) -> None:
+        while True:
+            try:
+                sentence = await self._sentence_stream.__anext__()
+                audio = await self._tts.synthesize(text=sentence.text)
+                self._event_queue.put_nowait(
+                    SynthesisEvent(type=SynthesisEventType.AUDIO, audio=audio)
+                )
+            except asyncio.CancelledError:
+                break
+
+        self._closed = True
 
     def push_text(self, token: str) -> None:
-        self._text += token
-
-        # Divide the text into sentences and push them to the queue
+        self._sentence_stream.push_text(token)
 
     async def flush(self) -> None:
-        pass
+        await self._sentence_stream.flush()
 
     async def close(self) -> None:
-        pass
+        self._main_task.cancel()
+        try:
+            await self._main_task
+        except asyncio.CancelledError:
+            pass
 
     async def __anext__(self) -> SynthesisEvent:
-        raise StopAsyncIteration
+        if self._closed and self._event_queue.empty():
+            raise StopAsyncIteration
+
+        return await self._event_queue.get()
 
 
 class StreamAdapter(TTS):
