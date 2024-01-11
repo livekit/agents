@@ -15,7 +15,7 @@
 import asyncio
 import logging
 from typing import Coroutine, Optional, TYPE_CHECKING
-from livekit import rtc, protocol
+from livekit import api, rtc, protocol
 
 # TODO: refactor worker so we can avoid this circular import
 if TYPE_CHECKING:
@@ -58,13 +58,17 @@ class JobContext:
 
     @property
     def participant(self) -> Optional[rtc.Participant]:
-        """LiveKit Participant corresponding to the Job"""
+        """LiveKit RemoteParticipant that the Job launched for. None if Agent is launched for the Room."""
         return self._participant
 
     @property
     def agent_identity(self) -> Optional[rtc.Participant]:
         """Participant sid for the agent"""
         return self._agent_identity
+
+    @property
+    def api(self) -> api.LiveKitAPI:
+        return self._worker.api
 
     def create_task(self, coro: Coroutine) -> asyncio.Task:
         """

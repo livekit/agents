@@ -14,10 +14,10 @@
 
 import json
 import logging
-from state_manager import StateManager, AgentState
 from typing import AsyncIterable
 
 from livekit import rtc, agents
+from livekit.agents import AgentStatePreset, AgentState, ChatMessage
 from chatgpt import (
     ChatGPTMessage,
     ChatGPTMessageRole,
@@ -45,9 +45,6 @@ class KITT:
         await kitt.start()
 
     def __init__(self, ctx: agents.JobContext):
-        # state
-        self.state = StateManager(ctx)
-
         # plugins
         self.chatgpt_plugin = ChatGPTPlugin(
             prompt=PROMPT, message_capacity=20, model="gpt-4-1106-preview"
@@ -56,7 +53,13 @@ class KITT:
         self.tts_plugin = TTS()
 
         self.ctx: agents.JobContext = ctx
+        self.data_transport = agents.DataTransport(ctx)
+        self.data_transport.on_chat_message(self.on_chat_received)
         self.line_out = rtc.AudioSource(ELEVEN_TTS_SAMPLE_RATE, ELEVEN_TTS_CHANNELS)
+
+        self._sending_audio = False
+        self._processing = False
+        self._agent_state: AgentStatePreset = AgentStatePreset.IDLE
 
     async def start(self):
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
@@ -68,15 +71,16 @@ class KITT:
             yield INTRO
 
         await self.process_chatgpt_result(intro_text_stream())
+        self.update_state()
 
-    def on_data_received(self, data: bytes, participant: rtc.RemoteParticipant, kind):
-        payload = json.loads(data.decode("utf-8"))
+    def on_chat_received(self, message: ChatMessage):
+        # TODO: handle deleted and updated messages in message context
+        if message.deleted:
+            return
 
-        if payload["type"] == "user_chat_message":
-            text = payload["text"]
-            msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=text)
-            chatgpt_result = self.chatgpt_plugin.add_message(msg)
-            self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
+        msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=message.message)
+        chatgpt_result = self.chatgpt_plugin.add_message(msg)
+        self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
 
     async def publish_audio(self):
         track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.line_out)
@@ -100,13 +104,13 @@ class KITT:
         stream = self.stt_plugin.stream(sample_rate=44100)
         self.ctx.create_task(self.process_stt_stream(stream))
         async for audio_frame in audio_stream:
-            if self.state.agent_state != AgentState.LISTENING:
+            if self._agent_state != AgentState.LISTENING:
                 continue
             stream.push_frame(audio_frame)
 
     async def process_stt_stream(self, stream):
         async for event in stream:
-            if not event.is_final or self.state.agent_state != AgentState.LISTENING:
+            if not event.is_final or self._agent_state != AgentState.LISTENING:
                 continue
 
             alt = event.alternatives[0]
@@ -115,7 +119,8 @@ class KITT:
                 continue
 
             await self.ctx.room.local_participant.publish_data(
-                json.dumps({"type": "transcription", "text": text})
+                json.dumps({"text": text}),
+                topic="transcription",
             )
 
             msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=text)
@@ -123,32 +128,53 @@ class KITT:
             self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
 
     async def process_chatgpt_result(self, text_stream):
+        # ChatGPT is streamed, so we'll flip the state immediately
+        self.update_state(processing=True)
+
         stream = self.tts_plugin.stream(model_id="eleven_turbo_v2")
         self.ctx.create_task(self.send_audio_stream(stream))
-        self.state.chat_gpt_working = True
         all_text = ""
 
         async for text in text_stream:
             stream.push_text(text)
             all_text += text
 
-        self.state.chat_gpt_working = False
-
+        self.update_state(processing=False)
         await self.send_message_from_agent(all_text)
         await stream.close()
 
     async def send_audio_stream(
         self, tts_events: AsyncIterable[agents.tts.SynthesisEvent]
     ):
-        self.state.agent_sending_audio = True
+        first = True
         async for e in tts_events:
+            if first:
+                first = False
+                self.update_state(sending_audio=True)
             await self.line_out.capture_frame(e.audio.data)
-        self.state.agent_sending_audio = False
+        self._sending_audio = False
+        self.update_state(sending_audio=False)
 
     async def send_message_from_agent(self, text):
-        await self.ctx.room.local_participant.publish_data(
-            json.dumps({"type": "agent_chat_message", "text": text})
-        )
+        # TODO: display incremental tokens when clients support it
+        await self.data_transport.send_chat_message(text)
+
+    def update_state(self,
+                     sending_audio: bool = None,
+                     processing: bool = None):
+        if sending_audio is not None:
+            self._sending_audio = sending_audio
+        if processing is not None:
+            self._processing = processing
+
+        state = AgentStatePreset.LISTENING
+        if self._sending_audio:
+            state = AgentStatePreset.SPEAKING
+        elif self._processing:
+            state = AgentStatePreset.THINKING
+
+        self._agent_state = state
+        self.ctx.create_task(self.data_transport.set_agent_state(state))
 
 
 if __name__ == "__main__":

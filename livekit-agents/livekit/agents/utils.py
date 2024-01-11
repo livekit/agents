@@ -5,6 +5,11 @@ AudioBuffer = Union[List[rtc.AudioFrame], rtc.AudioFrame]
 
 
 def merge_frames(buffer: AudioBuffer) -> rtc.AudioFrame:
+    """
+    Merges one or more AudioFrames into a single one
+    Args:
+        buffer: either a rtc.AudioFrame or a list of rtc.AudioFrame
+    """
     if isinstance(buffer, list):
         # merge all frames into one
         if len(buffer) == 0:

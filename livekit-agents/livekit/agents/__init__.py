@@ -23,6 +23,7 @@ from .worker import (
 )
 from .plugin import Plugin
 from .utils import AudioBuffer, merge_frames
+from .data_transport import DataTransport, AgentStatePreset, AgentState, ChatMessage
 from .job_request import SubscribeCallbacks, AutoDisconnectCallbacks, JobRequest
 from .job_context import JobContext
 
@@ -45,6 +46,10 @@ __all__ = [
     "JobType",
     "AudioBuffer",
     "merge_frames",
+    "DataTransport",
+    "AgentStatePreset",
+    "AgentState",
+    "ChatMessage",
     "stt",
     "vad",
     "tts",
