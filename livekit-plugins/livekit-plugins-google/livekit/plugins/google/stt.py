@@ -200,7 +200,7 @@ class SpeechStream(stt.SpeechStream):
         except asyncio.CancelledError:
             pass
 
-    def _streamning_config(self) -> cloud_speech.StreamingRecognitionConfig:
+    def _streaming_config(self) -> cloud_speech.StreamingRecognitionConfig:
         return cloud_speech.StreamingRecognitionConfig(
             config=cloud_speech.RecognitionConfig(
                 explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
@@ -224,7 +224,7 @@ class SpeechStream(stt.SpeechStream):
         retry_count = 0
         while True:
             try:
-                input_gen = self._input_gen(self._streamning_config())
+                input_gen = self._input_gen(self._streaming_config())
                 stream = await self._client.streaming_recognize(requests=input_gen)
                 retry_count = 0
 
@@ -234,7 +234,6 @@ class SpeechStream(stt.SpeechStream):
                     )
 
             except asyncio.CancelledError:
-                # Close requested
                 break
             except Exception as e:
                 if retry_count > max_retry and max_retry > 0:
