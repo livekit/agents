@@ -160,6 +160,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         if self._closed:
             raise ValueError("cannot push to a closed stream")
 
+        # TODO: Native word boundary detection may not be good enough for all languages
         # fmt: off
         splitters = (".", ",", "?", "!", ";", ":", "—", "-", "(", ")", "[", "]", "}", " ")
         # fmt: on
