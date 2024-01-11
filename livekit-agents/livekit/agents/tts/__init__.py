@@ -3,6 +3,7 @@ from .tts import (
     SynthesisEvent,
     SynthesizedAudio,
     SynthesizeStream,
+    SynthesisEventType,
 )
 
 __all__ = [
@@ -10,4 +11,5 @@ __all__ = [
     "SynthesisEvent",
     "SynthesizedAudio",
     "SynthesizeStream",
+    "SynthesisEventType",
 ]
