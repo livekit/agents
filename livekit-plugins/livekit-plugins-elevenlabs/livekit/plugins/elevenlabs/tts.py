@@ -160,7 +160,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         if self._closed:
             raise ValueError("cannot push to a closed stream")
 
+        # fmt: off
         splitters = (".", ",", "?", "!", ";", ":", "—", "-", "(", ")", "[", "]", "}", " ")
+        # fmt: on
+
         self._text += text
         if text[-1] in splitters:
             self._queue.put_nowait(self._text)
