@@ -78,7 +78,6 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("ELEVEN_API_KEY must be set")
 
-        self._api_key = api_key
         self._session = aiohttp.ClientSession()
         self._config = TTSOptions(
             voice=voice,
@@ -89,7 +88,8 @@ class TTS(tts.TTS):
 
     async def list_voices(self) -> List[Voice]:
         async with self._session.get(
-            f"{self._base_url}/voices", headers={AUTHORIZATION_HEADER: self._api_key}
+            f"{self._config.base_url}/voices",
+            headers={AUTHORIZATION_HEADER: self._config.api_key},
         ) as resp:
             data = await resp.json()
             return dict_to_voices_list(data)
@@ -101,8 +101,8 @@ class TTS(tts.TTS):
     ) -> tts.SynthesizedAudio:
         voice = self._config.voice
         async with self._session.post(
-            f"{self._base_url}/text-to-speech/{voice.id}?output_format=pcm_44100",
-            headers={AUTHORIZATION_HEADER: self._api_key},
+            f"{self._config.base_url}/text-to-speech/{voice.id}?output_format=pcm_44100",
+            headers={AUTHORIZATION_HEADER: self._config.api_key},
             json=dict(
                 text=text,
                 model_id=self._config.model_id,
