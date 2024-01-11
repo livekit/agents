@@ -147,6 +147,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 logging.error(f"elevenlabs synthesis task failed: {task.exception()}")
 
         self._main_task.add_done_callback(log_exception)
+        self._text = ""
 
     def _stream_url(self) -> str:
         base_url = self._config.base_url
@@ -159,7 +160,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         if self._closed:
             raise ValueError("cannot push to a closed stream")
 
-        self._queue.put_nowait(text)
+        splitters = (".", ",", "?", "!", ";", ":", "—", "-", "(", ")", "[", "]", "}", " ")
+        self._text += text
+        if text[-1] in splitters:
+            self._queue.put_nowait(self._text)
+            self._text = ""
 
     async def _run(self, max_retry: int) -> None:
         retry_count = 0
