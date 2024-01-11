@@ -253,6 +253,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 break
 
     async def flush(self) -> None:
+        self._queue.put_nowait(STREAM_EOS)
         await self._queue.join()
 
     async def close(self) -> None:
