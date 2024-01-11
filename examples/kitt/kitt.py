@@ -159,9 +159,7 @@ class KITT:
         # TODO: display incremental tokens when clients support it
         await self.data_transport.send_chat_message(text)
 
-    def update_state(self,
-                     sending_audio: bool = None,
-                     processing: bool = None):
+    def update_state(self, sending_audio: bool = None, processing: bool = None):
         if sending_audio is not None:
             self._sending_audio = sending_audio
         if processing is not None:
