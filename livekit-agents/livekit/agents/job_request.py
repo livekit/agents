@@ -304,7 +304,7 @@ class JobRequest:
             # for auto disconnect are already met. We wait 5 seconds to ensure
             # we have the state of the room, even if the room is relayed.
             async def disconnect_if_needed_wrapper():
-                await asyncio.sleep(5)
+                await asyncio.sleep(15)
                 disconnect_if_needed()
 
             asyncio.create_task(disconnect_if_needed_wrapper())
