@@ -49,12 +49,11 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "click>=8.1.7",
-        "livekit>=0.6.0",
-        "livekit-api>=0.1.3",
-        "livekit-protocol>=0.1.0",
-        "livekit-protocol",
-        "websockets>=12.0",
+        "click~=8.1.0",
+        "livekit~=0.7.1",
+        "livekit-api~=0.1.0",
+        "livekit-protocol~=0.1.0",
+        "websockets>=12,<13",
     ],
     package_data={},
     project_urls={
