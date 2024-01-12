@@ -49,7 +49,7 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.8.0",
-    install_requires=["livekit ~= 0.7.0", "torch >= 2, < 3", "numpy >= 1, < 2"],
+    install_requires=["livekit ~= 0.7.1", "torch >= 2, < 3", "numpy >= 1, < 2"],
     package_data={"livekit.plugins.silero": ["files/silero_vad.jit"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
