@@ -50,7 +50,7 @@ setuptools.setup(
     python_requires=">=3.10.0",  # deepgram-sdk requires 3.10
     install_requires=[
         "deepgram-sdk >= 2.0, < 3.0",
-        "livekit ~= 0.7.0",
+        "livekit ~= 0.7.1",
         "livekit-agents ~= 0.1.0",
     ],
     package_data={},
