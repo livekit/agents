@@ -110,7 +110,9 @@ class DataHelper:
 class ChatMessage:
     message: str
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:12])
-    timestamp: datetime = field(default_factory=lambda: int(datetime.now().timestamp() * 1000))
+    timestamp: datetime = field(
+        default_factory=lambda: int(datetime.now().timestamp() * 1000)
+    )
     deleted: bool = field(default=False)
 
     # these fields are not serialized

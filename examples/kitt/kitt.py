@@ -121,10 +121,12 @@ class KITT:
                 continue
 
             await self.ctx.room.local_participant.publish_data(
-                json.dumps({
-                    "text": text,
-                    "timestamp": int(datetime.now().timestamp() * 1000),
-                }),
+                json.dumps(
+                    {
+                        "text": text,
+                        "timestamp": int(datetime.now().timestamp() * 1000),
+                    }
+                ),
                 topic="transcription",
             )
 
@@ -177,7 +179,9 @@ class KITT:
             state = AgentState.THINKING
 
         self._agent_state = state
-        self.ctx.create_task(self.data_transport.set_metadata(agent_state=state.name.lower()))
+        self.ctx.create_task(
+            self.data_transport.set_metadata(agent_state=state.name.lower())
+        )
 
 
 if __name__ == "__main__":
