@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from datetime import datetime, field
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 import json
 from typing import Callable, List, Union
@@ -29,7 +29,7 @@ _CHAT_TOPIC = "lk-chat-topic"
 _CHAT_UPDATE_TOPIC = "lk-chat-update-topic"
 
 
-class DataTransport:
+class DataHelper:
     """A utility class that helps with sending data to other participants in the Room.
 
     It uses Participant Metadata and DataChannel messages to send updates to the client.
@@ -37,13 +37,11 @@ class DataTransport:
     """
 
     def __init__(self, ctx: JobContext):
-        self._api = ctx.api
         self._lp = ctx.room.local_participant
-        self._room_name = ctx.room.name
         self._agent_state: AgentState = AgentStatePreset.IDLE
         self._callback: Callable[["ChatMessage"], None] = None
 
-        self._lp.on("data_received", self._on_data_received)
+        ctx.room.on("data_received", self._on_data_received)
 
     @property
     def agent_state(self) -> AgentState:
@@ -63,17 +61,9 @@ class DataTransport:
         if isinstance(s, AgentStatePreset):
             s = s.name.lower()
         metadata = {"agent_state": s}
-        await self._api.room.update_participant(
-            api.UpdateParticipantRequest(
-                room=self.room_name,
-                identity=self._lp.identity,
-                metadata=json.dumps(metadata),
-            )
-        )
+        await self._lp.update_metadata(json.dumps(metadata))
 
-    async def send_chat_message(
-        self, message: str, asset_urls: List[str] = []
-    ) -> "ChatMessage":
+    async def send_chat_message(self, message: str) -> "ChatMessage":
         """Send a chat message to the end user using LiveKit Chat Protocol.
 
         Args:
@@ -84,7 +74,6 @@ class DataTransport:
         """
         msg = ChatMessage(
             message=message,
-            asset_urls=asset_urls,
         )
         await self._lp.publish_data(
             payload=json.dumps(msg.asdict()),
@@ -120,10 +109,9 @@ class DataTransport:
 
 @dataclass
 class ChatMessage:
-    id: str = field(default_factory=lambda: str(uuid.uuid4())[:12])
     message: str
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:12])
     timestamp: datetime = field(default_factory=datetime.now)
-    asset_urls: List[str]
     deleted: bool = field(default=False)
 
     def asdict(self):
@@ -132,8 +120,6 @@ class ChatMessage:
             "message": self.message,
             "timestamp": self.timestamp.isoformat(),
         }
-        if self.asset_urls:
-            d["asset_urls"] = self.asset_urls
         if self.deleted:
             d["deleted"] = True
         return d

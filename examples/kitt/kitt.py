@@ -17,7 +17,7 @@ import logging
 from typing import AsyncIterable
 
 from livekit import rtc, agents
-from livekit.agents import AgentStatePreset, AgentState, ChatMessage
+from livekit.agents import AgentStatePreset, AgentState
 from chatgpt import (
     ChatGPTMessage,
     ChatGPTMessageRole,
@@ -53,7 +53,7 @@ class KITT:
         self.tts_plugin = TTS()
 
         self.ctx: agents.JobContext = ctx
-        self.data_transport = agents.DataTransport(ctx)
+        self.data_transport = agents.DataHelper(ctx)
         self.data_transport.on_chat_message(self.on_chat_received)
         self.line_out = rtc.AudioSource(ELEVEN_TTS_SAMPLE_RATE, ELEVEN_TTS_CHANNELS)
 
@@ -63,7 +63,6 @@ class KITT:
 
     async def start(self):
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
-        self.ctx.room.on("data_received", self.on_data_received)
         self.ctx.room.on("disconnected", self.cleanup)
         await self.publish_audio()
 
@@ -73,7 +72,7 @@ class KITT:
         await self.process_chatgpt_result(intro_text_stream())
         self.update_state()
 
-    def on_chat_received(self, message: ChatMessage):
+    def on_chat_received(self, message: agents.ChatMessage):
         # TODO: handle deleted and updated messages in message context
         if message.deleted:
             return
@@ -104,13 +103,13 @@ class KITT:
         stream = self.stt_plugin.stream(sample_rate=44100)
         self.ctx.create_task(self.process_stt_stream(stream))
         async for audio_frame in audio_stream:
-            if self._agent_state != AgentState.LISTENING:
+            if self._agent_state != AgentStatePreset.LISTENING:
                 continue
             stream.push_frame(audio_frame)
 
     async def process_stt_stream(self, stream):
         async for event in stream:
-            if not event.is_final or self._agent_state != AgentState.LISTENING:
+            if not event.is_final or self._agent_state != AgentStatePreset.LISTENING:
                 continue
 
             alt = event.alternatives[0]
