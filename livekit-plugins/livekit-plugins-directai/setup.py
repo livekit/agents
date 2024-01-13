@@ -50,9 +50,9 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.8.0",
     install_requires=[
-        "livekit",
-        "aiohttp >= 3.8.5",
-        "Pillow",
+        "livekit ~= 0.7.1",
+        "aiohttp >= 3, < 4",
+        "Pillow >= 10, < 11",
     ],
     package_data={},
     project_urls={
