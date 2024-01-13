@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from datetime import datetime
+from enum import Enum
 import json
 import logging
 from typing import AsyncIterable
 
 from livekit import rtc, agents
-from livekit.agents import AgentStatePreset, AgentState
 from chatgpt import (
     ChatGPTMessage,
     ChatGPTMessageRole,
@@ -33,6 +34,8 @@ PROMPT = "You are KITT, a friendly voice assistant powered by LiveKit.  \
 INTRO = "Hello, I am KITT, a friendly voice assistant powered by LiveKit, ChatGPT, and Eleven Labs. \
         You can find my source code in the top right of this screen if you're curious how I work. \
         Feel free to ask me anything — I'm here to help! Just start talking or type in the chat."
+
+AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 
 ELEVEN_TTS_SAMPLE_RATE = 44100
 ELEVEN_TTS_CHANNELS = 1
@@ -59,7 +62,7 @@ class KITT:
 
         self._sending_audio = False
         self._processing = False
-        self._agent_state: AgentStatePreset = AgentStatePreset.IDLE
+        self._agent_state: AgentState = AgentState.IDLE
 
     async def start(self):
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
@@ -103,13 +106,13 @@ class KITT:
         stream = self.stt_plugin.stream(sample_rate=44100)
         self.ctx.create_task(self.process_stt_stream(stream))
         async for audio_frame in audio_stream:
-            if self._agent_state != AgentStatePreset.LISTENING:
+            if self._agent_state != AgentState.LISTENING:
                 continue
             stream.push_frame(audio_frame)
 
     async def process_stt_stream(self, stream):
         async for event in stream:
-            if not event.is_final or self._agent_state != AgentStatePreset.LISTENING:
+            if not event.is_final or self._agent_state != AgentState.LISTENING:
                 continue
 
             alt = event.alternatives[0]
@@ -118,7 +121,10 @@ class KITT:
                 continue
 
             await self.ctx.room.local_participant.publish_data(
-                json.dumps({"text": text}),
+                json.dumps({
+                    "text": text,
+                    "timestamp": int(datetime.now().timestamp() * 1000),
+                }),
                 topic="transcription",
             )
 
@@ -164,14 +170,14 @@ class KITT:
         if processing is not None:
             self._processing = processing
 
-        state = AgentStatePreset.LISTENING
+        state = AgentState.LISTENING
         if self._sending_audio:
-            state = AgentStatePreset.SPEAKING
+            state = AgentState.SPEAKING
         elif self._processing:
-            state = AgentStatePreset.THINKING
+            state = AgentState.THINKING
 
         self._agent_state = state
-        self.ctx.create_task(self.data_transport.set_agent_state(state))
+        self.ctx.create_task(self.data_transport.set_metadata(agent_state=state.name.lower()))
 
 
 if __name__ == "__main__":
