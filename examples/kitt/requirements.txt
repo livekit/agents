@@ -1,6 +1,6 @@
 livekit
 livekit-api
-livekit-agents==0.1.0
+livekit-agents==0.1.1
 livekit-plugins-deepgram==0.0.5
 livekit-plugins-elevenlabs==0.0.10
 openai
