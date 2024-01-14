@@ -192,6 +192,7 @@ class JobRequest:
             metadata (str, optional):
                 Metadata of the agent participant. Defaults to "".
         """
+        job_ctx: JobContext = None
         async with self._lock:
             if self._answered:
                 raise Exception("job already answered")
@@ -225,7 +226,14 @@ class JobRequest:
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
                 logging.error(
-                    "failed to connect to the room, cancelling job %s: %s", self.id, e
+                    "failed to connect to the room, cancelling job %s: %s",
+                    self.id,
+                    e,
+                    extra={
+                        "job_id": self.id,
+                        "room": self.room.name,
+                        "agent_identity": identity,
+                    },
                 )
                 await self._worker._send_job_status(
                     self.id, proto_agent.JobStatus.JS_FAILED, str(e)
