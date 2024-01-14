@@ -15,6 +15,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
+import logging
 from typing import Any, Callable, Dict, Optional
 import uuid
 
@@ -98,12 +99,15 @@ class DataHelper:
         # handle both new and updates the same way, as long as the ID is in there
         # the user can decide how to replace the previous message
         if dp.topic == _CHAT_TOPIC or dp.topic == _CHAT_UPDATE_TOPIC:
-            parsed = json.loads(dp.data)
-            msg = ChatMessage(**parsed)
-            if dp.participant:
-                msg.participant = dp.participant
-            if self._callback:
-                self._callback(msg)
+            try:
+                parsed = json.loads(dp.data)
+                msg = ChatMessage(**parsed)
+                if dp.participant:
+                    msg.participant = dp.participant
+                if self._callback:
+                    self._callback(msg)
+            except Exception as e:
+                logging.warning("failed to parse chat message: %s", e)
 
 
 @dataclass

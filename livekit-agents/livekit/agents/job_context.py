@@ -62,8 +62,8 @@ class JobContext:
         return self._participant
 
     @property
-    def agent_identity(self) -> Optional[rtc.Participant]:
-        """Participant sid for the agent"""
+    def agent_identity(self) -> str:
+        """The agent's Participant identity"""
         return self._agent_identity
 
     @property
@@ -89,15 +89,12 @@ class JobContext:
 
         def done_cb(task: asyncio.Task):
             self._tasks.discard(t)
-            # task.exception raises if task was cancelled
-            # we don't want to pay much attention if agent is disconnected
-            try:
-                if task.exception():
-                    logging.error(
-                        "A task raised an exception:", exc_info=task.exception()
-                    )
-            except asyncio.exceptions.CancelledError:
-                pass
+            if not task.cancelled() and task.exception():
+                logging.error(
+                    "A task raised an exception:",
+                    exc_info=task.exception(),
+                    extra={"job_id": self.id, "agent_identity": self.agent_identity},
+                )
 
         t.add_done_callback(done_cb)
         return t
