@@ -103,7 +103,7 @@ class KITT:
 
     async def process_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        stream = self.stt_plugin.stream(sample_rate=44100)
+        stream = self.stt_plugin.stream()
         self.ctx.create_task(self.process_stt_stream(stream))
         async for audio_frame in audio_stream:
             if self._agent_state != AgentState.LISTENING:
