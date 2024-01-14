@@ -56,8 +56,8 @@ class KITT:
         self.tts_plugin = TTS()
 
         self.ctx: agents.JobContext = ctx
-        self.data_transport = agents.DataHelper(ctx)
-        self.data_transport.on_chat_message(self.on_chat_received)
+        self.data_helper = agents.DataHelper(ctx)
+        self.data_helper.on_chat_message(self.on_chat_received)
         self.line_out = rtc.AudioSource(ELEVEN_TTS_SAMPLE_RATE, ELEVEN_TTS_CHANNELS)
 
         self._sending_audio = False
@@ -164,7 +164,7 @@ class KITT:
 
     async def send_message_from_agent(self, text):
         # TODO: display incremental tokens when clients support it
-        await self.data_transport.send_chat_message(text)
+        await self.data_helper.send_chat_message(text)
 
     def update_state(self, sending_audio: bool = None, processing: bool = None):
         if sending_audio is not None:
@@ -180,7 +180,7 @@ class KITT:
 
         self._agent_state = state
         self.ctx.create_task(
-            self.data_transport.set_metadata(agent_state=state.name.lower())
+            self.data_helper.set_metadata(agent_state=state.name.lower())
         )
 
 
