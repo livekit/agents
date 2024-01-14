@@ -93,7 +93,9 @@ class JobContext:
             # we don't want to pay much attention if agent is disconnected
             try:
                 if task.exception():
-                    logging.error("A task raised an exception:", exc_info=task.exception())
+                    logging.error(
+                        "A task raised an exception:", exc_info=task.exception()
+                    )
             except asyncio.exceptions.CancelledError:
                 pass
 
