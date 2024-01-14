@@ -90,7 +90,8 @@ class AutoDisconnectCallbacks:
     def PUBLISHER_LEFT(ctx: JobContext) -> bool:
         if ctx.participant is None:
             logging.error(
-                "Incorrect usage of PUBLISHER_LEFT, JobContext is tied to a Participant"
+                "Incorrect usage of PUBLISHER_LEFT, JobContext is tied to a Participant",
+                extra=ctx.logging_extra,
             )
             return False
 
@@ -250,18 +251,21 @@ class JobRequest:
                             "Task was cancelled. Worker: %s Job: %s",
                             self._worker.id,
                             self.id,
+                            extra=job_ctx.logging_extra,
                         )
                     else:
                         logging.info(
                             "Task completed successfully. Worker: %s Job: %s",
                             self._worker.id,
                             self.id,
+                            extra=job_ctx.logging_extra,
                         )
                 except asyncio.CancelledError:
                     logging.info(
                         "Task was cancelled. Worker: %s Job: %s",
                         self._worker.id,
                         self.id,
+                        extra=job_ctx.logging_extra,
                     )
                 except Exception as e:
                     logging.error(
@@ -269,6 +273,8 @@ class JobRequest:
                         self._worker.id,
                         self.id,
                         e,
+                        exc_info=e,
+                        extra=job_ctx.logging_extra,
                     )
 
             task = self._worker._loop.create_task(agent(job_ctx))
@@ -309,4 +315,4 @@ class JobRequest:
 
             asyncio.create_task(disconnect_if_needed_wrapper())
 
-        logging.info("accepted job %s", self.id)
+        logging.info("accepted job %s", self.id, extra=job_ctx.logging_extra)

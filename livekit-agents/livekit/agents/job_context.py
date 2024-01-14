@@ -93,7 +93,7 @@ class JobContext:
                 logging.error(
                     "A task raised an exception:",
                     exc_info=task.exception(),
-                    extra={"job_id": self.id, "agent_identity": self.agent_identity},
+                    extra=self.logging_extra,
                 )
 
         t.add_done_callback(done_cb)
@@ -110,7 +110,7 @@ class JobContext:
         """
 
         async with self._lock:
-            logging.info("shutting down job %s", self.id)
+            logging.info("shutting down job %s", self.id, extra=self.logging_extra)
             if self._closed:
                 return
 
@@ -121,7 +121,7 @@ class JobContext:
             for task in self._tasks:
                 task.cancel()
 
-            logging.info("job %s shutdown", self.id)
+            logging.info("job %s shutdown", self.id, extra=self.logging_extra)
 
     async def update_status(
         self,
@@ -130,3 +130,20 @@ class JobContext:
         user_data: str = "",
     ) -> None:
         await self._worker._send_job_status(self._id, status, error, user_data)
+
+    @property
+    def logging_extra(self) -> dict:
+        """
+        Additional context to identify the job in logs.
+
+        Usage: logging.info("my message", extra=ctx.logging_extra)
+        """
+        e = {
+            "job_id": self.id,
+            "room": self.room.name,
+            "agent_identity": self.agent_identity,
+            "worker_id": self._worker.id,
+        }
+        if self.participant:
+            e["participant_identity"] = self.participant.identity
+        return e
