@@ -89,8 +89,13 @@ class JobContext:
 
         def done_cb(task: asyncio.Task):
             self._tasks.discard(t)
-            if task.exception():
-                logging.error("A task raised an exception:", exc_info=task.exception())
+            # task.exception raises if task was cancelled
+            # we don't want to pay much attention if agent is disconnected
+            try:
+                if task.exception():
+                    logging.error("A task raised an exception:", exc_info=task.exception())
+            except asyncio.exceptions.CancelledError:
+                pass
 
         t.add_done_callback(done_cb)
         return t
