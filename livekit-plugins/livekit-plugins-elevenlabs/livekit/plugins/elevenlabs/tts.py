@@ -207,7 +207,7 @@ class Stream(tts.SynthesizeStream):
                 msg = await session.ws.receive()
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     data = json.loads(msg.data)
-                    if data["isFinal"]:
+                    if data.get("isFinal"):
                         session.final_future.set_result(None)
                         break
                     bytes_audio = base64.b64decode(data["audio"])

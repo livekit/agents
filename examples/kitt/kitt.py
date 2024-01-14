@@ -56,8 +56,7 @@ class KITT:
         self.tts_plugin = TTS()
 
         self.ctx: agents.JobContext = ctx
-        self.data_helper = agents.DataHelper(ctx)
-        self.data_helper.on_chat_message(self.on_chat_received)
+        self.chat_manager = rtc.ChatManager(ctx.room, on_message=self.on_chat_received)
         self.line_out = rtc.AudioSource(ELEVEN_TTS_SAMPLE_RATE, ELEVEN_TTS_CHANNELS)
 
         self._sending_audio = False
@@ -66,7 +65,8 @@ class KITT:
 
     async def start(self):
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
-        self.ctx.room.on("disconnected", self.cleanup)
+        # if you have to perform teardown cleanup, you can listen to the disconnected event
+        # self.ctx.room.on("disconnected", your_cleanup_function)
         await self.publish_audio()
 
         async def intro_text_stream():
@@ -75,7 +75,7 @@ class KITT:
         await self.process_chatgpt_result(intro_text_stream())
         self.update_state()
 
-    def on_chat_received(self, message: agents.ChatMessage):
+    def on_chat_received(self, message: rtc.ChatMessage):
         # TODO: handle deleted and updated messages in message context
         if message.deleted:
             return
@@ -97,9 +97,6 @@ class KITT:
         participant: rtc.RemoteParticipant,
     ):
         self.ctx.create_task(self.process_track(track))
-
-    def cleanup(self):
-        logging.info("KITT agent clean up")
 
     async def process_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
@@ -147,7 +144,7 @@ class KITT:
             all_text += text
 
         self.update_state(processing=False)
-        await self.send_message_from_agent(all_text)
+        await self.chat_manager.send_message(all_text)
         await stream.close()
 
     async def send_audio_stream(
@@ -162,10 +159,6 @@ class KITT:
         self._sending_audio = False
         self.update_state(sending_audio=False)
 
-    async def send_message_from_agent(self, text):
-        # TODO: display incremental tokens when clients support it
-        await self.data_helper.send_chat_message(text)
-
     def update_state(self, sending_audio: bool = None, processing: bool = None):
         if sending_audio is not None:
             self._sending_audio = sending_audio
@@ -179,9 +172,12 @@ class KITT:
             state = AgentState.THINKING
 
         self._agent_state = state
-        self.ctx.create_task(
-            self.data_helper.set_metadata(agent_state=state.name.lower())
+        metadata = json.dumps(
+            {
+                "agent_state": state.name.lower(),
+            }
         )
+        self.ctx.create_task(self.ctx.room.local_participant.update_metadata(metadata))
 
 
 if __name__ == "__main__":
