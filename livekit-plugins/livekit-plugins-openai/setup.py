@@ -54,7 +54,7 @@ setuptools.setup(
         "torch >= 2, < 3",
         "torchaudio >= 2, < 3",
         "numpy >= 1.24.0",
-        "openai ~= 0.28.0",
+        "openai ~= 1.7.2",
         "audioread >= 3, < 4",
         "opencv-python >= 4, < 5",
         "requests >= 2, < 3",
