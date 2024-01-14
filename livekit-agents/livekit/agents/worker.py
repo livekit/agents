@@ -66,8 +66,8 @@ class Worker:
     def __init__(
         self,
         job_request_cb: Callable[["JobRequest"], Coroutine],
-        worker_type: JobType.ValueType,
         *,
+        worker_type: JobType.ValueType = JobType.JT_ROOM,
         event_loop: Optional[asyncio.AbstractEventLoop] = None,
         ws_url: Optional[str] = None,
         api_key: Optional[str] = None,
