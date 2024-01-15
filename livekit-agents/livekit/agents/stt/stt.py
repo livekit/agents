@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from livekit import rtc
-from typing import List
+from typing import Optional, List
 from dataclasses import dataclass
 from ..utils import AudioBuffer
 
@@ -21,7 +21,11 @@ class SpeechEvent:
 
 
 class STT(ABC):
-    def __init__(self, *, streaming_supported: bool) -> None:
+    def __init__(
+        self,
+        *,
+        streaming_supported: bool,
+    ) -> None:
         self._streaming_supported = streaming_supported
 
     @abstractmethod
@@ -29,23 +33,14 @@ class STT(ABC):
         self,
         *,
         buffer: AudioBuffer,
-        language: str = "en-US",
-        detect_language: bool = False,
-        num_channels: int = 1,
-        sample_rate: int = 16000,
-        punctuate: bool = True,
+        language: Optional[str] = None,
     ) -> SpeechEvent:
         pass
 
     def stream(
         self,
         *,
-        language: str = "en-US",
-        detect_language: bool = False,
-        interim_results: bool = True,
-        num_channels: int = 1,
-        sample_rate: int = 16000,
-        punctuate: bool = True,
+        language: Optional[str] = None,
     ) -> "SpeechStream":
         raise NotImplementedError(
             "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"

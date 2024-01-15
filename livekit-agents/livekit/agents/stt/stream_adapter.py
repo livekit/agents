@@ -1,7 +1,8 @@
 import asyncio
 import logging
+from typing import Optional
 from ..vad import VADStream, VADEventType
-from ..utils import merge_frames
+from ..utils import merge_frames, AudioBuffer
 from .stt import (
     STT,
     SpeechStream,
@@ -20,11 +21,22 @@ class StreamAdapter(STT):
         self._vad_stream = vad_stream
         self._stt = stt
 
-    async def recognize(self, *args, **kwargs):
-        return await self._stt.recognize(*args, **kwargs)
+    async def recognize(self, *, buffer: AudioBuffer, language: Optional[str] = None):
+        return await self._stt.recognize(
+            buffer=buffer,
+            language=language,
+        )
 
-    def stream(self, *args, **kwargs) -> SpeechStream:
-        return StreamAdapterWrapper(self._vad_stream, self._stt, *args, **kwargs)
+    def stream(
+        self,
+        *,
+        language: Optional[str] = None,
+    ) -> SpeechStream:
+        return StreamAdapterWrapper(
+            self._vad_stream,
+            self._stt,
+            language=language,
+        )
 
 
 class StreamAdapterWrapper(SpeechStream):
