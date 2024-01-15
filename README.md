@@ -28,7 +28,9 @@ Plugins can be installed individually depending on what your agent needs. Availa
 - livekit-plugins-elevenlabs
 - livekit-plugins-openai
 - livekit-plugins-silero
-- livekit-plugins-anthropic
+- livekit-plugins-google
+- livekit-plugins-deepgram
+- livekit-plugins-nltk
 
 ## Terminology
 
@@ -50,57 +52,30 @@ from livekit.plugins.vad import VADPlugin, VADEventType
 from livekit.plugins.openai import WhisperAPITranscriber
 
 
-class MyAgent():
-    def __init__(self):
-        # Initialize plugins
-        self.vad_plugin = VADPlugin(
-            left_padding_ms=1000,
-            silence_threshold_ms=500)
-        self.stt_plugin = WhisperAPITranscriber()
-
-        self.ctx: Optional[agents.JobContext] = None
-        self.track_tasks: Set[asyncio.Task] = set()
-        self.ctx = None
-
-    async def start(self, ctx: agents.JobContext):
-        self.ctx = ctx
-        ctx.room.on("track_subscribed", self.on_track_subscribed)
-        ctx.room.on("disconnected", self.cleanup)
-
-    # Callback for when a track is subscribed to. Only tracks matching the should_subscribe filter that is configured when accepting a job will be subscribed to.
-    def on_track_subscribed(
-            self,
-            track: rtc.Track,
-            publication: rtc.TrackPublication,
-            participant: rtc.RemoteParticipant):
-        t = asyncio.create_task(self.process_track(track))
-        self.track_tasks.add(t)
-        t.add_done_callback(self.track_tasks.discard)
-
-    def cleanup(self):
-        # Whatever cleanup you need to do.
-        pass
-
-    async def process_track(self, track: rtc.Track):
-        audio_stream = rtc.AudioStream(track)
-        async for vad_result in self.vad_plugin.start(audio_stream):
-            # When the human has finished talking, send the audio frames containing voice to the transcription plugin (in this case the Whisper API).
-            if vad_result.type == VADEventType.FINISHED:
-                stt_output = await self.stt_plugin.transcribe_frames(vad_result.frames)
-                if len(stt_output) == 0:
-                    continue
-                # Send the speech transcription to all participants in the LiveKit room via a DataChannel message.
-                await self.ctx.room.local_participant.publish_data(json.dumps({"type": "transcription", "text": text}))
-
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     # Callback that gets called on every new Agent JobRequest. In this callback you can create your agent and accept (or decline) a job. Declining a job will tell the LiveKit server to give the job to another Worker.
     async def job_request_cb(job_request: agents.JobRequest):
+        def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+            # do work on the track
+            pass
+
+        def on_disconnected():
+            # do your agent's cleanup
+            pass
+            
+        async def my_agent(self, ctx: agents.JobContext):
+            ctx.room.on("track_subscribed", on_track_subscribed)
+            ctx.room.on("disconnected", on_disconnected)
+
         # Accept the job request with my_agent and configure a filter function that decides which tracks the agent processes. In this case, the agent only cares about audio tracks.
-        my_agent = MyAgent()
-        await job_request.accept(my_agent.start, should_subscribe=lambda track_pub, _: track_pub.kind == rtc.TrackKind.KIND_AUDIO)
+        await job_request.accept(
+            my_agent,
+            identity="agent",
+            subscribe_cb=agents.SubscribeCallbacks.AUDIO_ONLY,
+            auto_disconnect_cb=agents.AutoDisconnectCallbacks.DEFAULT,
+        )
 
     # When a new LiveKit room is created, the job_request_cb is called.
     worker = agents.Worker(job_request_cb=job_request_cb,
@@ -118,7 +93,7 @@ The Agent Framework expose a cli interface to run your agent. To start the above
 python my_agent.py start --api-key=<your livekit api key> --api-secret<your livekit api secret> --url=<your livekit url>
 ```
 
-The environment variables `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and `LIVEKIT_URL` can be used instead of the cli-args. (`.env` files also supported)
+The environment variables `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and `LIVEKIT_URL` can be used instead of the cli-args.
 
 ### What is happening when I run my Agent?
 
@@ -143,14 +118,6 @@ This reference [Dockerfile](examples/agents/Dockerfile) serves as a good start p
 ## More Examples
 
 Examples can be found in the `examples/` repo.
-
-Examples coming soon:
-
-- KITT (Clone of ChatGPT Voice Mode)
-- Audio-to-Audio Language Translation
-- Transcription
-- Face-Detection
-- Voice-to-Image
 
 <!--BEGIN_REPO_NAV-->
 <!--END_REPO_NAV-->
