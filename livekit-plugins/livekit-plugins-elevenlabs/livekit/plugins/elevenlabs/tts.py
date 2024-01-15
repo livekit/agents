@@ -16,6 +16,7 @@ import asyncio
 import logging
 import base64
 import dataclasses
+import contextlib
 import json
 import os
 from dataclasses import dataclass
@@ -242,8 +243,19 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _listen_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         while True:
-            msg = await ws.receive_json()
+            msg = await ws.receive()
 
+            if msg.type in (
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSING,
+            ):
+                break
+
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
+
+            msg = json.loads(msg.data)
             if msg.get("audio"):
                 data = base64.b64decode(msg["audio"])
                 audio_frame = rtc.AudioFrame(
