@@ -19,6 +19,7 @@ import logging
 from typing import AsyncIterable
 
 from livekit import rtc, agents
+from livekit.agents.tts import SynthesisEvent, SynthesisEventType
 from chatgpt import (
     ChatGPTMessage,
     ChatGPTMessageRole,
@@ -150,15 +151,16 @@ class KITT:
         await stream.close()
 
     async def send_audio_stream(
-        self, tts_events: AsyncIterable[agents.tts.SynthesisEvent]
+        self, tts_events: AsyncIterable[SynthesisEvent]
     ):
-        first = True
         async for e in tts_events:
-            if first:
-                first = False
+            if e.type == SynthesisEventType.STARTED:
                 self.update_state(sending_audio=True)
+                continue
+            elif e.type != SynthesisEventType.AUDIO:
+                continue
+            logging.info('capturing frame')
             await self.line_out.capture_frame(e.audio.data)
-        self._sending_audio = False
         self.update_state(sending_audio=False)
 
     def update_state(self, sending_audio: bool = None, processing: bool = None):
