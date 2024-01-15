@@ -31,7 +31,7 @@ setuptools.setup(
     description="LiveKit Python Plugins for DirectAI Services",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
-    url="https://github.com/livekit/python-agents",
+    url="https://github.com/livekit/agents",
     cmdclass={},
     classifiers=[
         "Intended Audience :: Developers",
@@ -50,7 +50,8 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.8.0",
     install_requires=[
-        "livekit ~= 0.7.1",
+        "livekit >= 0.8.0",
+        "livekit-agents >= 0.1.0",
         "aiohttp >= 3, < 4",
         "Pillow >= 10, < 11",
     ],
@@ -58,6 +59,6 @@ setuptools.setup(
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",
-        "Source": "https://github.com/livekit/python-agents",
+        "Source": "https://github.com/livekit/agents",
     },
 )

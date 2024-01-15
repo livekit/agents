@@ -53,7 +53,7 @@ class KITT:
             prompt=PROMPT, message_capacity=20, model="gpt-4-1106-preview"
         )
         self.stt_plugin = STT()
-        self.tts_plugin = TTS()
+        self.tts_plugin = TTS(model_id="eleven_turbo_v2")
 
         self.ctx: agents.JobContext = ctx
         self.chat = rtc.ChatManager(ctx.room)
@@ -137,7 +137,7 @@ class KITT:
         # ChatGPT is streamed, so we'll flip the state immediately
         self.update_state(processing=True)
 
-        stream = self.tts_plugin.stream(model_id="eleven_turbo_v2")
+        stream = self.tts_plugin.stream()
         self.ctx.create_task(self.send_audio_stream(stream))
         all_text = ""
 
