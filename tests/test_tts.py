@@ -1,7 +1,7 @@
 import asyncio
 import wave
 from livekit import rtc, agents
-from livekit.plugins import elevenlabs
+from livekit.plugins import elevenlabs, openai
 
 TEST_AUDIO_SYNTHESIZE = "the people who are crazy enough to think they can change the world are the ones who do"
 
@@ -15,9 +15,15 @@ def save_wave_file(filename: str, frame: rtc.AudioFrame) -> None:
 
 
 async def test_synthetize():
-    tts = elevenlabs.TTS()
-    audio = await tts.synthesize(text=TEST_AUDIO_SYNTHESIZE)
-    save_wave_file("1.wav", audio)
+    ttss = [elevenlabs.TTS(), openai.TTS()]
+
+    async def synthetize(tts: agents.tts.TTS):
+        audio = await tts.synthesize(text=TEST_AUDIO_SYNTHESIZE)
+        save_wave_file(tts.__class__.__module__ + ".wav", audio.data)
+
+    async with asyncio.TaskGroup() as group:
+        for tts in ttss:
+            group.create_task(synthetize(tts))
 
 
 async def test_stream():

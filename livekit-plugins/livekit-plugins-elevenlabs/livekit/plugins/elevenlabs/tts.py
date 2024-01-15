@@ -112,11 +112,14 @@ class TTS(tts.TTS):
             ),
         ) as resp:
             data = await resp.read()
-            return rtc.AudioFrame(
-                data=data,
-                sample_rate=44100,
-                num_channels=1,
-                samples_per_channel=len(data) // 2,  # 16-bit
+            return tts.SynthesizedAudio(
+                text=text,
+                data=rtc.AudioFrame(
+                    data=data,
+                    sample_rate=44100,
+                    num_channels=1,
+                    samples_per_channel=len(data) // 2,  # 16-bit
+                ),
             )
 
     def stream(
