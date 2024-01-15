@@ -68,12 +68,13 @@ async def test_stream():
             await asyncio.sleep(0.01)
 
         await stream.flush()
-        await stream.close()
         async for event in stream:
             if event.is_final:
                 text = event.alternatives[0].text
                 assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.8
                 break
+
+        await stream.close()
 
     async with asyncio.TaskGroup() as group:
         for stt in stts:

@@ -53,7 +53,7 @@ DEFAULT_VOICE = Voice(
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
-STREAM_EOS = json.dumps(dict(text=""))
+STREAM_EOS = ""
 
 
 @dataclass
@@ -130,7 +130,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         session: aiohttp.ClientSession,
         config: TTSOptions,
-        latency: int = 1,  # [1-4] the higher the more optimized for streaming latency
+        latency: int = 2,  # [1-4] the higher the more optimized for streaming latency
     ):
         self._config = config
         self._session = session
@@ -153,8 +153,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         base_url = self._config.base_url
         voice_id = self._config.voice.id
         model_id = self._config.model_id
-        return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id} \
-            &output_format=pcm_44100&optimize_streaming_latency={self._latency}"
+        return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format=pcm_44100&optimize_streaming_latency={self._latency}"
 
     def push_text(self, text: str) -> None:
         if self._closed:
@@ -178,27 +177,30 @@ class SynthesizeStream(tts.SynthesizeStream):
             try:
                 ws = await self._try_connect()
                 retry_count = 0  # reset retry count
-                listen_task = asyncio.create_task(self._listen_task(ws))
 
                 self._event_queue.put_nowait(
                     tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
                 )
+
+                listen_task = asyncio.create_task(self._listen_task(ws))
 
                 # forward queued text to 11labs
                 while not ws.closed:
                     text = await self._queue.get()
                     text_packet = dict(
                         text=text,
-                        try_trigger_generation=False,
+                        try_trigger_generation=True,
                     )
                     await ws.send_str(json.dumps(text_packet))
                     self._queue.task_done()
+                    if text == STREAM_EOS:
+                        await listen_task
+                        # We know 11labs is closing the stream after each request/flush
+                        self._event_queue.put_nowait(
+                            tts.SynthesisEvent(type=tts.SynthesisEventType.COMPLETED)
+                        )
+                        break
 
-                # We know 11labs is closing the stream after each request/flush
-                self._event_queue.put_nowait(
-                    tts.SynthesisEvent(type=tts.SynthesisEventType.COMPLETED)
-                )
-                await listen_task
             except asyncio.CancelledError:
                 if ws:
                     await ws.close()
@@ -257,6 +259,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 break
 
     async def flush(self) -> None:
+        self._queue.put_nowait(self._text + " ")
+        self._text = ""
         self._queue.put_nowait(STREAM_EOS)
         await self._queue.join()
 
