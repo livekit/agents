@@ -192,7 +192,7 @@ class JobRequest:
             metadata (str, optional):
                 Metadata of the agent participant. Defaults to "".
         """
-        job_ctx: JobContext = None
+        job_ctx: Optional[JobContext] = None
         async with self._lock:
             if self._answered:
                 raise Exception("job already answered")
