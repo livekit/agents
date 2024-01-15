@@ -26,6 +26,7 @@ Plugins can be installed individually depending on what your agent needs. Availa
 - livekit-plugins-silero
 - livekit-plugins-google
 - livekit-plugins-deepgram
+- livekit-plugins-nltk
 
 ## Terminology
 
