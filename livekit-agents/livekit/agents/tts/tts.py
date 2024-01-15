@@ -13,13 +13,13 @@ class SynthesizedAudio:
 
 class SynthesisEventType(Enum):
     # first event, indicates that the stream has started
-    # retriggered after COMPLETED
+    # retriggered after FINISHED
     STARTED = 0
     # audio data is available
     AUDIO = 1
     # generally happens after a flushing the stream
     # some TTS providers close the stream so we know it's done
-    COMPLETED = 2
+    FINISHED = 2
 
 
 @dataclass
@@ -38,7 +38,7 @@ class SynthesizeStream(ABC):
         pass
 
     @abstractmethod
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         pass
 
     @abstractmethod

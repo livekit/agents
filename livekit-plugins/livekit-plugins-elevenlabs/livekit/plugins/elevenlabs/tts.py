@@ -201,7 +201,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         await listen_task
                         # We know 11labs is closing the stream after each request/flush
                         self._event_queue.put_nowait(
-                            tts.SynthesisEvent(type=tts.SynthesisEventType.COMPLETED)
+                            tts.SynthesisEvent(type=tts.SynthesisEventType.FINISHED)
                         )
                         break
 
@@ -279,7 +279,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._queue.put_nowait(STREAM_EOS)
         await self._queue.join()
 
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         self._main_task.cancel()
         try:
             await self._main_task

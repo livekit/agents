@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 from datetime import datetime
 from enum import Enum
 import json
@@ -75,6 +76,9 @@ class KITT:
         async def intro_text_stream():
             yield INTRO
 
+        # allow the participant to fully subscribe to the audio, so it doesn't miss
+        # anything in the beginning
+        await asyncio.sleep(1)
         await self.process_chatgpt_result(intro_text_stream())
         self.update_state()
 
@@ -109,6 +113,7 @@ class KITT:
             if self._agent_state != AgentState.LISTENING:
                 continue
             stream.push_frame(audio_frame)
+        await stream.flush()
 
     async def process_stt_stream(self, stream):
         async for event in stream:
@@ -139,29 +144,30 @@ class KITT:
         self.update_state(processing=True)
 
         stream = self.tts_plugin.stream()
+        # send audio to TTS in parallel
         self.ctx.create_task(self.send_audio_stream(stream))
         all_text = ""
-
         async for text in text_stream:
             stream.push_text(text)
             all_text += text
 
         self.update_state(processing=False)
+        # buffer up the entire response from ChatGPT before sending a chat message
         await self.chat.send_message(all_text)
-        await stream.close()
+        await stream.flush()
 
-    async def send_audio_stream(
-        self, tts_events: AsyncIterable[SynthesisEvent]
-    ):
-        async for e in tts_events:
+    async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent]):
+        async for e in tts_stream:
+            logging.info(f"got event: {e.type}")
             if e.type == SynthesisEventType.STARTED:
                 self.update_state(sending_audio=True)
-                continue
-            elif e.type != SynthesisEventType.AUDIO:
-                continue
-            logging.info('capturing frame')
-            await self.line_out.capture_frame(e.audio.data)
-        self.update_state(sending_audio=False)
+            elif e.type == SynthesisEventType.FINISHED:
+                self.update_state(sending_audio=False)
+            elif e.type == SynthesisEventType.AUDIO:
+                logging.info("capturing frame")
+                await self.line_out.capture_frame(e.audio.data)
+        await tts_stream.aclose()
+        logging.info("closed tts")
 
     def update_state(self, sending_audio: bool = None, processing: bool = None):
         if sending_audio is not None:

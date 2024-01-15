@@ -83,8 +83,8 @@ class StreamAdapterWrapper(SpeechStream):
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         self._vad_stream.push_frame(frame)
 
-    async def close(self) -> None:
-        await self._vad_stream.close()
+    async def aclose(self) -> None:
+        await self._vad_stream.aclose()
         self._main_task.cancel()
         try:
             await self._main_task

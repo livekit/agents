@@ -30,7 +30,7 @@ class SentenceStream(ABC):
     async def flush(self) -> None:
         pass
 
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         pass
 
     @abstractmethod
