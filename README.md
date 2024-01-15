@@ -3,9 +3,13 @@
 
 # LiveKit Agent Framework
 
+<!--BEGIN_DESCRIPTION-->
+
 The Agent Framework is designed for building real-time, programmable participants
 that run on servers. Easily tap into LiveKit WebRTC sessions and process or generate
 audio, video, and data streams.
+
+<!--END_DESCRIPTION-->
 
 The framework includes plugins for common workflows, such as voice activity detection and speech-to-text.
 
@@ -99,7 +103,7 @@ This doesn't actually run any agents. Instead, the worker sits waiting for the L
 
 Once the LiveKit server is given a job, the worker can decide whether or not to accept it. Accepting the job will create a LiveKit participant that joins the room and begin subscribing to tracks.
 
-### What happens when I SIGTERM one of my Workers? 
+### What happens when I SIGTERM one of my Workers?
 
 The Agent Framework was designed for production use cases. Since agents are more stateful entities than typical web-servers, it's important that workers can't be terminated while they are running active agents.
 
