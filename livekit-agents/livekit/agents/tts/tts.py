@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from typing import Optional
+from enum import Enum
 from livekit import rtc
 from dataclasses import dataclass
 
@@ -9,14 +11,26 @@ class SynthesizedAudio:
     data: rtc.AudioFrame
 
 
+class SynthesisEventType(Enum):
+    # first event, indicates that the stream has started
+    # retriggered after COMPLETED
+    STARTED = 0
+    # audio data is available
+    AUDIO = 1
+    # generally happens after a flushing the stream
+    # some TTS providers close the stream so we know it's done
+    COMPLETED = 2
+
+
 @dataclass
 class SynthesisEvent:
-    audio: SynthesizedAudio
+    type: SynthesisEventType
+    audio: Optional[SynthesizedAudio] = None
 
 
 class SynthesizeStream(ABC):
     @abstractmethod
-    def push_text(self, token: str):
+    def push_text(self, token: str) -> None:
         pass
 
     @abstractmethod
@@ -49,5 +63,5 @@ class TTS(ABC):
         )
 
     @property
-    def streaming_supported(self):
+    def streaming_supported(self) -> bool:
         return self._streaming_supported
