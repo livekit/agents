@@ -56,15 +56,17 @@ class KITT:
         self.tts_plugin = TTS()
 
         self.ctx: agents.JobContext = ctx
-        self.chat_manager = rtc.ChatManager(ctx.room, on_message=self.on_chat_received)
+        self.chat = rtc.ChatManager(ctx.room)
         self.line_out = rtc.AudioSource(ELEVEN_TTS_SAMPLE_RATE, ELEVEN_TTS_CHANNELS)
 
         self._sending_audio = False
         self._processing = False
         self._agent_state: AgentState = AgentState.IDLE
 
-    async def start(self):
+        self.chat.on("message_received", self.on_chat_received)
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
+
+    async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
         # self.ctx.room.on("disconnected", your_cleanup_function)
         await self.publish_audio()
@@ -144,7 +146,7 @@ class KITT:
             all_text += text
 
         self.update_state(processing=False)
-        await self.chat_manager.send_message(all_text)
+        await self.chat.send_message(all_text)
         await stream.close()
 
     async def send_audio_stream(
