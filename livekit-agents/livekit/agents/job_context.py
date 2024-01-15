@@ -15,7 +15,7 @@
 import asyncio
 import logging
 from typing import Coroutine, Optional, TYPE_CHECKING
-from livekit import rtc, protocol
+from livekit import api, rtc, protocol
 
 # TODO: refactor worker so we can avoid this circular import
 if TYPE_CHECKING:
@@ -58,13 +58,17 @@ class JobContext:
 
     @property
     def participant(self) -> Optional[rtc.Participant]:
-        """LiveKit Participant corresponding to the Job"""
+        """LiveKit RemoteParticipant that the Job launched for. None if Agent is launched for the Room."""
         return self._participant
 
     @property
-    def agent_identity(self) -> Optional[rtc.Participant]:
-        """Participant sid for the agent"""
+    def agent_identity(self) -> str:
+        """The agent's Participant identity"""
         return self._agent_identity
+
+    @property
+    def api(self) -> api.LiveKitAPI:
+        return self._worker.api
 
     def create_task(self, coro: Coroutine) -> asyncio.Task:
         """
@@ -85,8 +89,12 @@ class JobContext:
 
         def done_cb(task: asyncio.Task):
             self._tasks.discard(t)
-            if task.exception():
-                logging.error("A task raised an exception:", exc_info=task.exception())
+            if not task.cancelled() and task.exception():
+                logging.error(
+                    "A task raised an exception:",
+                    exc_info=task.exception(),
+                    extra=self.logging_extra,
+                )
 
         t.add_done_callback(done_cb)
         return t
@@ -102,7 +110,7 @@ class JobContext:
         """
 
         async with self._lock:
-            logging.info("shutting down job %s", self.id)
+            logging.info("shutting down job %s", self.id, extra=self.logging_extra)
             if self._closed:
                 return
 
@@ -113,7 +121,7 @@ class JobContext:
             for task in self._tasks:
                 task.cancel()
 
-            logging.info("job %s shutdown", self.id)
+            logging.info("job %s shutdown", self.id, extra=self.logging_extra)
 
     async def update_status(
         self,
@@ -122,3 +130,20 @@ class JobContext:
         user_data: str = "",
     ) -> None:
         await self._worker._send_job_status(self._id, status, error, user_data)
+
+    @property
+    def logging_extra(self) -> dict:
+        """
+        Additional context to identify the job in logs.
+
+        Usage: logging.info("my message", extra=ctx.logging_extra)
+        """
+        e = {
+            "job_id": self.id,
+            "room": self.room.name,
+            "agent_identity": self.agent_identity,
+            "worker_id": self._worker.id,
+        }
+        if self.participant:
+            e["participant_identity"] = self.participant.identity
+        return e

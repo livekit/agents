@@ -33,7 +33,7 @@ setuptools.setup(
     description="LiveKit Python Plugins for ElevenLabs Services",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
-    url="https://github.com/livekit/python-agents",
+    url="https://github.com/livekit/agents",
     cmdclass={},
     classifiers=[
         "Intended Audience :: Developers",
@@ -51,14 +51,14 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "livekit",
-        "livekit-agents",
+        "livekit >= 0.8.0",
+        "livekit-agents >= 0.1.0",
         "aiohttp >= 3.8.5",
     ],
     package_data={},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",
-        "Source": "https://github.com/livekit/python-agents",
+        "Source": "https://github.com/livekit/agents",
     },
 )

@@ -66,8 +66,8 @@ class Worker:
     def __init__(
         self,
         job_request_cb: Callable[["JobRequest"], Coroutine],
-        worker_type: JobType.ValueType,
         *,
+        worker_type: JobType.ValueType = JobType.JT_ROOM,
         event_loop: Optional[asyncio.AbstractEventLoop] = None,
         ws_url: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -109,6 +109,7 @@ class Worker:
         self._running = False
         self._running_jobs: list["JobContext"] = []
         self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
+        self._api = api.LiveKitAPI(ws_url, api_key, api_secret)
 
     def _set_url(self, ws_url: str) -> None:
         parse_res = urlparse(ws_url)
@@ -313,6 +314,10 @@ class Worker:
         the Worker has been acknowledged by a LiveKit Server.
         """
         return self._running
+
+    @property
+    def api(self) -> api.LiveKitAPI:
+        return self._api
 
 
 def _run_worker(

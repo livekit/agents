@@ -16,7 +16,6 @@ import asyncio
 import logging
 import base64
 import dataclasses
-import contextlib
 import json
 import os
 from dataclasses import dataclass
@@ -163,6 +162,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         if self._closed:
             raise ValueError("cannot push to a closed stream")
 
+        if not text or len(text) == 0:
+            return
+
         # TODO: Native word boundary detection may not be good enough for all languages
         # fmt: off
         splitters = (".", ",", "?", "!", ";", ":", "—", "-", "(", ")", "[", "]", "}", " ")
@@ -182,15 +184,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ws = await self._try_connect()
                 retry_count = 0  # reset retry count
 
-                self._event_queue.put_nowait(
-                    tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
-                )
-
                 listen_task = asyncio.create_task(self._listen_task(ws))
 
                 # forward queued text to 11labs
+                started = False
                 while not ws.closed:
                     text = await self._queue.get()
+                    if not started:
+                        self._event_queue.put_nowait(
+                            tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
+                        )
+                        started = True
                     text_packet = dict(
                         text=text,
                         try_trigger_generation=True,
@@ -201,7 +205,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         await listen_task
                         # We know 11labs is closing the stream after each request/flush
                         self._event_queue.put_nowait(
-                            tts.SynthesisEvent(type=tts.SynthesisEventType.COMPLETED)
+                            tts.SynthesisEvent(type=tts.SynthesisEventType.FINISHED)
                         )
                         break
 
@@ -279,7 +283,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._queue.put_nowait(STREAM_EOS)
         await self._queue.join()
 
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         self._main_task.cancel()
         try:
             await self._main_task

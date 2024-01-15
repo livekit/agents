@@ -51,7 +51,7 @@ async def test_stream():
     assert (await anext(stream)).type == agents.tts.SynthesisEventType.STARTED
 
     async for event in stream:
-        if event.type == agents.tts.SynthesisEventType.COMPLETED:
+        if event.type == agents.tts.SynthesisEventType.FINISHED:
             break
 
         assert event.type == agents.tts.SynthesisEventType.AUDIO
@@ -60,4 +60,4 @@ async def test_stream():
     audio = agents.utils.merge_frames(frames)
     save_wave_file("2.wav", audio)
 
-    await stream.close()
+    await stream.aclose()

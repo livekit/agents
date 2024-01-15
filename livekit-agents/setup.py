@@ -31,7 +31,7 @@ setuptools.setup(
     description="LiveKit Python Agents",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
-    url="https://github.com/livekit/python-agents",
+    url="https://github.com/livekit/agents",
     cmdclass={},
     classifiers=[
         "Intended Audience :: Developers",
@@ -50,15 +50,15 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "click~=8.1.0",
-        "livekit~=0.7.1",
-        "livekit-api~=0.4.0",
-        "livekit-protocol~=0.3.0",
+        "livekit>=0.8.0",
+        "livekit-api>=0.4.1",
+        "livekit-protocol>=0.3.0",
         "websockets>=12,<13",
     ],
     package_data={},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",
-        "Source": "https://github.com/livekit/python-agents",
+        "Source": "https://github.com/livekit/agents",
     },
 )

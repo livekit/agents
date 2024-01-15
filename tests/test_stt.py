@@ -74,7 +74,7 @@ async def test_stream():
                 assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.8
                 break
 
-        await stream.close()
+        await stream.aclose()
 
     async with asyncio.TaskGroup() as group:
         for stt in stts:

@@ -55,7 +55,7 @@ class ChatGPTPlugin:
         if self._producing_response:
             self._needs_interrupt = True
 
-    async def close(self):
+    async def aclose(self):
         pass
 
     async def send_system_prompt(self) -> AsyncIterable[str]:

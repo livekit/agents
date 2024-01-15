@@ -90,7 +90,8 @@ class AutoDisconnectCallbacks:
     def PUBLISHER_LEFT(ctx: JobContext) -> bool:
         if ctx.participant is None:
             logging.error(
-                "Incorrect usage of PUBLISHER_LEFT, JobContext is tied to a Participant"
+                "Incorrect usage of PUBLISHER_LEFT, JobContext is tied to a Participant",
+                extra=ctx.logging_extra,
             )
             return False
 
@@ -191,6 +192,7 @@ class JobRequest:
             metadata (str, optional):
                 Metadata of the agent participant. Defaults to "".
         """
+        job_ctx: Optional[JobContext] = None
         async with self._lock:
             if self._answered:
                 raise Exception("job already answered")
@@ -224,7 +226,14 @@ class JobRequest:
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
                 logging.error(
-                    "failed to connect to the room, cancelling job %s: %s", self.id, e
+                    "failed to connect to the room, cancelling job %s: %s",
+                    self.id,
+                    e,
+                    extra={
+                        "job_id": self.id,
+                        "room": self.room.name,
+                        "agent_identity": identity,
+                    },
                 )
                 await self._worker._send_job_status(
                     self.id, proto_agent.JobStatus.JS_FAILED, str(e)
@@ -250,18 +259,21 @@ class JobRequest:
                             "Task was cancelled. Worker: %s Job: %s",
                             self._worker.id,
                             self.id,
+                            extra=job_ctx.logging_extra,
                         )
                     else:
                         logging.info(
                             "Task completed successfully. Worker: %s Job: %s",
                             self._worker.id,
                             self.id,
+                            extra=job_ctx.logging_extra,
                         )
                 except asyncio.CancelledError:
                     logging.info(
                         "Task was cancelled. Worker: %s Job: %s",
                         self._worker.id,
                         self.id,
+                        extra=job_ctx.logging_extra,
                     )
                 except Exception as e:
                     logging.error(
@@ -269,6 +281,8 @@ class JobRequest:
                         self._worker.id,
                         self.id,
                         e,
+                        exc_info=e,
+                        extra=job_ctx.logging_extra,
                     )
 
             task = self._worker._loop.create_task(agent(job_ctx))
@@ -309,4 +323,4 @@ class JobRequest:
 
             asyncio.create_task(disconnect_if_needed_wrapper())
 
-        logging.info("accepted job %s", self.id)
+        logging.info("accepted job %s", self.id, extra=job_ctx.logging_extra)

@@ -46,7 +46,7 @@ class StreamAdapterWrapper(SynthesizeStream):
     async def flush(self) -> None:
         await self._sentence_stream.flush()
 
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         self._main_task.cancel()
         try:
             await self._main_task
