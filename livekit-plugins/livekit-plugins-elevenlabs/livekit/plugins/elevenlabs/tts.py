@@ -182,15 +182,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ws = await self._try_connect()
                 retry_count = 0  # reset retry count
 
-                self._event_queue.put_nowait(
-                    tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
-                )
-
                 listen_task = asyncio.create_task(self._listen_task(ws))
 
                 # forward queued text to 11labs
+                started = False
                 while not ws.closed:
                     text = await self._queue.get()
+                    if not started:
+                        self._event_queue.put_nowait(
+                            tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
+                        )
+                        started = True
                     text_packet = dict(
                         text=text,
                         try_trigger_generation=True,
