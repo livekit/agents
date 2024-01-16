@@ -136,7 +136,9 @@ if __name__ == "__main__":
         await job_request.accept(
             PainterAgent.create,
             identity="painter",
+            # subscribe to all audio tracks automatically
             subscribe_cb=agents.SubscribeCallbacks.AUDIO_ONLY,
+            # disconnect when the last participant leaves
             auto_disconnect_cb=agents.AutoDisconnectCallbacks.DEFAULT,
         )
 
