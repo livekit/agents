@@ -14,7 +14,6 @@
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from typing import Callable, Coroutine, Optional, TYPE_CHECKING, Union
 from .job_context import JobContext
 from livekit import rtc, protocol, api
@@ -29,7 +28,6 @@ AutoDisconnectCallback = Callable[[JobContext], bool]
 AgentEntry = Callable[[JobContext], Coroutine]
 
 
-@dataclass
 class AutoSubscribe:
     """Helper callbacks for common subscribe scenarios"""
 
@@ -63,7 +61,6 @@ class AutoSubscribe:
         return publication.kind == rtc.TrackKind.KIND_AUDIO
 
 
-@dataclass
 class AutoDisconnect:
     """Helper callbacks for common auto disconnect scenarios"""
 
