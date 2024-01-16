@@ -199,11 +199,11 @@ if __name__ == "__main__":
         await job_request.accept(
             KITT.create,
             identity="kitt_agent",
-            subscribe_cb=agents.SubscribeCallbacks.AUDIO_ONLY,
-            auto_disconnect_cb=agents.AutoDisconnectCallbacks.DEFAULT,
+            subscribe_cb=agents.AutoSubscribe.AUDIO_ONLY,
+            auto_disconnect_cb=agents.AutoDisconnect.DEFAULT,
         )
 
     worker = agents.Worker(
-        job_request_cb=job_request_cb, worker_type=agents.JobType.JT_ROOM
+        request_handler=job_request_cb, worker_type=agents.JobType.JT_ROOM
     )
     agents.run_app(worker)
