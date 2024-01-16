@@ -204,7 +204,5 @@ if __name__ == "__main__":
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
 
-    worker = agents.Worker(
-        request_handler=job_request_cb
-    )
+    worker = agents.Worker(request_handler=job_request_cb)
     agents.run_app(worker)
