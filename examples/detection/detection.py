@@ -158,8 +158,8 @@ if __name__ == "__main__":
         await job_request.accept(
             Detection.create,
             identity="detection_agent",
-            subscribe_cb=agents.AutoSubscribe.VIDEO_ONLY,
-            auto_disconnect_cb=agents.AutoDisconnect.DEFAULT,
+            auto_subscribe=agents.AutoSubscribe.VIDEO_ONLY,
+            auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
 
     worker = agents.Worker(

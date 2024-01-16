@@ -37,6 +37,12 @@ INTRO = "Hello, I am KITT, a friendly voice assistant powered by LiveKit Agents.
         You can find my source code in the top right of this screen if you're curious how I work. \
         Feel free to ask me anything — I'm here to help! Just start talking or type in the chat."
 
+
+# convert intro response to a stream
+async def intro_text_stream():
+    yield INTRO
+
+
 AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 
 ELEVEN_TTS_SAMPLE_RATE = 44100
@@ -59,7 +65,7 @@ class KITT:
 
         self.ctx: agents.JobContext = ctx
         self.chat = rtc.ChatManager(ctx.room)
-        self.line_out = rtc.AudioSource(ELEVEN_TTS_SAMPLE_RATE, ELEVEN_TTS_CHANNELS)
+        self.audio_out = rtc.AudioSource(ELEVEN_TTS_SAMPLE_RATE, ELEVEN_TTS_CHANNELS)
 
         self._sending_audio = False
         self._processing = False
@@ -71,14 +77,18 @@ class KITT:
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
         # self.ctx.room.on("disconnected", your_cleanup_function)
-        await self.publish_audio()
 
-        async def intro_text_stream():
-            yield INTRO
+        # publish audio track
+        track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.audio_out)
+        options = rtc.TrackPublishOptions(
+            source=rtc.TrackSource.SOURCE_MICROPHONE,
+        )
+        await self.ctx.room.local_participant.publish_track(track, options)
 
-        # allow the participant to fully subscribe to the audio, so it doesn't miss
+        # allow the participant to fully subscribe to the agent's audio track, so it doesn't miss
         # anything in the beginning
         await asyncio.sleep(1)
+
         await self.process_chatgpt_result(intro_text_stream())
         self.update_state()
 
@@ -90,12 +100,6 @@ class KITT:
         msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=message.message)
         chatgpt_result = self.chatgpt_plugin.add_message(msg)
         self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
-
-    async def publish_audio(self):
-        track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.line_out)
-        options = rtc.TrackPublishOptions()
-        options.source = rtc.TrackSource.SOURCE_MICROPHONE
-        await self.ctx.room.local_participant.publish_track(track, options)
 
     def on_track_subscribed(
         self,
@@ -158,16 +162,13 @@ class KITT:
 
     async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent]):
         async for e in tts_stream:
-            logging.info(f"got event: {e.type}")
             if e.type == SynthesisEventType.STARTED:
                 self.update_state(sending_audio=True)
             elif e.type == SynthesisEventType.FINISHED:
                 self.update_state(sending_audio=False)
             elif e.type == SynthesisEventType.AUDIO:
-                logging.info("capturing frame")
-                await self.line_out.capture_frame(e.audio.data)
+                await self.audio_out.capture_frame(e.audio.data)
         await tts_stream.aclose()
-        logging.info("closed tts")
 
     def update_state(self, sending_audio: bool = None, processing: bool = None):
         if sending_audio is not None:
@@ -199,11 +200,10 @@ if __name__ == "__main__":
         await job_request.accept(
             KITT.create,
             identity="kitt_agent",
-            subscribe_cb=agents.AutoSubscribe.AUDIO_ONLY,
-            auto_disconnect_cb=agents.AutoDisconnect.DEFAULT,
+            name="KITT",
+            auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY,
+            auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
 
-    worker = agents.Worker(
-        request_handler=job_request_cb, worker_type=agents.JobType.JT_ROOM
-    )
+    worker = agents.Worker(request_handler=job_request_cb)
     agents.run_app(worker)
