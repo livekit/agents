@@ -136,10 +136,10 @@ if __name__ == "__main__":
             PainterAgent.create,
             identity="painter",
             # subscribe to all audio tracks automatically
-            subscribe_cb=agents.SubscribeCallbacks.AUDIO_ONLY,
+            auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY,
             # disconnect when the last participant leaves
-            auto_disconnect_cb=agents.AutoDisconnectCallbacks.DEFAULT,
+            auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
 
-    worker = agents.Worker(job_request_cb=job_request_cb)
+    worker = agents.Worker(request_handler=job_request_cb)
     agents.run_app(worker)
