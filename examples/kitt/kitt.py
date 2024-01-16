@@ -37,9 +37,11 @@ INTRO = "Hello, I am KITT, a friendly voice assistant powered by LiveKit, ChatGP
         You can find my source code in the top right of this screen if you're curious how I work. \
         Feel free to ask me anything — I'm here to help! Just start talking or type in the chat."
 
+
 # convert intro response to a stream
 async def intro_text_stream():
     yield INTRO
+
 
 AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 
@@ -79,7 +81,7 @@ class KITT:
         # publish audio track
         track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.audio_out)
         options = rtc.TrackPublishOptions(
-            source = rtc.TrackSource.SOURCE_MICROPHONE,
+            source=rtc.TrackSource.SOURCE_MICROPHONE,
         )
         await self.ctx.room.local_participant.publish_track(track, options)
 

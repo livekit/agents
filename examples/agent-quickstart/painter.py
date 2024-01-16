@@ -36,7 +36,6 @@ class PainterAgent:
         def process_chat(msg: rtc.ChatMessage):
             self.prompt = msg.message
 
-
         self.ctx.room.on("track_subscribed", subscribe_cb)
         self.chat.on("message_received", process_chat)
 
