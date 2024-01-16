@@ -79,7 +79,7 @@ class AutoDisconnect:
 
         # If only participant is the agent
         for p in ctx.room.participants.values():
-            if p.identity == ctx.agent_identity:
+            if p.identity == ctx.agent.identity:
                 return True
 
         return False
