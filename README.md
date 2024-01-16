@@ -80,8 +80,8 @@ if __name__ == "__main__":
         await job_request.accept(
             my_agent,
             identity="agent",
-            subscribe_cb=agents.SubscribeCallbacks.AUDIO_ONLY,
-            auto_disconnect_cb=agents.AutoDisconnectCallbacks.DEFAULT,
+            subscribe_cb=agents.AutoSubscribe.AUDIO_ONLY,
+            auto_disconnect_cb=agents.AutoDisconnect.DEFAULT,
         )
 
     # When a new LiveKit room is created, the job_request_cb is called.

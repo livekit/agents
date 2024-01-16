@@ -26,17 +26,15 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class SubscribeCallbacks:
+class AutoSubscribe:
     """Helper callbacks for common subscribe scenarios"""
 
     @staticmethod
     def SUBSCRIBE_ALL(
         publication: rtc.TrackPublication, participant: rtc.RemoteParticipant
     ) -> bool:
-        """
-        Subscribe to all tracks automatically. This will also set the LiveKit room option
-        auto_subscribe to true as an optimization.
-        """
+        """Subscribe to all tracks automatically. This will also set the LiveKit room option
+        auto_subscribe to true as an optimization."""
         return True
 
     @staticmethod
@@ -50,23 +48,19 @@ class SubscribeCallbacks:
     def VIDEO_ONLY(
         publication: rtc.TrackPublication, participant: rtc.RemoteParticipant
     ) -> bool:
-        """
-        Subscribe to video tracks automatically
-        """
+        """Subscribe to video tracks automatically"""
         return publication.kind == rtc.TrackKind.KIND_VIDEO
 
     @staticmethod
     def AUDIO_ONLY(
         publication: rtc.TrackPublication, participant: rtc.RemoteParticipant
     ) -> bool:
-        """
-        Subscribe to audio tracks automatically
-        """
+        """Subscribe to audio tracks automatically"""
         return publication.kind == rtc.TrackKind.KIND_AUDIO
 
 
 @dataclass
-class AutoDisconnectCallbacks:
+class AutoDisconnect:
     """Helper callbacks for common auto disconnect scenarios"""
 
     @staticmethod
@@ -104,15 +98,13 @@ class AutoDisconnectCallbacks:
         If the agent is not tied to a participant, it will shut down when the agent is the only remaining participant.
         """
         if ctx.participant is not None:
-            return AutoDisconnectCallbacks.PUBLISHER_LEFT(ctx)
+            return AutoDisconnect.PUBLISHER_LEFT(ctx)
 
-        return AutoDisconnectCallbacks.ROOM_EMPTY(ctx)
+        return AutoDisconnect.ROOM_EMPTY(ctx)
 
 
 class JobRequest:
-    """
-    Represents a new job from the server, this worker can either accept or reject it.
-    """
+    """Represents a new job from the server, this worker can either accept or reject it."""
 
     def __init__(
         self,
@@ -136,9 +128,7 @@ class JobRequest:
         return self._info.room
 
     async def reject(self) -> None:
-        """
-        Tell the server that we cannot handle the job
-        """
+        """Tell the server we cannot handle this job"""
         async with self._lock:
             if self._answered:
                 raise Exception("job already answered")
@@ -154,17 +144,16 @@ class JobRequest:
         agent: Callable[[JobContext], Coroutine],
         subscribe_cb: Callable[
             [rtc.TrackPublication, rtc.RemoteParticipant], bool
-        ] = SubscribeCallbacks.SUBSCRIBE_NONE,
+        ] = AutoSubscribe.SUBSCRIBE_NONE,
         auto_disconnect_cb: Callable[
             [JobContext], bool
-        ] = AutoDisconnectCallbacks.DEFAULT,
+        ] = AutoDisconnect.DEFAULT,
         grants: api.VideoGrants = None,
         name: str = "",
         identity: str = "",
         metadata: str = "",
     ) -> None:
-        """
-        Signal to the LiveKit Server that we can handle the job, and connect to the room.
+        """Signal to the LiveKit Server that we can handle the job, and connect to the room.
 
         Args:
             agent (Callable[[JobContext], Coroutine]):
@@ -192,7 +181,6 @@ class JobRequest:
             metadata (str, optional):
                 Metadata of the agent participant. Defaults to "".
         """
-        job_ctx: Optional[JobContext] = None
         async with self._lock:
             if self._answered:
                 raise Exception("job already answered")
@@ -221,14 +209,13 @@ class JobRequest:
 
             try:
                 options = rtc.RoomOptions(
-                    auto_subscribe=subscribe_cb == SubscribeCallbacks.SUBSCRIBE_ALL
+                    auto_subscribe=subscribe_cb == AutoSubscribe.SUBSCRIBE_ALL
                 )
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
-                logging.error(
-                    "failed to connect to the room, cancelling job %s: %s",
+                logging.exception(
+                    "failed to connect to the room, cancelling job %s",
                     self.id,
-                    e,
                     extra={
                         "job_id": self.id,
                         "room": self.room.name,
@@ -238,7 +225,7 @@ class JobRequest:
                 await self._worker._send_job_status(
                     self.id, proto_agent.JobStatus.JS_FAILED, str(e)
                 )
-                raise e
+                raise
 
             participant: Optional[rtc.Participant] = None
             if self._info.participant:
@@ -249,44 +236,8 @@ class JobRequest:
                 self._worker,
                 self._room,
                 participant=participant,
-                agent_identity=identity,
             )
-
-            def done_callback(t: asyncio.Task):
-                try:
-                    if t.cancelled():
-                        logging.info(
-                            "Task was cancelled. Worker: %s Job: %s",
-                            self._worker.id,
-                            self.id,
-                            extra=job_ctx.logging_extra,
-                        )
-                    else:
-                        logging.info(
-                            "Task completed successfully. Worker: %s Job: %s",
-                            self._worker.id,
-                            self.id,
-                            extra=job_ctx.logging_extra,
-                        )
-                except asyncio.CancelledError:
-                    logging.info(
-                        "Task was cancelled. Worker: %s Job: %s",
-                        self._worker.id,
-                        self.id,
-                        extra=job_ctx.logging_extra,
-                    )
-                except Exception as e:
-                    logging.error(
-                        "Task raised an uncaught exception. Worker: %s Job: %s Exception: %s",
-                        self._worker.id,
-                        self.id,
-                        e,
-                        exc_info=e,
-                        extra=job_ctx.logging_extra,
-                    )
-
-            task = self._worker._loop.create_task(agent(job_ctx))
-            task.add_done_callback(done_callback)
+            job_ctx.create_task(agent(job_ctx))
 
             def disconnect_if_needed(*_):
                 if auto_disconnect_cb(job_ctx):
@@ -294,6 +245,15 @@ class JobRequest:
                         job_ctx.disconnect(),
                         loop=self._worker._loop,
                     )
+
+            self._room.on("participant_disconnected", disconnect_if_needed)
+
+            async def job_validity():
+                # let time to the server to forward participant info
+                await asyncio.sleep(15)
+                disconnect_if_needed()
+
+            job_ctx.create_task(job_validity())
 
             @self._room.on("track_published")
             def on_track_published(
@@ -305,22 +265,11 @@ class JobRequest:
 
                 publication.set_subscribed(True)
 
-            self._room.on("participant_disconnected", disconnect_if_needed)
-
             for participant in self._room.participants.values():
                 for publication in participant.tracks.values():
                     if not subscribe_cb(publication, participant):
                         continue
 
                     publication.set_subscribed(True)
-
-            # Call disconnect_if_needed() once to check if the conditions
-            # for auto disconnect are already met. We wait 5 seconds to ensure
-            # we have the state of the room, even if the room is relayed.
-            async def disconnect_if_needed_wrapper():
-                await asyncio.sleep(15)
-                disconnect_if_needed()
-
-            asyncio.create_task(disconnect_if_needed_wrapper())
 
         logging.info("accepted job %s", self.id, extra=job_ctx.logging_extra)
