@@ -77,6 +77,6 @@ if __name__ == "__main__":
         )
 
     worker = agents.Worker(
-        job_request_cb=job_request_cb, worker_type=agents.JobType.JT_ROOM
+        request_handler=job_request_cb, worker_type=agents.JobType.JT_ROOM
     )
     agents.run_app(worker)

@@ -69,15 +69,12 @@ class AutoDisconnect:
 
     @staticmethod
     def ROOM_EMPTY(ctx: JobContext) -> bool:
-        # Hot path, if there are no participants, we don't need to check
         if len(ctx.room.participants) == 0:
             return True
 
-        # Hot path, if there are more than 1 participants, we don't need to check
         if len(ctx.room.participants) > 1:
             return False
 
-        # If only participant is the agent
         for p in ctx.room.participants.values():
             if p.identity == ctx.agent.identity:
                 return True
