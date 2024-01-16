@@ -15,7 +15,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Callable, Coroutine, Optional, TYPE_CHECKING
+from typing import Callable, Coroutine, Optional, TYPE_CHECKING, Union
 from .job_context import JobContext
 from livekit import rtc, protocol, api
 from livekit.protocol import agent as proto_agent
@@ -23,6 +23,10 @@ from livekit.protocol import agent as proto_agent
 # TODO: refactor worker so we can avoid this circular import
 if TYPE_CHECKING:
     from .worker import Worker
+
+AutoSubscribeCallback = Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool]
+AutoDisconnectCallback = Callable[[JobContext], bool]
+AgentEntry = Callable[[JobContext], Coroutine]
 
 
 @dataclass
@@ -141,44 +145,42 @@ class JobRequest:
 
     async def accept(
         self,
-        agent: Callable[[JobContext], Coroutine],
-        subscribe_cb: Callable[
-            [rtc.TrackPublication, rtc.RemoteParticipant], bool
+        agent: AgentEntry,
+        auto_subscribe: Union[
+            AutoSubscribeCallback, bool
         ] = AutoSubscribe.SUBSCRIBE_NONE,
-        auto_disconnect_cb: Callable[
-            [JobContext], bool
-        ] = AutoDisconnect.DEFAULT,
-        grants: api.VideoGrants = None,
-        name: str = "",
-        identity: str = "",
-        metadata: str = "",
+        auto_disconnect: AutoDisconnectCallback = AutoDisconnect.DEFAULT,
+        grants: api.VideoGrants = api.VideoGrants(),
+        name: Optional[str] = None,
+        identity: Optional[str] = None,
+        metadata: Optional[str] = None,
     ) -> None:
         """Signal to the LiveKit Server that we can handle the job, and connect to the room.
 
         Args:
-            agent (Callable[[JobContext], Coroutine]):
+            agent:
                 Your agent entrypoint.
 
-            subscribe_cb (Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool]):
+            auto_subscribe:
                 Callback that is called when a track is published in the room. Return True to subscribe to the track.
 
-            auto_disconnect_cb (Callable[[JobContext], bool]):
+            auto_disconnect:
                 Callback that is called when the agent should disconnect from the room. Return True to disconnect.
                 The callback is called when:
                 - Initially once the agent has connected to the room
                 - A participant leaves the room
 
-            grants (api.VideoGrants, optional):
+            grants:
                 Additional grants to give to the agent participant in its token.
                 Defaults to None.
 
-            name (str, optional):
+            name:
                 Name of the agent participant. Defaults to "".
 
-            identity (str, optional):
+            identity:
                 Identity of the agent participant. Defaults to "".
 
-            metadata (str, optional):
+            metadata:
                 Metadata of the agent participant. Defaults to "".
         """
         async with self._lock:
@@ -188,7 +190,6 @@ class JobRequest:
             self._answered = True
 
             identity = identity or "agent-" + self.id
-            grants = grants or api.VideoGrants()
             grants.room_join = True
             grants.agent = True
             grants.room = self.room.name
@@ -198,8 +199,8 @@ class JobRequest:
                 api.AccessToken(self._worker._api_key, self._worker._api_secret)
                 .with_identity(identity)
                 .with_grants(grants)
-                .with_metadata(metadata)
-                .with_name(name)
+                .with_metadata(metadata or "")
+                .with_name(name or "")
                 .to_jwt()
             )
 
@@ -209,7 +210,8 @@ class JobRequest:
 
             try:
                 options = rtc.RoomOptions(
-                    auto_subscribe=subscribe_cb == AutoSubscribe.SUBSCRIBE_ALL
+                    auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL
+                    or auto_subscribe is True
                 )
                 await self._room.connect(self._worker._rtc_url, jwt, options)
             except rtc.ConnectError as e:
@@ -240,7 +242,7 @@ class JobRequest:
             job_ctx.create_task(agent(job_ctx))
 
             def disconnect_if_needed(*_):
-                if auto_disconnect_cb(job_ctx):
+                if auto_disconnect(job_ctx):
                     asyncio.ensure_future(
                         job_ctx.disconnect(),
                         loop=self._worker._loop,
@@ -255,21 +257,25 @@ class JobRequest:
 
             job_ctx.create_task(job_validity())
 
-            @self._room.on("track_published")
-            def on_track_published(
-                publication: rtc.RemoteTrackPublication,
-                participant: rtc.RemoteParticipant,
+            if auto_subscribe != AutoSubscribe.SUBSCRIBE_ALL and not isinstance(
+                auto_subscribe, bool
             ):
-                if not subscribe_cb(publication, participant):
-                    return
 
-                publication.set_subscribed(True)
-
-            for participant in self._room.participants.values():
-                for publication in participant.tracks.values():
-                    if not subscribe_cb(publication, participant):
-                        continue
+                @self._room.on("track_published")
+                def on_track_published(
+                    publication: rtc.RemoteTrackPublication,
+                    participant: rtc.RemoteParticipant,
+                ):
+                    if not auto_subscribe(publication, participant):
+                        return
 
                     publication.set_subscribed(True)
+
+                for participant in self._room.participants.values():
+                    for publication in participant.tracks.values():
+                        if not auto_subscribe(publication, participant):
+                            continue
+
+                        publication.set_subscribed(True)
 
         logging.info("accepted job %s", self.id, extra=job_ctx.logging_extra)

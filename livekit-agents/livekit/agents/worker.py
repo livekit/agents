@@ -145,9 +145,7 @@ class Worker:
     async def _send_availability(
         self, job_id: str, available: bool
     ) -> protocol.agent.JobAssignment:
-        """
-        Send availability to the server, and wait for assignment
-        """
+        """Send availability to the server, and wait for assignment"""
         req = protocol.agent.WorkerMessage()
         req.availability.available = available
         req.availability.job_id = job_id
@@ -206,10 +204,8 @@ class Worker:
             pass
 
     async def _handle_new_job(self, job: "JobRequest") -> None:
-        """
-        Execute the available callback, and automatically deny the job if the callback
-        does not send an answer or raises an exception
-        """
+        """Execute the available callback, and automatically deny the job if the callback
+        does not send an answer or raises an exception"""
 
         try:
             await self._job_request_cb(job)
@@ -308,11 +304,9 @@ class Worker:
 
     @property
     def running(self) -> bool:
-        """
-        Whether the worker is running.
+        """Whether the worker is running.
         Running is first set to True when the websocket connection is established and
-        the Worker has been acknowledged by a LiveKit Server.
-        """
+        the Worker has been acknowledged by a LiveKit Server."""
         return self._running
 
     @property
@@ -325,9 +319,7 @@ def _run_worker(
     loop: Optional[asyncio.AbstractEventLoop] = None,
     started_cb: Optional[Callable[[Worker], Any]] = None,
 ) -> None:
-    """
-    Run the specified worker and handle graceful shutdown
-    """
+    """Run the specified worker and handle graceful shutdown"""
 
     loop = loop or asyncio.get_event_loop()
 
@@ -383,9 +375,7 @@ def _run_worker(
 
 
 def run_app(worker: Worker) -> None:
-    """
-    Run the CLI to interact with the worker
-    """
+    """Run the CLI to interact with the worker"""
 
     import click
 
