@@ -96,7 +96,7 @@ class PainterAgent:
                 )
                 started_at = datetime.now()
                 try:
-                    argb_frame = await self.dalle.generate(prompt, size="1024x1024")
+                    argb_frame = await self.dalle.generate(prompt, size="1792x1024")
                     self.current_image = rtc.VideoFrame(argb_frame.to_i420())
                     elapsed = (datetime.now() - started_at).seconds
                     self.ctx.create_task(
@@ -111,7 +111,7 @@ class PainterAgent:
             await asyncio.sleep(0.05)
 
     async def image_publish_worker(self):
-        video_source = rtc.VideoSource(1024, 1024)
+        video_source = rtc.VideoSource(1792, 1024)
         track = rtc.LocalVideoTrack.create_video_track("image", video_source)
         await self.ctx.room.local_participant.publish_track(track)
         image: rtc.VideoFrame = None
