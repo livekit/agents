@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import logging
 import asyncio
 from typing import List, Optional
@@ -38,6 +39,7 @@ class VAD(agents.vad.VAD):
 
     def stream(
         self,
+        *,
         min_speaking_duration: float = 0.5,
         min_silence_duration: float = 0.5,
         padding_duration: float = 0.1,
@@ -112,10 +114,8 @@ class VADStream(agents.vad.VADStream):
 
     async def aclose(self) -> None:
         self._main_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
-        except asyncio.CancelledError:
-            pass
 
     async def _run(self):
         while True:

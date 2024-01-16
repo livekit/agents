@@ -37,8 +37,7 @@ class VAD(ABC):
         sample_rate: int = 16000,
         max_buffered_speech: float = 45.0,
     ) -> "VADStream":
-        """
-        Returns a VADStream that can be used to push audio frames and receive VAD events
+        """Returns a VADStream that can be used to push audio frames and receive VAD events
         Args:
           min_speaking_duration: minimum duration of speech to trigger a START_SPEAKING event
 
@@ -50,9 +49,7 @@ class VAD(ABC):
           sample_rate: sample rate of the inference/processing
 
           max_buffered_speech: max buffered speech in seconds that we keep until the END_SPEAKING event is triggered
-              it is unrecommended to use 0.0 as it may cause OOM if the user doesn't stop speaking
-
-        """
+              it is unrecommended to use 0.0 as it may cause OOM if the user doesn't stop speaking"""
         pass
 
 

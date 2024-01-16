@@ -1,3 +1,4 @@
+import contextlib
 import asyncio
 import logging
 from typing import Optional
@@ -86,10 +87,8 @@ class StreamAdapterWrapper(SpeechStream):
     async def aclose(self) -> None:
         await self._vad_stream.aclose()
         self._main_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
-        except asyncio.CancelledError:
-            pass
 
     async def flush(self) -> None:
         await self._vad_stream.flush()

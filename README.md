@@ -63,7 +63,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     # Callback that gets called on every new Agent JobRequest. In this callback you can create your agent and accept (or decline) a job. Declining a job will tell the LiveKit server to give the job to another Worker.
-    async def job_request_cb(job_request: agents.JobRequest):
+    async def job_request_handler(job_request: agents.JobRequest):
         def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
             # do work on the track
             pass
@@ -80,12 +80,12 @@ if __name__ == "__main__":
         await job_request.accept(
             my_agent,
             identity="agent",
-            subscribe_cb=agents.SubscribeCallbacks.AUDIO_ONLY,
-            auto_disconnect_cb=agents.AutoDisconnectCallbacks.DEFAULT,
+            subscribe_cb=agents.AutoSubscribe.AUDIO_ONLY,
+            auto_disconnect_cb=agents.AutoDisconnect.DEFAULT,
         )
 
-    # When a new LiveKit room is created, the job_request_cb is called.
-    worker = agents.Worker(job_request_cb=job_request_cb,
+    # When a new LiveKit room is created, the request_handler is called.
+    worker = agents.Worker(request_handler=job_request_handler,
                            worker_type=agents.JobType.JT_ROOM)
 
     # Start the cli

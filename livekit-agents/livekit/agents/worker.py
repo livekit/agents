@@ -32,7 +32,7 @@ import websockets
 from livekit import api, protocol
 from livekit.protocol import agent as proto_agent
 from livekit.protocol import models as proto_models
-from livekit.protocol.agent import JobType as ProtoJobType
+from livekit.protocol.agent import JobType
 from .job_request import JobRequest
 from .job_context import JobContext
 from .plugin import Plugin
@@ -41,7 +41,7 @@ MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_INTERVAL = 5
 ASSIGNMENT_TIMEOUT = 15
 
-JobType = ProtoJobType
+JobRequestHandler = Callable[["JobRequest"], Coroutine]
 
 
 class AssignmentTimeoutError(Exception):
@@ -65,7 +65,7 @@ class Worker:
 
     def __init__(
         self,
-        job_request_cb: Callable[["JobRequest"], Coroutine],
+        request_handler: JobRequestHandler,
         *,
         worker_type: JobType.ValueType = JobType.JT_ROOM,
         event_loop: Optional[asyncio.AbstractEventLoop] = None,
@@ -75,15 +75,15 @@ class Worker:
     ) -> None:
         """
         Args:
-            job_request_cb (Callable[[JobRequest], Coroutine]): Callback that is triggered when a new Job is available.
-            worker_type (JobType.ValueType): What kind of jobs this worker can handle.
-            event_loop (Optional[asyncio.AbstractEventLoop], optional): Optional asyncio event loop to use for this worker. Defaults to None.
-            ws_url (_type_, optional): LiveKit websocket URL. Defaults to os.environ.get("LIVEKIT_URL", "http://localhost:7880").
+            request_handler (JobRequestHandler): Callback that is triggered when a new Job is available.
+            worker_type (JobType): What kind of jobs this worker can handle.
+            event_loop (Optional[asyncio.AbstractEventLoop]): Optional asyncio event loop to use for this worker. Defaults to None.
+            ws_url (str, optional): LiveKit websocket URL. Defaults to os.environ.get("LIVEKIT_URL", "http://localhost:7880").
             api_key (str, optional): LiveKit API Key. Defaults to os.environ.get("LIVEKIT_API_KEY", "").
             api_secret (str, optional): LiveKit API Secret. Defaults to os.environ.get("LIVEKIT_API_SECRET", "").
         """
 
-        ws_url = ws_url or os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
+        ws_url = ws_url or os.environ.get("LIVEKIT_URL") or "ws://localhost:7880"
         api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
         api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
 
@@ -101,7 +101,7 @@ class Worker:
 
         self._loop = event_loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
-        self._job_request_cb = job_request_cb
+        self._request_handler = request_handler
         self._wid = "W-" + str(uuid.uuid4())[:12]
         self._worker_type = worker_type
         self._api_key = api_key
@@ -145,9 +145,7 @@ class Worker:
     async def _send_availability(
         self, job_id: str, available: bool
     ) -> protocol.agent.JobAssignment:
-        """
-        Send availability to the server, and wait for assignment
-        """
+        """Send availability to the server, and wait for assignment"""
         req = protocol.agent.WorkerMessage()
         req.availability.available = available
         req.availability.job_id = job_id
@@ -206,15 +204,13 @@ class Worker:
             pass
 
     async def _handle_new_job(self, job: "JobRequest") -> None:
-        """
-        Execute the available callback, and automatically deny the job if the callback
-        does not send an answer or raises an exception
-        """
+        """Execute the available callback, and automatically deny the job if the callback
+        does not send an answer or raises an exception"""
 
         try:
-            await self._job_request_cb(job)
-        except Exception as e:
-            logging.error("available callback failed: %s", e)
+            await self._request_handler(job)
+        except Exception:
+            logging.exception("request handler for job %s failed", job.id)
             return
 
         if not job._answered:
@@ -308,11 +304,9 @@ class Worker:
 
     @property
     def running(self) -> bool:
-        """
-        Whether the worker is running.
+        """Whether the worker is running.
         Running is first set to True when the websocket connection is established and
-        the Worker has been acknowledged by a LiveKit Server.
-        """
+        the Worker has been acknowledged by a LiveKit Server."""
         return self._running
 
     @property
@@ -325,9 +319,7 @@ def _run_worker(
     loop: Optional[asyncio.AbstractEventLoop] = None,
     started_cb: Optional[Callable[[Worker], Any]] = None,
 ) -> None:
-    """
-    Run the specified worker and handle graceful shutdown
-    """
+    """Run the specified worker and handle graceful shutdown"""
 
     loop = loop or asyncio.get_event_loop()
 
@@ -383,9 +375,7 @@ def _run_worker(
 
 
 def run_app(worker: Worker) -> None:
-    """
-    Run the CLI to interact with the worker
-    """
+    """Run the CLI to interact with the worker"""
 
     import click
 

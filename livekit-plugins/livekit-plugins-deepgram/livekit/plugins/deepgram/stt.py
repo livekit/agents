@@ -211,7 +211,6 @@ class SpeechStream(stt.SpeechStream):
                     self._queue.task_done()
 
             except asyncio.CancelledError:
-                # close requested
                 await asyncio.shield(self._live.finish())
                 break
             except Exception as e:
@@ -247,9 +246,9 @@ def live_transcription_to_speech_event(
         is_final=event.is_final or False,  # could be None?
         alternatives=[
             stt.SpeechData(
-                language=language,
-                start_time=alt.words[0].start if alt.words else 0,
-                end_time=alt.words[-1].end if alt.words else 0,
+                language=language or "",
+                start_time=(alt.words[0].start if alt.words else 0) or 0,
+                end_time=(alt.words[-1].end if alt.words else 0) or 0,
                 confidence=alt.confidence or 0,
                 text=alt.transcript or "",
             )
@@ -270,9 +269,9 @@ def prerecorded_transcription_to_speech_event(
         is_final=True,
         alternatives=[
             stt.SpeechData(
-                language=language,
-                start_time=alt.words[0].start if alt.words else 0,
-                end_time=alt.words[-1].end if alt.words else 0,
+                language=language or "",
+                start_time=(alt.words[0].start if alt.words else 0) or 0,
+                end_time=(alt.words[-1].end if alt.words else 0) or 0,
                 confidence=alt.confidence or 0,
                 # not sure why transcript is Optional inside DG SDK ...
                 text=alt.transcript or "",

@@ -23,7 +23,7 @@ from .worker import (
 )
 from .plugin import Plugin
 from .utils import AudioBuffer, merge_frames
-from .job_request import SubscribeCallbacks, AutoDisconnectCallbacks, JobRequest
+from .job_request import AutoSubscribe, AutoDisconnect, JobRequest
 from .job_context import JobContext
 
 from . import stt
@@ -35,8 +35,8 @@ __all__ = [
     "__version__",
     "Worker",
     "JobRequest",
-    "SubscribeCallbacks",
-    "AutoDisconnectCallbacks",
+    "AutoSubscribe",
+    "AutoDisconnect",
     "JobContext",
     "JobCancelledError",
     "AssignmentTimeoutError",

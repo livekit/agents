@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import contextlib
 import logging
 from typing import Coroutine, Optional, TYPE_CHECKING
 from livekit import api, rtc, protocol
@@ -23,8 +24,7 @@ if TYPE_CHECKING:
 
 
 class JobContext:
-    """
-    Context for job, it contains the worker, the room, and the participant.
+    """Context for job, it contains the worker, the room, and the participant.
     You should not create these on your own. They are created by the Worker.
     """
 
@@ -33,13 +33,11 @@ class JobContext:
         id: str,
         worker: "Worker",
         room: rtc.Room,
-        agent_identity: str,
         participant: Optional[rtc.Participant] = None,
     ) -> None:
         self._id = id
         self._worker = worker
         self._room = room
-        self._agent_identity = agent_identity
         self._participant = participant
         self._closed = False
         self._lock = asyncio.Lock()
@@ -62,27 +60,18 @@ class JobContext:
         return self._participant
 
     @property
-    def agent_identity(self) -> str:
+    def agent(self) -> rtc.LocalParticipant:
         """The agent's Participant identity"""
-        return self._agent_identity
+        return self._room.local_participant
 
     @property
     def api(self) -> api.LiveKitAPI:
+        """LiveKit API client"""
         return self._worker.api
 
     def create_task(self, coro: Coroutine) -> asyncio.Task:
-        """
-        Creates and asyncio.Task and internally
-        keeps a reference until the task is complete to prevent
-        it from being garbage collected. Also adds a callback to
-        that logs the task's completion status along with any
-        exceptions that may have been raised.
-
-        Args:
-            coro (Coroutine): async function to run
-
-        Returns:
-            asyncio.Task
+        """Schedule the execution of a coroutine object in a spawn task using asyncio and keep a reference to it.
+        The task is automatically cancelled when the job is disconnected.
         """
 
         t = asyncio.create_task(coro)
@@ -121,6 +110,10 @@ class JobContext:
             for task in self._tasks:
                 task.cancel()
 
+            for task in self._tasks:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
             logging.info("job %s shutdown", self.id, extra=self.logging_extra)
 
     async def update_status(
@@ -141,7 +134,7 @@ class JobContext:
         e = {
             "job_id": self.id,
             "room": self.room.name,
-            "agent_identity": self.agent_identity,
+            "agent_identity": self.agent.identity,
             "worker_id": self._worker.id,
         }
         if self.participant:

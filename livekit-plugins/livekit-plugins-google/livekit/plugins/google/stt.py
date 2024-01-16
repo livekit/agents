@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 from typing import Optional, Union, List
 from google.auth import credentials
 from google.cloud.speech_v2 import SpeechAsyncClient
@@ -195,10 +196,8 @@ class SpeechStream(stt.SpeechStream):
 
     async def aclose(self) -> None:
         self._main_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
-        except asyncio.CancelledError:
-            pass
 
     def _streaming_config(self) -> cloud_speech.StreamingRecognitionConfig:
         return cloud_speech.StreamingRecognitionConfig(
