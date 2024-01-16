@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import asyncio
 import logging
 import base64
@@ -158,11 +159,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         model_id = self._config.model_id
         return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format=pcm_44100&optimize_streaming_latency={self._latency}"
 
-    def push_text(self, text: str) -> None:
+    def push_text(self, token: str) -> None:
         if self._closed:
             raise ValueError("cannot push to a closed stream")
 
-        if not text or len(text) == 0:
+        if not token or len(token) == 0:
             return
 
         # TODO: Native word boundary detection may not be good enough for all languages
@@ -170,8 +171,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         splitters = (".", ",", "?", "!", ";", ":", "—", "-", "(", ")", "[", "]", "}", " ")
         # fmt: on
 
-        self._text += text
-        if text[-1] in splitters:
+        self._text += token
+        if token[-1] in splitters:
             self._queue.put_nowait(self._text)
             self._text = ""
 
@@ -285,10 +286,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def aclose(self) -> None:
         self._main_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
-        except asyncio.CancelledError:
-            pass
 
     async def __anext__(self) -> tts.SynthesisEvent:
         if self._closed and self._event_queue.empty():
