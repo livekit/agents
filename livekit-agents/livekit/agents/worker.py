@@ -43,6 +43,7 @@ ASSIGNMENT_TIMEOUT = 15
 
 JobRequestHandler = Callable[["JobRequest"], Coroutine]
 
+
 class AssignmentTimeoutError(Exception):
     """Worker timed out when joining the worker-pool"""
 
@@ -96,7 +97,7 @@ class Worker:
                 "No api secret provided, set LIVEKIT_API_SECRET or use the api-secret parameter inside the CLI"
             )
 
-        self._set_url(ws_url) 
+        self._set_url(ws_url)
 
         self._loop = event_loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
