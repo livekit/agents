@@ -59,10 +59,6 @@ class Detection:
         await self.publish_video()
 
     def on_chat_received(self, message: rtc.ChatMessage):
-        # TODO: handle deleted and updated messages in message context
-        if message.deleted:
-            return
-
         text = message.message
         words = text.split(",")
         includes = []
@@ -112,18 +108,23 @@ class Detection:
             image = Image.frombytes(
                 "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
             )
-            draw = ImageDraw.Draw(image)
+            draw = ImageDraw.Draw(image, mode="RGBA")
             for result in self.latest_results:
                 draw.rectangle(
-                    (result.top_left, result.bottom_right), outline="#ff0000", width=3
+                    (result.top_left, result.bottom_right), outline="#ff000000", width=3
                 )
-            bb_frame = rtc.ArgbFrame.create(
-                format=rtc.VideoFormatType.FORMAT_BGRA,
+
+            # LiveKit needs ARGB (little-endian so BGRA big-endian)
+            (r, g, b, a) = image.split()
+            argb_image = Image.merge("RGBA", (b, g, r, a))
+            argb_frame = rtc.ArgbFrame.create(
+                format=rtc.VideoFormatType.FORMAT_ARGB,
                 width=frame.buffer.width,
                 height=frame.buffer.height,
             )
-            bb_frame.data[:] = image.tobytes()
-            result_frame = rtc.VideoFrame(bb_frame.to_i420())
+            argb_frame.data[:] = argb_image.tobytes()
+            print(frame.buffer.width, frame.buffer.height)
+            result_frame = rtc.VideoFrame(argb_frame.to_i420())
             self.video_out.capture_frame(result_frame)
 
     async def detect(self, frame: rtc.VideoFrame):
