@@ -125,6 +125,10 @@ class JobRequest:
     def room(self) -> protocol.models.Room:
         return self._info.room
 
+    @property
+    def publisher(self) -> Optional[protocol.models.ParticipantInfo]:
+        return self._info.participant
+
     async def reject(self) -> None:
         """Tell the server we cannot handle this job"""
         async with self._lock:

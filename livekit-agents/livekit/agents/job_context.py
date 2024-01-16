@@ -24,8 +24,7 @@ if TYPE_CHECKING:
 
 
 class JobContext:
-    """
-    Context for job, it contains the worker, the room, and the participant.
+    """Context for job, it contains the worker, the room, and the participant.
     You should not create these on your own. They are created by the Worker.
     """
 
