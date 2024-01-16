@@ -50,34 +50,36 @@ class Detection:
         self.video_out = rtc.VideoSource(width=640, height=480)
         self.latest_results = []
         self.detecting = False
+        self.chat = rtc.ChatManager(ctx.room)
+        self.chat.on("message_received", self.on_chat_received)
 
     async def start(self):
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
-        self.ctx.room.on("data_received", self.on_data_received)
         await self.send_message_from_agent(INTRO_MESSAGE)
         await self.publish_video()
 
-    def on_data_received(self, data: bytes, participant: rtc.RemoteParticipant, kind):
-        payload = json.loads(data.decode("utf-8"))
+    def on_chat_received(self, message: rtc.ChatMessage):
+        # TODO: handle deleted and updated messages in message context
+        if message.deleted:
+            return
 
-        if payload["type"] == "user_chat_message":
-            text = payload["text"]
-            words = text.split(",")
-            includes = []
-            for word in words:
-                word = word.strip()
-                if len(word) > 0:
-                    includes.append(word)
-            self.detector = Detector(
-                detector_configs=[
-                    Detector.DetectorConfig(
-                        name="item",
-                        examples_to_include=includes,
-                        examples_to_exclude=[],
-                        detection_threshold=0.2,
-                    )
-                ]
-            )
+        text = message.message
+        words = text.split(",")
+        includes = []
+        for word in words:
+            word = word.strip()
+            if len(word) > 0:
+                includes.append(word)
+        self.detector = Detector(
+            detector_configs=[
+                Detector.DetectorConfig(
+                    name="item",
+                    examples_to_include=includes,
+                    examples_to_exclude=[],
+                    detection_threshold=0.2,
+                )
+            ]
+        )
 
     def on_track_subscribed(
         self,
@@ -102,28 +104,26 @@ class Detection:
                 continue
 
             argb_frame = rtc.ArgbFrame.create(
-                format=rtc.VideoFormatType.FORMAT_ARGB,
+                format=rtc.VideoFormatType.FORMAT_RGBA,
                 width=frame.buffer.width,
                 height=frame.buffer.height,
             )
             frame.buffer.to_argb(dst=argb_frame)
             image = Image.frombytes(
                 "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
-            )  # Underlying data is BGRA which is unsupported by PIL but is the format LiveKit uses
+            )
             draw = ImageDraw.Draw(image)
             for result in self.latest_results:
                 draw.rectangle(
                     (result.top_left, result.bottom_right), outline="#ff0000", width=3
                 )
-            argb_frame = rtc.ArgbFrame.create(
-                format=rtc.VideoFormatType.FORMAT_ARGB,
+            bb_frame = rtc.ArgbFrame.create(
+                format=rtc.VideoFormatType.FORMAT_BGRA,
                 width=frame.buffer.width,
                 height=frame.buffer.height,
             )
-            argb_frame.data[:] = image.tobytes()
-            result_frame = rtc.VideoFrame(
-                0, rtc.VideoRotation.VIDEO_ROTATION_0, argb_frame.to_i420()
-            )
+            bb_frame.data[:] = image.tobytes()
+            result_frame = rtc.VideoFrame(bb_frame.to_i420())
             self.video_out.capture_frame(result_frame)
 
     async def detect(self, frame: rtc.VideoFrame):
@@ -158,8 +158,8 @@ if __name__ == "__main__":
         await job_request.accept(
             Detection.create,
             identity="detection_agent",
-            subscribe_cb=agents.AutoSubscribe.VIDEO_ONLY,
-            auto_disconnect_cb=agents.AutoDisconnect.DEFAULT,
+            subscribe_cb=agents.SubscribeCallbacks.VIDEO_ONLY,
+            auto_disconnect_cb=agents.AutoDisconnectCallbacks.DEFAULT,
         )
 
     worker = agents.Worker(
