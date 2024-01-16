@@ -38,6 +38,7 @@ class VAD(agents.vad.VAD):
 
     def stream(
         self,
+        *,
         min_speaking_duration: float = 0.5,
         min_silence_duration: float = 0.5,
         padding_duration: float = 0.1,
