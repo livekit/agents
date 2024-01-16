@@ -74,6 +74,7 @@ if __name__ == "__main__":
             auto_subscribe=agents.AutoSubsribe.AUDIO_ONLY,
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
             identity="vad_agent",
+            name="VAD",
         )
 
     worker = agents.Worker(

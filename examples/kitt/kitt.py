@@ -200,6 +200,7 @@ if __name__ == "__main__":
         await job_request.accept(
             KITT.create,
             identity="kitt_agent",
+            name="KITT",
             auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY,
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
