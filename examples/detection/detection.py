@@ -153,16 +153,16 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     async def job_request_cb(job_request: agents.JobRequest):
-        logging.info("Accepting job for KITT")
+        logging.info("Accepting job for Detection")
 
         await job_request.accept(
             Detection.create,
             identity="detection_agent",
-            auto_subscribe=agents.AudoSubscribe.VIDEO_ONLY,
+            auto_subscribe=agents.AutoSubscribe.VIDEO_ONLY,
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
 
     worker = agents.Worker(
-        job_request_cb=job_request_cb, worker_type=agents.JobType.JT_ROOM
+        request_handler=job_request_cb, worker_type=agents.JobType.JT_ROOM
     )
     agents.run_app(worker)
