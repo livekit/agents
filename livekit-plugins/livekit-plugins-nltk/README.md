@@ -1,3 +1,9 @@
-# LiveKit Plugins VAD
+# LiveKit Plugins NLTK
 
-Plugins for Voice Activity Dection (VAD) to use with LiveKit Agents.
+Agent Framework plugin for [NLTK](https://www.nltk.org/)-based text processing. Currently featuring a `SentenceTokenizer`.
+
+## Installation
+
+```bash
+pip install livekit-plugins-nltk
+```

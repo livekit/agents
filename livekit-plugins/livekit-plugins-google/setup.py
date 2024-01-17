@@ -28,7 +28,7 @@ with open(os.path.join(here, "livekit", "plugins", "google", "version.py"), "r")
 setuptools.setup(
     name="livekit-plugins-google",
     version=about["__version__"],
-    description="LiveKit Python Plugins for Google Services",
+    description="Agent Framework plugin for services from Google Cloud",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",

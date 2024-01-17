@@ -28,7 +28,7 @@ with open(os.path.join(here, "livekit", "plugins", "openai", "version.py"), "r")
 setuptools.setup(
     name="livekit-plugins-openai",
     version=about["__version__"],
-    description="LiveKit Python Plugins for OpenAI Models and Services",
+    description="Agent Framework plugin for services from OpenAI",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",

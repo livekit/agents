@@ -28,7 +28,7 @@ with open(os.path.join(here, "livekit", "plugins", "directai", "version.py"), "r
 setuptools.setup(
     name="livekit-plugins-directai",
     version=about["__version__"],
-    description="LiveKit Python Plugins for DirectAI Services",
+    description="Agent Framework plugin for accessing vision models from DirectAI",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",

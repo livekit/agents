@@ -30,7 +30,7 @@ with open(
 setuptools.setup(
     name="livekit-plugins-elevenlabs",
     version=about["__version__"],
-    description="LiveKit Python Plugins for ElevenLabs Services",
+    description="Agent Framework plugin for voice synthesis with ElevenLabs' API.",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",
