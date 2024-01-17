@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
+import asyncio
 import logging
 import time
 
@@ -55,7 +55,7 @@ class Detection:
 
     async def start(self):
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
-        await self.send_message_from_agent(INTRO_MESSAGE)
+        await self.chat.send_message(INTRO_MESSAGE)
         await self.publish_video()
 
     def on_chat_received(self, message: rtc.ChatMessage):
@@ -146,11 +146,6 @@ class Detection:
         options = rtc.TrackPublishOptions()
         options.source = rtc.TrackSource.SOURCE_CAMERA
         await self.ctx.room.local_participant.publish_track(track, options)
-
-    async def send_message_from_agent(self, text):
-        await self.ctx.room.local_participant.publish_data(
-            json.dumps({"type": "agent_chat_message", "text": text})
-        )
 
 
 if __name__ == "__main__":
