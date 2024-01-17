@@ -108,22 +108,25 @@ class Detection:
             image = Image.frombytes(
                 "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
             )
+
+            # Draw red bounding box
             draw = ImageDraw.Draw(image, mode="RGBA")
             for result in self.latest_results:
                 draw.rectangle(
                     (result.top_left, result.bottom_right), outline="#ff000000", width=3
                 )
 
-            # LiveKit needs ARGB (little-endian so BGRA big-endian)
+            # LiveKit uses ARGB little-endian (so BGRA big-endian)
             (r, g, b, a) = image.split()
+            # PIL we say "RGBA" because that's what PIL supports. But has no consequence, we store as BGRA
             argb_image = Image.merge("RGBA", (b, g, r, a))
             argb_frame = rtc.ArgbFrame.create(
                 format=rtc.VideoFormatType.FORMAT_ARGB,
                 width=frame.buffer.width,
                 height=frame.buffer.height,
             )
+            # LiveKit stores underlying data as little-endian. So we set the BGRA data directly to an ARGB frame
             argb_frame.data[:] = argb_image.tobytes()
-            print(frame.buffer.width, frame.buffer.height)
             result_frame = rtc.VideoFrame(argb_frame.to_i420())
             self.video_out.capture_frame(result_frame)
 
