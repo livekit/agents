@@ -51,7 +51,7 @@ setuptools.setup(
     install_requires=[
         "deepgram-sdk >= 3.0, < 4.0",
         "livekit >= 0.8.0",
-        "livekit-agents >= 0.1.0",
+        "livekit-agents >= 0.3.0",
     ],
     package_data={},
     project_urls={

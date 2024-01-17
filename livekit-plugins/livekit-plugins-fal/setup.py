@@ -51,7 +51,7 @@ setuptools.setup(
     install_requires=[
         "fal",
         "livekit >= 0.8.0",
-        "livekit-agents >= 0.1.0",
+        "livekit-agents >= 0.3.0",
     ],
     package_data={},
     project_urls={
