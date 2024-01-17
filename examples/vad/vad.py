@@ -71,12 +71,14 @@ if __name__ == "__main__":
 
         await job_request.accept(
             vad.start,
-            subscribe_cb=agents.AutoSubsribe.AUDIO_ONLY,
-            auto_disconnect_cb=agents.AutoDisconnect.DEFAULT,
+            auto_subscribe=agents.AutoSubsribe.AUDIO_ONLY,
+            auto_disconnect=agents.AutoDisconnect.DEFAULT,
             identity="vad_agent",
+            name="VAD",
         )
 
     worker = agents.Worker(
         request_handler=job_request_cb, worker_type=agents.JobType.JT_ROOM
     )
     agents.run_app(worker)
+""

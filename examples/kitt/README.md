@@ -19,12 +19,13 @@ This starts the worker and will be listening for new job requests. This worker i
 ## How it works
 
 KITT has 4 stages:
+
 - VAD (voice-activity-detection)
 - Speech-to-text
-- LLM 
+- LLM
 - Text-to-speech
 
-Each stage makes use of a plugin. VAD uses `livekit-plugins-vad`, speech-to-text uses Whisper from `livekit-plugins-openai`, LLM uses ChatGPT from `livekit-plugins-openai`, and text-to-speech uses `livekit-plugins-elevenlabs`.
+Each stage makes use of a plugin. VAD uses `livekit-plugins-silero`, speech-to-text uses `livekit-plugins-deepgram`, LLM uses ChatGPT from `livekit-plugins-openai`, and text-to-speech uses `livekit-plugins-elevenlabs`.
 
 When a KITT agent starts, it publishes an audio track right away and sends an intro message. It then subscribes to any existing and new audio tracks and sends them into the VAD instance for processing.
 
