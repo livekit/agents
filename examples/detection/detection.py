@@ -112,7 +112,9 @@ class Detection:
             draw = ImageDraw.Draw(image, mode="RGBA")
             for result in self.latest_results:
                 draw.rectangle(
-                    (result.top_left, result.bottom_right), outline="#ff000000", width=3
+                    (result.top_left, result.bottom_right),
+                    outline=(255, 0, 0, 255),
+                    width=3,
                 )
 
             # LiveKit uses ARGB little-endian (so BGRA big-endian)
