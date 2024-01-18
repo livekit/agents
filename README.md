@@ -22,6 +22,10 @@ The framework includes plugins for common workflows, such as voice activity dete
 
 Agents integrates seamlessly with [LiveKit server](https://github.com/livekit/livekit), offloading job queuing and scheduling responsibilities to it. This eliminates the need for additional queuing infrastructure. Agent code developed on your local machine can scale to support thousands of concurrent sessions when deployed to a server in production.
 
+> This SDK is currently in Developer Preview mode and not ready for production use. There will be bugs and APIs may change during this period.
+>
+> We welcome and appreciate any feedback or contributions. You can create issues here or chat live with us in the #dev channel within the [LiveKit Community Slack](https://livekit.io/join-slack).
+
 ## Docs & Guides
 
 - [Overview](https://docs.livekit.io/agents/)
