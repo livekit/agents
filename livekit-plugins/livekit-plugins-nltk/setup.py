@@ -28,7 +28,7 @@ with open(os.path.join(here, "livekit", "plugins", "nltk", "version.py"), "r") a
 setuptools.setup(
     name="livekit-plugins-nltk",
     version=about["__version__"],
-    description="LiveKit utilities using NLTK",
+    description="Agent Framework plugin for NLTK-based text processing.",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",

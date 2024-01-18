@@ -28,7 +28,7 @@ with open(os.path.join(here, "livekit", "plugins", "fal", "version.py"), "r") as
 setuptools.setup(
     name="livekit-plugins-fal",
     version=about["__version__"],
-    description="LiveKit Python Plugins for Fal Models and Services",
+    description="Image generation with Fal.ai API",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",

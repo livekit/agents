@@ -12,122 +12,125 @@
 
 <!--BEGIN_DESCRIPTION-->
 
-Agents is designed for building real-time, programmable participants
-that run on servers. Easily tap into LiveKit WebRTC sessions and process or generate
-audio, video, and data streams.
+LiveKit Agents is an end-to-end framework for building real-time, multimodal AI "agents" that can see, hear, speak and project.
+
+Your agents can interact with your users via voice, video, and data channels. This framework allows you to build an agent using Python.
 
 <!--END_DESCRIPTION-->
 
 The framework includes plugins for common workflows, such as voice activity detection and speech-to-text.
 
-Furthermore, it integrates seamlessly with LiveKit server, offloading job queuing and scheduling responsibilities to it. This approach eliminates the need for additional queuing infrastructure. The code developed on your local machine is fully scalable when deployed to a server, supporting thousands of concurrent sessions.
+Agents integrates seamlessly with [LiveKit server](https://github.com/livekit/livekit), offloading job queuing and scheduling responsibilities to it. This eliminates the need for additional queuing infrastructure. Agent code developed on your local machine can scale to support thousands of concurrent sessions when deployed to a server in production.
 
-## Getting Started
+## Docs & Guides
 
-To install the core agent library:
+- [Overview](https://docs.livekit.io/agents/)
+- [Quickstart](https://docs.livekit.io/agents/quickstart)
+- [Working with plugins](https://docs.livekit.io/agents/plugins)
+- [Deploying agents](https://docs.livekit.io/agents/deployment)
+
+## Examples
+
+### KITT
+
+An voice assistant using DeepGram STT, GPT-4, and ElevenLabs TTS
+
+- [Demo](https://kitt.livekit.io)
+- [Source Code](https://github.com/livekit/agents/tree/main/examples/kitt)
+
+## Installation
+
+To install the core Agents library:
 
 ```bash
 pip install livekit-agents
 ```
 
-Plugins can be installed individually depending on what your agent needs. Available plugins:
+Agents includes a set of prebuilt plugins that make it easier to compose together agents. These plugins cover common tasks like converting speech to text or vice versa and running inference on a generative AI model. The following plugins are available today:
 
-- livekit-plugins-elevenlabs
-- livekit-plugins-openai
-- livekit-plugins-silero
-- livekit-plugins-google
-- livekit-plugins-deepgram
-- livekit-plugins-nltk
+| Plugin                                                                             | Features                        |
+| ---------------------------------------------------------------------------------- | ------------------------------- |
+| [livekit-plugins-deepgram](https://pypi.org/project/livekit-plugins-deepgram/)     | STT                             |
+| [livekit-plugins-directai](https://pypi.org/project/livekit-plugins-directai/)     | Vision, object detection        |
+| [livekit-plugins-elevenlabs](https://pypi.org/project/livekit-plugins-elevenlabs/) | TTS                             |
+| [livekit-plugins-fal](https://pypi.org/project/livekit-plugins-fal/)               | Image generation                |
+| [livekit-plugins-google](https://pypi.org/project/livekit-plugins-google/)         | STT                             |
+| [livekit-plugins-nltk](https://pypi.org/project/livekit-plugins-nltk/)             | Utilities for working with text |
+| [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-openai/)         | Dalle 3, STT, TTS               |
+| [livekit-plugins-silero](https://pypi.org/project/livekit-plugins-silero/)         | VAD                             |
 
-## Terminology
+## Concepts
 
-- **Agent**: A function that defines the workflow of the server-side participant. This is what you will be developing.
+- **Agent**: A function that defines the workflow of a programmable, server-side participant. This is your application code.
 - **Worker**: A container process responsible for managing job queuing with LiveKit server. Each worker is capable of running multiple agents simultaneously.
-- **Plugin**: A library class that perform a specific task like speech-to-text with a specific provider. Agents can combine multiple plugins together to perform more complex tasks.
+- **Plugin**: A library class that performs a specific task, like speech-to-text, from a specific provider. An agent can compose multiple plugins together to perform more complex tasks.
 
-## Creating an Agent
+## Running an agent
 
-Let's begin with a simple agent that performs speech-to-text on incoming audio tracks and sends a data channel message for each result.
+The framework exposes a CLI interface to run your agent. To get started, you'll need the following environment variables set:
 
-```python title="my_agent.py"
-import asyncio
-import json
-import logging
-from typing import Optional, Set
-from livekit import agents, rtc
-from livekit.plugins.vad import VADPlugin, VADEventType
-from livekit.plugins.openai import WhisperAPITranscriber
+- LIVEKIT_URL
+- LIVEKIT_API_KEY
+- LIVEKIT_API_SECRET
 
+### Running the worker
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
-    # Callback that gets called on every new Agent JobRequest. In this callback you can create your agent and accept (or decline) a job. Declining a job will tell the LiveKit server to give the job to another Worker.
-    async def job_request_handler(job_request: agents.JobRequest):
-        def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-            # do work on the track
-            pass
-
-        def on_disconnected():
-            # do your agent's cleanup
-            pass
-            
-        async def my_agent(self, ctx: agents.JobContext):
-            ctx.room.on("track_subscribed", on_track_subscribed)
-            ctx.room.on("disconnected", on_disconnected)
-
-        # Accept the job request with my_agent and configure a filter function that decides which tracks the agent processes. In this case, the agent only cares about audio tracks.
-        await job_request.accept(
-            my_agent,
-            identity="agent",
-            subscribe_cb=agents.AutoSubscribe.AUDIO_ONLY,
-            auto_disconnect_cb=agents.AutoDisconnect.DEFAULT,
-        )
-
-    # When a new LiveKit room is created, the request_handler is called.
-    worker = agents.Worker(request_handler=job_request_handler,
-                           worker_type=agents.JobType.JT_ROOM)
-
-    # Start the cli
-    agents.run_app(worker)
-```
-
-## Running an Agent
-
-The framework expose a cli interface to run your agent. To start the above agent, run:
+This will start the worker and wait for users to connect to your LiveKit server:
 
 ```bash
-python my_agent.py start --api-key=<your livekit api key> --api-secret<your livekit api secret> --url=<your livekit url>
+python my_agent.py start
 ```
 
-The environment variables `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and `LIVEKIT_URL` can be used instead of the cli-args.
+### Joining a specific room
 
-### What is happening when I run my Agent?
+To join a LiveKit room that's already active, you can use the `simulate-job` command:
 
-When you run your agent with the above commands, a worker is started that opens an authenticated websocket connection to a LiveKit server (defined by your LIVEKIT_URL and authenticated with the key and secret).
+```bash
+python my_agent.py simulate-job --room-name <my-room>
+```
 
-This doesn't actually run any agents. Instead, the worker sits waiting for the LiveKit server to give it a job. In the above case, this happens whenever a new LiveKit room is created because the worker type is `JT_ROOM`.
+### What happens when I run my agent?
 
-Once the LiveKit server is given a job, the worker can decide whether or not to accept it. Accepting the job will create a LiveKit participant that joins the room and begin subscribing to tracks.
+When you follow the steps above to run your agent, a worker is started that opens an authenticated WebSocket connection to a LiveKit server instance(defined by your `LIVEKIT_URL` and authenticated with an access token).
 
-### What happens when I SIGTERM one of my Workers?
+No agents are actually running at this point. Instead, the worker is waiting for LiveKit server to give it a job.
 
-The framework was designed for production use cases. Since agents are more stateful entities than typical web-servers, it's important that workers can't be terminated while they are running active agents.
+When a room is created, the server notifies one of the registered workers about a new job. The notified worker can decide whether or not to accept it. If the worker accepts the job, the worker will instantiate your agent as a participant and have it join the room where it can start subscribing to tracks. A worker can manage multiple agent instances simultaneously.
 
-When calling SIGTERM on a worker, the worker will signal to the LiveKit server that it does not want to be given any more jobs. It will also auto-decline any new job requests that might sneak in before the server signaling has occurred. The worker will remain alive while it manages an agent that is still connected to a room.
+If a notified worker rejects the job or does not accept within a predetermined timeout period, the server will route the job request to another available worker.
 
-## Deploying a Worker?
+### What happens when I SIGTERM a worker?
 
-Workers can be deployed like any other python application. Deployments will typically need `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and `LIVEKIT_URL` set as environment variables.
+The orchestration system was designed for production use cases. Unlike the typical web server, an agent is a stateful program, so it's important that a worker can't be terminated while it's managing any active agents.
 
-This reference [Dockerfile](examples/agents/Dockerfile) serves as a good start point for your agent deployment.
+When calling SIGTERM on a worker, the worker will signal to LiveKit server that it no longer wants additional jobs. It will also auto-reject any new job requests that get through before the server signal is received. The worker will remain alive while it manages any agents connected to rooms.
 
-## More Examples
+### Downloading model files
 
-Examples can be found in the `examples/` repo.
+Some plugins require model files to be downloaded before they can be used. To download all the necessary models for your agent, execute the following command:
+
+```bash
+python my_agent.py download-files
+```
+
+If you're developing a custom plugin, you can integrate this functionality by implementing a `download_files` method in your Plugin class:
+
+```python
+class MyPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def download_files(self):
+        _ = torch.hub.load(
+            repo_or_dir="my-repo",
+            model="my-model",
+        )
+```
 
 <!--BEGIN_REPO_NAV-->
+
 <br/><table>
+
 <thead><tr><th colspan="2">LiveKit Ecosystem</th></tr></thead>
 <tbody>
 <tr><td>Real-time SDKs</td><td><a href="https://github.com/livekit/components-js">React Components</a> · <a href="https://github.com/livekit/client-sdk-js">JavaScript</a> · <a href="https://github.com/livekit/client-sdk-swift">iOS/macOS</a> · <a href="https://github.com/livekit/client-sdk-android">Android</a> · <a href="https://github.com/livekit/client-sdk-flutter">Flutter</a> · <a href="https://github.com/livekit/client-sdk-react-native">React Native</a> · <a href="https://github.com/livekit/client-sdk-rust">Rust</a> · <a href="https://github.com/livekit/client-sdk-python">Python</a> · <a href="https://github.com/livekit/client-sdk-unity-web">Unity (web)</a> · <a href="https://github.com/livekit/client-sdk-unity">Unity (beta)</a></td></tr><tr></tr>
