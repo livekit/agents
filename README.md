@@ -103,6 +103,28 @@ The framework was designed for production use cases. Since agents are more state
 
 When calling SIGTERM on a worker, the worker will signal to the LiveKit server that it does not want to be given any more jobs. It will also auto-decline any new job requests that might sneak in before the server signaling has occurred. The worker will remain alive while it manages an agent that is still connected to a room.
 
+### Downloading model files
+
+Some plugins require model files to be downloaded before they can be used. To download all the necessary models for your agent, execute the following command:
+
+```bash
+python my_agent.py download-files
+```
+
+If you're developing a custom plugin, you can integrate this functionality by implementing a `download_files` method in your Plugin class:
+
+```python
+class MyPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__)
+
+    def download_files(self):
+        _ = torch.hub.load(
+            repo_or_dir="my-repo",
+            model="my-model",
+        )
+```
+
 <!--BEGIN_REPO_NAV-->
 
 <br/><table>
