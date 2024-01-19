@@ -28,7 +28,7 @@ Hi there! I can help you detect objects in your video stream using Direct AI's r
 Wanna see what I can do? Try typing in "eyes".
 """
 
-BYE_MESSAGE= """
+BYE_MESSAGE = """
 Thanks for giving this a try!
 """
 
@@ -63,12 +63,17 @@ class Detection:
             participant: rtc.RemoteParticipant,
         ):
             self.ctx.create_task(self.process_track(track))
+
         self.ctx.room.on("track_subscribed", on_track_subscribed)
 
-        video_track = rtc.LocalVideoTrack.create_video_track("agent-video", self.video_out)
+        video_track = rtc.LocalVideoTrack.create_video_track(
+            "agent-video", self.video_out
+        )
         await self.ctx.room.local_participant.publish_track(video_track)
 
-        audio_track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.audio_out)
+        audio_track = rtc.LocalAudioTrack.create_audio_track(
+            "agent-mic", self.audio_out
+        )
         await self.ctx.room.local_participant.publish_track(audio_track)
         self.tts_stream = self.tts_plugin.stream()
         self.ctx.create_task(self.send_audio_stream(self.tts_stream))
@@ -172,7 +177,9 @@ class Detection:
         finally:
             self.detecting = False
 
-    async def send_audio_stream(self, tts_stream: AsyncIterable[agents.tts.SynthesisEvent]):
+    async def send_audio_stream(
+        self, tts_stream: AsyncIterable[agents.tts.SynthesisEvent]
+    ):
         async for e in tts_stream:
             if e.type == agents.tts.SynthesisEventType.STARTED:
                 pass
@@ -185,6 +192,7 @@ class Detection:
     def update_state(self, state: str):
         metadata = json.dumps({"agent_state": state})
         self.ctx.create_task(self.ctx.room.local_participant.update_metadata(metadata))
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
