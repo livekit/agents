@@ -12,20 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import json
 import logging
 import time
+from typing import AsyncIterable, Optional
 
 from livekit import agents, rtc
 from livekit.plugins.directai import Detector
+from livekit.plugins.elevenlabs import TTS
 from PIL import Image, ImageDraw
 
 INTRO_MESSAGE = """
-This example uses DirectAI to detect objects in the video stream. DirectAI allows you to
-detect arbitrary objects using prompts instead of needing to know which objects to detect
-beforehand. This example detects cell phones by default, but you can change the prompt via
-a text chat with the agent. Each comma-separated word is sent in as an "item to include".
-For example, "cell-phone, phone, mobile-phone" would be a good prompt to detect cell phones.
+Hi there! I can help you detect objects in your video stream using Direct AI's real-time object detector.
+Wanna see what I can do? Try typing in "eyes". You can change what objects to detect by typing them in
+the chat.
 """
+
+BYE_MESSAGE = """
+Thanks for giving this a try! Goodbye for now.
+"""
+
+_DETECTION_THRESHOLD = 0.15
+_OUTPUT_HEIGHT = 720
+_OUTPUT_WIDTH = 960
+_ELEVEN_TTS_SAMPLE_RATE = 44100
+_ELEVEN_TTS_CHANNELS = 1
 
 
 class Detection:
@@ -36,26 +48,43 @@ class Detection:
 
     def __init__(self, ctx: agents.JobContext):
         self.ctx: agents.JobContext = ctx
-        self.detector = Detector(
-            detector_configs=[
-                Detector.DetectorConfig(
-                    name="item",
-                    examples_to_include=["cell phone"],
-                    examples_to_exclude=[],
-                    detection_threshold=0.2,
-                )
-            ]
-        )
-        self.video_out = rtc.VideoSource(width=640, height=480)
+        self.detector: Optional[Detector] = None
+        self.tts_plugin = TTS(model_id="eleven_turbo_v2")
+        self.video_out = rtc.VideoSource(_OUTPUT_WIDTH, _OUTPUT_HEIGHT)
+        self.audio_out = rtc.AudioSource(_ELEVEN_TTS_SAMPLE_RATE, _ELEVEN_TTS_CHANNELS)
         self.latest_results = []
         self.detecting = False
         self.chat = rtc.ChatManager(ctx.room)
         self.chat.on("message_received", self.on_chat_received)
 
     async def start(self):
-        self.ctx.room.on("track_subscribed", self.on_track_subscribed)
-        await self.chat.send_message(INTRO_MESSAGE)
-        await self.publish_video()
+        def on_track_subscribed(
+            track: rtc.Track,
+            publication: rtc.TrackPublication,
+            participant: rtc.RemoteParticipant,
+        ):
+            self.ctx.create_task(self.process_track(track))
+
+        self.ctx.room.on("track_subscribed", on_track_subscribed)
+
+        video_track = rtc.LocalVideoTrack.create_video_track(
+            "agent-video", self.video_out
+        )
+        await self.ctx.room.local_participant.publish_track(video_track)
+
+        audio_track = rtc.LocalAudioTrack.create_audio_track(
+            "agent-mic", self.audio_out
+        )
+        await self.ctx.room.local_participant.publish_track(audio_track)
+        self.tts_stream = self.tts_plugin.stream()
+        self.ctx.create_task(self.send_audio_stream(self.tts_stream))
+
+        # give time for the subscriber to fully subscribe to the agent's tracks
+        await asyncio.sleep(1)
+        await self.send_chat_and_voice(INTRO_MESSAGE)
+
+        # limit to 2 mins
+        self.ctx.create_task(self.end_session_after(2 * 60))
 
     def on_chat_received(self, message: rtc.ChatMessage):
         text = message.message
@@ -71,18 +100,20 @@ class Detection:
                     name="item",
                     examples_to_include=includes,
                     examples_to_exclude=[],
-                    detection_threshold=0.2,
+                    detection_threshold=_DETECTION_THRESHOLD,
                 )
             ]
         )
 
-    def on_track_subscribed(
-        self,
-        track: rtc.Track,
-        publication: rtc.TrackPublication,
-        participant: rtc.RemoteParticipant,
-    ):
-        self.ctx.create_task(self.process_track(track))
+    async def end_session_after(self, duration: int):
+        await asyncio.sleep(duration)
+        await self.send_chat_and_voice(BYE_MESSAGE)
+        await asyncio.sleep(5)
+        await self.ctx.disconnect()
+
+    async def send_chat_and_voice(self, message: str):
+        self.tts_stream.push_text(message)
+        await self.chat.send_message(message)
 
     async def process_track(self, track: rtc.VideoTrack):
         video_stream = rtc.VideoStream(track)
@@ -132,7 +163,7 @@ class Detection:
             self.video_out.capture_frame(result_frame)
 
     async def detect(self, frame: rtc.VideoFrame):
-        if self.detecting:
+        if (not self.detector) or self.detecting:
             return
 
         self.detecting = True
@@ -142,11 +173,17 @@ class Detection:
         finally:
             self.detecting = False
 
-    async def publish_video(self):
-        track = rtc.LocalVideoTrack.create_video_track("agent-video", self.video_out)
-        options = rtc.TrackPublishOptions()
-        options.source = rtc.TrackSource.SOURCE_CAMERA
-        await self.ctx.room.local_participant.publish_track(track, options)
+    async def send_audio_stream(
+        self, tts_stream: AsyncIterable[agents.tts.SynthesisEvent]
+    ):
+        async for e in tts_stream:
+            if e.type == agents.tts.SynthesisEventType.AUDIO:
+                await self.audio_out.capture_frame(e.audio.data)
+        await tts_stream.aclose()
+
+    def update_state(self, state: str):
+        metadata = json.dumps({"agent_state": state})
+        self.ctx.create_task(self.ctx.room.local_participant.update_metadata(metadata))
 
 
 if __name__ == "__main__":
@@ -162,7 +199,5 @@ if __name__ == "__main__":
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
 
-    worker = agents.Worker(
-        request_handler=job_request_cb, worker_type=agents.JobType.JT_ROOM
-    )
+    worker = agents.Worker(job_request_cb)
     agents.run_app(worker)
