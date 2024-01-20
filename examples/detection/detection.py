@@ -25,11 +25,12 @@ from PIL import Image, ImageDraw
 
 INTRO_MESSAGE = """
 Hi there! I can help you detect objects in your video stream using Direct AI's real-time object detector.
-Wanna see what I can do? Try typing in "eyes".
+Wanna see what I can do? Try typing in "eyes". You can change what objects to detect by typing them in
+the chat.
 """
 
 BYE_MESSAGE = """
-Thanks for giving this a try!
+Thanks for giving this a try! Goodbye for now.
 """
 
 _DETECTION_THRESHOLD = 0.15
@@ -107,16 +108,12 @@ class Detection:
     async def end_session_after(self, duration: int):
         await asyncio.sleep(duration)
         await self.send_chat_and_voice(BYE_MESSAGE)
-        await asyncio.sleep(3)
-        self.ctx.room.disconnect()
+        await asyncio.sleep(5)
+        await self.ctx.disconnect()
 
     async def send_chat_and_voice(self, message: str):
-        async def text_stream():
-            yield message
-
-        async for text in text_stream():
-            self.tts_stream.push_text(text)
-        await self.tts_stream.flush()
+        self.tts_stream.push_text(message)
+        # await self.tts_stream.flush()
         await self.chat.send_message(message)
 
     async def process_track(self, track: rtc.VideoTrack):
@@ -181,11 +178,7 @@ class Detection:
         self, tts_stream: AsyncIterable[agents.tts.SynthesisEvent]
     ):
         async for e in tts_stream:
-            if e.type == agents.tts.SynthesisEventType.STARTED:
-                pass
-            elif e.type == agents.tts.SynthesisEventType.FINISHED:
-                pass
-            elif e.type == agents.tts.SynthesisEventType.AUDIO:
+            if e.type == agents.tts.SynthesisEventType.AUDIO:
                 await self.audio_out.capture_frame(e.audio.data)
         await tts_stream.aclose()
 
@@ -207,5 +200,5 @@ if __name__ == "__main__":
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
 
-    worker = agents.Worker(request_handler=job_request_cb)
+    worker = agents.Worker(job_request_cb)
     agents.run_app(worker)
