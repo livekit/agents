@@ -113,6 +113,7 @@ class Detection:
 
     async def send_chat_and_voice(self, message: str):
         self.tts_stream.push_text(message)
+        await self.tts_stream.flush()
         await self.chat.send_message(message)
 
     async def process_track(self, track: rtc.VideoTrack):

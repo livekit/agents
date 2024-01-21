@@ -42,6 +42,13 @@ An voice assistant using DeepGram STT, GPT-4, and ElevenLabs TTS
 - [Demo](https://kitt.livekit.io)
 - [Source Code](https://github.com/livekit/agents/tree/main/examples/kitt)
 
+### Object Detection
+
+Real-time object detection using DirectAI
+
+- [Demo](https://directai-demo.livekit.io)
+- [Source Code](https://github.com/livekit/agents/tree/main/examples/detection)
+
 ## Installation
 
 To install the core Agents library:
@@ -132,7 +139,9 @@ class MyPlugin(Plugin):
 ```
 
 <!--BEGIN_REPO_NAV-->
+
 <br/><table>
+
 <thead><tr><th colspan="2">LiveKit Ecosystem</th></tr></thead>
 <tbody>
 <tr><td>Real-time SDKs</td><td><a href="https://github.com/livekit/components-js">React Components</a> · <a href="https://github.com/livekit/client-sdk-js">JavaScript</a> · <a href="https://github.com/livekit/client-sdk-swift">iOS/macOS</a> · <a href="https://github.com/livekit/client-sdk-android">Android</a> · <a href="https://github.com/livekit/client-sdk-flutter">Flutter</a> · <a href="https://github.com/livekit/client-sdk-react-native">React Native</a> · <a href="https://github.com/livekit/client-sdk-rust">Rust</a> · <a href="https://github.com/livekit/client-sdk-python">Python</a> · <a href="https://github.com/livekit/client-sdk-unity-web">Unity (web)</a> · <a href="https://github.com/livekit/client-sdk-unity">Unity (beta)</a></td></tr><tr></tr>
