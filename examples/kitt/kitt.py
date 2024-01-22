@@ -80,10 +80,7 @@ class KITT:
 
         # publish audio track
         track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.audio_out)
-        options = rtc.TrackPublishOptions(
-            source=rtc.TrackSource.SOURCE_MICROPHONE,
-        )
-        await self.ctx.room.local_participant.publish_track(track, options)
+        await self.ctx.room.local_participant.publish_track(track)
 
         # allow the participant to fully subscribe to the agent's audio track, so it doesn't miss
         # anything in the beginning
