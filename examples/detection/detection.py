@@ -71,6 +71,7 @@ class Detection:
             "agent-video", self.video_out
         )
         await self.ctx.room.local_participant.publish_track(video_track)
+        # Send an empty frame to initialize the video track
         argb_frame = rtc.ArgbFrame.create(
             format=rtc.VideoFormatType.FORMAT_ARGB,
             width=_OUTPUT_WIDTH,
