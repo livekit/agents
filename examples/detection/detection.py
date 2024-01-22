@@ -87,11 +87,11 @@ class Detection:
         self.tts_stream = self.tts_plugin.stream()
         self.ctx.create_task(self.send_audio_stream(self.tts_stream))
 
+        self.update_state("idle")
+
         # give time for the subscriber to fully subscribe to the agent's tracks
         await asyncio.sleep(1)
         await self.send_chat_and_voice(INTRO_MESSAGE)
-
-        self.update_state("idle")
 
         # limit to 2 mins
         self.ctx.create_task(self.end_session_after(2 * 60))
@@ -192,6 +192,11 @@ class Detection:
         async for e in tts_stream:
             if e.type == agents.tts.SynthesisEventType.AUDIO:
                 await self.audio_out.capture_frame(e.audio.data)
+            elif e.type == agents.tts.SynthesisEventType.STARTED:
+                self.update_state("speaking")
+            elif e.type == agents.tts.SynthesisEventType.FINISHED:
+                self.update_state("idle")
+
         await tts_stream.aclose()
 
     def update_state(self, state: str):
