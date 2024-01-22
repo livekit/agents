@@ -83,6 +83,8 @@ class Detection:
         await asyncio.sleep(1)
         await self.send_chat_and_voice(INTRO_MESSAGE)
 
+        self.update_state("idle")
+
         # limit to 2 mins
         self.ctx.create_task(self.end_session_after(2 * 60))
 
@@ -108,6 +110,7 @@ class Detection:
     async def end_session_after(self, duration: int):
         await asyncio.sleep(duration)
         await self.send_chat_and_voice(BYE_MESSAGE)
+        self.update_state("idle")
         await asyncio.sleep(5)
         await self.ctx.disconnect()
 
@@ -167,6 +170,7 @@ class Detection:
         if (not self.detector) or self.detecting:
             return
 
+        self.update_state("detecting")
         self.detecting = True
         try:
             results = await self.detector.detect(frame=frame)
