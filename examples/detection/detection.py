@@ -71,6 +71,14 @@ class Detection:
             "agent-video", self.video_out
         )
         await self.ctx.room.local_participant.publish_track(video_track)
+        # Send an empty frame to initialize the video track
+        argb_frame = rtc.ArgbFrame.create(
+            format=rtc.VideoFormatType.FORMAT_ARGB,
+            width=_OUTPUT_WIDTH,
+            height=_OUTPUT_HEIGHT,
+        )
+        argb_frame.data[:] = bytearray(_OUTPUT_WIDTH * _OUTPUT_HEIGHT * 4)
+        self.video_out.capture_frame(rtc.VideoFrame(argb_frame.to_i420()))
 
         audio_track = rtc.LocalAudioTrack.create_audio_track(
             "agent-mic", self.audio_out
