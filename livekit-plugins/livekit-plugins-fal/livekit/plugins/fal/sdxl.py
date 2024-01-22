@@ -17,19 +17,11 @@ import io
 import logging
 import os
 from typing import AsyncIterable, Optional, Set
-import heapq
 
 import aiohttp
-import logging
-from livekit import rtc
-from typing import Optional, AsyncIterable, Set
-import time
-import asyncio
-import os
-import io
 import msgpack
+from livekit import rtc
 from PIL import Image
-from dataclasses import dataclass
 
 FAL_URL = "wss://110602490-sd-turbo-real-time-high-fps-msgpack.gateway.alpha.fal.ai/ws"
 
@@ -57,8 +49,6 @@ class SDXLPlugin:
         key_id: Optional[str] = None,
         key_secret: Optional[str] = None,
         initial_prompt: str = "",
-        initial_strength: float = 0.6,
-        initial_inference_steps: int = 5,
     ):
         self._key_id = key_id or os.environ.get("FAL_KEY_ID")
         self._key_secret = key_secret or os.environ.get("FAL_KEY_SECRET")
