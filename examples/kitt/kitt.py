@@ -36,10 +36,16 @@ PROMPT = "You are KITT, a friendly voice assistant powered by LiveKit.  \
 INTRO = "Hello, I am KITT, a friendly voice assistant powered by LiveKit Agents. \
         You can find my source code in the top right of this screen if you're curious how I work. \
         Feel free to ask me anything — I'm here to help! Just start talking or type in the chat."
+SIP_INTRO = "Hello, I am KITT, a friendly voice assistant powered by LiveKit Agents. \
+             Feel free to ask me anything — I'm here to help! Just start talking."
 
 
 # convert intro response to a stream
-async def intro_text_stream():
+async def intro_text_stream(sip: bool):
+    if sip:
+        yield SIP_INTRO
+        return
+
     yield INTRO
 
 
@@ -86,7 +92,8 @@ class KITT:
         # anything in the beginning
         await asyncio.sleep(1)
 
-        await self.process_chatgpt_result(intro_text_stream())
+        sip = self.ctx.room.name.startswith("sip")
+        await self.process_chatgpt_result(intro_text_stream(sip))
         self.update_state()
 
     def on_chat_received(self, message: rtc.ChatMessage):
