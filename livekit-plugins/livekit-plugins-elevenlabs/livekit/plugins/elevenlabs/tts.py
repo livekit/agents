@@ -63,6 +63,8 @@ class TTSOptions:
     voice: Voice
     model_id: TTSModels
     base_url: str
+    sample_rate: int
+    latency: int
 
 
 class TTS(tts.TTS):
@@ -73,6 +75,8 @@ class TTS(tts.TTS):
         model_id: TTSModels = "eleven_multilingual_v2",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        sample_rate: int = 24000,
+        latency: int = 2,
     ) -> None:
         super().__init__(streaming_supported=True)
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
@@ -85,6 +89,8 @@ class TTS(tts.TTS):
             model_id=model_id,
             api_key=api_key,
             base_url=base_url or API_BASE_URL_V1,
+            sample_rate=sample_rate,
+            latency=latency,
         )
 
     async def list_voices(self) -> List[Voice]:
@@ -134,11 +140,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         session: aiohttp.ClientSession,
         config: TTSOptions,
-        latency: int = 2,  # [1-4] the higher the more optimized for streaming latency
     ):
         self._config = config
         self._session = session
-        self._latency = latency
 
         self._queue = asyncio.Queue[str]()
         self._event_queue = asyncio.Queue[tts.SynthesisEvent]()
@@ -157,7 +161,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         base_url = self._config.base_url
         voice_id = self._config.voice.id
         model_id = self._config.model_id
-        return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format=pcm_44100&optimize_streaming_latency={self._latency}"
+        return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format=pcm_{self._config.sample_rate}&optimize_streaming_latency={self._config.latency}"
 
     def push_text(self, token: str) -> None:
         if self._closed:
@@ -265,7 +269,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 data = base64.b64decode(msg["audio"])
                 audio_frame = rtc.AudioFrame(
                     data=data,
-                    sample_rate=44100,
+                    sample_rate=self._config.sample_rate,
                     num_channels=1,
                     samples_per_channel=len(data) // 2,
                 )
@@ -277,6 +281,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
             elif msg.get("isFinal"):
                 break
+            else:
+                logging.error(f"Unhandled message from ElevenLabs: {msg}")
 
     async def flush(self) -> None:
         self._queue.put_nowait(self._text + " ")
