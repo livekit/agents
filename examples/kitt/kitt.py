@@ -51,7 +51,7 @@ async def intro_text_stream(sip: bool):
 
 AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 
-ELEVEN_TTS_SAMPLE_RATE = 44100
+ELEVEN_TTS_SAMPLE_RATE = 24000
 ELEVEN_TTS_CHANNELS = 1
 
 
@@ -67,7 +67,9 @@ class KITT:
             prompt=PROMPT, message_capacity=20, model="gpt-4-1106-preview"
         )
         self.stt_plugin = STT()
-        self.tts_plugin = TTS(model_id="eleven_turbo_v2")
+        self.tts_plugin = TTS(
+            model_id="eleven_turbo_v2", sample_rate=ELEVEN_TTS_SAMPLE_RATE
+        )
 
         self.ctx: agents.JobContext = ctx
         self.chat = rtc.ChatManager(ctx.room)
