@@ -15,11 +15,12 @@
 import asyncio
 import json
 import logging
+import time
 from typing import AsyncIterable, Optional
 
 from livekit import agents, rtc
-from livekit.plugins.fal import SDTurboHighFPS
 from livekit.plugins.elevenlabs import TTS
+from livekit.plugins.fal import SDTurboHighFPS
 
 INTRO_MESSAGE = """
 Hi there! I will swap your face for a celebrity's face using FAL.AI's real-time stable diffusion api.
@@ -119,7 +120,12 @@ class FalAI:
 
     async def process_track(self, track: rtc.VideoTrack):
         video_stream = rtc.VideoStream(track)
+        last_time = time.time()
         async for frame in video_stream:
+            # throttle to 10 fps
+            if (time.time() - last_time) < 0.1:
+                continue
+            last_time = time.time()
             self.stream.push_frame(
                 frame=frame, prompt=f"Replace face with {self.celebrity}", strength=0.4
             )
