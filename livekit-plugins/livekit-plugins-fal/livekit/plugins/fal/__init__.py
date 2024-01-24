@@ -13,9 +13,10 @@
 # limitations under the License.
 
 from .sdxl import SDXL
+from .sd_turbo_high_fps import SDTurboHighFPS, SDTurboHighFPSStream
 from .version import __version__
 
-__all__ = ["SDXL", "__version__"]
+__all__ = ["SDTurboHighFPS", "SDTurboHighFPSStream", "SDXL", "__version__"]
 
 from livekit.agents import Plugin
 

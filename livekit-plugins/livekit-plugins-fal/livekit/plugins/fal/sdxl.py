@@ -12,14 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import fal
 import cv2
 import requests
 import numpy as np
 from livekit import rtc
 import asyncio
 import os
-
 
 class SDXL:
     def __init__(self, model: str = "110602490-fast-sdxl") -> None:
@@ -31,6 +29,9 @@ class SDXL:
         self.model = model
 
     async def generate(self, prompt: str) -> rtc.ArgbFrame:
+        # Was getting circular import issues because of the namespace conflict. Couldn't figure out how to fix it.
+        # This is a hacky workaround and I'm not sure if it works. Maybe we should remove SDXL for now?
+        import fal
         handler = fal.apps.submit(
             self.model,
             arguments={"prompt": prompt, "sync_mode": False},

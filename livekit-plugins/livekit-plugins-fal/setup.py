@@ -49,7 +49,11 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "fal",
+        "Pillow >= 10, < 11",
+        "msgpack >= 1.0.0",
+        "numpy >= 1.0.0",
+        "fal >= 0.12.1",
+        "aiohttp >= 3.8.5",
         "livekit >= 0.8.0",
         "livekit-agents >= 0.3.0",
     ],
