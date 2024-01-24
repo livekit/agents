@@ -122,11 +122,11 @@ class SDTurboHighFPSStream:
                     )
                     image_rgb = image_rgba.convert("RGB")
                     # center crop to 512x512
-                    # crop_x = (image_rgb.width - 512) // 2
-                    # crop_y = (image_rgb.height - 512) // 2
-                    # image_rgb = image_rgb.crop(
-                    #     (crop_x, crop_y, crop_x + 512, crop_y + 512)
-                    # )
+                    crop_x = (image_rgb.width - 512) // 2
+                    crop_y = (image_rgb.height - 512) // 2
+                    image_rgb = image_rgb.crop(
+                        (crop_x, crop_y, crop_x + 512, crop_y + 512)
+                    )
                     jpg_img = io.BytesIO()
                     image_rgb.save(jpg_img, format="JPEG")
                     payload = {
