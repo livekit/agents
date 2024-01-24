@@ -122,8 +122,8 @@ class FalAI:
         video_stream = rtc.VideoStream(track)
         last_time = time.time()
         async for frame in video_stream:
-            # throttle to 10 fps
-            if (time.time() - last_time) < 0.1:
+            # throttle to 5 fps
+            if (time.time() - last_time) < 0.2:
                 continue
             last_time = time.time()
             self.stream.push_frame(
