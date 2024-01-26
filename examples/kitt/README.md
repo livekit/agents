@@ -11,7 +11,7 @@ pip install -r requirements.txt
 then start the worker:
 
 ```bash
-python kitt.py start --api-key=<your livekit api key> --api-secret=<your livekit api secret> --url=<your livekit ws url>
+python kitt.py --api-key=<your livekit api key> --api-secret=<your livekit api secret> --url=<your livekit ws url> start
 ```
 
 This starts the worker and will be listening for new job requests. This worker is configured to listen to the "room" job type (`JT_ROOM`) which means it will get a JobRequest when a new LiveKit room is created.
