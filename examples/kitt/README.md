@@ -1,4 +1,4 @@
-# KITT - A Talking AI Example Using Whisper, ChatGPT, and ElevenLabs
+# KITT - A Talking AI Example Using Deepgram, ChatGPT, and ElevenLabs
 
 ## Running locally
 
@@ -29,7 +29,7 @@ Each stage makes use of a plugin. VAD uses `livekit-plugins-silero`, speech-to-t
 
 When a KITT agent starts, it publishes an audio track right away and sends an intro message. It then subscribes to any existing and new audio tracks and sends them into the VAD instance for processing.
 
-When VAD detects that there has been speech, it sends the audio frames containing speech to Whisper for transcribing. The resulting text is sent to ChatGPT, which streams a text response. That text response is then sent to elevenlabs to generate audio frames and sent back into the LiveKit room.
+When VAD detects that there has been speech, it sends the audio frames containing speech to Deepgram for transcribing. The resulting text is sent to ChatGPT, which streams a text response. That text response is then sent to elevenlabs to generate audio frames and sent back into the LiveKit room.
 
 ## How to deploy
 
