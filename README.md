@@ -57,7 +57,13 @@ To install the core Agents library:
 pip install livekit-agents
 ```
 
-Agents includes a set of prebuilt plugins that make it easier to compose together agents. These plugins cover common tasks like converting speech to text or vice versa and running inference on a generative AI model. The following plugins are available today:
+Agents includes a set of prebuilt plugins that make it easier to compose together agents. These plugins cover common tasks like converting speech to text or vice versa and running inference on a generative AI model. You can install a plugin as follows:
+
+```bash
+pip install livekit-plugins-deepgram
+```
+
+The following plugins are available today:
 
 | Plugin                                                                             | Features                        |
 | ---------------------------------------------------------------------------------- | ------------------------------- |
