@@ -92,6 +92,14 @@ This will start the worker and wait for users to connect to your LiveKit server:
 python my_agent.py start
 ```
 
+### Using playground for your agent UI
+
+To ease the process of building and testing an agent, we've developed a versatile web frontend called "playground". You can use or modify this app to suit your specific requirements. It can also serve as a starting point for a completely custom agent application.
+
+- [Hosted playground](https://agents-playground.livekit.io)
+- [Source code](/livekit/agents-playground)
+- [Playground docs](https://docs.livekit.io/agents/playground)
+
 ### Joining a specific room
 
 To join a LiveKit room that's already active, you can use the `simulate-job` command:
