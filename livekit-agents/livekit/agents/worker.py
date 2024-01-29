@@ -93,8 +93,7 @@ class Worker:
         self._api = None
         self._running = False
         self._running_jobs: list["JobContext"] = []
-        self._pending_jobs: Dict[str,
-                                 asyncio.Future[proto_agent.JobAssignment]] = {}
+        self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
         self._rtc_url = None
         self._agent_url = None
         ws_url = ws_url or os.environ.get("LIVEKIT_URL")
@@ -115,22 +114,15 @@ class Worker:
 
     async def _connect(self) -> protocol.agent.RegisterWorkerResponse:
         if not self._rtc_url:
-            raise ValueError(
-                "No WebSocket URL provided, set LIVEKIT_URL env var"
-            )
+            raise ValueError("No WebSocket URL provided, set LIVEKIT_URL env var")
 
         if not self._api_key:
-            raise ValueError(
-                "No API key provided, set LIVEKIT_API_KEY env var"
-            )
+            raise ValueError("No API key provided, set LIVEKIT_API_KEY env var")
 
         if not self._api_secret:
-            raise ValueError(
-                "No API secret provided, set LIVEKIT_API_SECRET env var"
-            )
+            raise ValueError("No API secret provided, set LIVEKIT_API_SECRET env var")
 
-        self._api = api.LiveKitAPI(
-            self._rtc_url, self._api_key, self._api_secret)
+        self._api = api.LiveKitAPI(self._rtc_url, self._api_key, self._api_secret)
 
         join_jwt = (
             api.AccessToken(self._api_key, self._api_secret)
@@ -251,8 +243,7 @@ class Worker:
         for i in range(MAX_RECONNECT_ATTEMPTS):
             try:
                 reg = await self._connect()
-                logging.info(
-                    "worker successfully re-registered: %s", reg.worker_id)
+                logging.info("worker successfully re-registered: %s", reg.worker_id)
                 return True
             except Exception as e:
                 logging.error("failed to reconnect, attempt %i: %s", i, e)
@@ -268,8 +259,7 @@ class Worker:
                         await self._message_received(await self._recv())
                 except websockets.exceptions.ConnectionClosed as e:
                     if self._running:
-                        logging.error(
-                            "connection closed, trying to reconnect: %s", e)
+                        logging.error("connection closed, trying to reconnect: %s", e)
                         if not await self._reconnect():
                             break
                 except Exception as e:
@@ -406,8 +396,18 @@ def run_app(worker: Worker) -> None:
         help="LiveKit server or Cloud project WebSocket URL",
         default="ws://localhost:7880",
     )
-    @click.option("--api-key", envvar="LIVEKIT_API_KEY", help="LiveKit server or Cloud project's API key", required=True)
-    @click.option("--api-secret", envvar="LIVEKIT_API_SECRET", help="LiveKit server or Cloud project's API secret", required=True)
+    @click.option(
+        "--api-key",
+        envvar="LIVEKIT_API_KEY",
+        help="LiveKit server or Cloud project's API key",
+        required=True,
+    )
+    @click.option(
+        "--api-secret",
+        envvar="LIVEKIT_API_SECRET",
+        help="LiveKit server or Cloud project's API secret",
+        required=True,
+    )
     def cli(log_level: str, url: str, api_key: str, api_secret: str) -> None:
         logging.basicConfig(level=log_level)
         worker._set_url(url)
@@ -425,8 +425,7 @@ def run_app(worker: Worker) -> None:
         async def _pre_run() -> (
             Tuple[proto_models.Room, Optional[proto_models.ParticipantInfo]]
         ):
-            lkapi = api.LiveKitAPI(
-                worker._rtc_url, worker._api_key, worker._api_secret)
+            lkapi = api.LiveKitAPI(worker._rtc_url, worker._api_key, worker._api_secret)
 
             try:
                 room = await lkapi.room.create_room(
@@ -436,8 +435,7 @@ def run_app(worker: Worker) -> None:
                 participant = None
                 if identity:
                     participant = await lkapi.room.get_participant(
-                        api.RoomParticipantIdentity(
-                            room=room_name, identity=identity)
+                        api.RoomParticipantIdentity(room=room_name, identity=identity)
                     )
 
                 return room, participant
@@ -445,11 +443,9 @@ def run_app(worker: Worker) -> None:
                 await lkapi.aclose()
 
         room_info, participant = worker._loop.run_until_complete(_pre_run())
-        logging.info(
-            f"Simulating job for room {room_info.name} ({room_info.sid})")
+        logging.info(f"Simulating job for room {room_info.name} ({room_info.sid})")
         _run_worker(
-            worker, started_cb=lambda _: worker._simulate_job(
-                room_info, participant)
+            worker, started_cb=lambda _: worker._simulate_job(room_info, participant)
         )
 
     @cli.command(help="List used plugins")
