@@ -13,15 +13,16 @@
 # limitations under the License.
 
 import asyncio
+import datetime
 import json
 import logging
-from typing import AsyncIterable, Optional
+from typing import AsyncIterable
 
-from game_state import GameState, GAME_STATE
+from fal_sd_turbo import FalSDTurbo
+from game_state import GAME_STATE, GameState
 from livekit import agents, rtc
 from livekit.plugins.deepgram import STT
 from livekit.plugins.elevenlabs import TTS
-from livekit.plugins.fal import SDTurboHighFPS
 
 INTRO_MESSAGE = """
 Hi there, this is a guessing game where you guess which celebrity I've swapped your face for. 
@@ -50,7 +51,7 @@ class FalAI:
 
     def __init__(self, ctx: agents.JobContext):
         self.ctx: agents.JobContext = ctx
-        self.falai: Optional[SDTurboHighFPS] = SDTurboHighFPS()
+        self.falai = FalSDTurbo()
         self.fal_stream = self.falai.stream()
         self.stt_plugin = STT()
         self.stt_stream = self.stt_plugin.stream()
@@ -103,12 +104,8 @@ class FalAI:
         if state == GAME_STATE.PRE_GAME:
             self.ctx.create_task(self.send_chat_and_voice(GAME_RESET_MESSAGE))
 
-    def on_guess(self, correct: bool, celebrity: str):
-        correct_message = f"Correct, it was {celebrity}!"
-        incorrect_message = f"Incorrect, it's not {celebrity}."
-        self.ctx.create_task(
-            self.send_chat_and_voice(correct_message if correct else incorrect_message)
-        )
+    def on_guess(self, message: str):
+        self.ctx.create_task(self.send_chat_and_voice(message=message))
 
     # Publish Tracks
     async def publish_tracks(self):
@@ -166,7 +163,17 @@ class FalAI:
                 if e.alternatives[0].text == "":
                     continue
                 self.game_state.add_user_input(e.alternatives[0].text)
-                await self.chat.send_message(e.alternatives[0].text)
+                await self.ctx.room.local_participant.publish_data(
+                    json.dumps(
+                        {
+                            "text": e.alternatives[0].text,
+                            "timestamp": int(
+                                datetime.datetime.now().timestamp() * 1000
+                            ),
+                        }
+                    ),
+                    topic="transcription",
+                )
 
     async def send_audio_stream(
         self, tts_stream: AsyncIterable[agents.tts.SynthesisEvent]

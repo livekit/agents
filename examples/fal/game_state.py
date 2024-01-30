@@ -9,11 +9,25 @@ from livekit import agents
 
 CELEBRITIES = [
     "Tom Cruise",
-    "Rihanna",
-    "Nicolas Cage",
-    "Taylor Swift",
-    "Beyonce",
+    "Nicholas Cage",
+    "Beyoncé",
+    "Dwayne 'The Rock' Johnson",
     "Will Smith",
+    "Taylor Swift",
+    "Scarlett Johansson",
+    "Leonardo DiCaprio",
+    "Oprah Winfrey",
+    "Justin Bieber",
+    "Lady Gaga",
+    "Robert Downey Jr.",
+    "Adele",
+    "Chris Evans",
+    "Kim Kardashian",
+    "Brad Pitt",
+    "Shakira",
+    "Vin Diesel",
+    "Jennifer Aniston",
+    "Kanye West",
 ]
 
 GAME_STATE = Enum("GAME_STATE", "PRE_GAME PLAYING")
@@ -25,9 +39,12 @@ PRE_GAME_PROMPT = "You are a game running agent in the pregame phase.\
                 If the user has not expressed intent to start playing, you should return the string 'wait'. Do not return any other strings."
 
 PLAYING_PROMPT_TEMPLATE = (
-    "You are an agent that can return two strings: 'correct' and 'incorrect'.\
+    "You are an agent that can return two types of responses: A correct guess or an incorrect guess.\
+    If the guess is correct, return the 'correct' string. Don't return anything else if the guess is correct.\
+    If the guess is incorrect, return a short response that conveys that the guess was incorrect and give\
+    a useful hint about what the answer is without revealing the name.\
     Do not return any other strings. Return 'correct' if the user has guessed the name %s correctly.\
-        The spelling may be slightly off so don't worry too much about that."
+    The spelling may be slightly off so don't worry too much about that."
 )
 
 
@@ -36,7 +53,7 @@ class GameState:
         self,
         ctx: agents.JobContext,
         on_state_changed: Callable[[GAME_STATE], None],
-        on_guess: Callable[[bool, str], None],
+        on_guess: Callable[[str], None],
     ):
         self._ctx = ctx
         self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -113,10 +130,10 @@ class GameState:
         print("playing text: ", text)
         if text == "correct":
             self._score += 1
-            self._on_guess(True, self.current_celebrity)
+            self._on_guess(f"Correct! It was {self.current_celebrity}!")
             self._celeb_index = (self._celeb_index + 1) % len(CELEBRITIES)
         else:
-            self._on_guess(False, self.current_celebrity)
+            self._on_guess(text)
 
     def _shuffle_celebrities(self):
         random.shuffle(CELEBRITIES)

@@ -28,7 +28,7 @@ from PIL import Image
 FAL_URL = "wss://fal.run/fal-ai/sd-turbo-real-time-high-fps-msgpack-a10g/ws"
 
 
-class SDTurboHighFPS:
+class FalSDTurbo:
     """Fal SDXL Plugin
 
     Requires FAL_KEY_ID and FAL_KEY_SECRET environment variables to be set.
