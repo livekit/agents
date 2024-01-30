@@ -16,6 +16,7 @@ import asyncio
 import io
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Optional, Set
 
@@ -24,7 +25,7 @@ import msgpack
 from livekit import rtc
 from PIL import Image
 
-FAL_URL = "wss://110602490-sd-turbo-real-time-high-fps-msgpack.gateway.alpha.fal.ai/ws"
+FAL_URL = "wss://fal.run/fal-ai/sd-turbo-real-time-high-fps-msgpack-a10g/ws"
 
 
 class SDTurboHighFPS:
@@ -79,8 +80,14 @@ class SDTurboHighFPSStream:
         self._in_flight_requests = 0
         self._tasks = set()
         self._closed = False
+        self._latency = 0
+        self._send_time_queue = asyncio.Queue[float]()
         run_task = asyncio.create_task(self._run())
         run_task.add_done_callback(lambda t: _task_done_cb(t, self._tasks))
+
+    @property
+    def latency(self) -> float:
+        return self._latency
 
     def push_frame(self, frame: rtc.VideoFrame, prompt: str, strength: float) -> None:
         if self._closed:
@@ -142,6 +149,7 @@ class SDTurboHighFPSStream:
                         )
                         continue
                     self._in_flight_requests += 1
+                    self._send_time_queue.put_nowait(time.time())
                     await ws.send_bytes(packed)
             except asyncio.CancelledError:
                 if ws:
@@ -151,19 +159,17 @@ class SDTurboHighFPSStream:
                 break
             except Exception as e:
                 if retry_count > max_retry and max_retry > 0:
-                    logging.error(f"failed to connect to FalAI: {e}")
+                    logging.error(f"failed to connect to FalAI: {e} - {retry_count}")
                     break
 
-                retry_delay = min(retry_count * 5, 5)  # max 5s
-                retry_count += 1
-                logging.warning(
-                    f"failed to connect to FalAI: {e} - retrying in {retry_delay}s"
-                )
-                await asyncio.sleep(retry_delay)
+                logging.warning(f"failed to connect to FalAI: {e} - retrying")
+                await asyncio.sleep(1)
 
     async def _ws_receiver(self, ws):
         while True:
             ws_message = await ws.receive()
+            send_time = await self._send_time_queue.get()
+            self._latency = time.time() - send_time
             if ws_message.type == aiohttp.WSMsgType.TEXT:
                 logging.info(f"Received text message from fal ai: {ws_message.data}")
                 continue
