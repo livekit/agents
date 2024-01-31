@@ -19,7 +19,7 @@ CELEBRITIES = [
     "Oprah Winfrey",
     "Justin Bieber",
     "Lady Gaga",
-    "Robert Downey Jr.",
+    "Robert Downey Junior",
     "Adele",
     "Chris Evans",
     "Kim Kardashian",
@@ -35,8 +35,8 @@ GAME_STATE = Enum("GAME_STATE", "PRE_GAME PLAYING")
 PRE_GAME_PROMPT = "You are a game running agent in the pregame phase.\
                 Your job is to listen to the user's input and start the game when the user expresses intent to start playing. \
                 When the user has expressed that their intent to start playing (by using natural language), \
-                your only job is to return the string 'start'. \
-                If the user has not expressed intent to start playing, you should return the string 'wait'. Do not return any other strings."
+                your only job is to return the string 'start'. Do not return any other strings. Just return 'start'\
+                when the user has expressed intent to start playing."
 
 PLAYING_PROMPT_TEMPLATE = (
     "You are an agent that can return two types of responses: A correct guess or an incorrect guess.\
@@ -44,7 +44,7 @@ PLAYING_PROMPT_TEMPLATE = (
     If the guess is incorrect, return a short response that conveys that the guess was incorrect and give\
     a useful hint about what the answer is without revealing the name.\
     Do not return any other strings. Return 'correct' if the user has guessed the name %s correctly.\
-    The spelling may be slightly off so don't worry too much about that."
+    The spelling may be off so don't worry too much about that. Be generous."
 )
 
 
@@ -52,16 +52,13 @@ class GameState:
     def __init__(
         self,
         ctx: agents.JobContext,
-        on_state_changed: Callable[[GAME_STATE], None],
-        on_guess: Callable[[str], None],
+        send_message: Callable[[str], None],
     ):
         self._ctx = ctx
         self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self._game_state = GAME_STATE.PRE_GAME
+        self._send_message = send_message
         self._input_queue = asyncio.Queue()
-        self._on_state_changed = on_state_changed
-        self._on_guess = on_guess
-        self._score = 0
         self._celeb_index = 0
         self._shuffle_celebrities()
         self._ctx.create_task(self._run())
@@ -77,13 +74,7 @@ class GameState:
     @game_state.setter
     def game_state(self, new_state: GAME_STATE):
         self._flush_input_queue()
-        if new_state == GAME_STATE.PRE_GAME:
-            self._score = 0
         self._game_state = new_state
-
-    @property
-    def score(self):
-        return self._score
 
     def add_user_input(self, user_input: str):
         self._input_queue.put_nowait(user_input)
@@ -110,6 +101,9 @@ class GameState:
         print("pre game text: ", text)
         if text == "start":
             self.game_state = GAME_STATE.PLAYING
+            self._send_message(
+                "Great! Let's start playing! Give the face swap engine some time to warm up."
+            )
         elif text == "wait":
             pass
 
@@ -127,13 +121,11 @@ class GameState:
             ],
         )
         text = res.choices[0].message.content
-        print("playing text: ", text)
         if text == "correct":
-            self._score += 1
-            self._on_guess(f"Correct! It was {self.current_celebrity}!")
+            self._send_message(f"Correct! It was {self.current_celebrity}!")
             self._celeb_index = (self._celeb_index + 1) % len(CELEBRITIES)
         else:
-            self._on_guess(text)
+            self._send_message(text)
 
     def _shuffle_celebrities(self):
         random.shuffle(CELEBRITIES)

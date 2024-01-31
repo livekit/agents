@@ -29,10 +29,6 @@ Hi there, this is a guessing game where you guess which celebrity I've swapped y
 Just tell me when you are ready to start playing.
 """
 
-GAME_RESET_MESSAGE = """
-Game has been reset. Just tell me when you are ready to start playing again.
-"""
-
 BYE_MESSAGE = """
 Thanks for giving this a try! Goodbye for now.
 """
@@ -61,8 +57,9 @@ class FalAI:
         self.tts_stream = self.tts_plugin.stream()
         self.game_state = GameState(
             ctx=ctx,
-            on_guess=self.on_guess,
-            on_state_changed=self.on_game_state_changed,
+            send_message=lambda msg: self.ctx.create_task(
+                self.send_chat_and_voice(msg)
+            ),
         )
         self.video_out = rtc.VideoSource(_FAL_OUTPUT_WIDTH, _FAL_OUTPUT_HEIGHT)
         self.audio_out = rtc.AudioSource(_ELEVEN_TTS_SAMPLE_RATE, _ELEVEN_TTS_CHANNELS)
@@ -99,14 +96,6 @@ class FalAI:
         # limit to 2 mins
         self.ctx.create_task(self.end_session_after(2 * 60))
 
-    # Game State
-    def on_game_state_changed(self, state: GAME_STATE):
-        if state == GAME_STATE.PRE_GAME:
-            self.ctx.create_task(self.send_chat_and_voice(GAME_RESET_MESSAGE))
-
-    def on_guess(self, message: str):
-        self.ctx.create_task(self.send_chat_and_voice(message=message))
-
     # Publish Tracks
     async def publish_tracks(self):
         video_track = rtc.LocalVideoTrack.create_video_track(
@@ -136,7 +125,7 @@ class FalAI:
                 self.fal_stream.push_frame(
                     video_frame,
                     prompt=f"webcam screenshot of {self.game_state.current_celebrity}. HD. High Quality.",
-                    strength=0.6,
+                    strength=0.625,
                 )
                 # Keep sending video frames until we receive a FAL frame
                 if not self.received_fal_frame:
