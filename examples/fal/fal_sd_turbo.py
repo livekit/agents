@@ -58,9 +58,6 @@ def _task_done_cb(task: asyncio.Task, set: Set[asyncio.Task]) -> None:
         return
 
 
-EOS: None = None
-
-
 class SDTurboHighFPSStream:
     @dataclass
     class Input:
@@ -74,7 +71,6 @@ class SDTurboHighFPSStream:
         self._key_id = key_id
         self._key_secret = key_secret
         self._session = aiohttp.ClientSession()
-        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self._input_queue = asyncio.Queue[self.Input]()
         self._output_queue = asyncio.Queue[rtc.VideoFrame]()
         self._in_flight_requests = 0
@@ -82,8 +78,8 @@ class SDTurboHighFPSStream:
         self._closed = False
         self._latency = 0
         self._send_time_queue = asyncio.Queue[float]()
-        run_task = asyncio.create_task(self._run())
-        run_task.add_done_callback(lambda t: _task_done_cb(t, self._tasks))
+        self._run_task = asyncio.create_task(self._run())
+        self._run_task.add_done_callback(lambda t: _task_done_cb(t, self._tasks))
 
     @property
     def latency(self) -> float:
@@ -110,6 +106,8 @@ class SDTurboHighFPSStream:
         )
 
     async def aclose(self) -> None:
+        self._run_task.cancel()
+        await self._run_task
         self._closed = True
 
     async def _run(self):
