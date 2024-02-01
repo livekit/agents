@@ -83,33 +83,22 @@ class Worker:
             api_secret (str, optional): LiveKit API Secret. Defaults to os.environ.get("LIVEKIT_API_SECRET", "").
         """
 
-        ws_url = ws_url or os.environ.get("LIVEKIT_URL") or "ws://localhost:7880"
-        api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
-        api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
-
-        if not api_key:
-            raise ValueError(
-                "No api key provided, set LIVEKIT_API_KEY or use the api-key parameter inside the CLI"
-            )
-
-        if not api_secret:
-            raise ValueError(
-                "No api secret provided, set LIVEKIT_API_SECRET or use the api-secret parameter inside the CLI"
-            )
-
-        self._set_url(ws_url)
-
         self._loop = event_loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
         self._request_handler = request_handler
         self._wid = "W-" + str(uuid.uuid4())[:12]
         self._worker_type = worker_type
-        self._api_key = api_key
-        self._api_secret = api_secret
+        self._api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
+        self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
+        self._api = None
         self._running = False
         self._running_jobs: list["JobContext"] = []
         self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
-        self._api = api.LiveKitAPI(ws_url, api_key, api_secret)
+        self._rtc_url = None
+        self._agent_url = None
+        ws_url = ws_url or os.environ.get("LIVEKIT_URL")
+        if ws_url:
+            self._set_url(ws_url)
 
     def _set_url(self, ws_url: str) -> None:
         parse_res = urlparse(ws_url)
@@ -124,6 +113,17 @@ class Worker:
         self._rtc_url = url
 
     async def _connect(self) -> protocol.agent.RegisterWorkerResponse:
+        if not self._rtc_url:
+            raise ValueError("No WebSocket URL provided, set LIVEKIT_URL env var")
+
+        if not self._api_key:
+            raise ValueError("No API key provided, set LIVEKIT_API_KEY env var")
+
+        if not self._api_secret:
+            raise ValueError("No API secret provided, set LIVEKIT_API_SECRET env var")
+
+        self._api = api.LiveKitAPI(self._rtc_url, self._api_key, self._api_secret)
+
         join_jwt = (
             api.AccessToken(self._api_key, self._api_secret)
             .with_grants(api.VideoGrants(agent=True))
@@ -280,6 +280,7 @@ class Worker:
 
     async def start(self) -> None:
         """Start the Worker"""
+
         async with self._lock:
             if self._running:
                 raise Exception("worker is already running")
@@ -310,7 +311,7 @@ class Worker:
         return self._running
 
     @property
-    def api(self) -> api.LiveKitAPI:
+    def api(self) -> api.LiveKitAPI | None:
         return self._api
 
 
@@ -390,11 +391,23 @@ def run_app(worker: Worker) -> None:
     )
     @click.option(
         "--url",
-        help="The websocket URL",
-        default=worker._rtc_url,
+        required=True,
+        envvar="LIVEKIT_URL",
+        help="LiveKit server or Cloud project WebSocket URL",
+        default="ws://localhost:7880",
     )
-    @click.option("--api-key", help="The API key", default=worker._api_key)
-    @click.option("--api-secret", help="The API secret", default=worker._api_secret)
+    @click.option(
+        "--api-key",
+        envvar="LIVEKIT_API_KEY",
+        help="LiveKit server or Cloud project's API key",
+        required=True,
+    )
+    @click.option(
+        "--api-secret",
+        envvar="LIVEKIT_API_SECRET",
+        help="LiveKit server or Cloud project's API secret",
+        required=True,
+    )
     def cli(log_level: str, url: str, api_key: str, api_secret: str) -> None:
         logging.basicConfig(level=log_level)
         worker._set_url(url)
