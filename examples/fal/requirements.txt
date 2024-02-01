@@ -3,5 +3,7 @@ livekit-api>=0.4.1
 livekit-agents>=0.3.0
 livekit-plugins-deepgram>=0.1.0
 livekit-plugins-elevenlabs>=0.1.3
-openai
-Pillow
+openai>=1.0.0
+msgpack>=1.0.0
+aiohttp>=3.0.0
+Pillow>=10.0.0
