@@ -17,6 +17,7 @@ class SpeechData:
 @dataclass
 class SpeechEvent:
     is_final: bool
+    speech_final: bool
     alternatives: List[SpeechData]
 
 
