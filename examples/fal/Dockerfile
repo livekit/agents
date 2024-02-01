@@ -33,4 +33,4 @@ RUN python -m pip install -r requirements.txt
 USER appuser
 
 # Run the application.
-CMD python detection.py start
+CMD python fal.py start
