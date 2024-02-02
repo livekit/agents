@@ -1,0 +1,4 @@
+livekit
+livekit-agents
+mediapipe
+numpy
