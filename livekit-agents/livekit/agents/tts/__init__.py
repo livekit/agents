@@ -6,7 +6,10 @@ from .tts import (
     SynthesisEventType,
 )
 
-from .stream_adapter import StreamAdapterWrapper
+from .stream_adapter import (
+    StreamAdapterWrapper,
+    StreamAdapter,
+)
 
 __all__ = [
     "TTS",
@@ -15,4 +18,5 @@ __all__ = [
     "SynthesizeStream",
     "SynthesisEventType",
     "StreamAdapterWrapper",
+    "StreamAdapter",
 ]
