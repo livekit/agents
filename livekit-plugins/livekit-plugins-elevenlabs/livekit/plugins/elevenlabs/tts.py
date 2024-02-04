@@ -108,7 +108,7 @@ class TTS(tts.TTS):
     ) -> tts.SynthesizedAudio:
         voice = self._config.voice
         async with self._session.post(
-            f"{self._config.base_url}/text-to-speech/{voice.id}?output_format=pcm_44100",
+            f"{self._config.base_url}/text-to-speech/{voice.id}?output_format=mp3_44100_128",
             headers={AUTHORIZATION_HEADER: self._config.api_key},
             json=dict(
                 text=text,
@@ -161,7 +161,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         base_url = self._config.base_url
         voice_id = self._config.voice.id
         model_id = self._config.model_id
-        return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format=pcm_{self._config.sample_rate}&optimize_streaming_latency={self._config.latency}"
+        return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format=mp3_44100_128&optimize_streaming_latency={self._config.latency}"
 
     def push_text(self, token: str) -> None:
         if self._closed:
