@@ -242,6 +242,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             tts.SynthesisEvent(type=tts.SynthesisEventType.FINISHED)
                         )
                         break
+                break
 
             except asyncio.CancelledError:
                 if ws:
