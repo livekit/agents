@@ -294,6 +294,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._main_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
+        await self._session.close()
 
     async def __anext__(self) -> tts.SynthesisEvent:
         if self._closed and self._event_queue.empty():
