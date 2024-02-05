@@ -241,8 +241,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         self._event_queue.put_nowait(
                             tts.SynthesisEvent(type=tts.SynthesisEventType.FINISHED)
                         )
+                        completed = True
                         break
-                break
 
             except asyncio.CancelledError:
                 if ws:
