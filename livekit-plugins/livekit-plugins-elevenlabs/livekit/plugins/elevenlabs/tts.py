@@ -184,7 +184,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         retry_count = 0
         listen_task: Optional[asyncio.Task] = None
         ws: Optional[aiohttp.ClientWebSocketResponse] = None
-        while True:
+        completed = False
+
+        while not completed:
             try:
                 ws = await self._try_connect()
                 retry_count = 0  # reset retry count
@@ -212,6 +214,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         self._event_queue.put_nowait(
                             tts.SynthesisEvent(type=tts.SynthesisEventType.FINISHED)
                         )
+                        completed = True
                         break
 
             except asyncio.CancelledError:
