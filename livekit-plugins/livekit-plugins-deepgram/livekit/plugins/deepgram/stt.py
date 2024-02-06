@@ -247,7 +247,7 @@ def live_transcription_to_speech_event(
 
     return stt.SpeechEvent(
         is_final=event.is_final or False,  # could be None?
-        speech_final=event.speech_final or False,
+        end_of_speech=event.speech_final or False,
         alternatives=[
             stt.SpeechData(
                 language=language or "",

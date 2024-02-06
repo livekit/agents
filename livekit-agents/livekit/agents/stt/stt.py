@@ -18,7 +18,7 @@ class SpeechData:
 class SpeechEvent:
     is_final: bool
     alternatives: List[SpeechData]
-    speech_final: bool = False
+    end_of_speech: bool = False
 
 
 class STT(ABC):
