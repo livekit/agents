@@ -281,6 +281,7 @@ def recognize_response_to_speech_event(
     gg_alts = result.alternatives
     return stt.SpeechEvent(
         is_final=True,
+        end_of_speech=True,
         alternatives=[
             stt.SpeechData(
                 language=result.language_code,
@@ -301,6 +302,9 @@ def streaming_recognize_response_to_speech_event(
     gg_alts = result.alternatives
     return stt.SpeechEvent(
         is_final=result.is_final,
+        # Google STT does not have a separate end_of_speech indicator
+        # so we'll use is_final
+        end_of_speech=result.is_final,
         alternatives=[
             stt.SpeechData(
                 language=result.language_code,

@@ -311,7 +311,7 @@ class Worker:
         return self._running
 
     @property
-    def api(self) -> api.LiveKitAPI | None:
+    def api(self) -> Optional[api.LiveKitAPI]:
         return self._api
 
 
