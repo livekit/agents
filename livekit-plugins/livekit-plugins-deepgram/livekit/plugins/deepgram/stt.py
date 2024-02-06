@@ -22,7 +22,7 @@ class STTOptions:
     punctuate: bool
     model: DeepgramModels
     smart_format: bool
-
+    endpointing: Optional[str]
 
 class STT(stt.STT):
     def __init__(
@@ -36,6 +36,7 @@ class STT(stt.STT):
         model: DeepgramModels = "nova-2-general",
         api_key: Optional[str] = None,
         api_url: Optional[str] = None,
+        min_silence_duration: int = 10,
     ) -> None:
         super().__init__(streaming_supported=True)
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
@@ -51,6 +52,7 @@ class STT(stt.STT):
             punctuate=punctuate,
             model=model,
             smart_format=smart_format,
+            endpointing=str(min_silence_duration),
         )
 
     def _sanitize_options(
@@ -197,6 +199,7 @@ class SpeechStream(stt.SpeechStream):
                     sample_rate=self._sample_rate,
                     smart_format=self._config.smart_format,
                     punctuate=self._config.punctuate,
+                    endpointing=self._config.endpointing,
                 )
                 await self._live.start(dg_opts)
                 opened = True
@@ -244,6 +247,7 @@ def live_transcription_to_speech_event(
 
     return stt.SpeechEvent(
         is_final=event.is_final or False,  # could be None?
+        end_of_speech=event.speech_final or False,
         alternatives=[
             stt.SpeechData(
                 language=language or "",
