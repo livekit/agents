@@ -32,6 +32,8 @@ async def test_recognize():
         event = await stt.recognize(buffer=frame)
         text = event.alternatives[0].text
         assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.9
+        assert event.is_final
+        assert event.end_of_speech
 
     async with asyncio.TaskGroup() as group:
         for stt in stts:
@@ -72,6 +74,7 @@ async def test_stream():
             if event.is_final:
                 text = event.alternatives[0].text
                 assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.8
+                assert event.end_of_speech
                 break
 
         await stream.aclose()

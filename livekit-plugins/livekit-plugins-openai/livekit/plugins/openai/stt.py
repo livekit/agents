@@ -94,5 +94,6 @@ class STT(stt.STT):
 def transcription_to_speech_event(transcription) -> stt.SpeechEvent:
     return stt.SpeechEvent(
         is_final=True,
+        end_of_speech=True,
         alternatives=[stt.SpeechData(text=transcription.text, language="")],
     )

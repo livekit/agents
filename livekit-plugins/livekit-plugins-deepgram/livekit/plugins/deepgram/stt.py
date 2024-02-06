@@ -24,6 +24,7 @@ class STTOptions:
     smart_format: bool
     endpointing: Optional[str]
 
+
 class STT(stt.STT):
     def __init__(
         self,
@@ -271,6 +272,7 @@ def prerecorded_transcription_to_speech_event(
 
     return stt.SpeechEvent(
         is_final=True,
+        end_of_speech=True,
         alternatives=[
             stt.SpeechData(
                 language=language or "",
