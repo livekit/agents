@@ -292,7 +292,7 @@ def live_transcription_to_speech_event(
     event: dict,
 ) -> stt.SpeechEvent:
     try:
-        dg_alts = event["channel"]["alternatives"]  # type: ignore
+        dg_alts = event["channel"]["alternatives"]
     except KeyError:
         raise ValueError("no alternatives in response")
 
@@ -317,7 +317,7 @@ def prerecorded_transcription_to_speech_event(
     event: dict,
 ) -> stt.SpeechEvent:
     try:
-        dg_alts = event["results"]["channels"][0]["alternatives"]  # type: ignore
+        dg_alts = event["results"]["channels"][0]["alternatives"]
     except KeyError:
         raise ValueError("no alternatives in response")
 
