@@ -202,8 +202,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         text = await self._queue.get()
 
-                    print("NEIL got here", text)
-
                     if not started:
                         self._event_queue.put_nowait(
                             tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
