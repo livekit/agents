@@ -130,6 +130,8 @@ class KITT:
     async def process_stt_stream(self, stream):
         buffered_text = ""
         async for event in stream:
+            if event.alternatives[0].text == "":
+                continue
             if event.is_final:
                 buffered_text = " ".join([buffered_text, event.alternatives[0].text])
 
