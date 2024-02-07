@@ -196,11 +196,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 started = False
                 while not ws.closed:
                     text = None
-                    if retry_text_queue.empty():
+                    if not retry_text_queue.empty():
                         text = await retry_text_queue.get()
                         retry_text_queue.task_done()
                     else:
                         text = await self._queue.get()
+
+                    print("NEIL got here", text)
 
                     if not started:
                         self._event_queue.put_nowait(
