@@ -7,10 +7,10 @@ import os
 import urllib
 import wave
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 import aiohttp
-from livekit import agents, rtc
+from livekit import rtc
 from livekit.agents import stt
 from livekit.agents.utils import AudioBuffer, merge_frames
 
@@ -107,7 +107,7 @@ class STT(stt.STT):
         query_params = self._config_to_query(config)
 
         # Deepgram prerecorded API requires WAV/MP3, so we write our PCM into a wav buffer
-        buffer = agents.utils.merge_frames(buffer)
+        buffer = merge_frames(buffer)
         io_buffer = io.BytesIO()
         with wave.open(io_buffer, "wb") as wav:
             wav.setnchannels(buffer.num_channels)
