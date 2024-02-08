@@ -51,13 +51,6 @@ class STT(stt.STT):
         if not self._api_key:
             raise ValueError("Deepgram API key is required")
 
-        self._session = aiohttp.ClientSession(
-            headers={
-                "Authorization": f"Token {self._api_key}",
-                "Accept": "application/json",
-                "Content-Type": "audio/wav",
-            }
-        )
         self._config = STTOptions(
             language=language,
             detect_language=detect_language,
@@ -105,7 +98,7 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
         query_params = self._config_to_query(config)
-
+        url = f"https://api.deepgram.com/v1/listen?{query_params}"
         # Deepgram prerecorded API requires WAV/MP3, so we write our PCM into a wav buffer
         buffer = merge_frames(buffer)
         io_buffer = io.BytesIO()
@@ -115,10 +108,21 @@ class STT(stt.STT):
             wav.setframerate(buffer.sample_rate)
             wav.writeframes(buffer.data)
 
-        url = f"https://api.deepgram.com/v1/listen?{query_params}"
-        res = await self._session.post(url=url, data=io_buffer.getvalue())
-        json_res = await res.json()
-        return prerecorded_transcription_to_speech_event(config.language, json_res)
+        async with aiohttp.ClientSession(
+            headers={
+                "Authorization": f"Token {self._api_key}",
+                "Accept": "application/json",
+                "Content-Type": "audio/wav",
+            }
+        ) as session:
+            async with session.post(
+                url=url,
+                data=io_buffer.getvalue(),
+            ) as res:
+                json_res = await res.json()
+                return prerecorded_transcription_to_speech_event(
+                    config.language, json_res
+                )
 
     def stream(
         self,
@@ -128,7 +132,6 @@ class STT(stt.STT):
         config = self._sanitize_options(language=language)
         return SpeechStream(
             config,
-            session=self._session,
             api_key=self._api_key,
         )
 
@@ -138,12 +141,10 @@ class SpeechStream(stt.SpeechStream):
         self,
         config: STTOptions,
         api_key: str,
-        session: aiohttp.ClientSession,
         sample_rate: int = 16000,
         num_channels: int = 1,
     ) -> None:
         super().__init__()
-        self._session = session
         self._config = config
         self._sample_rate = sample_rate
         self._num_channels = num_channels
@@ -174,64 +175,62 @@ class SpeechStream(stt.SpeechStream):
     async def aclose(self) -> None:
         await self._queue.put(STREAM_CLOSE_MSG)
         await self._main_task
-        await self._session.close()
 
     async def _run(self, max_retry: int) -> None:
         """Try to connect to Deepgram with exponential backoff and forward frames"""
-        retry_count = 0
-        ws: Optional[aiohttp.ClientWebSocketResponse] = None
-        stream_finished = False
-        listen_task: Optional[asyncio.Task] = None
-        keepalive_task: Optional[asyncio.Task] = None
-        while not stream_finished:
-            try:
-                ws = await self._try_connect()
-                listen_task = asyncio.create_task(self._listen_loop(ws))
-                keepalive_task = asyncio.create_task(self._keepalive_loop(ws))
+        async with aiohttp.ClientSession() as session:
+            retry_count = 0
+            ws: Optional[aiohttp.ClientWebSocketResponse] = None
+            listen_task: Optional[asyncio.Task] = None
+            keepalive_task: Optional[asyncio.Task] = None
+            while True:
+                try:
+                    ws = await self._try_connect(session)
+                    listen_task = asyncio.create_task(self._listen_loop(ws))
+                    keepalive_task = asyncio.create_task(self._keepalive_loop(ws))
+                    # break out of the retry loop if we are done
+                    if await self._send_loop(ws):
+                        keepalive_task.cancel()
+                        await asyncio.wait_for(listen_task, timeout=5)
+                        break
+                except Exception as e:
+                    if retry_count > max_retry and max_retry > 0:
+                        logging.error(f"failed to connect to Deepgram: {e}")
+                        break
 
-                while not ws.closed:
-                    data = await self._queue.get()
-                    # fire and forget, we don't care if we miss frames in the error case
-                    self._queue.task_done()
+                    retry_delay = min(retry_count * 5, 5)  # max 5s
+                    retry_count += 1
+                    logging.warning(
+                        f"failed to connect to Deepgram: {e} - retrying in {retry_delay}s"
+                    )
+                    await asyncio.sleep(retry_delay)
 
-                    if ws.closed:
-                        raise Exception("websocket closed")
-
-                    if isinstance(data, rtc.AudioFrame):
-                        await ws.send_bytes(data.data.tobytes())
-                    else:
-                        if data == STREAM_CLOSE_MSG:
-                            await ws.send_str(data)
-                            stream_finished = True
-                            break
-            except Exception as e:
-                if retry_count > max_retry and max_retry > 0:
-                    logging.error(f"failed to connect to Deepgram: {e}")
-                    break
-
-                retry_delay = min(retry_count * 5, 5)  # max 5s
-                retry_count += 1
-                logging.warning(
-                    f"failed to connect to Deepgram: {e} - retrying in {retry_delay}s"
-                )
-                await asyncio.sleep(retry_delay)
-
-        await asyncio.wait_for(listen_task, timeout=5)
-        listen_task.cancel()
-        keepalive_task.cancel()
-        await keepalive_task
         self._closed = True
 
+    async def _send_loop(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
+        while not ws.closed:
+            data = await self._queue.get()
+            # fire and forget, we don't care if we miss frames in the error case
+            self._queue.task_done()
+
+            if ws.closed:
+                raise Exception("websocket closed")
+
+            if isinstance(data, rtc.AudioFrame):
+                await ws.send_bytes(data.data.tobytes())
+            else:
+                if data == STREAM_CLOSE_MSG:
+                    await ws.send_str(data)
+                    return True
+        return False
+
     async def _keepalive_loop(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        while True:
-            try:
-                await ws.send_str(STREAM_KEEPALIVE_MSG)
-                await asyncio.sleep(5)
-            except asyncio.CancelledError:
-                break
+        while not ws.closed:
+            await ws.send_str(STREAM_KEEPALIVE_MSG)
+            await asyncio.sleep(5)
 
     async def _listen_loop(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        while True:
+        while not ws.closed:
             msg = await ws.receive()
             if msg.type in (
                 aiohttp.WSMsgType.CLOSED,
@@ -257,7 +256,9 @@ class SpeechStream(stt.SpeechStream):
 
             logging.warning("Unhandled message %s", msg)
 
-    async def _try_connect(self) -> aiohttp.ClientWebSocketResponse:
+    async def _try_connect(
+        self, session: aiohttp.ClientSession
+    ) -> aiohttp.ClientWebSocketResponse:
         live_config = {
             "model": self._config.model,
             "punctuate": self._config.punctuate,
@@ -275,7 +276,7 @@ class SpeechStream(stt.SpeechStream):
         query_params = urllib.parse.urlencode(live_config).lower()
 
         url = f"wss://api.deepgram.com/v1/listen?{query_params}"
-        ws = await self._session.ws_connect(
+        ws = await session.ws_connect(
             url, headers={"Authorization": f"Token {self._api_key}"}
         )
 
