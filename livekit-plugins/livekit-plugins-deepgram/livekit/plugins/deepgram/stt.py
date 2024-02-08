@@ -266,6 +266,7 @@ class SpeechStream(stt.SpeechStream):
             "encoding": "linear16",
             "sample_rate": self._sample_rate,
             "channels": self._num_channels,
+            "endpointing": str(self._config.endpointing or "10"),
         }
 
         if self._config.language:
