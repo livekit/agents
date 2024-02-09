@@ -3,6 +3,13 @@ from livekit import rtc
 from typing import Optional, List
 from dataclasses import dataclass
 from ..utils import AudioBuffer
+from enum import Enum
+
+class SpeechEventType(Enum):
+    START_OF_SPEECH = 0
+    INTERIM_TRANSCRIPT = 1
+    FINAL_TRANSCRIPT = 2
+    END_OF_SPEECH = 3
 
 
 @dataclass
@@ -16,9 +23,9 @@ class SpeechData:
 
 @dataclass
 class SpeechEvent:
-    is_final: bool
+    type: SpeechEventType
+    # When the type is END_OF_SPEECH, the first alternative will be a combination of all the received final transcripts
     alternatives: List[SpeechData]
-    end_of_speech: bool = False
 
 
 class STT(ABC):
