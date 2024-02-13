@@ -94,11 +94,14 @@ class GameState:
 
     async def _run(self):
         while True:
-            user_input = await self._input_queue.get()
-            if self._game_state == GAME_STATE.PRE_GAME:
-                await self._handle_pre_game_input(user_input)
-            elif self._game_state == GAME_STATE.PLAYING:
-                await self._handle_playing_input(user_input)
+            try:
+                user_input = await self._input_queue.get()
+                if self._game_state == GAME_STATE.PRE_GAME:
+                    await self._handle_pre_game_input(user_input)
+                elif self._game_state == GAME_STATE.PLAYING:
+                    await self._handle_playing_input(user_input)
+            except Exception as e:
+                print("Error handling input: ", e)
 
     async def _handle_pre_game_input(self, user_input: str):
         res = await self._client.chat.completions.create(
