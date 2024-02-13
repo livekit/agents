@@ -25,7 +25,6 @@ CELEBRITIES = [
     "Tom Cruise",
     "Nicholas Cage",
     "Beyoncé",
-    "Dwayne 'The Rock' Johnson",
     "Will Smith",
     "Taylor Swift",
     "Scarlett Johansson",
