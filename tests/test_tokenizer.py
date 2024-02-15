@@ -46,7 +46,7 @@ async def test_streamed_sent_tokenizer():
         text = text[chunk_size:]
 
     sentence_tokenizer = nltk.SentenceTokenizer()
-    stream = sentence_tokenizer.stream(language="english", min_sentence_len=20)
+    stream = sentence_tokenizer.stream(language="english")
     for chunk in chunks:
         stream.push_text(chunk)
 
