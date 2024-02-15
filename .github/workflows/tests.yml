@@ -19,7 +19,9 @@ jobs:
           submodules: true
           lfs: true
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: install packages
         run: |
           pip3 install pytest pytest-asyncio ./livekit-agents
