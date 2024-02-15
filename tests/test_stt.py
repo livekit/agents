@@ -36,7 +36,6 @@ async def test_recognize():
         assert event.end_of_speech
 
     async with asyncio.TaskGroup() as group:
-        # force test to run
         for stt in stts:
             group.create_task(recognize(stt))
 

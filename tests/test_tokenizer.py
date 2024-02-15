@@ -23,6 +23,10 @@ EXPECTED_MIN_20 = [
 ]
 
 
+def test_download_files():
+    nltk.NltkPlugin().download_files()
+
+
 def test_sent_tokenizer():
     sentence_tokenizer = nltk.SentenceTokenizer(min_sentence_len=20)
     segmented = sentence_tokenizer.tokenize(text=TEXT)
