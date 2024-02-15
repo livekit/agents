@@ -1,6 +1,6 @@
-livekit>=0.8.0
+livekit>=0.9.0
 livekit-api>=0.4.1
-livekit-agents>=0.3.0
-livekit-plugins-directai>=0.1.1
-livekit-plugins-elevenlabs>=0.1.0
+livekit-agents>=0.4.0
+livekit-plugins-directai>=0.2.0
+livekit-plugins-elevenlabs>=0.2.0
 Pillow>=10.0.0

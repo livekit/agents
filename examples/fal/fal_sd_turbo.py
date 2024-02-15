@@ -89,19 +89,14 @@ class SDTurboHighFPSStream:
         if self._closed:
             raise ValueError("cannot push to a closed stream")
 
-        argb_frame = rtc.ArgbFrame.create(
-            format=rtc.VideoFormatType.FORMAT_RGBA,
-            width=frame.buffer.width,
-            height=frame.buffer.height,
-        )
-        frame.buffer.to_argb(dst=argb_frame)
+        argb_frame = frame.convert(rtc.VideoBufferType.RGBA)
         self._input_queue.put_nowait(
             self.Input(
                 data=argb_frame.data,
                 prompt=prompt,
                 strength=strength,
-                width=frame.buffer.width,
-                height=frame.buffer.height,
+                width=frame.width,
+                height=frame.height,
             )
         )
 
@@ -191,13 +186,11 @@ class SDTurboHighFPSStream:
             img_rgba = img.convert("RGBA")
             (r, g, b, a) = img_rgba.split()
             img_argb = Image.merge("RGBA", (b, g, r, a))
-            argb_frame = rtc.ArgbFrame.create(
-                rtc.VideoFormatType.FORMAT_ARGB, img.width, img.height
+            argb_frame = rtc.VideoFrame(
+                img.width, img.height, rtc.VideoBufferType.ARGB, img_argb.tobytes()
             )
-            argb_frame.data[:] = img_argb.tobytes()
-            video_frame = rtc.VideoFrame(argb_frame.to_i420())
             self._in_flight_requests -= 1
-            await self._output_queue.put(video_frame)
+            await self._output_queue.put(argb_frame)
 
     async def _get_connected_ws(self):
         creds = f"{self._key_id}:{self._key_secret}"

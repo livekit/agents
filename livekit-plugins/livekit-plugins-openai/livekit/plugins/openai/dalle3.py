@@ -37,7 +37,7 @@ class Dalle3:
         size: Literal["256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"],
         model: DalleModels = "dall-e-3",
         quality: Literal["standard", "hd"] = "standard",
-    ) -> rtc.ArgbFrame:
+    ) -> rtc.VideoFrame:
         response = await self._client.images.generate(
             model=model, prompt=prompt, size=size, quality=quality, n=1
         )
@@ -47,18 +47,17 @@ class Dalle3:
         )
         argb_array = bytearray(image.tobytes())
 
-        # shape is (height, width, channels)
-        argb_frame = rtc.ArgbFrame.create(
-            rtc.VideoFormatType.FORMAT_ARGB, image.shape[1], image.shape[0]
+        result = rtc.VideoFrame(
+            image.shape[1], image.shape[0], rtc.VideoBufferType.ARGB, argb_array
         )
-        argb_frame.data[:] = argb_array
-        return argb_frame
+        return result
 
     def _fetch_image(self, url):
         response = requests.get(url, timeout=10)
         arr = np.asarray(bytearray(response.content), dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         img = cv2.cvtColor(img, cv2.COLOR_RGB2RGBA)
+        # convert to ARGB
         from_to = [0, 3, 1, 1, 2, 2, 3, 0]
         cv2.mixChannels([img], [img], from_to)
         return img
