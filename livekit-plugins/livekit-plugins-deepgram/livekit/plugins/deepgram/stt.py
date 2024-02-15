@@ -4,7 +4,7 @@ import io
 import json
 import logging
 import os
-import urllib
+from urllib.parse import urlencode
 import wave
 from dataclasses import dataclass
 from typing import Optional, Union
@@ -88,7 +88,7 @@ class STT(stt.STT):
         }
         if config.language:
             params["language"] = config.language
-        return urllib.parse.urlencode(params).lower()
+        return urlencode(params).lower()
 
     async def recognize(
         self,
@@ -273,7 +273,7 @@ class SpeechStream(stt.SpeechStream):
         if self._config.language:
             live_config["language"] = self._config.language
 
-        query_params = urllib.parse.urlencode(live_config).lower()
+        query_params = urlencode(live_config).lower()
 
         url = f"wss://api.deepgram.com/v1/listen?{query_params}"
         ws = await session.ws_connect(
