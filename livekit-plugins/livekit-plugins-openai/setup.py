@@ -49,7 +49,7 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "livekit >= 0.8.0",
+        "livekit >= 0.9.0",
         "livekit-agents >= 0.3.0",
         "torch >= 2, < 3",
         "torchaudio >= 2, < 3",
