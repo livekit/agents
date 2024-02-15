@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-python@v4
       - name: install packages
         run: |
-          pip3 install pytest ./livekit-agents
+          pip3 install pytest pytest-asyncio ./livekit-agents
           for dir in livekit-plugins/*; do
             pip3 install $dir
           done
@@ -36,4 +36,4 @@ jobs:
           ELEVEN_API_KEY: ${{ secrets.ELEVEN_API_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
         run: |
-          pytest .
+          pytest --asyncio-mode=auto .
