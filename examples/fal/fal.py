@@ -109,13 +109,13 @@ class FalAI:
         await self.ctx.room.local_participant.publish_track(audio_track)
 
         # Send an empty frame to initialize the video track
-        argb_frame = rtc.ArgbFrame.create(
-            format=rtc.VideoFormatType.FORMAT_ARGB,
-            width=_FAL_OUTPUT_WIDTH,
-            height=_FAL_OUTPUT_HEIGHT,
+        argb_frame = rtc.VideoFrame(
+            _FAL_OUTPUT_WIDTH,
+            _FAL_OUTPUT_HEIGHT,
+            rtc.VideoBufferType.ARGB,
+            bytearray(_FAL_OUTPUT_WIDTH * _FAL_OUTPUT_HEIGHT * 4),
         )
-        argb_frame.data[:] = bytearray(_FAL_OUTPUT_WIDTH * _FAL_OUTPUT_HEIGHT * 4)
-        self.video_out.capture_frame(rtc.VideoFrame(argb_frame.to_i420()))
+        self.video_out.capture_frame(argb_frame)
 
     # Video processing
     async def process_video_track(self, track: rtc.Track):

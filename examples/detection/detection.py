@@ -72,13 +72,13 @@ class Detection:
         )
         await self.ctx.room.local_participant.publish_track(video_track)
         # Send an empty frame to initialize the video track
-        argb_frame = rtc.ArgbFrame.create(
-            format=rtc.VideoFormatType.FORMAT_ARGB,
-            width=_OUTPUT_WIDTH,
-            height=_OUTPUT_HEIGHT,
+        result = rtc.VideoFrame(
+            _OUTPUT_WIDTH,
+            _OUTPUT_HEIGHT,
+            rtc.VideoBufferType.ARGB,
+            bytearray(_OUTPUT_WIDTH * _OUTPUT_HEIGHT * 4),
         )
-        argb_frame.data[:] = bytearray(_OUTPUT_WIDTH * _OUTPUT_HEIGHT * 4)
-        self.video_out.capture_frame(rtc.VideoFrame(argb_frame.to_i420()))
+        self.video_out.capture_frame(result)
 
         audio_track = rtc.LocalAudioTrack.create_audio_track(
             "agent-mic", self.audio_out
@@ -141,12 +141,7 @@ class Detection:
                 self.video_out.capture_frame(frame)
                 continue
 
-            argb_frame = rtc.ArgbFrame.create(
-                format=rtc.VideoFormatType.FORMAT_RGBA,
-                width=frame.buffer.width,
-                height=frame.buffer.height,
-            )
-            frame.buffer.to_argb(dst=argb_frame)
+            argb_frame = frame.frame.convert(rtc.VideoBufferType.RGBA)
             image = Image.frombytes(
                 "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
             )
@@ -164,15 +159,15 @@ class Detection:
             (r, g, b, a) = image.split()
             # PIL we say "RGBA" because that's what PIL supports. But has no consequence, we store as BGRA
             argb_image = Image.merge("RGBA", (b, g, r, a))
-            argb_frame = rtc.ArgbFrame.create(
-                format=rtc.VideoFormatType.FORMAT_ARGB,
-                width=frame.buffer.width,
-                height=frame.buffer.height,
-            )
+
             # LiveKit stores underlying data as little-endian. So we set the BGRA data directly to an ARGB frame
-            argb_frame.data[:] = argb_image.tobytes()
-            result_frame = rtc.VideoFrame(argb_frame.to_i420())
-            self.video_out.capture_frame(result_frame)
+            argb_frame = rtc.VideoFrame(
+                argb_image.width,
+                argb_image.height,
+                rtc.VideoBufferType.ARGB,
+                argb_image.tobytes(),
+            )
+            self.video_out.capture_frame(argb_frame)
 
     async def detect(self, frame: rtc.VideoFrame):
         if (not self.detector) or self.detecting:

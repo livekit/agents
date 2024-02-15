@@ -97,7 +97,7 @@ class PainterAgent:
                 started_at = datetime.now()
                 try:
                     argb_frame = await self.dalle.generate(prompt, size="1792x1024")
-                    self.current_image = rtc.VideoFrame(argb_frame.to_i420())
+                    self.current_image = argb_frame
                     elapsed = (datetime.now() - started_at).seconds
                     self.ctx.create_task(
                         self.chat.send_message(f"Done! Took {elapsed} seconds.")
