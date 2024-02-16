@@ -1,5 +1,8 @@
 from livekit.plugins import nltk
 
+# Download nltk data one time before running tests
+nltk.NltkPlugin().download_files()
+
 TEXT = (
     "Hi! "
     "LiveKit is a platform for live audio and video applications and services. "
@@ -21,10 +24,6 @@ EXPECTED_MIN_20 = [
     "f(x) = x * 2.54 + 42.",
     "Hey! Hi! Hello!",
 ]
-
-
-def test_download_files():
-    nltk.NltkPlugin().download_files()
 
 
 def test_sent_tokenizer():
