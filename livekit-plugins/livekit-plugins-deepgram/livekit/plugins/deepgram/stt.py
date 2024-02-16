@@ -164,9 +164,18 @@ class SpeechStream(stt.SpeechStream):
         self._queue.put_nowait(frame)
 
     async def aclose(self, wait: bool = True) -> None:
-        await self._queue.put(SpeechStream._CLOSE_MSG)
-        await self._main_task
+        self._queue.put_nowait(SpeechStream._CLOSE_MSG)
+
+        if wait:
+            await self._main_task
+        else:
+            self._main_task.cancel()
+
+        with suppress(asyncio.CancelledError):
+            await self._main_task
+
         await self._session.close()
+
 
     async def _run(self, max_retry: int) -> None:
         """Try to connect to Deepgram with exponential backoff and forward frames"""
