@@ -1,5 +1,8 @@
 from livekit.plugins import nltk
 
+# Download the punkt tokenizer, will only download if not already present
+nltk.NltkPlugin().download_files()
+
 TEXT = (
     "Hi! "
     "LiveKit is a platform for live audio and video applications and services. "
