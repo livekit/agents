@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Optional
 from enum import Enum
@@ -17,28 +19,33 @@ class SynthesisEventType(Enum):
     STARTED = 0
     # audio data is available
     AUDIO = 1
-    # generally happens after a flushing the stream
-    # some TTS providers close the stream so we know it's done
+    # finished synthesizing audio after a flush
+    # this doesn't means the stream is done, more text can be pushed
     FINISHED = 2
 
 
 @dataclass
 class SynthesisEvent:
     type: SynthesisEventType
-    audio: Optional[SynthesizedAudio] = None
+    audio: SynthesizedAudio | None = None
 
 
 class SynthesizeStream(ABC):
     @abstractmethod
-    def push_text(self, token: str) -> None:
+    def push_text(self, token: str | None) -> None:
+        """
+        Push some text to be synthesized. If token is None, 
+        it will be used to identify the end of this particular segment.
+        (required by some TTS engines)
+        """
         pass
 
     @abstractmethod
-    async def flush(self) -> None:
-        pass
-
-    @abstractmethod
-    async def aclose(self) -> None:
+    async def aclose(self, wait: bool = True) -> None:
+        """
+        Close the stream, if wait is True, it will wait for the TTS to
+        finish synthesizing the audio, otherwise it will close ths stream immediately
+        """
         pass
 
     @abstractmethod
