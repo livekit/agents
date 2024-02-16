@@ -1,5 +1,8 @@
 from livekit.plugins import nltk
 
+# Download the punkt tokenizer, will only download if not already present
+nltk.NltkPlugin().download_files()
+
 TEXT = (
     "Hi! "
     "LiveKit is a platform for live audio and video applications and services. "
@@ -24,10 +27,8 @@ EXPECTED_MIN_20 = [
 
 
 def test_sent_tokenizer():
-    sentence_tokenizer = nltk.SentenceTokenizer()
-    segmented = sentence_tokenizer.tokenize(
-        text=TEXT, language="english", min_sentence_len=20
-    )
+    sentence_tokenizer = nltk.SentenceTokenizer(min_sentence_len=20)
+    segmented = sentence_tokenizer.tokenize(text=TEXT)
     for i, segment in enumerate(EXPECTED_MIN_20):
         assert segment == segmented[i].text
 
@@ -46,7 +47,7 @@ async def test_streamed_sent_tokenizer():
         text = text[chunk_size:]
 
     sentence_tokenizer = nltk.SentenceTokenizer()
-    stream = sentence_tokenizer.stream(language="english", min_sentence_len=20)
+    stream = sentence_tokenizer.stream(language="english")
     for chunk in chunks:
         stream.push_text(chunk)
 
