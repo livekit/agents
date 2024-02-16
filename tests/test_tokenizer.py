@@ -1,8 +1,5 @@
 from livekit.plugins import nltk
 
-# Download nltk data one time before running tests
-nltk.NltkPlugin().download_files()
-
 TEXT = (
     "Hi! "
     "LiveKit is a platform for live audio and video applications and services. "

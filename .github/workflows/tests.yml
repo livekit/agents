@@ -30,6 +30,11 @@ jobs:
           for dir in livekit-plugins/*; do
             pip3 install $dir
           done
+      - name: Download plugin dependencies
+        run: |
+          echo "from livekit.plugins.nltk import NltkPlugin" >> nltk_download.py
+          echo "NltkPlugin().download()" >> nltk_download.py
+          python3 nltk_download.py
       - name: Run tests
         env:
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
