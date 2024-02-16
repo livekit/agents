@@ -22,7 +22,7 @@ class TokenizerOptions:
 class SentenceTokenizer(agents.tokenize.SentenceTokenizer):
     def __init__(
         self,
-        language: str = "en-US",
+        language: str = "english",
         min_sentence_len: int = 20,
         stream_context_len: int = 10,
     ) -> None:
