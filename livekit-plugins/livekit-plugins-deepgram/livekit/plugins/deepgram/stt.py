@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+from re import I
+from typing import List
 import io
 import json
 import logging
@@ -146,6 +148,9 @@ class SpeechStream(stt.SpeechStream):
         self._closed = False
         self._main_task = asyncio.create_task(self._run(max_retry=32))
 
+        # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
+        self._final_events = []
+
         def log_exception(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():
                 logging.error(f"deepgram task failed: {task.exception()}")
@@ -261,25 +266,53 @@ class SpeechStream(stt.SpeechStream):
             alts = data["channel"]["alternatives"]
 
             if data["speech_final"]: # end of speech
-                # complete sentence since the beginning of the speech
+                if len(self._final_events) == 0:
+                    logging.warning("received end of speech without any final transcription")
+                    return
+
+                # combine all final transcripts since the start of the speech
                 sentence = ""
+                confidence = 0
+                self._final_events = []
+                for alt in self._final_events:
+                    sentence += alt.alternatives[0].text
+                    confidence += alt.alternatives[0].confidence
+
+                confidence /= len(self._final_events)
 
                 end_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=[
+                        stt.SpeechData(   
+                            language=self._config.language,
+                            start_time=self._final_events[0].alternatives[0].start_time,
+                            end_time=self._final_events[-1].alternatives[0].end_time,
+                            confidence=confidence,
+                            text=sentence,
+                        )
+                    ]
                 )
                 self._event_queue.put_nowait(end_event)
-                pass
-
+                self._final_events = []
             elif data["is_final"]:
                 # final transcription of a segment
-                pass
-                
+                alts = live_transcription_to_speech_data(self._config.language, data)
+                final_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=alts,
+                )
+                self._final_events.append(final_event)
+                self._event_queue.put_nowait(final_event)
             else:
                 # interim transcription
-                pass
+                alts = live_transcription_to_speech_data(self._config.language, data)
+                interim_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    alternatives=alts,
+                )
+                self._event_queue.put_nowait(interim_event)
 
             return
-
 
         logging.warning("skipping non-results message %s", data)
        
@@ -290,51 +323,44 @@ class SpeechStream(stt.SpeechStream):
         return await self._event_queue.get()
 
 
-def live_transcription_to_speech_event(
-    language: Optional[str],
-    event: dict,
-) -> stt.SpeechEvent:
-    try:
-        dg_alts = event["channel"]["alternatives"]
-    except KeyError:
-        raise ValueError("no alternatives in response")
+def live_transcription_to_speech_data(
+    language: str,
+    data: dict,
+) -> List[stt.SpeechData]:
+    dg_alts = data["channel"]["alternatives"]
 
-    return stt.SpeechEvent(
-        is_final=event["is_final"] or False,  # could be None?
-        end_of_speech=event["speech_final"] or False,
-        alternatives=[
-            stt.SpeechData(
-                language=language or "",
-                start_time=(alt["words"][0]["start"] if alt["words"] else 0) or 0,
-                end_time=(alt["words"][-1]["end"] if alt["words"] else 0) or 0,
-                confidence=alt["confidence"] or 0,
-                text=alt["transcript"] or "",
-            )
-            for alt in dg_alts
-        ],
-    )
-
+    return [
+        stt.SpeechData(
+            language=language,
+            start_time=alt["words"][0]["start"] if alt["words"] else 0,
+            end_time=alt["words"][-1]["end"] if alt["words"] else 0,
+            confidence=alt["confidence"],
+            text=alt["transcript"],
+        )
+        for alt in dg_alts
+    ]
 
 def prerecorded_transcription_to_speech_event(
-    language: Optional[str],
+    language: Optional[str], # language should be None when 'detect_language' is enabled
     event: dict,
 ) -> stt.SpeechEvent:
-    try:
-        dg_alts = event["results"]["channels"][0]["alternatives"]
-    except KeyError:
-        raise ValueError("no alternatives in response")
+    # We only support one channel for now
+    channel = event["results"]["channels"][0]
+    dg_alts = channel["alternatives"]
+
+    # Use the detected language if enabled
+    # https://developers.deepgram.com/docs/language-detection
+    detected_language = channel.get("detected_language")
 
     return stt.SpeechEvent(
-        is_final=True,
-        end_of_speech=True,
+        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[
             stt.SpeechData(
-                language=language or "",
-                start_time=(alt["words"][0]["start"] if alt["words"] else 0) or 0,
-                end_time=(alt["words"][-1]["end"] if alt["words"] else 0) or 0,
-                confidence=alt["confidence"] or 0,
-                # not sure why transcript is Optional inside DG SDK ...
-                text=alt["transcript"] or "",
+                language=language or detected_language,
+                start_time=alt["words"][0]["start"] if alt["words"] else 0,
+                end_time=alt["words"][-1]["end"] if alt["words"] else 0,
+                confidence=alt["confidence"],
+                text=alt["transcript"],
             )
             for alt in dg_alts
         ],
