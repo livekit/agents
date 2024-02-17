@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install ffmpeg
-        run: sudo apt-get install -y ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: install packages
         run: |
           pip3 install pytest pytest-asyncio ./livekit-agents
