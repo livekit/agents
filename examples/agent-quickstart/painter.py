@@ -70,8 +70,8 @@ class PainterAgent:
         stt_stream = stt.stream()
         self.ctx.create_task(self.stt_worker(stt_stream))
 
-        async for frame in audio_stream:
-            stt_stream.push_frame(frame)
+        async for audio_frame_event in audio_stream:
+            stt_stream.push_frame(audio_frame_event.frame)
         await stt_stream.flush()
 
     async def stt_worker(self, stt_stream: agents.stt.SpeechStream):

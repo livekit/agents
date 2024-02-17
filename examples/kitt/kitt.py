@@ -121,10 +121,10 @@ class KITT:
         audio_stream = rtc.AudioStream(track)
         stream = self.stt_plugin.stream()
         self.ctx.create_task(self.process_stt_stream(stream))
-        async for audio_frame in audio_stream:
+        async for audio_frame_event in audio_stream:
             if self._agent_state != AgentState.LISTENING:
                 continue
-            stream.push_frame(audio_frame)
+            stream.push_frame(audio_frame_event.frame)
         await stream.flush()
 
     async def process_stt_stream(self, stream):
