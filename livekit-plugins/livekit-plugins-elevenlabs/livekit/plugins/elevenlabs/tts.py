@@ -184,9 +184,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         retry_count = 0
         listen_task: Optional[asyncio.Task] = None
         ws: Optional[aiohttp.ClientWebSocketResponse] = None
-        completed = False
-
-        while not completed:
+        retry_text_queue: asyncio.Queue[str] = asyncio.Queue()
+        while True:
             try:
                 ws = await self._try_connect()
                 retry_count = 0  # reset retry count
@@ -196,7 +195,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # forward queued text to 11labs
                 started = False
                 while not ws.closed:
-                    text = await self._queue.get()
+                    text = None
+                    if not retry_text_queue.empty():
+                        text = await retry_text_queue.get()
+                        retry_text_queue.task_done()
+                    else:
+                        text = await self._queue.get()
+
                     if not started:
                         self._event_queue.put_nowait(
                             tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
@@ -206,7 +211,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                         text=text,
                         try_trigger_generation=True,
                     )
-                    await ws.send_str(json.dumps(text_packet))
+
+                    # This case can happen in normal operation because 11labs will not
+                    # keep connections open indefinitely if we are not sending data.
+                    try:
+                        await ws.send_str(json.dumps(text_packet))
+                    except Exception:
+                        await retry_text_queue.put(text)
+                        break
+
+                    # We call self._queue.task_done() even if we are retrying the text because
+                    # all text has gone through self._queue. An exception may have short-circuited
+                    # out of the loop so task_done() will not have already been called on text that
+                    # is being retried.
                     self._queue.task_done()
                     if text == STREAM_EOS:
                         await listen_task
@@ -214,7 +231,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         self._event_queue.put_nowait(
                             tts.SynthesisEvent(type=tts.SynthesisEventType.FINISHED)
                         )
-                        completed = True
                         break
 
             except asyncio.CancelledError:
@@ -297,7 +313,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._main_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
-        await self._session.close()
 
     async def __anext__(self) -> tts.SynthesisEvent:
         if self._closed and self._event_queue.empty():
