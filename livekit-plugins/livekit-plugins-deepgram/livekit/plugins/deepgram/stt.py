@@ -241,10 +241,10 @@ class SpeechStream(stt.SpeechStream):
 
         closing_ws = False
 
-        # if we wan't to keep the connection alive even if no audio is sent,
-        # Deepgram expects a keepalive message.
-        # https://developers.deepgram.com/reference/listen-live#stream-keepalive
         async def keepalive_task():
+            # if we want to keep the connection alive even if no audio is sent,
+            # Deepgram expects a keepalive message.
+            # https://developers.deepgram.com/reference/listen-live#stream-keepalive
             while True:
                 await ws.send_str(SpeechStream._KEEPALIVE_MSG)
                 await asyncio.sleep(5)
