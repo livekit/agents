@@ -70,8 +70,8 @@ class PainterAgent:
         stt_stream = stt.stream()
         self.ctx.create_task(self.stt_worker(stt_stream))
 
-        async for frame in audio_stream:
-            stt_stream.push_frame(frame)
+        async for audio_frame_event in audio_stream:
+            stt_stream.push_frame(audio_frame_event.frame)
         await stt_stream.flush()
 
     async def stt_worker(self, stt_stream: agents.stt.SpeechStream):
@@ -97,7 +97,7 @@ class PainterAgent:
                 started_at = datetime.now()
                 try:
                     argb_frame = await self.dalle.generate(prompt, size="1792x1024")
-                    self.current_image = rtc.VideoFrame(argb_frame.to_i420())
+                    self.current_image = argb_frame
                     elapsed = (datetime.now() - started_at).seconds
                     self.ctx.create_task(
                         self.chat.send_message(f"Done! Took {elapsed} seconds.")

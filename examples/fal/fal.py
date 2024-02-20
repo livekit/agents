@@ -109,29 +109,29 @@ class FalAI:
         await self.ctx.room.local_participant.publish_track(audio_track)
 
         # Send an empty frame to initialize the video track
-        argb_frame = rtc.ArgbFrame.create(
-            format=rtc.VideoFormatType.FORMAT_ARGB,
-            width=_FAL_OUTPUT_WIDTH,
-            height=_FAL_OUTPUT_HEIGHT,
+        argb_frame = rtc.VideoFrame(
+            _FAL_OUTPUT_WIDTH,
+            _FAL_OUTPUT_HEIGHT,
+            rtc.VideoBufferType.ARGB,
+            bytearray(_FAL_OUTPUT_WIDTH * _FAL_OUTPUT_HEIGHT * 4),
         )
-        argb_frame.data[:] = bytearray(_FAL_OUTPUT_WIDTH * _FAL_OUTPUT_HEIGHT * 4)
-        self.video_out.capture_frame(rtc.VideoFrame(argb_frame.to_i420()))
+        self.video_out.capture_frame(argb_frame)
 
     # Video processing
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
-        async for video_frame in video_stream:
+        async for video_frame_event in video_stream:
             if self.game_state.game_state == GAME_STATE.PLAYING:
                 self.fal_stream.push_frame(
-                    video_frame,
+                    video_frame_event.frame,
                     prompt=f"webcam screenshot of {self.game_state.current_celebrity}. HD. High Quality.",
                     strength=0.625,
                 )
                 # Keep sending video frames until we receive a FAL frame
                 if not self.received_fal_frame:
-                    self.video_out.capture_frame(video_frame)
+                    self.video_out.capture_frame(video_frame_event.frame)
             else:
-                self.video_out.capture_frame(video_frame)
+                self.video_out.capture_frame(video_frame_event.frame)
 
     async def send_fal_frames(self):
         async for video_frame in self.fal_stream:
@@ -143,8 +143,8 @@ class FalAI:
     # Audio processing
     async def process_audio_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        async for audio_frame in audio_stream:
-            self.stt_stream.push_frame(audio_frame)
+        async for audio_frame_event in audio_stream:
+            self.stt_stream.push_frame(audio_frame_event.frame)
 
     async def process_stt(self):
         async for e in self.stt_stream:

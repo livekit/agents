@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import os
+from urllib.parse import urlencode
 import wave
 from contextlib import suppress
 from urllib.parse import urlencode
@@ -197,7 +198,6 @@ class SpeechStream(stt.SpeechStream):
             live_config["language"] = self._config.language
 
         headers={"Authorization": f"Token {self._api_key}"}
-
         url = f"wss://api.deepgram.com/v1/listen?{urlencode(live_config)}"
         ws = await self._session.ws_connect(url, headers=headers)
 
@@ -261,6 +261,8 @@ class SpeechStream(stt.SpeechStream):
 
 
     def _process_stream_event(self, data: dict) -> None:
+        assert self._config.language is not None
+
         # https://developers.deepgram.com/docs/speech-started
         if data["type"] == "SpeechStarted":
             start_event = stt.SpeechEvent(

@@ -66,14 +66,9 @@ class Detector:
 
     async def detect(self, frame: rtc.VideoFrame) -> List[DetectionResult]:
         deploy_id = await self._get_deploy_id()
-        argb_frame = rtc.ArgbFrame.create(
-            format=rtc.VideoFormatType.FORMAT_RGBA,
-            width=frame.buffer.width,
-            height=frame.buffer.height,
-        )
-        frame.buffer.to_argb(dst=argb_frame)
+        converted = frame.convert(rtc.VideoBufferType.RGBA)
         image = Image.frombytes(
-            "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
+            "RGBA", (converted.width, converted.height), converted.data
         ).convert("RGB")
 
         output_stream = io.BytesIO()

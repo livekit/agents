@@ -64,14 +64,9 @@ class Classifier:
 
     async def classify(self, frame: rtc.VideoFrame) -> ClassificationResult:
         deploy_id = await self._get_deploy_id()
-        argb_frame = rtc.ArgbFrame.create(
-            format=rtc.VideoFormatType.FORMAT_RGBA,
-            width=frame.buffer.width,
-            height=frame.buffer.height,
-        )
-        frame.buffer.to_argb(dst=argb_frame)
+        buffer = frame.convert(rtc.VideoBufferType.RGBA)
         image = Image.frombytes(
-            "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
+            "RGBA", (buffer.width, buffer.height), buffer.data
         ).convert("RGB")
 
         output_stream = io.BytesIO()

@@ -116,6 +116,7 @@ class JobRequest:
         self._answered = False
         self._simulated = simulated
         self._lock = asyncio.Lock()
+        self._grace_period_disconnect_task: Optional[asyncio.Task] = None
 
     @property
     def id(self) -> str:
@@ -148,6 +149,7 @@ class JobRequest:
             AutoSubscribeCallback, bool
         ] = AutoSubscribe.SUBSCRIBE_NONE,
         auto_disconnect: AutoDisconnectCallback = AutoDisconnect.DEFAULT,
+        disconnect_grace_period: float = 30,
         grants: api.VideoGrants = api.VideoGrants(),
         name: Optional[str] = None,
         identity: Optional[str] = None,
@@ -167,6 +169,13 @@ class JobRequest:
                 The callback is called when:
                 - Initially once the agent has connected to the room
                 - A participant leaves the room
+
+            disconnect_grace_period:
+                Time in seconds to wait before disconnecting the agent after the
+                auto_disconnect callback returns True (signaling that the agent should disconnect).
+                The auto_disconnect callback will run again after this period to check if the agent should disconnect.
+                If the callback returns False, the agent will not disconnect.
+                Defaults to 30.
 
             grants:
                 Additional grants to give to the agent participant in its token.
@@ -239,12 +248,27 @@ class JobRequest:
             )
             job_ctx.create_task(agent(job_ctx))
 
+            async def disconnect_if_needed_after_grace_period():
+                await asyncio.sleep(disconnect_grace_period)
+                if auto_disconnect(job_ctx):
+                    await job_ctx.disconnect()
+
             def disconnect_if_needed(*_):
                 if auto_disconnect(job_ctx):
-                    asyncio.ensure_future(
-                        job_ctx.disconnect(),
-                        loop=self._worker._loop,
-                    )
+                    # If the auto_disconnect callback returns True, start the grace period.
+                    # If there is already a grace period task running, keep that one running
+                    # instead of starting a new one because we don't want to reset the timer.
+                    if self._grace_period_disconnect_task is None:
+                        self._grace_period_disconnect_task = asyncio.ensure_future(
+                            disconnect_if_needed_after_grace_period(),
+                            loop=self._worker._loop,
+                        )
+                else:
+                    # If, during the grace period, the auto_disconnect callback returns False,
+                    # cancel the grace period task
+                    if self._grace_period_disconnect_task:
+                        self._grace_period_disconnect_task.cancel()
+                        self._grace_period_disconnect_task = None
 
             self._room.on("participant_disconnected", disconnect_if_needed)
 
