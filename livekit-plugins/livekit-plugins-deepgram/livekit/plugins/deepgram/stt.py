@@ -353,7 +353,7 @@ class SpeechStream(stt.SpeechStream):
                     sentence += f" {alt.alternatives[0].text.strip()}"
                     confidence += alt.alternatives[0].confidence
 
-                confidence /= len(self._final_events)
+                confidence /= len(self._final_events) # avg. of confidence
 
                 end_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.END_OF_SPEECH,

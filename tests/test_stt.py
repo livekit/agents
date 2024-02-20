@@ -80,7 +80,7 @@ async def test_stream():
 
                 # We only wait for one final transcript on this test
                 # so OK to close right now
-                await stream.aclose()
+                await stream.aclose(wait=False)
                 break
 
     async with asyncio.TaskGroup() as group:
