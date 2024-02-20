@@ -34,7 +34,7 @@ class SynthesizeStream(ABC):
     @abstractmethod
     def push_text(self, token: str | None) -> None:
         """
-        Push some text to be synthesized. If token is None, 
+        Push some text to be synthesized. If token is None,
         it will be used to identify the end of this particular segment.
         (required by some TTS engines)
         """

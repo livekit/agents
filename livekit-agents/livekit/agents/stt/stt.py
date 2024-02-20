@@ -82,7 +82,7 @@ class SpeechStream(ABC):
     @abstractmethod
     async def aclose(self, *, wait: bool = True) -> None:
         """
-        Close the stream, if wait is True, it will wait for the STT to finish processing the 
+        Close the stream, if wait is True, it will wait for the STT to finish processing the
         remaining frames, otherwise it will close the stream immediately
         """
         pass
