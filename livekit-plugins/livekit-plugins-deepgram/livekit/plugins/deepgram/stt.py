@@ -241,19 +241,16 @@ class SpeechStream(stt.SpeechStream):
 
         closing_ws = False
 
+        # if we wan't to keep the connection alive even if no audio is sent,
+        # Deepgram expects a keepalive message.
+        # https://developers.deepgram.com/reference/listen-live#stream-keepalive
+        async def keepalive_task():
+            while True:
+                await ws.send_str(SpeechStream._KEEPALIVE_MSG)
+                await asyncio.sleep(5)
+
         async def send_task():
             nonlocal closing_ws
-
-            # if we wan't to keep the connection alive even if no audio is sent,
-            # Deepgram expects a keepalive message.
-            # https://developers.deepgram.com/reference/listen-live#stream-keepalive
-            async def keepalive():
-                while True:
-                    await ws.send_str(SpeechStream._KEEPALIVE_MSG)
-                    await asyncio.sleep(5)
-
-            keepalive_task = asyncio.create_task(keepalive())
-
             # forward inputs to deepgram
             # if we receive a close message, signal it to deepgram and break.
             # the recv task will then make sure to process the remaining audio and stop
@@ -272,10 +269,6 @@ class SpeechStream(stt.SpeechStream):
                     closing_ws = True
                     await ws.send_str(data)  # tell deepgram we are done with inputs
                     break
-
-            keepalive_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await keepalive_task
 
         async def recv_task():
             nonlocal closing_ws
@@ -304,7 +297,7 @@ class SpeechStream(stt.SpeechStream):
                 except Exception as e:
                     logging.error(f"failed to process deepgram message: {e}")
 
-        await asyncio.gather(send_task(), recv_task())
+        await asyncio.gather(send_task(), recv_task(), keepalive_task())
 
     def _process_stream_event(self, data: dict) -> None:
         assert self._config.language is not None
