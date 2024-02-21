@@ -22,7 +22,7 @@ from .worker import (
     run_app,
 )
 from .plugin import Plugin
-from .utils import AudioBuffer, merge_frames
+from .utils import AudioBuffer, merge_frames, Mp3Chunker
 from .job_request import AutoSubscribe, AutoDisconnect, JobRequest
 from .job_context import JobContext
 
@@ -45,6 +45,7 @@ __all__ = [
     "JobType",
     "AudioBuffer",
     "merge_frames",
+    "Mp3Chunker",
     "stt",
     "vad",
     "tts",
