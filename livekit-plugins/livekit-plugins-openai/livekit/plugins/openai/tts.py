@@ -47,7 +47,7 @@ class TTS(tts.TTS):
             f.write(data)
 
         tensor, sample_rate = torchaudio.load(io.BytesIO(data), format="mp3")
-        # torchaudio return float32, convert to sl16le
+        # torchaudio returns normalized float32, convert to sl16le
         np = (tensor.numpy() * 32767).astype("int16")
 
         num_channels = tensor.shape[0]
