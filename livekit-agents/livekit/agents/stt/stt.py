@@ -14,12 +14,11 @@ class SpeechEventType(Enum):
     START_OF_SPEECH = 0
     # interim transcript, useful for real-time transcription
     INTERIM_TRANSCRIPT = 1
-    # final transcript, emitted when the STT is confident that a certain
+    # final transcript, emitted when the STT is confident enough that a certain
     # portion of speech will not change
     FINAL_TRANSCRIPT = 2
-    # indicate the end of speech
-    # emitted when the user stops speaking
-    # the first alternative will be a combination of all the received final transcripts
+    # indicate the end of speech, emitted when the user stops speaking
+    # the first alternative is a combination of all the previous FINAL_TRANSCRIPT events
     END_OF_SPEECH = 3
 
 
