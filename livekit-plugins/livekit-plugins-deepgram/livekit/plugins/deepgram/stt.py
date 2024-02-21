@@ -254,7 +254,7 @@ class SpeechStream(stt.SpeechStream):
             # forward inputs to deepgram
             # if we receive a close message, signal it to deepgram and break.
             # the recv task will then make sure to process the remaining audio and stop
-            while True:
+            while not self._queue.empty():
                 data = await self._queue.get()
                 self._queue.task_done()
 
@@ -308,7 +308,8 @@ class SpeechStream(stt.SpeechStream):
             self._event_queue.put_nowait(start_event)
             return
 
-        # see this page https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
+        # see this page:
+        # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
         # for more information about the different types of events
         if data["type"] == "Results":
             alts = data["channel"]["alternatives"]
@@ -347,7 +348,7 @@ class SpeechStream(stt.SpeechStream):
                     confidence += alt.alternatives[0].confidence
 
                 sentence = sentence.rstrip()
-                confidence /= len(self._final_events) # avg. of confidence
+                confidence /= len(self._final_events)  # avg. of confidence
 
                 end_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.END_OF_SPEECH,
@@ -372,7 +373,7 @@ class SpeechStream(stt.SpeechStream):
         logging.warning("received unexpected message from deepgram %s", data)
 
     async def __anext__(self) -> stt.SpeechEvent:
-        if self._closed and self._event_queue.empty():
+        if self._closed and self._event_queue.empty() and self._main_task.done():
             raise StopAsyncIteration
 
         return await self._event_queue.get()

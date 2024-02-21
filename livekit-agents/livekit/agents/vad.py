@@ -6,9 +6,9 @@ from enum import Enum
 
 
 class VADEventType(Enum):
-    START_SPEAKING = 1
+    START_OF_SPEECH = 1
     SPEAKING = 2
-    END_SPEAKING = 3
+    END_OF_SPEECH = 3
 
 
 @dataclass
@@ -62,11 +62,7 @@ class VADStream(ABC):
         pass
 
     @abstractmethod
-    async def flush(self) -> None:
-        pass
-
-    @abstractmethod
-    async def aclose(self) -> None:
+    async def aclose(self, *, wait: bool = True) -> None:
         pass
 
     @abstractmethod
