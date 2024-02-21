@@ -1,7 +1,7 @@
 import asyncio
 import wave
 from livekit import rtc, agents
-from livekit.plugins import elevenlabs, openai
+from livekit.plugins import elevenlabs, openai, google
 
 TEST_AUDIO_SYNTHESIZE = "the people who are crazy enough to think they can change the world are the ones who do"
 
@@ -15,7 +15,7 @@ def save_wave_file(filename: str, frame: rtc.AudioFrame) -> None:
 
 
 async def test_synthetize():
-    ttss = [elevenlabs.TTS(), openai.TTS()]
+    ttss = [elevenlabs.TTS(), openai.TTS(), google.TTS()]
 
     async def synthetize(tts: agents.tts.TTS):
         audio = await tts.synthesize(text=TEST_AUDIO_SYNTHESIZE)
