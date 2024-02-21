@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import os
 import io
-import torchaudio
 import torch
+import torchaudio
 from typing import Optional
 from livekit import rtc
 from livekit.agents import tts
@@ -43,15 +44,17 @@ class TTS(tts.TTS):
         )
 
         data = await speech_res.aread()
-        tensor, sample_rate = torchaudio.load(io.BytesIO(data), format="mp3")
+        # save file
+        with open("openai.mp3", "wb") as f:
+            f.write(data)
 
-        with io.BytesIO() as buffer:
-            torch.save(tensor, buffer)
-            data = buffer.getvalue()
+        tensor, sample_rate = torchaudio.load(io.BytesIO(data), format="mp3")
+        # torchaudio return float32, convert to sl16le
+        np = (tensor.numpy() * 32767).astype("int16")
 
         num_channels = tensor.shape[0]
         frame = rtc.AudioFrame(
-            data=data,
+            data=np.tobytes(),
             sample_rate=sample_rate,
             num_channels=num_channels,
             samples_per_channel=tensor.shape[-1],
