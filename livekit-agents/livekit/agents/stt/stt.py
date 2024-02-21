@@ -10,7 +10,7 @@ from enum import Enum
 
 class SpeechEventType(Enum):
     # indicate the start of speech
-    # if the STT doesn't support this event, this will be emitted as the same time as the first ITERIM_TRANSCRIPT
+    # if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT
     START_OF_SPEECH = 0
     # interim transcript, useful for real-time transcription
     INTERIM_TRANSCRIPT = 1

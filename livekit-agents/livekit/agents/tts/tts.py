@@ -19,7 +19,7 @@ class SynthesisEventType(Enum):
     STARTED = 0
     # audio data is available
     AUDIO = 1
-    # finished synthesizing audio after a flush
+    # finished synthesizing an audio segment (generally separated by sending "None" to push_text)
     # this doesn't means the stream is done, more text can be pushed
     FINISHED = 2
 
