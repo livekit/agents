@@ -12,10 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 import os
 import io
-import torch
 import torchaudio
 from typing import Optional
 from livekit import rtc
