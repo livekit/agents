@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from typing import Union, List
 from livekit import rtc
 
@@ -37,3 +39,69 @@ def merge_frames(buffer: AudioBuffer) -> rtc.AudioFrame:
         )
 
     return buffer
+
+
+class Mp3Chunker:
+    """Mp3Chunker is a class that takes in byte chunks and outputs mp3 chunks
+    by finding mp3 headers. It is an async iterator that yields playable mp3 chunks. It
+    is not thread safe.
+    """
+
+    def __init__(self):
+        self.working_bytes = b""
+        self.decode_chunks = asyncio.Queue[bytes]()
+
+    def push_chunk(self, chunk: bytes | bytearray | None):
+        """Push a new bytes chunk (i.e. from a network response) to the chunker. When you want to close the chunker and
+        make sure all chunks are processed, call with None. No additional chunks can be pushed after None is pushed
+        and the chunker will raise StopAsyncIteration after all chunks are processed.
+
+        Args:
+            chunk (bytes | bytearray | None)
+        """
+
+        if chunk is None:
+            if len(self.working_bytes) > 0:
+                logging.error(
+                    "Mp3Chunker had remaining bytes, unchunked bytes after pushing None. This means data has been lost"
+                )
+            self.decode_chunks.put_nowait(None)
+            return
+
+        data_bytes = chunk
+        # find mp3 header
+        first_header_index = -1
+        last_header_index = -1
+        for i in range(len(data_bytes)):
+            if data_bytes[i] == 0xFF and data_bytes[i + 1] & 0xE0 == 0xE0:
+                if first_header_index == -1:
+                    first_header_index = i
+                if last_header_index == -1 or last_header_index < i:
+                    last_header_index = i
+
+        # In this chunk, we found at least one mp3 headers
+        if first_header_index > 0:
+            # If we have a full mp3 chunk in the http chunk we take the working bytes
+            # which always start with a header and add it to the decode chunks
+            if last_header_index > first_header_index:
+                self.decode_chunks.put_nowait(
+                    self.working_bytes
+                    + data_bytes[first_header_index:last_header_index]
+                )
+                # Whatever is left in the chunk is added to the working bytes
+                self.working_bytes = data_bytes[last_header_index:]
+            # Otherwise this is an incomplete mp3 chunk so we set it to the working bytes
+            else:
+                self.working_bytes = data_bytes[first_header_index:]
+        # If the http chunk had no mp3 headers, we just add it to the working bytes
+        else:
+            self.working_bytes += data_bytes
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        chunk = await self.decode_chunks.get()
+        if chunk is None:
+            raise StopAsyncIteration
+        return chunk
