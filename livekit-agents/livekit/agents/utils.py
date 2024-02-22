@@ -73,6 +73,7 @@ class Mp3Chunker:
         first_header_index = -1
         last_header_index = -1
         for i in range(len(chunk)):
+            # sync word is 11 bits, we don't care about the remaining 5 bits
             if chunk[i] == 0xFF and chunk[i + 1] & 0xE0 == 0xE0:
                 if first_header_index == -1:
                     first_header_index = i
