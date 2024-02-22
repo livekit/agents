@@ -53,7 +53,7 @@ class StreamAdapterWrapper(SpeechStream):
         super().__init__()
         self._vad = vad_stream
         self._stt = stt
-        self._event_queue = asyncio.Queue[SpeechEvent]()
+        self._event_queue = asyncio.Queue[SpeechEvent | None]()
         self._closed = False
         self._args = args
         self._kwargs = kwargs
@@ -67,22 +67,26 @@ class StreamAdapterWrapper(SpeechStream):
         self._main_task.add_done_callback(log_exception)
 
     async def _run(self) -> None:
-        async for event in self._vad:
-            if event.type == VADEventType.START_OF_SPEECH:
-                start_event = SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                self._event_queue.put_nowait(start_event)
-            elif event.type == VADEventType.END_OF_SPEECH:
-                merged_frames = merge_frames(event.speech)
-                event = await self._stt.recognize(
-                    buffer=merged_frames, *self._args, **self._kwargs
-                )
-                self._event_queue.put_nowait(event)
+        try:
+            async for event in self._vad:
+                if event.type == VADEventType.START_OF_SPEECH:
+                    start_event = SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    self._event_queue.put_nowait(start_event)
+                elif event.type == VADEventType.END_OF_SPEECH:
+                    merged_frames = merge_frames(event.speech)
+                    event = await self._stt.recognize(
+                        buffer=merged_frames, *self._args, **self._kwargs
+                    )
+                    self._event_queue.put_nowait(event)
 
-                end_event = SpeechEvent(
-                    type=stt.SpeechEventType.END_OF_SPEECH,
-                    alternatives=[event.alternatives[0]],
-                )
-                self._event_queue.put_nowait(end_event)
+                    end_event = SpeechEvent(
+                        type=stt.SpeechEventType.END_OF_SPEECH,
+                        alternatives=[event.alternatives[0]],
+                    )
+                    self._event_queue.put_nowait(end_event)
+        finally:
+            self._event_queue.put_nowait(None)
+
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
@@ -100,7 +104,7 @@ class StreamAdapterWrapper(SpeechStream):
             await self._main_task
 
     async def __anext__(self) -> SpeechEvent:
-        if self._closed and self._event_queue.empty() and self._main_task.done():
+        evt = await self._event_queue.get()
+        if evt is None:
             raise StopAsyncIteration
-
-        return await self._event_queue.get()
+        return evt
