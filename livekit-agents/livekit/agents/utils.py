@@ -68,34 +68,39 @@ class Mp3Chunker:
             self.decode_chunks.put_nowait(None)
             return
 
-        data_bytes = chunk
         # find mp3 header
         first_header_index = -1
         last_header_index = -1
-        for i in range(len(data_bytes)):
-            if data_bytes[i] == 0xFF and data_bytes[i + 1] & 0xE0 == 0xE0:
+        for i in range(len(chunk)):
+            if chunk[i] == 0xFF and chunk[i + 1] & 0xE0 == 0xE0:
                 if first_header_index == -1:
                     first_header_index = i
                 if last_header_index == -1 or last_header_index < i:
                     last_header_index = i
 
+        # Note: this algorithm is designed so that the working bytes always start with a header.
+        # Assumption: the first chunk will always start with a header
+
         # In this chunk, we found at least one mp3 headers
         if first_header_index > 0:
+            # Add everything before the first header to the working bytes
+            working_bytes += chunk[:first_header_index]
+
             # If we have a full mp3 chunk in the http chunk we take the working bytes
             # which always start with a header and add it to the decode chunks
             if last_header_index > first_header_index:
                 self.decode_chunks.put_nowait(
-                    self.working_bytes
-                    + data_bytes[first_header_index:last_header_index]
+                    working_bytes
+                    + chunk[first_header_index:last_header_index]
                 )
-                # Whatever is left in the chunk is added to the working bytes
-                self.working_bytes = data_bytes[last_header_index:]
-            # Otherwise this is an incomplete mp3 chunk so we set it to the working bytes
+                # Whatever is left in the chunk is set to the working bytes
+                working_bytes = chunk[last_header_index:]
+            # Otherwise this is an incomplete mp3 chunk so we add it to the working bytes
             else:
-                self.working_bytes = data_bytes[first_header_index:]
+                working_bytes = chunk[first_header_index:]
         # If the http chunk had no mp3 headers, we just add it to the working bytes
         else:
-            self.working_bytes += data_bytes
+            working_bytes += chunk
 
     def __aiter__(self):
         return self
