@@ -153,7 +153,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._session = aiohttp.ClientSession()
         self._queue = asyncio.Queue()
-        self._event_queue = asyncio.Queue[stt.SpeechEvent]()
+        self._event_queue = asyncio.Queue[stt.SpeechEvent | None]()
         self._closed = False
         self._main_task = asyncio.create_task(self._run(max_retry))
 
@@ -189,50 +189,55 @@ class SpeechStream(stt.SpeechStream):
         Run a single websocket connection to Deepgram and make sure to reconnect
         when something went wrong.
         """
-        retry_count = 0
-        while not self._closed:
-            try:
-                live_config = {
-                    "model": self._config.model,
-                    "punctuate": self._config.punctuate,
-                    "smart_format": self._config.smart_format,
-                    "interim_results": self._config.interim_results,
-                    "encoding": "linear16",
-                    "sample_rate": self._sample_rate,
-                    "vad_events": True,
-                    "channels": self._num_channels,
-                    "endpointing": self._config.endpointing,
-                }
 
-                if self._config.language:
-                    live_config["language"] = self._config.language
+        try:
+            retry_count = 0
+            while not self._closed:
+                try:
+                    live_config = {
+                        "model": self._config.model,
+                        "punctuate": self._config.punctuate,
+                        "smart_format": self._config.smart_format,
+                        "interim_results": self._config.interim_results,
+                        "encoding": "linear16",
+                        "sample_rate": self._sample_rate,
+                        "vad_events": True,
+                        "channels": self._num_channels,
+                        "endpointing": self._config.endpointing,
+                    }
 
-                headers = {"Authorization": f"Token {self._api_key}"}
+                    if self._config.language:
+                        live_config["language"] = self._config.language
 
-                url = (
-                    f"wss://api.deepgram.com/v1/listen?{urlencode(live_config).lower()}"
-                )
-                ws = await self._session.ws_connect(url, headers=headers)
-                retry_count = 0  # connected successfully, reset the retry_count
+                    headers = {"Authorization": f"Token {self._api_key}"}
 
-                await self._run_ws(ws)
-            except Exception as e:
-                # Something went wrong, retry the connection
-                if retry_count >= max_retry:
-                    logging.error(
-                        f"failed to connect to deepgram after {max_retry} tries",
+                    url = (
+                        f"wss://api.deepgram.com/v1/listen?{urlencode(live_config).lower()}"
+                    )
+                    ws = await self._session.ws_connect(url, headers=headers)
+                    retry_count = 0  # connected successfully, reset the retry_count
+
+                    await self._run_ws(ws)
+                except Exception as e:
+                    # Something went wrong, retry the connection
+                    if retry_count >= max_retry:
+                        logging.error(
+                            f"failed to connect to deepgram after {max_retry} tries",
+                            exc_info=e,
+                        )
+                        break
+
+                    retry_delay = min(retry_count * 2, 10)  # max 10s
+                    retry_count += 1  # increment after calculating the delay, the first retry should happen directly
+
+                    logging.warning(
+                        f"deepgram connection failed, retrying in {retry_delay}s",
                         exc_info=e,
                     )
-                    break
+                    await asyncio.sleep(retry_delay)
+        finally:
+            self._event_queue.put_nowait(None)
 
-                retry_delay = min(retry_count * 2, 10)  # max 10s
-                retry_count += 1  # increment after calculating the delay, the first retry should happen directly
-
-                logging.warning(
-                    f"deepgram connection failed, retrying in {retry_delay}s",
-                    exc_info=e,
-                )
-                await asyncio.sleep(retry_delay)
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """
@@ -254,7 +259,7 @@ class SpeechStream(stt.SpeechStream):
             # forward inputs to deepgram
             # if we receive a close message, signal it to deepgram and break.
             # the recv task will then make sure to process the remaining audio and stop
-            while not self._queue.empty():
+            while True:
                 data = await self._queue.get()
                 self._queue.task_done()
 
@@ -373,11 +378,13 @@ class SpeechStream(stt.SpeechStream):
         logging.warning("received unexpected message from deepgram %s", data)
 
     async def __anext__(self) -> stt.SpeechEvent:
-        if self._closed and self._event_queue.empty() and self._main_task.done():
+        evt = await self._event_queue.get()
+        if evt is None:
             raise StopAsyncIteration
 
-        return await self._event_queue.get()
+        return evt
 
+        
 
 def live_transcription_to_speech_data(
     language: str,

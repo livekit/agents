@@ -81,8 +81,8 @@ class VADStream(agents.vad.VADStream):
         if sample_rate not in [8000, 16000]:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
 
-        self._queue = asyncio.Queue[rtc.AudioFrame]()
-        self._event_queue = asyncio.Queue[agents.vad.VADEvent]()
+        self._queue = asyncio.Queue[rtc.AudioFrame | None]()
+        self._event_queue = asyncio.Queue[agents.vad.VADEvent | None]()
         self._model = model
 
         self._closed = False
@@ -117,32 +117,39 @@ class VADStream(agents.vad.VADStream):
         if not wait:
             self._main_task.cancel()
 
+        self._queue.put_nowait(None)
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
 
     async def _run(self):
-        while not self._queue.empty():
-            frame = await self._queue.get()
-            self._queue.task_done()
-
-            # resample to silero's sample rate
-            resampled_frame = frame.remix_and_resample(
-                self._sample_rate, 1
-            )  # TODO: This is technically wrong, fix when we have a better resampler
-            self._original_frames.append(frame)
-            self._queued_frames.append(resampled_frame)
-
-            # run inference by chunks of 40ms until we run out of data
+        try:
             while True:
-                available_length = sum(
-                    f.samples_per_channel for f in self._queued_frames
-                )
+                frame = await self._queue.get()
+                if frame is None:
+                    break # None is sent inside aclose
 
-                samples_40ms = self._sample_rate // 1000 * 40
-                if available_length < samples_40ms:
-                    break
+                self._queue.task_done()
 
-                await asyncio.shield(self._run_inference())
+                # resample to silero's sample rate
+                resampled_frame = frame.remix_and_resample(
+                    self._sample_rate, 1
+                )  # TODO: This is technically wrong, fix when we have a better resampler
+                self._original_frames.append(frame)
+                self._queued_frames.append(resampled_frame)
+
+                # run inference by chunks of 40ms until we run out of data
+                while True:
+                    available_length = sum(
+                        f.samples_per_channel for f in self._queued_frames
+                    )
+
+                    samples_40ms = self._sample_rate // 1000 * 40
+                    if available_length < samples_40ms:
+                        break
+
+                    await asyncio.shield(self._run_inference())
+        finally:
+            self._event_queue.put_nowait(None)
 
     async def _run_inference(self) -> None:
         # merge the first 4 frames (we know each is 10ms)
@@ -262,7 +269,8 @@ class VADStream(agents.vad.VADStream):
                 self._event_queue.put_nowait(event)
 
     async def __anext__(self) -> agents.vad.VADEvent:
-        if self._closed and self._event_queue.empty() and self._main_task.done():
+        evt = await self._event_queue.get()
+        if evt is None:
             raise StopAsyncIteration
 
-        return await self._event_queue.get()
+        return evt
