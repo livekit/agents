@@ -78,9 +78,7 @@ async def test_stream():
                 text = event.alternatives[0].text
                 assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.8
 
-                # We only wait for one final transcript on this test
-                # so OK to close right now
-                await stream.aclose(wait=False)
+                await stream.aclose()
                 break
 
     async with asyncio.TaskGroup() as group:
