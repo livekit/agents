@@ -149,11 +149,10 @@ class SpeechStream(stt.SpeechStream):
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._api_key = api_key
-        self._lock = asyncio.Lock()
 
         self._session = aiohttp.ClientSession()
         self._queue = asyncio.Queue()
-        self._event_queue = asyncio.Queue[stt.SpeechEvent | None]()
+        self._event_queue = asyncio.Queue()
         self._closed = False
         self._main_task = asyncio.create_task(self._run(max_retry))
 

@@ -25,8 +25,7 @@ def read_wav_file(filename: str) -> rtc.AudioFrame:
 
 
 async def test_recognize():
-    # stts = [deepgram.STT(), google.STT(), openai.STT()]
-    stts = [deepgram.STT()]
+    stts = [deepgram.STT(), google.STT(), openai.STT()]
     frame = read_wav_file(TEST_AUDIO_FILEPATH)
 
     async def recognize(stt: agents.stt.STT):
@@ -44,7 +43,7 @@ async def test_stream():
     silero_vad = silero.VAD()
     stts = [
         deepgram.STT(),
-        # google.STT(),
+        google.STT(),
         agents.stt.StreamAdapter(openai.STT(), silero_vad.stream()),
     ]
     frame = read_wav_file(TEST_AUDIO_FILEPATH)
