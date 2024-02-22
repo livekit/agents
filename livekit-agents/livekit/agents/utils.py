@@ -54,7 +54,8 @@ class Mp3Chunker:
     def push_chunk(self, chunk: bytes | bytearray | None):
         """Push a new bytes chunk (i.e. from a network response) to the chunker. When you want to close the chunker and
         make sure all chunks are processed, call with None. No additional chunks can be pushed after None is pushed
-        and the chunker will raise StopAsyncIteration after all chunks are processed.
+        and the chunker will raise StopAsyncIteration after all chunks are processed. The first chunk pushed must
+        start with an mp3 header.
 
         Args:
             chunk (bytes | bytearray | None)
@@ -84,23 +85,23 @@ class Mp3Chunker:
         # In this chunk, we found at least one mp3 headers
         if first_header_index > 0:
             # Add everything before the first header to the working bytes
-            working_bytes += chunk[:first_header_index]
+            self.working_bytes += chunk[:first_header_index]
 
             # If we have a full mp3 chunk in the http chunk we take the working bytes
             # which always start with a header and add it to the decode chunks
             if last_header_index > first_header_index:
                 self.decode_chunks.put_nowait(
-                    working_bytes
+                    self.working_bytes
                     + chunk[first_header_index:last_header_index]
                 )
                 # Whatever is left in the chunk is set to the working bytes
-                working_bytes = chunk[last_header_index:]
+                self.working_bytes = chunk[last_header_index:]
             # Otherwise this is an incomplete mp3 chunk so we add it to the working bytes
             else:
-                working_bytes = chunk[first_header_index:]
+                self.working_bytes = chunk[first_header_index:]
         # If the http chunk had no mp3 headers, we just add it to the working bytes
         else:
-            working_bytes += chunk
+            self.working_bytes += chunk
 
     def __aiter__(self):
         return self
