@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from livekit import rtc
-from typing import Optional, List
+from typing import List
 from dataclasses import dataclass, field
 from ..utils import AudioBuffer
 from enum import Enum

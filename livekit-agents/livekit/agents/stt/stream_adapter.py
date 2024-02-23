@@ -11,7 +11,6 @@ from .stt import (
 )
 from livekit import rtc
 from livekit.agents import stt
-from livekit.agents.utils import AudioBuffer, merge_frames
 
 
 class StreamAdapter(STT):

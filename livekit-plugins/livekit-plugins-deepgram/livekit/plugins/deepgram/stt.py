@@ -10,7 +10,6 @@ import os
 from urllib.parse import urlencode
 import wave
 from contextlib import suppress
-from urllib.parse import urlencode
 from dataclasses import dataclass
 
 import aiohttp
@@ -250,7 +249,7 @@ class SpeechStream(stt.SpeechStream):
                 while True:
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
                     await asyncio.sleep(5)
-            except Exception as e:
+            except Exception:
                 pass
 
         async def send_task():
