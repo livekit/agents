@@ -210,9 +210,7 @@ class SpeechStream(stt.SpeechStream):
 
                     headers = {"Authorization": f"Token {self._api_key}"}
 
-                    url = (
-                        f"wss://api.deepgram.com/v1/listen?{urlencode(live_config).lower()}"
-                    )
+                    url = f"wss://api.deepgram.com/v1/listen?{urlencode(live_config).lower()}"
                     ws = await self._session.ws_connect(url, headers=headers)
                     retry_count = 0  # connected successfully, reset the retry_count
 
@@ -237,7 +235,6 @@ class SpeechStream(stt.SpeechStream):
         finally:
             self._event_queue.put_nowait(None)
 
-
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """
         This method can throw ws errors, these are handled inside the _run method
@@ -254,7 +251,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
                     await asyncio.sleep(5)
             except Exception as e:
-                    pass
+                pass
 
         async def send_task():
             nonlocal closing_ws
@@ -386,7 +383,6 @@ class SpeechStream(stt.SpeechStream):
 
         return evt
 
-        
 
 def live_transcription_to_speech_data(
     language: str,

@@ -87,7 +87,6 @@ class StreamAdapterWrapper(SpeechStream):
         finally:
             self._event_queue.put_nowait(None)
 
-
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
             raise ValueError("cannot push frame to closed stream")

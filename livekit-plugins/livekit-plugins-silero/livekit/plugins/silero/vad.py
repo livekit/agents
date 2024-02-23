@@ -126,7 +126,7 @@ class VADStream(agents.vad.VADStream):
             while True:
                 frame = await self._queue.get()
                 if frame is None:
-                    break # None is sent inside aclose
+                    break  # None is sent inside aclose
 
                 self._queue.task_done()
 
