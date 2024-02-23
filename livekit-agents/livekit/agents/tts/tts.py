@@ -39,6 +39,13 @@ class SynthesizeStream(ABC):
         """
         pass
 
+    def mark_segment_end(self) -> None:
+        """
+        Mark the end of the current segment, this is equivalent to calling
+        push_text(None)
+        """
+        self.push_text(None)
+
     @abstractmethod
     async def aclose(self, wait: bool = True) -> None:
         """
