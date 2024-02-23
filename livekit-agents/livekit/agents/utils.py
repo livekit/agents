@@ -92,8 +92,7 @@ class Mp3Chunker:
             # which always start with a header and add it to the decode chunks
             if last_header_index > first_header_index:
                 self.decode_chunks.put_nowait(
-                    self.working_bytes
-                    + chunk[first_header_index:last_header_index]
+                    self.working_bytes + chunk[first_header_index:last_header_index]
                 )
                 # Whatever is left in the chunk is set to the working bytes
                 self.working_bytes = chunk[last_header_index:]

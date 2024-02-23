@@ -297,7 +297,6 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_queue.put_nowait(start_event)
 
-            
             if (
                 resp.speech_event_type
                 == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
@@ -335,8 +334,12 @@ class SpeechStream(stt.SpeechStream):
                             alternatives=[
                                 stt.SpeechData(
                                     language=result.language_code,
-                                    start_time=self._final_events[0].alternatives[0].start_time,
-                                    end_time=self._final_events[-1].alternatives[0].end_time,
+                                    start_time=self._final_events[0]
+                                    .alternatives[0]
+                                    .start_time,
+                                    end_time=self._final_events[-1]
+                                    .alternatives[0]
+                                    .end_time,
                                     confidence=confidence,
                                     text=sentence,
                                 )
