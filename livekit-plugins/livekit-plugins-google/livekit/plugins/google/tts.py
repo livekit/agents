@@ -49,7 +49,7 @@ class TTS(tts.TTS):
         credentials_info: Optional[dict] = None,
         credentials_file: Optional[str] = None,
     ) -> None:
-        super().__init__(streaming_supported=True)
+        super().__init__(streaming_supported=False)
 
         if credentials_info:
             self._client = (
