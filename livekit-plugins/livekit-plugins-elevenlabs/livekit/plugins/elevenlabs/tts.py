@@ -144,6 +144,9 @@ class TTS(tts.TTS):
     ) -> tts.SynthesizeStream:
         return SynthesizeStream(self._session, self._config)
 
+    async def close(self):
+        await self._session.close()
+
 
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
