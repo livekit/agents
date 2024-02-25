@@ -103,7 +103,7 @@ python my_agent.py start
 To ease the process of building and testing an agent, we've developed a versatile web frontend called "playground". You can use or modify this app to suit your specific requirements. It can also serve as a starting point for a completely custom agent application.
 
 - [Hosted playground](https://agents-playground.livekit.io)
-- [Source code](/livekit/agents-playground)
+- [Source code](https://github.com/livekit/agents-playground)
 - [Playground docs](https://docs.livekit.io/agents/playground)
 
 ### Joining a specific room
