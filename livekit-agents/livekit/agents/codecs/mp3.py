@@ -15,7 +15,7 @@ class Mp3StreamDecoder:
         self._packet_queue = queue.Queue()
         self._output_queue = queue.Queue()
         self._closed = False
-        self._codec = av.CodecContext.create('mp3', 'r')
+        self._codec = av.CodecContext.create('mp3', 'r') # noqa
         self._packet_parse_thread = threading.Thread(target=self._packet_parse_thread)
         self._packet_parse_thread.start()
         self._decode_thread = threading.Thread(target=self._decode_thread)
@@ -55,7 +55,7 @@ class Mp3StreamDecoder:
                 # flush case
                 if packet is None:
                     print("creating new codec")
-                    self._codec = av.CodecContext.create('mp3', 'r')
+                    self._codec = av.CodecContext.create('mp3', 'r') # noqa
                     continue
                 print(decoded)
                 plane = decoded[0].planes[0]
