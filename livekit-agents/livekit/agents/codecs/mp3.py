@@ -72,11 +72,10 @@ class Mp3StreamDecoder:
         return self
 
     async def __anext__(self):
+        def get_decoded_packet():
+            return self._output_queue.get()
         while True:
-            try:
-                packet = self._output_queue.get_nowait()
-                if packet is None:
-                    raise StopAsyncIteration
-                return packet
-            except queue.Empty:
-                await asyncio.sleep(0.01)
+            packet = asyncio.to_thread(get_decoded_packet)
+            if packet is None:
+                raise StopAsyncIteration
+            return packet
