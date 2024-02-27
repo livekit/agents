@@ -1,6 +1,7 @@
-from importlib import import_module
 import asyncio
 import ctypes
+import logging
+from importlib import import_module
 
 
 class Mp3StreamDecoder:
@@ -33,22 +34,31 @@ class Mp3StreamDecoder:
 
     async def _run(self):
         while True:
-            input = self._input_queue.get()
+            input = await self._input_queue.get()
             if input is None:
                 break
 
             result = await asyncio.to_thread(self._decode_input, input)
+            # If error decoding, skip it
+            if result is None:
+                continue
             self._output_queue.put_nowait(result)
 
     def _decode_input(self, input: bytes):
         packets = self._codec.parse(input)
         for packet in packets:
-            decoded = self._codec.decode(packet)
-            plane = decoded[0].planes[0]
-            ptr = plane.buffer_ptr
-            size = plane.buffer_size
-            byte_array_pointer = ctypes.cast(ptr, ctypes.POINTER(ctypes.c_char * size))
-            return bytes(byte_array_pointer.contents)
+            try:
+                decoded = self._codec.decode(packet)
+                plane = decoded[0].planes[0]
+                ptr = plane.buffer_ptr
+                size = plane.buffer_size
+                byte_array_pointer = ctypes.cast(
+                    ptr, ctypes.POINTER(ctypes.c_char * size)
+                )
+                return bytes(byte_array_pointer.contents)
+            except Exception as e:
+                logging.error(f"Error decoding chunk: {e}")
+                return None
 
     def __aiter__(self):
         return self
