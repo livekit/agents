@@ -36,6 +36,7 @@ class Mp3StreamDecoder:
         while True:
             input = await self._input_queue.get()
             if input is None:
+                self._output_queue.put_nowait(None)
                 break
 
             result = await asyncio.to_thread(self._decode_input, input)
