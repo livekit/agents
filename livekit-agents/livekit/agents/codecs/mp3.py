@@ -47,6 +47,7 @@ class Mp3StreamDecoder:
 
     def _decode_input(self, input: bytes):
         packets = self._codec.parse(input)
+        result = b""
         for packet in packets:
             try:
                 decoded = self._codec.decode(packet)
@@ -56,10 +57,12 @@ class Mp3StreamDecoder:
                 byte_array_pointer = ctypes.cast(
                     ptr, ctypes.POINTER(ctypes.c_char * size)
                 )
-                return bytes(byte_array_pointer.contents)
+                result += bytes(byte_array_pointer.contents)
             except Exception as e:
                 logging.error(f"Error decoding chunk: {e}")
-                return None
+                continue
+
+        return result
 
     def __aiter__(self):
         return self
