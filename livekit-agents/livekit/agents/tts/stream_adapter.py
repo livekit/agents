@@ -1,13 +1,15 @@
-import logging
 import asyncio
+import logging
+from typing import AsyncIterable
+
+from ..tokenize import SentenceStream, SentenceTokenizer
 from .tts import (
     TTS,
-    SynthesizeStream,
     SynthesisEvent,
     SynthesisEventType,
     SynthesizedAudio,
+    SynthesizeStream,
 )
-from ..tokenize import SentenceTokenizer, SentenceStream
 
 
 class StreamAdapterWrapper(SynthesizeStream):
@@ -66,7 +68,7 @@ class StreamAdapter(TTS):
         self._tts = tts
         self._tokenizer = tokenizer
 
-    async def synthesize(self, *, text: str) -> SynthesizedAudio:
+    async def synthesize(self, *, text: str) -> AsyncIterable[SynthesizedAudio]:
         return await self._tts.synthesize(text=text)
 
     def stream(self) -> SynthesizeStream:
