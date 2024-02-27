@@ -68,8 +68,8 @@ class StreamAdapter(TTS):
         self._tts = tts
         self._tokenizer = tokenizer
 
-    async def synthesize(self, *, text: str) -> AsyncIterable[SynthesizedAudio]:
-        return await self._tts.synthesize(text=text)
+    def synthesize(self, *, text: str) -> AsyncIterable[SynthesizedAudio]:
+        return self._tts.synthesize(text=text)
 
     def stream(self) -> SynthesizeStream:
         return StreamAdapterWrapper(self._tts, self._tokenizer.stream())
