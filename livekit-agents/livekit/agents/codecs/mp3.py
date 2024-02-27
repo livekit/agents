@@ -2,20 +2,24 @@ from importlib import import_module
 import asyncio
 import ctypes
 
+
 class Mp3StreamDecoder:
     """A class that can be used to stream arbitrary MP3 data (i.e. from an HTTP chunk) and decode it into PCM audio.
     This class is meant to be ephemeral. When you're done sending data, call close() to flush
     the decoder and create a new instance of this class if you need to decode more data.
     """
+
     def __init__(self):
         try:
             globals()["av"] = import_module("av")
         except ImportError:
-            raise ImportError("You haven't included the decoder_utils optional dependencies. Please install the decoder_utils extra by running `pip install livekit-agents[decoder_utils]`")
+            raise ImportError(
+                "You haven't included the decoder_utils optional dependencies. Please install the decoder_utils extra by running `pip install livekit-agents[decoder_utils]`"
+            )
         self._closed = False
         self._input_queue = asyncio.Queue()
         self._output_queue = asyncio.Queue()
-        self._codec = av.CodecContext.create('mp3', 'r') # noqa
+        self._codec = av.CodecContext.create("mp3", "r")  # noqa
         self._run_task = asyncio.create_task(self._run())
 
     def close(self):
