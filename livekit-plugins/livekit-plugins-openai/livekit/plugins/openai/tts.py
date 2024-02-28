@@ -63,9 +63,7 @@ class TTS(tts.TTS):
                     "response_format": "mp3",
                 },
             ) as resp:
-                mres = b""
                 async for data in resp.content.iter_chunked(4096):
-                    mres += data
                     decoder.push_chunk(data)
 
                 decoder.close()
@@ -73,11 +71,14 @@ class TTS(tts.TTS):
         async def decoder_stream():
             async for data in decoder:
                 results.put_nowait(
-                    rtc.AudioFrame(
-                        data=data,
-                        sample_rate=OPENAI_TTS_SAMPLE_RATE,
-                        num_channels=OPENAI_TTS_CHANNELS,
-                        samples_per_channel=len(data) // 2,
+                    tts.SynthesizedAudio(
+                        text=text,
+                        data=rtc.AudioFrame(
+                            data=data,
+                            sample_rate=OPENAI_TTS_SAMPLE_RATE,
+                            num_channels=OPENAI_TTS_CHANNELS,
+                            samples_per_channel=len(data) // 2,
+                        ),
                     )
                 )
             results.close()
