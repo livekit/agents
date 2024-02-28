@@ -389,6 +389,13 @@ def run_app(worker: Worker) -> None:
         ),
         help="Set the logging level",
     )
+    def cli(log_level: str, url: str, api_key: str, api_secret: str) -> None:
+        logging.basicConfig(level=log_level)
+        worker._set_url(url)
+        worker._api_key = api_key
+        worker._api_secret = api_secret
+
+    @cli.command(help="Start the worker")
     @click.option(
         "--url",
         required=True,
@@ -408,19 +415,31 @@ def run_app(worker: Worker) -> None:
         help="LiveKit server or Cloud project's API secret",
         required=True,
     )
-    def cli(log_level: str, url: str, api_key: str, api_secret: str) -> None:
-        logging.basicConfig(level=log_level)
-        worker._set_url(url)
-        worker._api_key = api_key
-        worker._api_secret = api_secret
-
-    @cli.command(help="Start the worker")
     def start() -> None:
         _run_worker(worker)
 
     @cli.command(help="Start a worker and simulate a job, useful for testing")
     @click.option("--room-name", help="The room name", required=True)
     @click.option("--identity", help="The participant identity")
+    @click.option(
+        "--url",
+        required=True,
+        envvar="LIVEKIT_URL",
+        help="LiveKit server or Cloud project WebSocket URL",
+        default="ws://localhost:7880",
+    )
+    @click.option(
+        "--api-key",
+        envvar="LIVEKIT_API_KEY",
+        help="LiveKit server or Cloud project's API key",
+        required=True,
+    )
+    @click.option(
+        "--api-secret",
+        envvar="LIVEKIT_API_SECRET",
+        help="LiveKit server or Cloud project's API secret",
+        required=True,
+    )
     def simulate_job(room_name: str, identity: str) -> None:
         async def _pre_run() -> (
             Tuple[proto_models.Room, Optional[proto_models.ParticipantInfo]]
