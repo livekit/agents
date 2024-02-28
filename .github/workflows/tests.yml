@@ -26,7 +26,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: install packages
         run: |
-          pip3 install pytest pytest-asyncio ./livekit-agents
+          pip3 install pytest pytest-asyncio './livekit-agents[codecs]'
           for dir in livekit-plugins/*; do
             pip3 install $dir
           done
