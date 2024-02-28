@@ -53,6 +53,7 @@ setuptools.setup(
         "livekit >= 0.9.0",
         "livekit-agents >= 0.4.0",
         "torch >= 2, < 3",
+        "torchaudio >= 2",
         "numpy >= 1, < 2",
     ],
     package_data={"livekit.plugins.silero": ["files/silero_vad.jit"]},

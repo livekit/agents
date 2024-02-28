@@ -51,13 +51,14 @@ class Mp3StreamDecoder:
         for packet in packets:
             try:
                 decoded = self._codec.decode(packet)
-                plane = decoded[0].planes[0]
-                ptr = plane.buffer_ptr
-                size = plane.buffer_size
-                byte_array_pointer = ctypes.cast(
-                    ptr, ctypes.POINTER(ctypes.c_char * size)
-                )
-                result += bytes(byte_array_pointer.contents)
+                for frame in decoded:
+                    plane = frame.planes[0]
+                    ptr = plane.buffer_ptr
+                    size = plane.buffer_size
+                    byte_array_pointer = ctypes.cast(
+                        ptr, ctypes.POINTER(ctypes.c_char * size)
+                    )
+                    result += bytes(byte_array_pointer.contents)
             except Exception as e:
                 logging.error(f"Error decoding chunk: {e}")
                 continue
