@@ -74,6 +74,7 @@ The following plugins are available today:
 | [livekit-plugins-google](https://pypi.org/project/livekit-plugins-google/)         | STT                             |
 | [livekit-plugins-nltk](https://pypi.org/project/livekit-plugins-nltk/)             | Utilities for working with text |
 | [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-openai/)         | Dalle 3, STT, TTS               |
+| [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-groq/)           | LLM                             |
 | [livekit-plugins-silero](https://pypi.org/project/livekit-plugins-silero/)         | VAD                             |
 
 ## Concepts
