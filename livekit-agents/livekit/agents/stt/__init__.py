@@ -1,4 +1,5 @@
 from .stt import (
+    SpeechEventType,
     SpeechEvent,
     SpeechData,
     SpeechStream,
@@ -7,6 +8,7 @@ from .stt import (
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 
 __all__ = [
+    "SpeechEventType",
     "SpeechEvent",
     "SpeechData",
     "SpeechStream",
