@@ -51,10 +51,8 @@ setuptools.setup(
     install_requires=[
         "livekit >= 0.9.0",
         "livekit-agents >= 0.3.0",
-        "torch >= 2, < 3",
-        "torchaudio >= 2, < 3",
         "numpy >= 1.24.0",
-        "openai ~= 1.7.2",
+        "openai >= 1.0.0",
         "audioread >= 3, < 4",
         "opencv-python >= 4, < 5",
         "requests >= 2, < 3",

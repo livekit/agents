@@ -55,6 +55,9 @@ setuptools.setup(
         "livekit-protocol>=0.3.0",
         "websockets>=12,<13",
     ],
+    extras_require={
+        "codecs": ["pyav>=12.0.2"],
+    },
     package_data={},
     project_urls={
         "Documentation": "https://docs.livekit.io",
