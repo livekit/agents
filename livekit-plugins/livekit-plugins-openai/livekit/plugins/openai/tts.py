@@ -81,3 +81,5 @@ class TTS(tts.TTS):
 
         fetch_task = asyncio.create_task(fetch())
         await fetch_task
+
+        raise StopAsyncIteration

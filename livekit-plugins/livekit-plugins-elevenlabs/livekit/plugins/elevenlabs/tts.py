@@ -129,6 +129,7 @@ class TTS(tts.TTS):
                     samples_per_channel=len(data) // 2,  # 16-bit
                 ),
             )
+            raise StopAsyncIteration
 
     def stream(
         self,
