@@ -18,7 +18,7 @@ from typing import AsyncIterator, Optional
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import codecs, tts, utils
+from livekit.agents import codecs, tts
 
 import openai
 
