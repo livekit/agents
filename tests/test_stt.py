@@ -32,8 +32,7 @@ async def test_recognize():
         event = await stt.recognize(buffer=frame)
         text = event.alternatives[0].text
         assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.9
-        assert event.is_final
-        assert event.end_of_speech
+        assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
 
     async with asyncio.TaskGroup() as group:
         for stt in stts:
@@ -67,17 +66,19 @@ async def test_stream():
         stream = stt.stream()
         for frame in frames:
             stream.push_frame(frame)
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.01)  # one frame is 10ms
 
-        await stream.flush()
+        # STT Should start with a START_OF_SPEECH event
+        start_event = await anext(stream)
+        assert start_event.type == agents.stt.SpeechEventType.START_OF_SPEECH
+
         async for event in stream:
-            if event.is_final:
+            if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
                 text = event.alternatives[0].text
                 assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.8
-                assert event.end_of_speech
-                break
 
-        await stream.aclose()
+                await stream.aclose()
+                break
 
     async with asyncio.TaskGroup() as group:
         for stt in stts:

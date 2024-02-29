@@ -81,8 +81,8 @@ class VADStream(agents.vad.VADStream):
         if sample_rate not in [8000, 16000]:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
 
-        self._queue = asyncio.Queue[rtc.AudioFrame]()
-        self._event_queue = asyncio.Queue[agents.vad.VADEvent]()
+        self._queue = asyncio.Queue[rtc.AudioFrame | None]()
+        self._event_queue = asyncio.Queue[agents.vad.VADEvent | None]()
         self._model = model
 
         self._closed = False
@@ -107,45 +107,49 @@ class VADStream(agents.vad.VADStream):
         self._main_task.add_done_callback(log_exception)
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
+        if self._closed:
+            raise ValueError("cannot push frame to closed stream")
+
         self._queue.put_nowait(frame)
 
-    async def flush(self) -> None:
-        await self._queue.join()
+    async def aclose(self, *, wait: bool = True) -> None:
+        self._closed = True
+        if not wait:
+            self._main_task.cancel()
 
-    async def aclose(self) -> None:
-        self._main_task.cancel()
+        self._queue.put_nowait(None)
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
 
     async def _run(self):
-        while True:
-            try:
-                frame = await self._queue.get()
-            except asyncio.CancelledError:
-                break
-
-            self._queue.task_done()
-
-            # resample to silero's sample rate
-            resampled_frame = frame.remix_and_resample(
-                self._sample_rate, 1
-            )  # TODO: This is technically wrong, fix when we have a better resampler
-            self._original_frames.append(frame)
-            self._queued_frames.append(resampled_frame)
-
-            # run inference by chunks of 40ms until we run out of data
+        try:
             while True:
-                available_length = sum(
-                    f.samples_per_channel for f in self._queued_frames
-                )
+                frame = await self._queue.get()
+                if frame is None:
+                    break  # None is sent inside aclose
 
-                samples_40ms = self._sample_rate // 1000 * 40
-                if available_length < samples_40ms:
-                    break
+                self._queue.task_done()
 
-                await asyncio.shield(self._run_inference())
+                # resample to silero's sample rate
+                resampled_frame = frame.remix_and_resample(
+                    self._sample_rate, 1
+                )  # TODO: This is technically wrong, fix when we have a better resampler
+                self._original_frames.append(frame)
+                self._queued_frames.append(resampled_frame)
 
-        self._closed = True
+                # run inference by chunks of 40ms until we run out of data
+                while True:
+                    available_length = sum(
+                        f.samples_per_channel for f in self._queued_frames
+                    )
+
+                    samples_40ms = self._sample_rate // 1000 * 40
+                    if available_length < samples_40ms:
+                        break
+
+                    await asyncio.shield(self._run_inference())
+        finally:
+            self._event_queue.put_nowait(None)
 
     async def _run_inference(self) -> None:
         # merge the first 4 frames (we know each is 10ms)
@@ -162,8 +166,8 @@ class VADStream(agents.vad.VADStream):
         tensor = tensor.to(torch.float32) / 32768.0
 
         # run inference
-        speech_prob = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: self._model(tensor, self._sample_rate).item()
+        speech_prob = await asyncio.to_thread(
+            lambda: self._model(tensor, self._sample_rate).item()
         )
         self._dispatch_event(speech_prob, original_frames)
         self._current_sample += merged_frame.samples_per_channel
@@ -205,7 +209,7 @@ class VADStream(agents.vad.VADStream):
             ]
 
         if speech_prob >= self._threshold:
-            # speaking, wait for min_speaking_duration to trigger START_SPEAKING
+            # speaking, wait for min_speaking_duration to trigger START_OF_SPEECH
             self._waiting_end = False
             if not self._waiting_start and not self._speaking:
                 self._waiting_start = True
@@ -217,14 +221,14 @@ class VADStream(agents.vad.VADStream):
                 self._waiting_start = False
                 self._speaking = True
                 event = agents.vad.VADEvent(
-                    type=agents.vad.VADEventType.START_SPEAKING,
+                    type=agents.vad.VADEventType.START_OF_SPEECH,
                     samples_index=self._start_speech,
                 )
                 self._event_queue.put_nowait(event)
 
-                # since we're waiting for the min_spaking_duration to trigger START_SPEAKING,
+                # since we're waiting for the min_spaking_duration to trigger START_OF_SPEECH,
                 # the SPEAKING data is missing the first few frames, trigger it here
-                # TODO(theomonnom): Maybe it is better to put the data inside the START_SPEAKING event?
+                # TODO(theomonnom): Maybe it is better to put the data inside the START_OF_SPEECH event?
                 event = agents.vad.VADEvent(
                     type=agents.vad.VADEventType.SPEAKING,
                     samples_index=self._start_speech,
@@ -243,7 +247,7 @@ class VADStream(agents.vad.VADStream):
             self._event_queue.put_nowait(event)
 
         if speech_prob < self._threshold:
-            # stopped speaking, wait for min_silence_duration to trigger END_SPEAKING
+            # stopped speaking, wait for min_silence_duration to trigger END_OF_SPEECH,
             self._waiting_start = False
             if not self._waiting_end and self._speaking:
                 self._waiting_end = True
@@ -256,7 +260,7 @@ class VADStream(agents.vad.VADStream):
                 self._waiting_end = False
                 self._speaking = False
                 event = agents.vad.VADEvent(
-                    type=agents.vad.VADEventType.END_SPEAKING,
+                    type=agents.vad.VADEventType.END_OF_SPEECH,
                     samples_index=self._end_speech,
                     duration=(self._current_sample - self._start_speech)
                     / self._sample_rate,
@@ -265,7 +269,8 @@ class VADStream(agents.vad.VADStream):
                 self._event_queue.put_nowait(event)
 
     async def __anext__(self) -> agents.vad.VADEvent:
-        if self._closed and self._event_queue.empty():
+        evt = await self._event_queue.get()
+        if evt is None:
             raise StopAsyncIteration
 
-        return await self._event_queue.get()
+        return evt

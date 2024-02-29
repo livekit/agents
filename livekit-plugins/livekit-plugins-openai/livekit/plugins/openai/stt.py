@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import dataclasses
 import os
 import io
 import wave
-from typing import Optional
 from dataclasses import dataclass
 from livekit import agents
 from livekit.agents.utils import AudioBuffer
@@ -39,7 +40,7 @@ class STT(stt.STT):
         language: str = "en",
         detect_language: bool = False,
         model: WhisperModels = "whisper-1",
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         super().__init__(streaming_supported=False)
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -60,7 +61,7 @@ class STT(stt.STT):
     def _sanitize_options(
         self,
         *,
-        language: Optional[str] = None,
+        language: str | None = None,
     ) -> STTOptions:
         config = dataclasses.replace(self._config)
         config.language = language or config.language
@@ -70,7 +71,7 @@ class STT(stt.STT):
         self,
         *,
         buffer: AudioBuffer,
-        language: Optional[str] = None,
+        language: str | None = None,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 
@@ -88,12 +89,11 @@ class STT(stt.STT):
             language=config.language,
             response_format="json",
         )
-        return transcription_to_speech_event(resp)
+        return transcription_to_speech_event(resp, config.language)
 
 
-def transcription_to_speech_event(transcription) -> stt.SpeechEvent:
+def transcription_to_speech_event(transcription, language) -> stt.SpeechEvent:
     return stt.SpeechEvent(
-        is_final=True,
-        end_of_speech=True,
-        alternatives=[stt.SpeechData(text=transcription.text, language="")],
+        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+        alternatives=[stt.SpeechData(text=transcription.text, language=language)],
     )
