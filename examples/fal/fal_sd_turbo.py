@@ -198,7 +198,7 @@ class SDTurboHighFPSStream:
             FAL_URL, headers={"Authorization": f"Key {creds}"}
         )
 
-    async def __anext__(self) -> rtc.ArgbFrame:
+    async def __anext__(self) -> rtc.VideoFrame:
         if self._closed and self._output_queue.empty():
             raise StopAsyncIteration
 
