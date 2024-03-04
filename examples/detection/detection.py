@@ -135,7 +135,7 @@ class Detection:
             current_time = time.time()
             if (current_time - last_processed_time) >= frame_interval:
                 last_processed_time = current_time
-                self.ctx.create_task(self.detect(frame))
+                self.ctx.create_task(self.detect(frame.frame))
 
             if len(self.latest_results) == 0:
                 self.video_out.capture_frame(frame.frame)
