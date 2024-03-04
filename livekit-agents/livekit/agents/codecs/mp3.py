@@ -16,6 +16,9 @@ import asyncio
 import ctypes
 import logging
 from importlib import import_module
+from typing import List
+
+from livekit import rtc
 
 
 class Mp3StreamDecoder:
@@ -32,8 +35,8 @@ class Mp3StreamDecoder:
                 "You haven't included the decoder_utils optional dependencies. Please install the decoder_utils extra by running `pip install livekit-agents[decoder_utils]`"
             )
         self._closed = False
-        self._input_queue = asyncio.Queue()
-        self._output_queue = asyncio.Queue()
+        self._input_queue = asyncio.Queue[bytes]()
+        self._output_queue = asyncio.Queue[rtc.AudioFrame]()
         self._codec = av.CodecContext.create("mp3", "r")  # noqa
         self._run_task = asyncio.create_task(self._run())
 
@@ -53,31 +56,42 @@ class Mp3StreamDecoder:
                 self._output_queue.put_nowait(None)
                 break
 
-            result = await asyncio.to_thread(self._decode_input, input)
-            # If error decoding, skip it
-            if result is None:
-                continue
-            self._output_queue.put_nowait(result)
+            result_frames = await asyncio.to_thread(self._decode_input, input)
+            for frame in result_frames:
+                await self._output_queue.put(frame)
 
     def _decode_input(self, input: bytes):
         packets = self._codec.parse(input)
-        result = b""
+        result_frames: List[rtc.AudioFrame] = []
         for packet in packets:
             try:
                 decoded = self._codec.decode(packet)
                 for frame in decoded:
+                    channels = frame.layout.channels
+                    if frame.format.is_planar and channels > 1:
+                        logging.warning(
+                            "TODO: planar audio has not yet been considered, reducing to single-channel"
+                        )
+                        channels = 1
                     plane = frame.planes[0]
                     ptr = plane.buffer_ptr
                     size = plane.buffer_size
                     byte_array_pointer = ctypes.cast(
                         ptr, ctypes.POINTER(ctypes.c_char * size)
                     )
-                    result += bytes(byte_array_pointer.contents)
+                    result_frames.append(
+                        rtc.AudioFrame(
+                            data=bytes(byte_array_pointer.contents),
+                            num_channels=channels,
+                            sample_rate=frame.sample_rate,
+                            samples_per_channel=frame.samples,
+                        )
+                    )
             except Exception as e:
                 logging.error(f"Error decoding chunk: {e}")
                 continue
 
-        return result
+        return result_frames
 
     def __aiter__(self):
         return self

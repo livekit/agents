@@ -1,12 +1,32 @@
 import asyncio
 import wave
 import os
+from typing import List
 from livekit import rtc, agents
 from livekit.plugins import deepgram, google, openai, silero
 from difflib import SequenceMatcher
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.wav")
+TEST_AUDIO_FILEPATH_2 = os.path.join(os.path.dirname(__file__), "long-stt-irl-2.wav")
 TEST_AUDIO_TRANSCRIPT = "the people who are crazy enough to think they can change the world are the ones who do"
+
+
+def read_mp3_file(filename: str) -> List[rtc.AudioFrame]:
+    async def decode():
+        mp3 = agents.codecs.Mp3StreamDecoder()
+        with open(filename, "rb") as file:
+            for chunk in iter(lambda: file.read(4096), b""):
+                mp3.push_chunk(chunk)
+
+        mp3.close()
+
+        frames: List[rtc.AudioFrame] = []
+        async for data in mp3:
+            frames.append(data)
+
+        return agents.utils.merge_frames(frames)
+
+    return asyncio.run(decode())
 
 
 def read_wav_file(filename: str) -> rtc.AudioFrame:
@@ -26,23 +46,24 @@ def read_wav_file(filename: str) -> rtc.AudioFrame:
 
 async def test_recognize():
     stts = [deepgram.STT(), google.STT(), openai.STT()]
-    frame = read_wav_file(TEST_AUDIO_FILEPATH)
+    inputs = [read_wav_file(TEST_AUDIO_FILEPATH), read_mp3_file(TEST_AUDIO_FILEPATH_2)]
 
-    async def recognize(stt: agents.stt.STT):
+    async def recognize(stt: agents.stt.STT, frame: rtc.AudioFrame):
         event = await stt.recognize(buffer=frame)
         text = event.alternatives[0].text
         assert SequenceMatcher(None, text, TEST_AUDIO_TRANSCRIPT).ratio() > 0.9
         assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
 
     async with asyncio.TaskGroup() as group:
-        for stt in stts:
-            group.create_task(recognize(stt))
+        for input in inputs:
+            for stt in stts:
+                group.create_task(recognize(stt, input))
 
 
 async def test_stream():
     silero_vad = silero.VAD()
     stts = [
-        deepgram.STT(),
+        deepgram.STT(min_silence_duration=1000),
         google.STT(),
         agents.stt.StreamAdapter(openai.STT(), silero_vad.stream()),
     ]
