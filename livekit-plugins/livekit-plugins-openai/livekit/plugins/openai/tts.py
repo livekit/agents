@@ -14,11 +14,10 @@
 
 import asyncio
 import os
-from typing import Optional
 from collections.abc import AsyncIterable
+from typing import Optional
 
 import aiohttp
-from livekit import rtc
 from livekit.agents import codecs, tts
 
 import openai

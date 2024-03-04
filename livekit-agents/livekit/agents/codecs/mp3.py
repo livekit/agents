@@ -67,12 +67,12 @@ class Mp3StreamDecoder:
             try:
                 decoded = self._codec.decode(packet)
                 for frame in decoded:
-                    channels = frame.layout.channels
-                    if frame.format.is_planar and channels > 1:
+                    nchannels = len(frame.layout.channels)
+                    if frame.format.is_planar and nchannels > 1:
                         logging.warning(
                             "TODO: planar audio has not yet been considered, reducing to single-channel"
                         )
-                        channels = 1
+                        nchannels = 1
                     plane = frame.planes[0]
                     ptr = plane.buffer_ptr
                     size = plane.buffer_size
@@ -82,7 +82,7 @@ class Mp3StreamDecoder:
                     result_frames.append(
                         rtc.AudioFrame(
                             data=bytes(byte_array_pointer.contents),
-                            num_channels=channels,
+                            num_channels=nchannels,
                             sample_rate=frame.sample_rate,
                             samples_per_channel=frame.samples,
                         )
