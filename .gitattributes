@@ -1,0 +1,2 @@
+tests/long-stt-irl.mp3 filter=lfs diff=lfs merge=lfs -text
+tests/change-sophie.wav filter=lfs diff=lfs merge=lfs -text
