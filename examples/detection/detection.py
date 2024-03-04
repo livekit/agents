@@ -36,7 +36,7 @@ Thanks for giving this a try! Goodbye for now.
 _DETECTION_THRESHOLD = 0.15
 _OUTPUT_HEIGHT = 720
 _OUTPUT_WIDTH = 960
-_ELEVEN_TTS_SAMPLE_RATE = 44100
+_ELEVEN_TTS_SAMPLE_RATE = 24000
 _ELEVEN_TTS_CHANNELS = 1
 
 
@@ -138,7 +138,7 @@ class Detection:
                 self.ctx.create_task(self.detect(frame))
 
             if len(self.latest_results) == 0:
-                self.video_out.capture_frame(frame)
+                self.video_out.capture_frame(frame.frame)
                 continue
 
             argb_frame = frame.frame.convert(rtc.VideoBufferType.RGBA)
