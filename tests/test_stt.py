@@ -7,7 +7,7 @@ from livekit.plugins import deepgram, google, openai, silero
 from difflib import SequenceMatcher
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.wav")
-TEST_AUDIO_FILEPATH_2 = os.path.join(os.path.dirname(__file__), "long-stt-irl-2.wav")
+TEST_AUDIO_FILEPATH_2 = os.path.join(os.path.dirname(__file__), "long-stt-irl-2.mp3")
 TEST_AUDIO_TRANSCRIPT = "the people who are crazy enough to think they can change the world are the ones who do"
 
 
