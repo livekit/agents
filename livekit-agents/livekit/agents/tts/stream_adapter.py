@@ -25,7 +25,7 @@ class StreamAdapterWrapper(SynthesizeStream):
 
         def log_exception(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():
-                logging.error(f"google speech task failed: {task.exception()}")
+                logging.error(f"speech task failed: {task.exception()}")
 
         self._main_task.add_done_callback(log_exception)
 
