@@ -57,7 +57,7 @@ class StreamAdapterWrapper(SynthesizeStream):
     async def aclose(self) -> None:
         self._main_task.cancel()
         try:
-            await self._event_queue.put(None)
+            self._event_queue.put_nowait(None)
             await self._main_task
         except asyncio.CancelledError:
             pass
