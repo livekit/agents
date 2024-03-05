@@ -1,16 +1,14 @@
-from __future__ import annotations
-
 import asyncio
 import dataclasses
-from typing import List
 import io
 import json
 import logging
 import os
-from urllib.parse import urlencode
 import wave
 from contextlib import suppress
 from dataclasses import dataclass
+from typing import List
+from urllib.parse import urlencode
 
 import aiohttp
 from livekit import rtc
@@ -203,7 +201,9 @@ class SpeechStream(stt.SpeechStream):
                         "vad_events": True,
                         "channels": self._num_channels,
                         "endpointing": self._config.endpointing,
-                        "utterance_end_ms": 1000,
+                        "utterance_end_ms": min(
+                            1000, int(self._config.endpointing or 1000)
+                        ),
                     }
 
                     if self._config.language:
