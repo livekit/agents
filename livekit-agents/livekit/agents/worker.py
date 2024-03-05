@@ -389,11 +389,8 @@ def run_app(worker: Worker) -> None:
         ),
         help="Set the logging level",
     )
-    def cli(log_level: str, url: str, api_key: str, api_secret: str) -> None:
+    def cli(log_level: str) -> None:
         logging.basicConfig(level=log_level)
-        worker._set_url(url)
-        worker._api_key = api_key
-        worker._api_secret = api_secret
 
     @cli.command(help="Start the worker")
     @click.option(
@@ -415,7 +412,10 @@ def run_app(worker: Worker) -> None:
         help="LiveKit server or Cloud project's API secret",
         required=True,
     )
-    def start() -> None:
+    def start(url: str, api_key: str, api_secret: str) -> None:
+        worker._set_url(url)
+        worker._api_key = api_key
+        worker._api_secret = api_secret
         _run_worker(worker)
 
     @cli.command(help="Start a worker and simulate a job, useful for testing")
@@ -440,7 +440,13 @@ def run_app(worker: Worker) -> None:
         help="LiveKit server or Cloud project's API secret",
         required=True,
     )
-    def simulate_job(room_name: str, identity: str) -> None:
+    def simulate_job(
+        room_name: str, identity: str, url: str, api_key: str, api_secret: str
+    ) -> None:
+        worker._set_url(url)
+        worker._api_key = api_key
+        worker._api_secret = api_secret
+
         async def _pre_run() -> (
             Tuple[proto_models.Room, Optional[proto_models.ParticipantInfo]]
         ):
