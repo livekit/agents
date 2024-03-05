@@ -1,18 +1,9 @@
 import asyncio
-import wave
 from livekit import agents
 from livekit.plugins import elevenlabs, openai
+from difflib import SequenceMatcher
 
 TEST_AUDIO_SYNTHESIZE = "the people who are crazy enough to think they can change the world are the ones who do"
-
-
-def save_wave_file(filename: str, buffer: agents.utils.AudioBuffer) -> None:
-    frame = agents.utils.merge_frames(buffer)
-    with wave.open(filename, "wb") as file:
-        file.setnchannels(frame.num_channels)
-        file.setsampwidth(2)
-        file.setframerate(frame.sample_rate)
-        file.writeframes(frame.data)
 
 
 async def test_synthetize():
@@ -22,7 +13,14 @@ async def test_synthetize():
         frames = []
         async for frame in tts.synthesize(text=TEST_AUDIO_SYNTHESIZE):
             frames.append(frame.data)
-        save_wave_file(tts.__class__.__module__ + ".wav", frames)
+
+        result = await openai.STT().recognize(buffer=agents.utils.merge_frames(frames))
+        assert (
+            SequenceMatcher(
+                None, result.alternatives[0].text, TEST_AUDIO_SYNTHESIZE
+            ).ratio()
+            > 0.9
+        )
 
     async with asyncio.TaskGroup() as group:
         for tts in ttss:
@@ -60,7 +58,12 @@ async def test_stream():
         assert event.type == agents.tts.SynthesisEventType.AUDIO
         frames.append(event.audio.data)
 
-    audio = agents.utils.merge_frames(frames)
-    save_wave_file("2.wav", audio)
+    result = await openai.STT().recognize(buffer=agents.utils.merge_frames(frames))
+    assert (
+        SequenceMatcher(
+            None, result.alternatives[0].text, TEST_AUDIO_SYNTHESIZE
+        ).ratio()
+        > 0.9
+    )
 
     await stream.aclose()
