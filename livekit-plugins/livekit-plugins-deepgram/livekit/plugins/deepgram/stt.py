@@ -148,6 +148,7 @@ class SpeechStream(stt.SpeechStream):
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._api_key = api_key
+        self._speaking = False
 
         self._session = aiohttp.ClientSession()
         self._queue = asyncio.Queue()
@@ -304,9 +305,14 @@ class SpeechStream(stt.SpeechStream):
         await asyncio.gather(send_task(), recv_task(), keepalive_task())
 
     def _commit_all_final_events(self) -> None:
+        if not self._speaking:
+            logging.warning(
+                "trying to commit final events without being in the speaking state"
+            )
+            return
+
         if len(self._final_events) == 0:
             logging.warning("received end of speech without any final transcription")
-            return
 
         # combine all final transcripts since the start of the speech
         sentence = ""
@@ -318,6 +324,7 @@ class SpeechStream(stt.SpeechStream):
         sentence = sentence.rstrip()
         confidence /= len(self._final_events)  # avg. of confidence
 
+        self._speaking = False
         end_event = stt.SpeechEvent(
             type=stt.SpeechEventType.END_OF_SPEECH,
             alternatives=[
@@ -338,11 +345,15 @@ class SpeechStream(stt.SpeechStream):
 
         # https://developers.deepgram.com/docs/speech-started
         if data["type"] == "SpeechStarted":
+            self._speaking = True
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
             self._event_queue.put_nowait(start_event)
             return
 
-        if data["type"] == "UtteranceEnd":
+        # https://developers.deepgram.com/docs/understanding-end-of-speech-detection#using-utteranceend-and-endpointing
+        # If UtterenceEnd comes before SpeechFinal, we use it to commit the final events
+        # otherwise, we ignore it.
+        if data["type"] == "UtteranceEnd" and self._speaking:
             self._commit_all_final_events()
             return
 
