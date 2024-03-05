@@ -43,7 +43,6 @@ class StreamAdapterWrapper(SynthesizeStream):
                 self._event_queue.put_nowait(
                     SynthesisEvent(type=SynthesisEventType.FINISHED)
                 )
-                self._event_queue.put_nowait(None)
             except asyncio.CancelledError:
                 break
 
