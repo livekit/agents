@@ -18,8 +18,8 @@ speech-to-text, it has some pauses in it, it might have some background noise \
 in it, we'll see"
 
 STTFactoryStream = {
-    # "deepgram": lambda: deepgram.STT(min_silence_duration=100),
-    # "google": google.STT,
+    "deepgram": lambda: deepgram.STT(min_silence_duration=100),
+    "google": google.STT,
     "openai": lambda: agents.stt.StreamAdapter(
         openai.STT(),
         silero.VAD().stream(
@@ -29,9 +29,9 @@ STTFactoryStream = {
 }
 
 STTFactoryRecognize = {
-    # "deepgram": deepgram.STT,
-    # "google": google.STT,
-    # "openai": openai.STT,
+    "deepgram": deepgram.STT,
+    "google": google.STT,
+    "openai": openai.STT,
 }
 
 
