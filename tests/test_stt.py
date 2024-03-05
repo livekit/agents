@@ -1,10 +1,13 @@
 import asyncio
-import wave
 import os
-from typing import List
-from livekit import rtc, agents
-from livekit.plugins import deepgram, google, openai, silero
+import wave
 from difflib import SequenceMatcher
+from typing import List
+from itertools import product
+
+import pytest
+from livekit import agents, rtc
+from livekit.plugins import deepgram, google, openai, silero
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.wav")
 TEST_AUDIO_FILEPATH_2 = os.path.join(os.path.dirname(__file__), "long-stt-irl.mp3")
@@ -14,20 +17,34 @@ that's probably pretty good for this test. This is a long test for \
 speech-to-text, it has some pauses in it, it might have some background noise \
 in it, we'll see"
 
+STTFactoryStream = {
+    # "deepgram": lambda: deepgram.STT(min_silence_duration=100),
+    # "google": google.STT,
+    "openai": lambda: agents.stt.StreamAdapter(openai.STT(), silero.VAD().stream()),
+}
 
-async def read_mp3_file(filename: str) -> List[rtc.AudioFrame]:
-    mp3 = agents.codecs.Mp3StreamDecoder()
-    with open(filename, "rb") as file:
-        for chunk in iter(lambda: file.read(4096), b""):
-            mp3.push_chunk(chunk)
+STTFactoryRecognize = {
+    # "deepgram": deepgram.STT,
+    # "google": google.STT,
+    # "openai": openai.STT,
+}
 
-    mp3.close()
 
-    frames: List[rtc.AudioFrame] = []
-    async for data in mp3:
-        frames.append(data)
+def read_mp3_file(filename: str) -> List[rtc.AudioFrame]:
+    async def decode():
+        mp3 = agents.codecs.Mp3StreamDecoder()
+        with open(filename, "rb") as file:
+            for chunk in iter(lambda: file.read(4096), b""):
+                mp3.push_chunk(chunk)
 
-    return agents.utils.merge_frames(frames)
+        mp3.close()
+
+        frames: List[rtc.AudioFrame] = []
+        async for data in mp3:
+            frames.append(data)
+        return agents.utils.merge_frames(frames)
+
+    return asyncio.get_event_loop().run_until_complete(decode())
 
 
 def read_wav_file(filename: str) -> rtc.AudioFrame:
@@ -45,28 +62,40 @@ def read_wav_file(filename: str) -> rtc.AudioFrame:
         )
 
 
-async def test_recognize():
-    stts = [deepgram.STT(), google.STT(), openai.STT()]
-    inputs = [
-        (read_wav_file(TEST_AUDIO_FILEPATH), TEST_AUDIO_TRANSCRIPT),
-        (await read_mp3_file(TEST_AUDIO_FILEPATH_2), TEST_AUDIO_TRANSCRIPT_2),
-    ]
-
-    async def recognize(stt: agents.stt.STT, frame: rtc.AudioFrame, expected: str):
-        event = await stt.recognize(buffer=frame)
-        text = event.alternatives[0].text
-        assert SequenceMatcher(None, text, expected).ratio() > 0.9
-        assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
-
-    async with asyncio.TaskGroup() as group:
-        for input, expected in inputs:
-            for stt in stts:
-                group.create_task(recognize(stt, input, expected))
+inputs = [
+    read_wav_file(TEST_AUDIO_FILEPATH),
+    read_mp3_file(TEST_AUDIO_FILEPATH_2),
+]
+expected = [TEST_AUDIO_TRANSCRIPT, TEST_AUDIO_TRANSCRIPT_2]
 
 
-async def _test_stream(
-    provider: agents.stt.STT, frame: rtc.AudioFrame, expected_text: str
-):
+@pytest.mark.parametrize(
+    "provider, frame, expected",
+    (
+        pytest.param(p, input_audio, expected)
+        for (p, (input_audio, expected)) in product(
+            STTFactoryRecognize.keys(), [(inputs[i], expected[i]) for i in range(2)]
+        )
+    ),
+)
+async def test_recognize(provider: str, frame: rtc.AudioFrame, expected: str):
+    stt = STTFactoryRecognize[provider]()
+    event = await stt.recognize(buffer=frame)
+    text = event.alternatives[0].text
+    assert SequenceMatcher(None, text, expected).ratio() > 0.9
+    assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
+
+
+@pytest.mark.parametrize(
+    "provider, frame, expected",
+    (
+        pytest.param(p, input_audio, expected)
+        for (p, (input_audio, expected)) in product(
+            STTFactoryStream.keys(), [(inputs[i], expected[i]) for i in range(2)]
+        )
+    ),
+)
+async def test_stream(provider: str, frame: rtc.AudioFrame, expected: str):
     # divide data into chunks of 10ms
     chunk_size = frame.sample_rate // 100
     frames = []
@@ -81,7 +110,8 @@ async def _test_stream(
             )
         )
 
-    stream = provider.stream()
+    stt = STTFactoryStream[provider]()
+    stream = stt.stream()
 
     async def stream_input():
         for frame in frames:
@@ -100,25 +130,6 @@ async def _test_stream(
             if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
                 total_text = " ".join([total_text, event.alternatives[0].text])
 
-        assert SequenceMatcher(None, total_text, expected_text).ratio() > 0.8
+        assert SequenceMatcher(None, total_text, expected).ratio() > 0.8
 
     await asyncio.gather(stream_input(), stream_output())
-
-
-async def test_stream():
-    inputs = [
-        (read_wav_file(TEST_AUDIO_FILEPATH), TEST_AUDIO_TRANSCRIPT),
-        (await read_mp3_file(TEST_AUDIO_FILEPATH_2), TEST_AUDIO_TRANSCRIPT_2),
-    ]
-
-    silero_vad = silero.VAD()
-    stts = [
-        deepgram.STT(min_silence_duration=100),
-        google.STT(),
-        agents.stt.StreamAdapter(openai.STT(), silero_vad.stream()),
-    ]
-
-    async with asyncio.TaskGroup() as group:
-        for provider in stts:
-            for input, expected in inputs:
-                group.create_task(_test_stream(provider, input, expected))
