@@ -201,7 +201,7 @@ class SpeechStream(stt.SpeechStream):
                         "vad_events": True,
                         "channels": self._num_channels,
                         "endpointing": self._config.endpointing,
-                        "utterance_end_ms": min(
+                        "utterance_end_ms": max(
                             1000, int(self._config.endpointing or 1000)
                         ),
                     }
