@@ -22,6 +22,9 @@ from livekit import agents, rtc
 from livekit.plugins.directai import Detector
 from livekit.plugins.elevenlabs import TTS
 from PIL import Image, ImageDraw
+import dotenv
+
+dotenv.load_dotenv()
 
 INTRO_MESSAGE = """
 Hi there! I can help you detect objects in your video stream using Direct AI's real-time object detector.
@@ -141,9 +144,9 @@ class Detection:
                 self.video_out.capture_frame(frame.frame)
                 continue
 
-            argb_frame = frame.frame.convert(rtc.VideoBufferType.RGBA)
+            rgba_frame = frame.frame.convert(rtc.VideoBufferType.RGBA)
             image = Image.frombytes(
-                "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
+                "RGBA", (rgba_frame.width, rgba_frame.height), rgba_frame.data
             )
 
             # Draw red bounding box
@@ -155,19 +158,14 @@ class Detection:
                     width=3,
                 )
 
-            # LiveKit uses ARGB little-endian (so BGRA big-endian)
-            (r, g, b, a) = image.split()
-            # PIL we say "RGBA" because that's what PIL supports. But has no consequence, we store as BGRA
-            argb_image = Image.merge("RGBA", (b, g, r, a))
-
             # LiveKit stores underlying data as little-endian. So we set the BGRA data directly to an ARGB frame
-            argb_frame = rtc.VideoFrame(
-                argb_image.width,
-                argb_image.height,
-                rtc.VideoBufferType.ARGB,
-                argb_image.tobytes(),
+            rgba_frame = rtc.VideoFrame(
+                rgba_frame.width,
+                rgba_frame.height,
+                rtc.VideoBufferType.RGBA,
+                image.tobytes(),
             )
-            self.video_out.capture_frame(argb_frame)
+            self.video_out.capture_frame(rgba_frame)
 
     async def detect(self, frame: rtc.VideoFrame):
         if (not self.detector) or self.detecting:
