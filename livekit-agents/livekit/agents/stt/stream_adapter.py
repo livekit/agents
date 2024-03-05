@@ -83,6 +83,8 @@ class StreamAdapterWrapper(SpeechStream):
                         alternatives=[event.alternatives[0]],
                     )
                     self._event_queue.put_nowait(end_event)
+        except Exception as e:
+            logging.exception(f"stream adapter failed: {e}")
         finally:
             self._event_queue.put_nowait(None)
 

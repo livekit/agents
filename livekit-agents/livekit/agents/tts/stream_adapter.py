@@ -35,8 +35,15 @@ class StreamAdapterWrapper(SynthesizeStream):
                 sentence = await self._sentence_stream.__anext__()
                 audio = await self._tts.synthesize(text=sentence.text)
                 self._event_queue.put_nowait(
+                    SynthesisEvent(type=SynthesisEventType.STARTED)
+                )
+                self._event_queue.put_nowait(
                     SynthesisEvent(type=SynthesisEventType.AUDIO, audio=audio)
                 )
+                self._event_queue.put_nowait(
+                    SynthesisEvent(type=SynthesisEventType.FINISHED)
+                )
+                self._event_queue.put_nowait(None)
             except asyncio.CancelledError:
                 break
 
@@ -51,15 +58,17 @@ class StreamAdapterWrapper(SynthesizeStream):
     async def aclose(self) -> None:
         self._main_task.cancel()
         try:
+            await self._event_queue.put(None)
             await self._main_task
         except asyncio.CancelledError:
             pass
 
     async def __anext__(self) -> SynthesisEvent:
-        if self._closed and self._event_queue.empty():
+        item = await self._event_queue.get()
+        if item is None:
             raise StopAsyncIteration
 
-        return await self._event_queue.get()
+        return item
 
 
 class StreamAdapter(TTS):
