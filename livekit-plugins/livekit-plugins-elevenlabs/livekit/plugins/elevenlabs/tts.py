@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import List, Optional, AsyncIterable
 import aiohttp
 from livekit import rtc
-from livekit.agents import tts, utils
+from livekit.agents import tts
 from .models import TTSModels
 
 
