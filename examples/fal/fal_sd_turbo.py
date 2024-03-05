@@ -184,13 +184,11 @@ class SDTurboHighFPSStream:
             byte_stream = io.BytesIO(output["image"])
             img = Image.open(byte_stream)
             img_rgba = img.convert("RGBA")
-            (r, g, b, a) = img_rgba.split()
-            img_argb = Image.merge("RGBA", (b, g, r, a))
-            argb_frame = rtc.VideoFrame(
-                img.width, img.height, rtc.VideoBufferType.ARGB, img_argb.tobytes()
+            frame = rtc.VideoFrame(
+                img.width, img.height, rtc.VideoBufferType.RGBA, img_rgba.tobytes()
             )
             self._in_flight_requests -= 1
-            await self._output_queue.put(argb_frame)
+            await self._output_queue.put(frame)
 
     async def _get_connected_ws(self):
         creds = f"{self._key_id}:{self._key_secret}"
