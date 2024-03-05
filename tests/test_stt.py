@@ -81,7 +81,6 @@ input = {
 # Google stt performing poorly
 threshold_overrides = {
     ("google", "long"): 0.1,
-    ("google", "short"): 0.1,
 }
 
 
