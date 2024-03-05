@@ -22,9 +22,6 @@ from livekit import agents, rtc
 from livekit.plugins.directai import Detector
 from livekit.plugins.elevenlabs import TTS
 from PIL import Image, ImageDraw
-import dotenv
-
-dotenv.load_dotenv()
 
 INTRO_MESSAGE = """
 Hi there! I can help you detect objects in your video stream using Direct AI's real-time object detector.
