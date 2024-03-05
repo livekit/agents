@@ -202,6 +202,7 @@ class SpeechStream(stt.SpeechStream):
                         "vad_events": True,
                         "channels": self._num_channels,
                         "endpointing": self._config.endpointing,
+                        "utterance_end_ms": 1000,
                     }
 
                     if self._config.language:
@@ -302,6 +303,36 @@ class SpeechStream(stt.SpeechStream):
 
         await asyncio.gather(send_task(), recv_task(), keepalive_task())
 
+    def _commit_all_final_events(self) -> None:
+        if len(self._final_events) == 0:
+            logging.warning("received end of speech without any final transcription")
+            return
+
+        # combine all final transcripts since the start of the speech
+        sentence = ""
+        confidence = 0
+        for alt in self._final_events:
+            sentence += f"{alt.alternatives[0].text.strip()} "
+            confidence += alt.alternatives[0].confidence
+
+        sentence = sentence.rstrip()
+        confidence /= len(self._final_events)  # avg. of confidence
+
+        end_event = stt.SpeechEvent(
+            type=stt.SpeechEventType.END_OF_SPEECH,
+            alternatives=[
+                stt.SpeechData(
+                    language=self._config.language,
+                    start_time=self._final_events[0].alternatives[0].start_time,
+                    end_time=self._final_events[-1].alternatives[0].end_time,
+                    confidence=confidence,
+                    text=sentence,
+                )
+            ],
+        )
+        self._event_queue.put_nowait(end_event)
+        self._final_events = []
+
     def _process_stream_event(self, data: dict) -> None:
         assert self._config.language is not None
 
@@ -309,6 +340,10 @@ class SpeechStream(stt.SpeechStream):
         if data["type"] == "SpeechStarted":
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
             self._event_queue.put_nowait(start_event)
+            return
+
+        if data["type"] == "UtteranceEnd":
+            self._commit_all_final_events()
             return
 
         # see this page:
@@ -337,36 +372,7 @@ class SpeechStream(stt.SpeechStream):
 
             # is_final and speech_final can be True at the same time
             if data["speech_final"]:  # end of speech
-                if len(self._final_events) == 0:
-                    logging.warning(
-                        "received end of speech without any final transcription"
-                    )
-                    return
-
-                # combine all final transcripts since the start of the speech
-                sentence = ""
-                confidence = 0
-                for alt in self._final_events:
-                    sentence += f"{alt.alternatives[0].text.strip()} "
-                    confidence += alt.alternatives[0].confidence
-
-                sentence = sentence.rstrip()
-                confidence /= len(self._final_events)  # avg. of confidence
-
-                end_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.END_OF_SPEECH,
-                    alternatives=[
-                        stt.SpeechData(
-                            language=self._config.language,
-                            start_time=self._final_events[0].alternatives[0].start_time,
-                            end_time=self._final_events[-1].alternatives[0].end_time,
-                            confidence=confidence,
-                            text=sentence,
-                        )
-                    ],
-                )
-                self._event_queue.put_nowait(end_event)
-                self._final_events = []
+                self._commit_all_final_events()
 
             return
 

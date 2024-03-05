@@ -45,24 +45,23 @@ def read_wav_file(filename: str) -> rtc.AudioFrame:
         )
 
 
-# async def test_recognize():
-#     # stts = [deepgram.STT(), google.STT(), openai.STT()]
-#     stts = [deepgram.STT(), openai.STT()]
-#     inputs = [
-#         (read_wav_file(TEST_AUDIO_FILEPATH), TEST_AUDIO_TRANSCRIPT),
-#         (await read_mp3_file(TEST_AUDIO_FILEPATH_2), TEST_AUDIO_TRANSCRIPT_2),
-#     ]
+async def test_recognize():
+    stts = [deepgram.STT(), google.STT(), openai.STT()]
+    inputs = [
+        (read_wav_file(TEST_AUDIO_FILEPATH), TEST_AUDIO_TRANSCRIPT),
+        (await read_mp3_file(TEST_AUDIO_FILEPATH_2), TEST_AUDIO_TRANSCRIPT_2),
+    ]
 
-#     async def recognize(stt: agents.stt.STT, frame: rtc.AudioFrame, expected: str):
-#         event = await stt.recognize(buffer=frame)
-#         text = event.alternatives[0].text
-#         assert SequenceMatcher(None, text, expected).ratio() > 0.9
-#         assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
+    async def recognize(stt: agents.stt.STT, frame: rtc.AudioFrame, expected: str):
+        event = await stt.recognize(buffer=frame)
+        text = event.alternatives[0].text
+        assert SequenceMatcher(None, text, expected).ratio() > 0.9
+        assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
 
-#     async with asyncio.TaskGroup() as group:
-#         for input, expected in inputs:
-#             for stt in stts:
-#                 group.create_task(recognize(stt, input, expected))
+    async with asyncio.TaskGroup() as group:
+        for input, expected in inputs:
+            for stt in stts:
+                group.create_task(recognize(stt, input, expected))
 
 
 async def _test_stream(
@@ -89,20 +88,21 @@ async def _test_stream(
             stream.push_frame(frame)
             await asyncio.sleep(0.01)  # one frame is 10ms
 
-    async def stream(stt: agents.stt.STT):
+        await stream.aclose()
+
+    async def stream_output():
         # STT Should start with a START_OF_SPEECH event
         start_event = await anext(stream)
         assert start_event.type == agents.stt.SpeechEventType.START_OF_SPEECH
 
+        total_text = ""
         async for event in stream:
             if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
-                text = event.alternatives[0].text
-                assert SequenceMatcher(None, text, expected_text).ratio() > 0.8
+                total_text = " ".join([total_text, event.alternatives[0].text])
 
-                await stream.aclose()
-                break
+        assert SequenceMatcher(None, total_text, expected_text).ratio() > 0.8
 
-    await stream(provider)
+    await asyncio.gather(stream_input(), stream_output())
 
 
 async def test_stream():
@@ -113,9 +113,9 @@ async def test_stream():
 
     silero_vad = silero.VAD()
     stts = [
-        deepgram.STT(min_silence_duration=1000),
-        # google.STT(),
-        # agents.stt.StreamAdapter(openai.STT(), silero_vad.stream()),
+        deepgram.STT(min_silence_duration=100),
+        google.STT(),
+        agents.stt.StreamAdapter(openai.STT(), silero_vad.stream()),
     ]
 
     async with asyncio.TaskGroup() as group:
