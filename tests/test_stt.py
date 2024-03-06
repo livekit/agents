@@ -10,12 +10,18 @@ from livekit import agents, rtc
 from livekit.plugins import deepgram, google, openai, silero
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.wav")
-TEST_AUDIO_FILEPATH_2 = os.path.join(os.path.dirname(__file__), "long-stt-irl.mp3")
+TEST_AUDIO_FILEPATH_2 = os.path.join(os.path.dirname(__file__), "long.mp3")
 TEST_AUDIO_TRANSCRIPT = "the people who are crazy enough to think they can change the world are the ones who do"
-TEST_AUDIO_TRANSCRIPT_2 = "My girlfriend is asleep so I can't talk loud, but \
-that's probably pretty good for this test. This is a long test for \
-speech-to-text, it has some pauses in it, it might have some background noise \
-in it, we'll see"
+TEST_AUDIO_TRANSCRIPT_2 = "It could not have been ten seconds, and yet it seemed a long time that their hands were clasped together.\
+He had time to learn every detail of her hand.\
+He explored the long fingers, the shapely nails, the work-hardened palm with its row of callouses, the smooth flesh under the wrist.\
+Merely from feeling it he would have known it by sight.\
+In the same instant it occurred to him that he did not know what colour the girl's eyes were.\
+They were probably brown, but people with dark hair sometimes had blue eyes.\
+To turn his head and look at her would have been inconceivable folly.\
+With hands locked together, invisible among the press of bodies,\
+they stared steadily in front of them, and instead of the eyes of the girl, the eyes of the aged prisoner gazed mournfully at Winston out of nests of hair."
+
 
 STTFactoryStream = {
     "deepgram": lambda: deepgram.STT(min_silence_duration=100),
