@@ -27,7 +27,10 @@ def read_mp3_file(filename: str) -> List[rtc.AudioFrame]:
     frames: List[rtc.AudioFrame] = []
     with open(filename, "rb") as file:
         for chunk in iter(lambda: file.read(4096), b""):
-            frames.extend(mp3.decode_chunk(chunk))
+            try:
+                frames.extend(mp3.decode_chunk(chunk))
+            except Exception as e:
+                print(f"Error decoding chunk: {e}", chunk)
 
     return agents.utils.merge_frames(frames)
 

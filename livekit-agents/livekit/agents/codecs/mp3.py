@@ -39,7 +39,11 @@ class Mp3StreamDecoder:
         packets = self._codec.parse(chunk)
         result: List[rtc.AudioFrame] = []
         for packet in packets:
-            decoded = self._codec.decode(packet)
+            try:
+                decoded = self._codec.decode(packet)
+            except Exception as e:
+                logging.warning(f"Error decoding packet: {e}")
+                continue
             for frame in decoded:
                 nchannels = len(frame.layout.channels)
                 if frame.format.is_planar and nchannels > 1:
