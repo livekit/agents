@@ -18,7 +18,7 @@ from collections.abc import AsyncIterable
 from typing import Optional
 
 import aiohttp
-from livekit.agents import codecs, tts
+from livekit.agents import codecs, tts, utils
 
 import openai
 
@@ -52,23 +52,17 @@ class TTS(tts.TTS):
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         decoder = codecs.Mp3StreamDecoder()
 
-        async def fetch():
-            async with self._session.post(
-                OPENAI_ENPOINT,
-                json={
-                    "input": text,
-                    "model": model,
-                    "voice": voice,
-                    "response_format": "mp3",
-                },
-            ) as resp:
-                async for data in resp.content.iter_chunked(4096):
-                    decoder.push_chunk(data)
-
-                decoder.close()
-
-        fetch_task = asyncio.create_task(fetch())
-        async for data in decoder:
-            yield tts.SynthesizedAudio(text=text, data=data)
-
-        await fetch_task
+        async with self._session.post(
+            OPENAI_ENPOINT,
+            json={
+                "input": text,
+                "model": model,
+                "voice": voice,
+                "response_format": "mp3",
+            },
+        ) as resp:
+            async for data in resp.content.iter_chunked(4096):
+                frames = decoder.decode_chunk(data)
+                frame = utils.merge_frames(frames)
+                yield tts.SynthesizedAudio(text=text, data=frame)
+                decoder.push_chunk(data)
