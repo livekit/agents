@@ -1,7 +1,6 @@
 import asyncio
 import os
 import wave
-from itertools import product
 from typing import List
 
 import pytest
@@ -21,22 +20,6 @@ They were probably brown, but people with dark hair sometimes had blue eyes.\
 To turn his head and look at her would have been inconceivable folly.\
 With hands locked together, invisible among the press of bodies,\
 they stared steadily in front of them, and instead of the eyes of the girl, the eyes of the aged prisoner gazed mournfully at Winston out of nests of hair."
-
-
-STTFactoryStream = {
-    "deepgram": lambda: deepgram.STT(min_silence_duration=100),
-    "google": google.STT,
-    "openai": lambda: agents.stt.StreamAdapter(
-        openai.STT(),
-        silero.VAD().stream(),
-    ),
-}
-
-STTFactoryRecognize = {
-    "deepgram": deepgram.STT,
-    "google": google.STT,
-    "openai": openai.STT,
-}
 
 
 def read_mp3_file(filename: str) -> List[rtc.AudioFrame]:
@@ -82,13 +65,43 @@ input = {
     },
 }
 
+STTFactoryStream = {
+    "deepgram": lambda: deepgram.STT(min_silence_duration=100),
+    "google": google.STT,
+    "openai": lambda: agents.stt.StreamAdapter(
+        openai.STT(),
+        silero.VAD().stream(),
+    ),
+}
+
+STTFactoryRecognize = {
+    "deepgram": deepgram.STT,
+    "google": google.STT,
+    "openai": openai.STT,
+}
+
+cases = {
+    "recognize": [
+        ("deepgram", "short"),
+        ("deepgram", "long"),
+        ("google", "short"),  # skip long test for google because it google cuts it off
+        ("openai", "short"),
+        ("openai", "long"),
+    ],
+    "stream": [
+        ("deepgram", "short"),
+        ("deepgram", "long"),
+        ("google", "short"),
+        ("google", "long"),
+        ("openai", "short"),
+        ("openai", "long"),
+    ],
+}
+
 
 @pytest.mark.parametrize(
     "provider, input_key",
-    (
-        pytest.param(p, i)
-        for (p, i) in product(STTFactoryRecognize.keys(), input.keys())
-    ),
+    (pytest.param(p, i) for (p, i) in cases["recognize"]),
 )
 async def test_recognize(provider: str, input_key: str):
     frame = input[input_key]["audio"]
@@ -102,7 +115,7 @@ async def test_recognize(provider: str, input_key: str):
 
 @pytest.mark.parametrize(
     "provider, input_key",
-    (pytest.param(p, i) for (p, i) in product(STTFactoryStream.keys(), input.keys())),
+    (pytest.param(p, i) for (p, i) in cases["stream"]),
 )
 async def test_stream(provider: str, input_key: str):
     frame = input[input_key]["audio"]
