@@ -37,7 +37,7 @@ class Mp3StreamDecoder:
 
     def decode_chunk(self, chunk: bytes) -> List[rtc.AudioFrame]:
         packets = self._codec.parse(chunk)
-        decoded = self._decode_input(packets)
+        decoded = self._codec.decode(packets)
         result: List[rtc.AudioFrame] = []
         for frame in decoded:
             nchannels = len(frame.layout.channels)
