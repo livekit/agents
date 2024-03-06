@@ -35,13 +35,8 @@ class Mp3StreamDecoder:
                 "You haven't included the decoder_utils optional dependencies. Please install the decoder_utils extra by running `pip install livekit-agents[decoder_utils]`"
             )
         self._closed = False
-        self._input_queue = asyncio.Queue[
-            bytes | None
-        ]()  # None is used to signal the end of input
-
-        self._output_queue = asyncio.Queue[
-            rtc.AudioFrame | None
-        ]()  # None is used to signal the end of output
+        self._input_queue = asyncio.Queue()
+        self._output_queue = asyncio.Queue()
 
         self._codec = av.CodecContext.create("mp3", "r")  # noqa
         self._run_task = asyncio.create_task(self._run())
