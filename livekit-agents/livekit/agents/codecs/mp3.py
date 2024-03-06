@@ -36,8 +36,6 @@ class Mp3StreamDecoder:
         self._codec = av.CodecContext.create("mp3", "r")  # noqa
 
     def decode_chunk(self, chunk: bytes) -> List[rtc.AudioFrame]:
-        if self._closed:
-            raise ValueError("Cannot push chunk to closed decoder")
         packets = self._codec.parse(chunk)
         decoded = self._decode_input(packets)
         result: List[rtc.AudioFrame] = []
