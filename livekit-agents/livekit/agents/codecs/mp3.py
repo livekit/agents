@@ -37,25 +37,28 @@ class Mp3StreamDecoder:
 
     def decode_chunk(self, chunk: bytes) -> List[rtc.AudioFrame]:
         packets = self._codec.parse(chunk)
-        decoded = self._codec.decode(packets)
         result: List[rtc.AudioFrame] = []
-        for frame in decoded:
-            nchannels = len(frame.layout.channels)
-            if frame.format.is_planar and nchannels > 1:
-                logging.warning(
-                    "TODO: planar audio has not yet been considered, skipping frame"
+        for packet in packets:
+            decoded = self._codec.decode(packet)
+            for frame in decoded:
+                nchannels = len(frame.layout.channels)
+                if frame.format.is_planar and nchannels > 1:
+                    logging.warning(
+                        "TODO: planar audio has not yet been considered, skipping frame"
+                    )
+                    continue
+                plane = frame.planes[0]
+                ptr = plane.buffer_ptr
+                size = plane.buffer_size
+                byte_array_pointer = ctypes.cast(
+                    ptr, ctypes.POINTER(ctypes.c_char * size)
                 )
-                continue
-            plane = frame.planes[0]
-            ptr = plane.buffer_ptr
-            size = plane.buffer_size
-            byte_array_pointer = ctypes.cast(ptr, ctypes.POINTER(ctypes.c_char * size))
-            result.append(
-                rtc.AudioFrame(
-                    data=bytes(byte_array_pointer.contents),
-                    num_channels=nchannels,
-                    sample_rate=frame.sample_rate,
-                    samples_per_channel=frame.samples,
+                result.append(
+                    rtc.AudioFrame(
+                        data=bytes(byte_array_pointer.contents),
+                        num_channels=nchannels,
+                        sample_rate=frame.sample_rate,
+                        samples_per_channel=frame.samples,
+                    )
                 )
-            )
         return result
