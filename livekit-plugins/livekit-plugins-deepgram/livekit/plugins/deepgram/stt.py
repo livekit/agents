@@ -343,28 +343,28 @@ class SpeechStream(stt.SpeechStream):
     def _process_stream_event(self, data: dict) -> None:
         assert self._config.language is not None
 
-        # https://developers.deepgram.com/docs/speech-started
         if data["type"] == "SpeechStarted":
+            if self._speaking:
+                logging.warning("received SpeechStarted while already speaking")
+
             self._speaking = True
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
             self._event_queue.put_nowait(start_event)
-            return
-
-        # https://developers.deepgram.com/docs/understanding-end-of-speech-detection#using-utteranceend-and-endpointing
-        # If UtterenceEnd comes before SpeechFinal, we use it to commit the final events
-        # otherwise, we ignore it.
-        if data["type"] == "UtteranceEnd" and self._speaking:
-            self._commit_all_final_events()
-            return
+        elif data["type"] == "UtteranceEnd":
+            # https://developers.deepgram.com/docs/understanding-end-of-speech-detection#using-utteranceend-and-endpointing
+            # If UtterenceEnd comes before SpeechFinal, we use it to commit the final events
+            # otherwise, we ignore it.
+            if self._speaking:
+                self._commit_all_final_events()
 
         # see this page:
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
         # for more information about the different types of events
-        if data["type"] == "Results":
-            alts = data["channel"]["alternatives"]
+        elif data["type"] == "Results":
+            is_final_transcript = data["is_final"]
+            is_endpoint = data["speech_final"]
 
-            if data["is_final"]:
-                # final transcription of a segment
+            if is_final_transcript:
                 alts = live_transcription_to_speech_data(self._config.language, data)
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -373,24 +373,19 @@ class SpeechStream(stt.SpeechStream):
                 self._final_events.append(final_event)
                 self._event_queue.put_nowait(final_event)
             else:
-                # interim transcription
-                alts = live_transcription_to_speech_data(self._config.language, data)  # type: ignore
+                alts = live_transcription_to_speech_data(self._config.language, data)
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=alts,
                 )
                 self._event_queue.put_nowait(interim_event)
 
-            # is_final and speech_final can be True at the same time
-            if data["speech_final"]:  # end of speech
+            if is_endpoint:
                 self._commit_all_final_events()
-
-            return
-
-        if data["type"] == "Metadata":
-            return  # ignore
-
-        logging.warning("received unexpected message from deepgram %s", data)
+        elif data["type"] == "Metadata":
+            pass
+        else:
+            logging.warning("received unexpected message from deepgram %s", data)
 
     async def __anext__(self) -> stt.SpeechEvent:
         evt = await self._event_queue.get()

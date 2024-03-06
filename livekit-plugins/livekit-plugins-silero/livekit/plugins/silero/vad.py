@@ -125,11 +125,10 @@ class VADStream(agents.vad.VADStream):
         try:
             while True:
                 frame = await self._queue.get()
-                self._queue.task_done()
-
                 if frame is None:
-                    await asyncio.shield(self._run_inference(force_end_of_speech=True))
                     break  # None is sent inside aclose
+
+                self._queue.task_done()
 
                 # resample to silero's sample rate
                 resampled_frame = frame.remix_and_resample(
@@ -149,44 +148,12 @@ class VADStream(agents.vad.VADStream):
                         break
 
                     await asyncio.shield(self._run_inference())
-        except Exception as e:
-            logging.exception(f"silero vad failed: {e}")
         finally:
             self._event_queue.put_nowait(None)
 
-    async def _run_inference(self, force_end_of_speech=False) -> None:
-        # If we're forcing the end of speech, we don't need to check the speech_prob,
-        #  we just end it if we're speaking
-        if force_end_of_speech and self._speaking:
-            self._waiting_start = False
-            self._waiting_end = False
-            self._speaking = False
-            speech = self._buffered_frames[:] + list(self._original_frames)
-
-            # keep current_sample up to date
-            if len(self._queued_frames) > 0:
-                merged_frame = agents.utils.merge_frames(list(self._queued_frames))
-                self._current_sample += merged_frame.samples_per_channel
-
-            self._queued_frames.clear()
-            self._original_frames.clear()
-            self._buffered_frames = []
-
-            event = agents.vad.VADEvent(
-                type=agents.vad.VADEventType.END_OF_SPEECH,
-                samples_index=self._current_sample,
-                duration=(self._current_sample + -self._start_speech)
-                / self._sample_rate,
-                speech=speech,
-            )
-
-            self._event_queue.put_nowait(event)
-            return
-
+    async def _run_inference(self) -> None:
         # merge the first 4 frames (we know each is 10ms)
         if len(self._queued_frames) < 4:
-            if force_end_of_speech:
-                pass
             return
 
         original_frames = [self._original_frames.popleft() for _ in range(4)]
@@ -202,15 +169,10 @@ class VADStream(agents.vad.VADStream):
         speech_prob = await asyncio.to_thread(
             lambda: self._model(tensor, self._sample_rate).item()
         )
-
         self._dispatch_event(speech_prob, original_frames)
         self._current_sample += merged_frame.samples_per_channel
 
-    def _dispatch_event(
-        self,
-        speech_prob: int,
-        original_frames: List[rtc.AudioFrame],
-    ):
+    def _dispatch_event(self, speech_prob: int, original_frames: List[rtc.AudioFrame]):
         """
         Dispatches a VAD event based on the speech probability and the options
         Args:

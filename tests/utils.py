@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 
 
@@ -6,11 +7,16 @@ def compare_word_counts(actual: str, expected: str):
 
     lookup = defaultdict(int)
 
-    for word in expected.split():
-        lookup[word] += 1
+    expected_split = re.split(r"\W+", expected)
+    actual_split = re.split(r"\W+", actual)
+    expected_split = [word.strip(" .,?![]()") for word in expected_split if word]
+    actual_split = [word.strip(" .,?![]()") for word in actual_split if word]
 
-    for word in actual.split():
-        lookup[word] -= 1
+    for word in expected_split:
+        lookup[word.lower()] += 1
+
+    for word in actual_split:
+        lookup[word.lower()] -= 1
 
     deviation = 0
     for word in lookup.keys():

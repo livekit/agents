@@ -98,7 +98,7 @@ async def test_recognize(provider: str, input_key: str):
     stt = STTFactoryRecognize[provider]()
     event = await stt.recognize(buffer=frame)
     text = event.alternatives[0].text
-    assert compare_word_counts(text, expected).ratio() > 0.9
+    assert compare_word_counts(text, expected) > 0.9
     assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
 
 
@@ -144,6 +144,6 @@ async def test_stream(provider: str, input_key: str):
             if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
                 total_text = " ".join([total_text, event.alternatives[0].text])
 
-        assert compare_word_counts(total_text, expected).ratio() > 0.8
+        assert compare_word_counts(total_text, expected) > 0.8
 
     await asyncio.gather(stream_input(), stream_output())
