@@ -1,16 +1,14 @@
-from __future__ import annotations
-
 import asyncio
 import dataclasses
-from typing import List
 import io
 import json
 import logging
 import os
-from urllib.parse import urlencode
 import wave
 from contextlib import suppress
 from dataclasses import dataclass
+from typing import List
+from urllib.parse import urlencode
 
 import aiohttp
 from livekit import rtc
@@ -148,6 +146,7 @@ class SpeechStream(stt.SpeechStream):
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._api_key = api_key
+        self._speaking = False
 
         self._session = aiohttp.ClientSession()
         self._queue = asyncio.Queue()
@@ -202,6 +201,9 @@ class SpeechStream(stt.SpeechStream):
                         "vad_events": True,
                         "channels": self._num_channels,
                         "endpointing": self._config.endpointing,
+                        "utterance_end_ms": max(
+                            1000, int(self._config.endpointing or 1000)
+                        ),
                     }
 
                     if self._config.language:
@@ -302,23 +304,67 @@ class SpeechStream(stt.SpeechStream):
 
         await asyncio.gather(send_task(), recv_task(), keepalive_task())
 
+    def _end_speech(self) -> None:
+        if not self._speaking:
+            logging.warning(
+                "trying to commit final events without being in the speaking state"
+            )
+            return
+
+        if len(self._final_events) == 0:
+            logging.warning("received end of speech without any final transcription")
+
+        # combine all final transcripts since the start of the speech
+        sentence = ""
+        confidence = 0
+        for alt in self._final_events:
+            sentence += f"{alt.alternatives[0].text.strip()} "
+            confidence += alt.alternatives[0].confidence
+
+        sentence = sentence.rstrip()
+        confidence /= len(self._final_events)  # avg. of confidence
+
+        self._speaking = False
+        end_event = stt.SpeechEvent(
+            type=stt.SpeechEventType.END_OF_SPEECH,
+            alternatives=[
+                stt.SpeechData(
+                    language=self._config.language,
+                    start_time=self._final_events[0].alternatives[0].start_time,
+                    end_time=self._final_events[-1].alternatives[0].end_time,
+                    confidence=confidence,
+                    text=sentence,
+                )
+            ],
+        )
+        self._event_queue.put_nowait(end_event)
+        self._final_events = []
+
     def _process_stream_event(self, data: dict) -> None:
         assert self._config.language is not None
 
-        # https://developers.deepgram.com/docs/speech-started
         if data["type"] == "SpeechStarted":
+            if self._speaking:
+                logging.warning("received SpeechStarted while already speaking")
+
+            self._speaking = True
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
             self._event_queue.put_nowait(start_event)
-            return
+        elif data["type"] == "UtteranceEnd":
+            # https://developers.deepgram.com/docs/understanding-end-of-speech-detection#using-utteranceend-and-endpointing
+            # If UtterenceEnd comes before SpeechFinal, we use it to commit the final events
+            # otherwise, we ignore it.
+            if self._speaking:
+                self._end_speech()
 
         # see this page:
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
         # for more information about the different types of events
-        if data["type"] == "Results":
-            alts = data["channel"]["alternatives"]
+        elif data["type"] == "Results":
+            is_final_transcript = data["is_final"]
+            is_endpoint = data["speech_final"]
 
-            if data["is_final"]:
-                # final transcription of a segment
+            if is_final_transcript:
                 alts = live_transcription_to_speech_data(self._config.language, data)
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -327,53 +373,19 @@ class SpeechStream(stt.SpeechStream):
                 self._final_events.append(final_event)
                 self._event_queue.put_nowait(final_event)
             else:
-                # interim transcription
-                alts = live_transcription_to_speech_data(self._config.language, data)  # type: ignore
+                alts = live_transcription_to_speech_data(self._config.language, data)
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=alts,
                 )
                 self._event_queue.put_nowait(interim_event)
 
-            # is_final and speech_final can be True at the same time
-            if data["speech_final"]:  # end of speech
-                if len(self._final_events) == 0:
-                    logging.warning(
-                        "received end of speech without any final transcription"
-                    )
-                    return
-
-                # combine all final transcripts since the start of the speech
-                sentence = ""
-                confidence = 0
-                for alt in self._final_events:
-                    sentence += f"{alt.alternatives[0].text.strip()} "
-                    confidence += alt.alternatives[0].confidence
-
-                sentence = sentence.rstrip()
-                confidence /= len(self._final_events)  # avg. of confidence
-
-                end_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.END_OF_SPEECH,
-                    alternatives=[
-                        stt.SpeechData(
-                            language=self._config.language,
-                            start_time=self._final_events[0].alternatives[0].start_time,
-                            end_time=self._final_events[-1].alternatives[0].end_time,
-                            confidence=confidence,
-                            text=sentence,
-                        )
-                    ],
-                )
-                self._event_queue.put_nowait(end_event)
-                self._final_events = []
-
-            return
-
-        if data["type"] == "Metadata":
-            return  # ignore
-
-        logging.warning("received unexpected message from deepgram %s", data)
+            if is_endpoint:
+                self._end_speech()
+        elif data["type"] == "Metadata":
+            pass
+        else:
+            logging.warning("received unexpected message from deepgram %s", data)
 
     async def __anext__(self) -> stt.SpeechEvent:
         evt = await self._event_queue.get()

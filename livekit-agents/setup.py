@@ -56,7 +56,7 @@ setuptools.setup(
         "websockets>=12,<13",
     ],
     extras_require={
-        "codecs": ["pyav>=12.0.2"],
+        "codecs": ["av>=11.0.0"],
     },
     package_data={},
     project_urls={

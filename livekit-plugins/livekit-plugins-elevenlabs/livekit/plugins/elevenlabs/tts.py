@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import List, Optional, AsyncIterable
 import aiohttp
 from livekit import rtc
-from livekit.agents import tts, utils
+from livekit.agents import tts
 from .models import TTSModels
 
 
@@ -101,43 +101,34 @@ class TTS(tts.TTS):
             data = await resp.json()
             return dict_to_voices_list(data)
 
-    def synthesize(
+    async def synthesize(
         self,
         *,
         text: str,
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         voice = self._config.voice
-        results = utils.AsyncIterableQueue()
 
-        async def fetch_task():
-            async with self._session.post(
-                f"{self._config.base_url}/text-to-speech/{voice.id}?output_format=pcm_44100",
-                headers={AUTHORIZATION_HEADER: self._config.api_key},
-                json=dict(
-                    text=text,
-                    model_id=self._config.model_id,
-                    voice_settings=dataclasses.asdict(voice.settings)
-                    if voice.settings
-                    else None,
+        async with self._session.post(
+            f"{self._config.base_url}/text-to-speech/{voice.id}?output_format=pcm_44100",
+            headers={AUTHORIZATION_HEADER: self._config.api_key},
+            json=dict(
+                text=text,
+                model_id=self._config.model_id,
+                voice_settings=dataclasses.asdict(voice.settings)
+                if voice.settings
+                else None,
+            ),
+        ) as resp:
+            data = await resp.read()
+            yield tts.SynthesizedAudio(
+                text=text,
+                data=rtc.AudioFrame(
+                    data=data,
+                    sample_rate=44100,
+                    num_channels=1,
+                    samples_per_channel=len(data) // 2,  # 16-bit
                 ),
-            ) as resp:
-                data = await resp.read()
-                results.put_nowait(
-                    tts.SynthesizedAudio(
-                        text=text,
-                        data=rtc.AudioFrame(
-                            data=data,
-                            sample_rate=44100,
-                            num_channels=1,
-                            samples_per_channel=len(data) // 2,  # 16-bit
-                        ),
-                    )
-                )
-                results.close()
-
-        asyncio.ensure_future(fetch_task())
-
-        return results
+            )
 
     def stream(
         self,

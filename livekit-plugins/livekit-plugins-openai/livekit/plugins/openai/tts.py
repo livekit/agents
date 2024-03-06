@@ -14,11 +14,11 @@
 
 import asyncio
 import os
-from typing import AsyncIterable, Optional
+from collections.abc import AsyncIterable
+from typing import Optional
 
 import aiohttp
-from livekit import rtc
-from livekit.agents import codecs, tts, utils
+from livekit.agents import codecs, tts
 
 import openai
 
@@ -47,11 +47,10 @@ class TTS(tts.TTS):
         )
         self._client = openai.AsyncOpenAI(api_key=api_key)
 
-    def synthesize(
+    async def synthesize(
         self, text: str, model: TTSModels = "tts-1", voice: TTSVoices = "alloy"
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         decoder = codecs.Mp3StreamDecoder()
-        results = utils.AsyncIterableQueue()
 
         async def fetch():
             async with self._session.post(
@@ -68,22 +67,8 @@ class TTS(tts.TTS):
 
                 decoder.close()
 
-        async def decoder_stream():
-            async for data in decoder:
-                results.put_nowait(
-                    tts.SynthesizedAudio(
-                        text=text,
-                        data=rtc.AudioFrame(
-                            data=data,
-                            sample_rate=OPENAI_TTS_SAMPLE_RATE,
-                            num_channels=OPENAI_TTS_CHANNELS,
-                            samples_per_channel=len(data) // 2,
-                        ),
-                    )
-                )
-            results.close()
+        fetch_task = asyncio.create_task(fetch())
+        async for data in decoder:
+            yield tts.SynthesizedAudio(text=text, data=data)
 
-        asyncio.ensure_future(fetch())
-        asyncio.ensure_future(decoder_stream())
-
-        return results
+        await fetch_task

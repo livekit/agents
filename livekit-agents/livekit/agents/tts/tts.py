@@ -4,10 +4,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from livekit import rtc
 from dataclasses import dataclass
-from enum import Enum
-from typing import AsyncIterable, Optional
-
-from livekit import rtc
+from typing import AsyncIterable
 
 
 @dataclass
@@ -71,7 +68,7 @@ class TTS(ABC):
         self._streaming_supported = streaming_supported
 
     @abstractmethod
-    def synthesize(self, *, text: str) -> AsyncIterable[SynthesizedAudio]:
+    async def synthesize(self, *, text: str) -> AsyncIterable[SynthesizedAudio]:
         pass
 
     def stream(self) -> SynthesizeStream:
