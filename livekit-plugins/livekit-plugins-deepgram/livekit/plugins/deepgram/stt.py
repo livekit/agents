@@ -355,7 +355,7 @@ class SpeechStream(stt.SpeechStream):
             # If UtterenceEnd comes before SpeechFinal, we use it to commit the final events
             # otherwise, we ignore it.
             if self._speaking:
-                self._commit_all_final_events()
+                self._end_speech()
 
         # see this page:
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
@@ -381,7 +381,7 @@ class SpeechStream(stt.SpeechStream):
                 self._event_queue.put_nowait(interim_event)
 
             if is_endpoint:
-                self._commit_all_final_events()
+                self._end_speech()
         elif data["type"] == "Metadata":
             pass
         else:
