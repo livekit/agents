@@ -76,9 +76,9 @@ class Mp3StreamDecoder:
                     nchannels = len(frame.layout.channels)
                     if frame.format.is_planar and nchannels > 1:
                         logging.warning(
-                            "TODO: planar audio has not yet been considered, reducing to single-channel"
+                            "TODO: planar audio has not yet been considered, skipping frame"
                         )
-                        nchannels = 1
+                        continue
                     plane = frame.planes[0]
                     ptr = plane.buffer_ptr
                     size = plane.buffer_size
