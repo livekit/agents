@@ -12,15 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import os
 from collections.abc import AsyncIterable
 from typing import Optional
 
 import aiohttp
 from livekit.agents import codecs, tts, utils
-
-import openai
 
 from .models import TTSModels, TTSVoices
 
@@ -45,7 +42,6 @@ class TTS(tts.TTS):
         self._session = aiohttp.ClientSession(
             headers={"Authorization": f"Bearer {api_key}"}
         )
-        self._client = openai.AsyncOpenAI(api_key=api_key)
 
     async def synthesize(
         self, text: str, model: TTSModels = "tts-1", voice: TTSVoices = "alloy"
