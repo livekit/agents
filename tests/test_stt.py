@@ -28,9 +28,7 @@ STTFactoryStream = {
     "google": google.STT,
     "openai": lambda: agents.stt.StreamAdapter(
         openai.STT(),
-        silero.VAD().stream(
-            threshold=0.02
-        ),  # Relax vad a lot because input file is very quiet and this is not a VAD test
+        silero.VAD().stream(),
     ),
 }
 
