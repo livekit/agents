@@ -1,7 +1,7 @@
 import asyncio
 from livekit import agents
 from livekit.plugins import elevenlabs, openai
-from difflib import SequenceMatcher
+from utils import compare_word_counts
 
 TEST_AUDIO_SYNTHESIZE = "the people who are crazy enough to think they can change the world are the ones who do"
 
@@ -16,9 +16,7 @@ async def test_synthetize():
 
         result = await openai.STT().recognize(buffer=agents.utils.merge_frames(frames))
         assert (
-            SequenceMatcher(
-                None, result.alternatives[0].text, TEST_AUDIO_SYNTHESIZE
-            ).ratio()
+            compare_word_counts(result.alternatives[0].text, TEST_AUDIO_SYNTHESIZE)
             > 0.9
         )
 
@@ -59,11 +57,6 @@ async def test_stream():
         frames.append(event.audio.data)
 
     result = await openai.STT().recognize(buffer=agents.utils.merge_frames(frames))
-    assert (
-        SequenceMatcher(
-            None, result.alternatives[0].text, TEST_AUDIO_SYNTHESIZE
-        ).ratio()
-        > 0.9
-    )
+    assert compare_word_counts(result.alternatives[0].text, TEST_AUDIO_SYNTHESIZE) > 0.9
 
     await stream.aclose()

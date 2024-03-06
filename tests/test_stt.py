@@ -1,13 +1,13 @@
 import asyncio
 import os
 import wave
-from difflib import SequenceMatcher
-from typing import List
 from itertools import product
+from typing import List
 
 import pytest
 from livekit import agents, rtc
 from livekit.plugins import deepgram, google, openai, silero
+from utils import compare_word_counts
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.wav")
 TEST_AUDIO_FILEPATH_2 = os.path.join(os.path.dirname(__file__), "long.mp3")
@@ -84,11 +84,6 @@ input = {
     },
 }
 
-# Google stt performing poorly
-threshold_overrides = {
-    ("google", "long"): 0.1,
-}
-
 
 @pytest.mark.parametrize(
     "provider, input_key",
@@ -100,11 +95,10 @@ threshold_overrides = {
 async def test_recognize(provider: str, input_key: str):
     frame = input[input_key]["audio"]
     expected = input[input_key]["transcript"]
-    threshold = threshold_overrides.get((provider, input_key), 0.9)
     stt = STTFactoryRecognize[provider]()
     event = await stt.recognize(buffer=frame)
     text = event.alternatives[0].text
-    assert SequenceMatcher(None, text, expected).ratio() > threshold
+    assert compare_word_counts(text, expected).ratio() > 0.9
     assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
 
 
@@ -115,7 +109,6 @@ async def test_recognize(provider: str, input_key: str):
 async def test_stream(provider: str, input_key: str):
     frame = input[input_key]["audio"]
     expected = input[input_key]["transcript"]
-    threshold = threshold_overrides.get((provider, input_key), 0.8)
 
     # divide data into chunks of 10ms
     chunk_size = frame.sample_rate // 100
@@ -151,6 +144,6 @@ async def test_stream(provider: str, input_key: str):
             if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
                 total_text = " ".join([total_text, event.alternatives[0].text])
 
-        assert SequenceMatcher(None, total_text, expected).ratio() > threshold
+        assert compare_word_counts(total_text, expected).ratio() > 0.8
 
     await asyncio.gather(stream_input(), stream_output())
