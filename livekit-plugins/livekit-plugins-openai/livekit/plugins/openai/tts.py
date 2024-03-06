@@ -59,6 +59,6 @@ class TTS(tts.TTS):
         ) as resp:
             async for data in resp.content.iter_chunked(4096):
                 frames = decoder.decode_chunk(data)
-                frame = utils.merge_frames(frames)
-                yield tts.SynthesizedAudio(text=text, data=frame)
-                decoder.push_chunk(data)
+                if len(frames) > 0:
+                    frame = utils.merge_frames(frames)
+                    yield tts.SynthesizedAudio(text=text, data=frame)
