@@ -304,7 +304,7 @@ class SpeechStream(stt.SpeechStream):
 
         await asyncio.gather(send_task(), recv_task(), keepalive_task())
 
-    def _commit_all_final_events(self) -> None:
+    def _end_speech(self) -> None:
         if not self._speaking:
             logging.warning(
                 "trying to commit final events without being in the speaking state"
