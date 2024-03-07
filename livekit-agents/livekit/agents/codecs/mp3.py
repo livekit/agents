@@ -42,7 +42,7 @@ class Mp3StreamDecoder:
             try:
                 decoded = self._codec.decode(packet)
             except Exception as e:
-                logging.warning(f"Error decoding packet: {e}")
+                logging.warning(f"Error decoding packet, skipping: {e}")
                 continue
             for frame in decoded:
                 nchannels = len(frame.layout.channels)
