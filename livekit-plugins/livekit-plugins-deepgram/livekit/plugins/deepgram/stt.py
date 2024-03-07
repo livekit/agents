@@ -201,9 +201,6 @@ class SpeechStream(stt.SpeechStream):
                         "vad_events": True,
                         "channels": self._num_channels,
                         "endpointing": self._config.endpointing,
-                        "utterance_end_ms": max(
-                            1000, int(self._config.endpointing or 1000)
-                        ),
                     }
 
                     if self._config.language:
@@ -355,18 +352,13 @@ class SpeechStream(stt.SpeechStream):
             # This is a normal case. Deepgram's SpeechStarted events
             # are not correlated with speech_final or utterance end.
             # It's poossible that we receive two in a row without an endpoint
+            # It's also possible we receive a transcript without a SpeechStarted event.
             if self._speaking:
                 return
 
             self._speaking = True
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
             self._event_queue.put_nowait(start_event)
-        elif data["type"] == "UtteranceEnd":
-            # https://developers.deepgram.com/docs/understanding-end-of-speech-detection#using-utteranceend-and-endpointing
-            # If UtterenceEnd comes before SpeechFinal, we use it to commit the final events
-            # otherwise, we ignore it.
-            if self._speaking:
-                self._end_speech()
 
         # see this page:
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
@@ -377,13 +369,9 @@ class SpeechStream(stt.SpeechStream):
 
             alts = live_transcription_to_speech_data(self._config.language, data)
             # If, for some reason, we didn't get a SpeechStarted event but we got
-            # a transcript with text, we should start speaking. We'll warn here
-            # because it's not epected, hasn't been observed, but technically
-            # isn't documented as impossible.
+            # a transcript with text, we should start speaking. It's rare but has
+            # been observed.
             if not self._speaking and len(alts) and alts[0].text.strip() != "":
-                logging.warning(
-                    "received a transcript without a SpeechStarted event. This is unexpected."
-                )
                 self._speaking = True
                 start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                 self._event_queue.put_nowait(start_event)
@@ -402,7 +390,10 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_queue.put_nowait(interim_event)
 
-            if is_endpoint:
+            # if we receive an endpoint, only end the speech if
+            # we either had a SpeechStarted event or we have a seen
+            # a non-empty transcript
+            if is_endpoint and self._speaking:
                 self._end_speech()
         elif data["type"] == "Metadata":
             pass
