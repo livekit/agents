@@ -325,13 +325,21 @@ class SpeechStream(stt.SpeechStream):
         if len(self._final_events) > 0:
             confidence /= len(self._final_events)  # avg. of confidence
 
+        # In rare cases, an utterance end event can come
+        # even if there was no transcribed text
+        start_time = 0
+        end_time = 0
+        if len(self._final_events) > 0:
+            start_time = self._final_events[0].alternatives[0].start_time
+            end_time = self._final_events[-1].alternatives[0].end_time
+
         end_event = stt.SpeechEvent(
             type=stt.SpeechEventType.END_OF_SPEECH,
             alternatives=[
                 stt.SpeechData(
                     language=self._config.language,
-                    start_time=self._final_events[0].alternatives[0].start_time,
-                    end_time=self._final_events[-1].alternatives[0].end_time,
+                    start_time=start_time,
+                    end_time=end_time,
                     confidence=confidence,
                     text=sentence,
                 )
