@@ -344,8 +344,11 @@ class SpeechStream(stt.SpeechStream):
         assert self._config.language is not None
 
         if data["type"] == "SpeechStarted":
+            # This is a normal case. Deepgram's SpeechStarted events
+            # are not correlated with speech_final or utterance end.
+            # It's poossible that we receive two in a row without an endpoint
             if self._speaking:
-                logging.warning("received SpeechStarted while already speaking")
+                return
 
             self._speaking = True
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
@@ -364,8 +367,20 @@ class SpeechStream(stt.SpeechStream):
             is_final_transcript = data["is_final"]
             is_endpoint = data["speech_final"]
 
+            alts = live_transcription_to_speech_data(self._config.language, data)
+            # If, for some reason, we didn't get a SpeechStarted event but we got
+            # a transcript with text, we should start speaking. We'll warn here
+            # because it's not epected, hasn't been observed, but technically
+            # isn't documented as impossible.
+            if not self._speaking and len(alts) and alts[0].text.strip() != "":
+                logging.warning(
+                    "received a transcript without a SpeechStarted event. This is unexpected."
+                )
+                self._speaking = True
+                start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                self._event_queue.put_nowait(start_event)
+
             if is_final_transcript:
-                alts = live_transcription_to_speech_data(self._config.language, data)
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=alts,
@@ -373,7 +388,6 @@ class SpeechStream(stt.SpeechStream):
                 self._final_events.append(final_event)
                 self._event_queue.put_nowait(final_event)
             else:
-                alts = live_transcription_to_speech_data(self._config.language, data)
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=alts,
