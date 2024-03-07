@@ -18,11 +18,6 @@ import logging
 from typing import Coroutine, Optional, TYPE_CHECKING
 from livekit import api, rtc, protocol
 
-# TODO: refactor worker so we can avoid this circular import
-if TYPE_CHECKING:
-    from .worker import Worker
-
-
 class JobContext:
     """Context for job, it contains the worker, the room, and the participant.
     You should not create these on your own. They are created by the Worker.

@@ -19,12 +19,12 @@ from .worker import (
     JobCancelledError,
     AssignmentTimeoutError,
     JobType,
-    run_app,
 )
 from .plugin import Plugin
 from .utils import AudioBuffer, merge_frames, AsyncIterableQueue
 from .job_request import AutoSubscribe, AutoDisconnect, JobRequest
 from .job_context import JobContext
+from .ipc import JobProcess
 
 from . import stt
 from . import vad
@@ -38,10 +38,10 @@ __all__ = [
     "AutoSubscribe",
     "AutoDisconnect",
     "JobContext",
+    "JobProcess",
     "JobCancelledError",
     "AssignmentTimeoutError",
     "Plugin",
-    "run_app",
     "JobType",
     "AudioBuffer",
     "merge_frames",
