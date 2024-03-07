@@ -23,20 +23,16 @@ they stared steadily in front of them, and instead of the eyes of the girl, the 
 
 
 def read_mp3_file(filename: str) -> List[rtc.AudioFrame]:
-    async def decode():
-        mp3 = agents.codecs.Mp3StreamDecoder()
-        with open(filename, "rb") as file:
-            for chunk in iter(lambda: file.read(4096), b""):
-                mp3.push_chunk(chunk)
+    mp3 = agents.codecs.Mp3StreamDecoder()
+    frames: List[rtc.AudioFrame] = []
+    with open(filename, "rb") as file:
+        for chunk in iter(lambda: file.read(4096), b""):
+            try:
+                frames.extend(mp3.decode_chunk(chunk))
+            except Exception as e:
+                print(f"Error decoding chunk: {e}", chunk)
 
-        mp3.close()
-
-        frames: List[rtc.AudioFrame] = []
-        async for data in mp3:
-            frames.append(data)
-        return agents.utils.merge_frames(frames)
-
-    return asyncio.get_event_loop().run_until_complete(decode())
+    return agents.utils.merge_frames(frames)
 
 
 def read_wav_file(filename: str) -> rtc.AudioFrame:

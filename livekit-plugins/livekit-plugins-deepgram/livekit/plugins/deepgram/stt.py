@@ -201,9 +201,6 @@ class SpeechStream(stt.SpeechStream):
                         "vad_events": True,
                         "channels": self._num_channels,
                         "endpointing": self._config.endpointing,
-                        "utterance_end_ms": max(
-                            1000, int(self._config.endpointing or 1000)
-                        ),
                     }
 
                     if self._config.language:
@@ -313,6 +310,9 @@ class SpeechStream(stt.SpeechStream):
 
         if len(self._final_events) == 0:
             logging.warning("received end of speech without any final transcription")
+            return
+
+        self._speaking = False
 
         # combine all final transcripts since the start of the speech
         sentence = ""
@@ -324,7 +324,6 @@ class SpeechStream(stt.SpeechStream):
         sentence = sentence.rstrip()
         confidence /= len(self._final_events)  # avg. of confidence
 
-        self._speaking = False
         end_event = stt.SpeechEvent(
             type=stt.SpeechEventType.END_OF_SPEECH,
             alternatives=[
@@ -344,18 +343,16 @@ class SpeechStream(stt.SpeechStream):
         assert self._config.language is not None
 
         if data["type"] == "SpeechStarted":
+            # This is a normal case. Deepgram's SpeechStarted events
+            # are not correlated with speech_final or utterance end.
+            # It's poossible that we receive two in a row without an endpoint
+            # It's also possible we receive a transcript without a SpeechStarted event.
             if self._speaking:
-                logging.warning("received SpeechStarted while already speaking")
+                return
 
             self._speaking = True
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
             self._event_queue.put_nowait(start_event)
-        elif data["type"] == "UtteranceEnd":
-            # https://developers.deepgram.com/docs/understanding-end-of-speech-detection#using-utteranceend-and-endpointing
-            # If UtterenceEnd comes before SpeechFinal, we use it to commit the final events
-            # otherwise, we ignore it.
-            if self._speaking:
-                self._end_speech()
 
         # see this page:
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
@@ -364,8 +361,16 @@ class SpeechStream(stt.SpeechStream):
             is_final_transcript = data["is_final"]
             is_endpoint = data["speech_final"]
 
+            alts = live_transcription_to_speech_data(self._config.language, data)
+            # If, for some reason, we didn't get a SpeechStarted event but we got
+            # a transcript with text, we should start speaking. It's rare but has
+            # been observed.
+            if not self._speaking and len(alts) and alts[0].text.strip() != "":
+                self._speaking = True
+                start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                self._event_queue.put_nowait(start_event)
+
             if is_final_transcript:
-                alts = live_transcription_to_speech_data(self._config.language, data)
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=alts,
@@ -373,14 +378,16 @@ class SpeechStream(stt.SpeechStream):
                 self._final_events.append(final_event)
                 self._event_queue.put_nowait(final_event)
             else:
-                alts = live_transcription_to_speech_data(self._config.language, data)
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=alts,
                 )
                 self._event_queue.put_nowait(interim_event)
 
-            if is_endpoint:
+            # if we receive an endpoint, only end the speech if
+            # we either had a SpeechStarted event or we have a seen
+            # a non-empty transcript
+            if is_endpoint and self._speaking:
                 self._end_speech()
         elif data["type"] == "Metadata":
             pass

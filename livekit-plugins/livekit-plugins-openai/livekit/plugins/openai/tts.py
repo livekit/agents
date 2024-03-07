@@ -12,15 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import os
 from collections.abc import AsyncIterable
 from typing import Optional
 
 import aiohttp
 from livekit.agents import codecs, tts
-
-import openai
 
 from .models import TTSModels, TTSVoices
 
@@ -45,30 +42,22 @@ class TTS(tts.TTS):
         self._session = aiohttp.ClientSession(
             headers={"Authorization": f"Bearer {api_key}"}
         )
-        self._client = openai.AsyncOpenAI(api_key=api_key)
 
     async def synthesize(
         self, text: str, model: TTSModels = "tts-1", voice: TTSVoices = "alloy"
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         decoder = codecs.Mp3StreamDecoder()
 
-        async def fetch():
-            async with self._session.post(
-                OPENAI_ENPOINT,
-                json={
-                    "input": text,
-                    "model": model,
-                    "voice": voice,
-                    "response_format": "mp3",
-                },
-            ) as resp:
-                async for data in resp.content.iter_chunked(4096):
-                    decoder.push_chunk(data)
-
-                decoder.close()
-
-        fetch_task = asyncio.create_task(fetch())
-        async for data in decoder:
-            yield tts.SynthesizedAudio(text=text, data=data)
-
-        await fetch_task
+        async with self._session.post(
+            OPENAI_ENPOINT,
+            json={
+                "input": text,
+                "model": model,
+                "voice": voice,
+                "response_format": "mp3",
+            },
+        ) as resp:
+            async for data in resp.content.iter_chunked(4096):
+                frames = decoder.decode_chunk(data)
+                for frame in frames:
+                    yield tts.SynthesizedAudio(text=text, data=frame)
