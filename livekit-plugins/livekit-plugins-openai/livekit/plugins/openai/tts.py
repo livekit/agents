@@ -17,7 +17,7 @@ from collections.abc import AsyncIterable
 from typing import Optional
 
 import aiohttp
-from livekit.agents import codecs, tts, utils
+from livekit.agents import codecs, tts
 
 from .models import TTSModels, TTSVoices
 
@@ -59,6 +59,5 @@ class TTS(tts.TTS):
         ) as resp:
             async for data in resp.content.iter_chunked(4096):
                 frames = decoder.decode_chunk(data)
-                if len(frames) > 0:
-                    frame = utils.merge_frames(frames)
+                for frame in frames:
                     yield tts.SynthesizedAudio(text=text, data=frame)
