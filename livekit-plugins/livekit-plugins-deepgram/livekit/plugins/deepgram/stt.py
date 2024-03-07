@@ -308,6 +308,10 @@ class SpeechStream(stt.SpeechStream):
             )
             return
 
+        if len(self._final_events) == 0:
+            logging.warning("received end of speech without any final transcription")
+            return
+
         self._speaking = False
 
         # combine all final transcripts since the start of the speech
@@ -318,25 +322,15 @@ class SpeechStream(stt.SpeechStream):
             confidence += alt.alternatives[0].confidence
 
         sentence = sentence.rstrip()
-
-        if len(self._final_events) > 0:
-            confidence /= len(self._final_events)  # avg. of confidence
-
-        # In rare cases, an utterance end event can come
-        # even if there was no transcribed text
-        start_time = 0
-        end_time = 0
-        if len(self._final_events) > 0:
-            start_time = self._final_events[0].alternatives[0].start_time
-            end_time = self._final_events[-1].alternatives[0].end_time
+        confidence /= len(self._final_events)  # avg. of confidence
 
         end_event = stt.SpeechEvent(
             type=stt.SpeechEventType.END_OF_SPEECH,
             alternatives=[
                 stt.SpeechData(
                     language=self._config.language,
-                    start_time=start_time,
-                    end_time=end_time,
+                    start_time=self._final_events[0].alternatives[0].start_time,
+                    end_time=self._final_events[-1].alternatives[0].end_time,
                     confidence=confidence,
                     text=sentence,
                 )
