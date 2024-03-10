@@ -12,15 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import os
-import io
-import torchaudio
-import torch
-from typing import Optional
+from typing import AsyncIterable, Optional
+
+import aiohttp
 from livekit import rtc
-from livekit.agents import tts
+from livekit.agents import codecs, tts, utils
+
 import openai
+
 from .models import TTSModels, TTSVoices
+
+OPENAI_TTS_SAMPLE_RATE = 24000
+OPENAI_TTS_CHANNELS = 1
+OPENAI_ENPOINT = "https://api.openai.com/v1/audio/speech"
 
 
 class TTS(tts.TTS):
@@ -30,31 +36,54 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("OPENAI_API_KEY must be set")
 
+        # TODO: we want to reuse aiohttp sessions
+        # for improved latency but doing so doesn't
+        # give us a clean way to close the session.
+        # Perhaps we introduce a close method to TTS?
+        # We also probalby want to send a warmup HEAD
+        # request after we create this
+        self._session = aiohttp.ClientSession(
+            headers={"Authorization": f"Bearer {api_key}"}
+        )
         self._client = openai.AsyncOpenAI(api_key=api_key)
 
-    async def synthesize(
+    def synthesize(
         self, text: str, model: TTSModels = "tts-1", voice: TTSVoices = "alloy"
-    ) -> tts.SynthesizedAudio:
-        speech_res = await self._client.audio.speech.create(
-            model=model,
-            voice=voice,
-            response_format="mp3",
-            input=text,
-        )
+    ) -> AsyncIterable[tts.SynthesizedAudio]:
+        decoder = codecs.Mp3StreamDecoder()
+        results = utils.AsyncIterableQueue()
 
-        data = await speech_res.aread()
-        tensor, sample_rate = torchaudio.load(io.BytesIO(data), format="mp3")
+        async def fetch():
+            async with self._session.post(
+                OPENAI_ENPOINT,
+                json={
+                    "input": text,
+                    "model": model,
+                    "voice": voice,
+                    "response_format": "mp3",
+                },
+            ) as resp:
+                async for data in resp.content.iter_chunked(4096):
+                    decoder.push_chunk(data)
 
-        with io.BytesIO() as buffer:
-            torch.save(tensor, buffer)
-            data = buffer.getvalue()
+                decoder.close()
 
-        num_channels = tensor.shape[0]
-        frame = rtc.AudioFrame(
-            data=data,
-            sample_rate=sample_rate,
-            num_channels=num_channels,
-            samples_per_channel=tensor.shape[-1],
-        )
+        async def decoder_stream():
+            async for data in decoder:
+                results.put_nowait(
+                    tts.SynthesizedAudio(
+                        text=text,
+                        data=rtc.AudioFrame(
+                            data=data,
+                            sample_rate=OPENAI_TTS_SAMPLE_RATE,
+                            num_channels=OPENAI_TTS_CHANNELS,
+                            samples_per_channel=len(data) // 2,
+                        ),
+                    )
+                )
+            results.close()
 
-        return tts.SynthesizedAudio(text=text, data=frame)
+        asyncio.ensure_future(fetch())
+        asyncio.ensure_future(decoder_stream())
+
+        return results

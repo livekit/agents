@@ -67,7 +67,7 @@ class KITT:
             prompt=PROMPT, message_capacity=20, model="gpt-4-1106-preview"
         )
         self.stt_plugin = STT(
-            min_silence_duration=1000,
+            min_silence_duration=100,
         )
         self.tts_plugin = TTS(
             model_id="eleven_turbo_v2", sample_rate=ELEVEN_TTS_SAMPLE_RATE

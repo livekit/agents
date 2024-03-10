@@ -18,18 +18,19 @@ This starts the worker and will be listening for new job requests. This worker i
 
 ## How it works
 
-KITT has 4 stages:
+KITT has 3 stages:
 
-- VAD (voice-activity-detection)
-- Speech-to-text
+- Speech-to-text (STT)
 - LLM
-- Text-to-speech
+- Text-to-speech (TTS)
 
-Each stage makes use of a plugin. VAD uses `livekit-plugins-silero`, speech-to-text uses `livekit-plugins-deepgram`, LLM uses ChatGPT from `livekit-plugins-openai`, and text-to-speech uses `livekit-plugins-elevenlabs`.
+Speech-to-text uses `livekit-plugins-deepgram` and text-to-speech uses `livekit-plugins-elevenlabs`.
 
-When a KITT agent starts, it publishes an audio track right away and sends an intro message. It then subscribes to any existing and new audio tracks and sends them into the VAD instance for processing.
+When a KITT agent starts, it publishes an audio track right away and sends an intro message. 
 
-When VAD detects that there has been speech, it sends the audio frames containing speech to Deepgram for transcribing. The resulting text is sent to ChatGPT, which streams a text response. That text response is then sent to elevenlabs to generate audio frames and sent back into the LiveKit room.
+It then subscribes to any existing and new audio tracks and sends their rtc.AudioFrames into the STT stream. 
+
+The STT stream produces transcription results from the audio frames and when the text is final it gets sent into the LLM (ChatGPT). Results from the LLM are pushed into the TTS stream which yields rtc.AudioFrames for the agent's voice. These frames are then published into the LiveKit room.
 
 ## How to deploy
 

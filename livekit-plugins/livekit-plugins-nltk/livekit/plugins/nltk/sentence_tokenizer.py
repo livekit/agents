@@ -1,9 +1,11 @@
-from typing import List
-from livekit import agents
-from dataclasses import dataclass
-import dataclasses
-from typing import Optional
 import asyncio
+import dataclasses
+import logging
+from dataclasses import dataclass
+from typing import List, Optional
+
+from livekit import agents
+
 import nltk
 
 # nltk is using the punkt tokenizer
@@ -78,11 +80,16 @@ class SentenceStream(agents.tokenize.SentenceStream):
         self._context_len = context_len
         self._min_sentence_len = min_sentence_len
         self._event_queue = asyncio.Queue()
+        self._closed = False
 
         self._incomplete_sentences = []  # <= min_sentence_len
         self._buffer = ""
 
     def push_text(self, text: str) -> None:
+        if self._closed:
+            logging.error("Cannot push text to closed stream")
+            return
+
         for char in text:
             self._buffer += char
 
@@ -118,11 +125,16 @@ class SentenceStream(agents.tokenize.SentenceStream):
         if buff:
             await self._event_queue.put(agents.tokenize.SegmentedSentence(text=buff))
 
+    async def aclose(self) -> None:
+        self._closed = True
+        self._event_queue.put_nowait(None)
+
     async def __anext__(self) -> agents.tokenize.SegmentedSentence:
-        if self._event_queue.empty():
+        event = await self._event_queue.get()
+        if event is None:
             raise StopAsyncIteration
 
-        return await self._event_queue.get()
+        return event
 
     def __aiter__(self) -> "SentenceStream":
         return self
