@@ -44,7 +44,7 @@ class VoiceSettings:
 
 
 DEFAULT_VOICE = Voice(
-    id="EXAVITQu4vr4xnSDxMaL",
+    voice_id="EXAVITQu4vr4xnSDxMaL",
     name="Bella",
     category="premade",
     settings=VoiceSettings(
