@@ -42,6 +42,15 @@ class VoiceSettings:
     style: Optional[float] = None  # [0.0 - 1.0]
     use_speaker_boost: Optional[bool] = False
 
+    @classmethod
+    def from_api(cls, api_settings: "VoiceSettings") -> "VoiceSettings":
+        return cls(
+            stability=api_settings.stability,
+            similarity_boost=api_settings.similarity_boost,
+            style=api_settings.style,
+            use_speaker_boost=api_settings.use_speaker_boost,
+        )
+
 
 DEFAULT_VOICE = Voice(
     voice_id="EXAVITQu4vr4xnSDxMaL",
@@ -110,14 +119,22 @@ class TTS(tts.TTS):
         results = utils.AsyncIterableQueue()
 
         async def fetch_task():
+            if (
+                not isinstance(voice.settings, VoiceSettings)
+                and voice.settings is not None
+            ):
+                voice_settings = VoiceSettings.from_api(voice.settings)
+            else:
+                voice_settings = voice.settings
+
             async with self._session.post(
-                f"{self._config.base_url}/text-to-speech/{voice.id}?output_format=mp3_44100_128",
+                f"{self._config.base_url}/text-to-speech/{voice.voice_id}?output_format=mp3_44100_128",
                 headers={AUTHORIZATION_HEADER: self._config.api_key},
                 json=dict(
                     text=text,
                     model_id=self._config.model_id,
                     voice_settings=(
-                        dataclasses.asdict(voice.settings) if voice.settings else None
+                        dataclasses.asdict(voice_settings) if voice_settings else None
                     ),
                 ),
             ) as resp:
@@ -273,7 +290,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         voice = self._config.voice
-        voice_settings = dataclasses.asdict(voice.settings) if voice.settings else None
+
+        if not isinstance(voice.settings, VoiceSettings) and voice.settings is not None:
+            voice_settings = VoiceSettings.from_api(voice.settings)
+        else:
+            voice_settings = voice.settings
+
+        voice_settings = dataclasses.asdict(voice_settings) if voice_settings else None
 
         init_packet = dict(
             text=" ",
