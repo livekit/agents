@@ -75,16 +75,6 @@ class Worker:
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
     ) -> None:
-        """
-        Args:
-            request_handler (JobRequestHandler): Callback that is triggered when a new Job is available.
-            worker_type (JobType): What kind of jobs this worker can handle.
-            event_loop (Optional[asyncio.AbstractEventLoop]): Optional asyncio event loop to use for this worker. Defaults to None.
-            ws_url (str, optional): LiveKit websocket URL. Defaults to os.environ.get("LIVEKIT_URL", "http://localhost:7880").
-            api_key (str, optional): LiveKit API Key. Defaults to os.environ.get("LIVEKIT_API_KEY", "").
-            api_secret (str, optional): LiveKit API Secret. Defaults to os.environ.get("LIVEKIT_API_SECRET", "").
-        """
-
         self._loop = event_loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
         self._request_handler = request_handler
@@ -111,15 +101,6 @@ class Worker:
         self._rtc_url = url
 
     async def _connect(self) -> protocol.agent.RegisterWorkerResponse:
-        if not self._rtc_url:
-            raise ValueError("No WebSocket URL provided, set LIVEKIT_URL env var")
-
-        if not self._api_key:
-            raise ValueError("No API key provided, set LIVEKIT_API_KEY env var")
-
-        if not self._api_secret:
-            raise ValueError("No API secret provided, set LIVEKIT_API_SECRET env var")
-
         self._api = api.LiveKitAPI(self._rtc_url, self._api_key, self._api_secret)
 
         join_jwt = (

@@ -12,11 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
 from typing import Coroutine, Optional, TYPE_CHECKING
-from livekit import api, rtc, protocol
+from livekit import api, rtc
+from livekit.protocol import worker, agents
+
 
 class JobContext:
     """Context for job, it contains the worker, the room, and the participant.
@@ -25,24 +29,22 @@ class JobContext:
 
     def __init__(
         self,
-        id: str,
-        worker: "Worker",
+        send_queue: asyncio.Queue[worker.IPCJobMessage],
+        job: agents.Job,
         room: rtc.Room,
-        participant: Optional[rtc.Participant] = None,
+        participant: rtc.RemoteParticipant | None = None,
     ) -> None:
-        self._id = id
-        self._worker = worker
+        self._job = job
         self._room = room
         self._participant = participant
-        self._closed = False
-        self._lock = asyncio.Lock()
-        self._worker._running_jobs.append(self)
         self._tasks = set()
+        self._lock = asyncio.Lock()
+        self._send_queue = send_queue
 
     @property
     def id(self) -> str:
         """Job ID"""
-        return self._id
+        return self._job.id
 
     @property
     def room(self) -> rtc.Room:
@@ -50,7 +52,7 @@ class JobContext:
         return self._room
 
     @property
-    def participant(self) -> Optional[rtc.Participant]:
+    def participant(self) -> rtc.RemoteParticipant | None:
         """LiveKit RemoteParticipant that the Job launched for. None if Agent is launched for the Room."""
         return self._participant
 
@@ -59,14 +61,9 @@ class JobContext:
         """The agent's Participant identity"""
         return self._room.local_participant
 
-    @property
-    def api(self) -> api.LiveKitAPI:
-        """LiveKit API client"""
-        return self._worker.api
-
     def create_task(self, coro: Coroutine) -> asyncio.Task:
-        """Schedule the execution of a coroutine object in a spawn task using asyncio and keep a reference to it.
-        The task is automatically cancelled when the job is disconnected.
+        """Schedule the execution of a coroutine object in a spawn task and keep a reference to it.
+        The task is automatically cancelled when the job is terminated.
         """
 
         t = asyncio.create_task(coro)
@@ -74,33 +71,18 @@ class JobContext:
         def done_cb(task: asyncio.Task):
             self._tasks.discard(t)
             if not task.cancelled() and task.exception():
-                logging.error(
-                    "A task raised an exception:",
-                    exc_info=task.exception(),
-                    extra=self.logging_extra,
-                )
+                logging.error("task raised an exception:", exc_info=task.exception())
 
         t.add_done_callback(done_cb)
         return t
 
-    async def disconnect(self) -> None:
-        """
-        Disconnect the agent from the room, shutdown the job, and cleanup resources.
-        This will also cancel all tasks created by this job if task_timeout is specified.
-
-        Args:
-            task_timeout (Optional[float], optional): How long to wait before tasks created via JobContext.create_task are cancelled.
-            If None, tasks will not be cancelled. Defaults to 25.
-        """
-
+    async def shutdown(self) -> None:
         async with self._lock:
-            logging.info("shutting down job %s", self.id, extra=self.logging_extra)
-            if self._closed:
-                return
+            await self._send_queue.put(
+                worker.IPCJobMessage(job_shutdown=worker.JobShutdownRequest())
+            )
 
-            self._worker._running_jobs.remove(self)
-            self._closed = True
-            await self.room.disconnect()
+            await self._room.disconnect()
 
             for task in self._tasks:
                 task.cancel()
@@ -109,29 +91,12 @@ class JobContext:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
 
-            logging.info("job %s shutdown", self.id, extra=self.logging_extra)
-
     async def update_status(
         self,
-        status: protocol.agent.JobStatus.ValueType,
-        error: str = "",
-        user_data: str = "",
+        userdata: str,
     ) -> None:
-        await self._worker._send_job_status(self._id, status, error, user_data)
-
-    @property
-    def logging_extra(self) -> dict:
-        """
-        Additional context to identify the job in logs.
-
-        Usage: logging.info("my message", extra=ctx.logging_extra)
-        """
-        e = {
-            "job_id": self.id,
-            "room": self.room.name,
-            "agent_identity": self.agent.identity,
-            "worker_id": self._worker.id,
-        }
-        if self.participant:
-            e["participant_identity"] = self.participant.identity
-        return e
+        await self._send_queue.put(
+            worker.IPCJobMessage(
+                update_job=worker.IPCUpdateJobStatus(userdata=userdata)
+            )
+        )

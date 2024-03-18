@@ -19,10 +19,6 @@ from .job_context import JobContext
 from livekit import rtc, protocol, api
 from livekit.protocol import agent as proto_agent
 
-# TODO: refactor worker so we can avoid this circular import
-if TYPE_CHECKING:
-    from .worker import Worker
-
 AutoSubscribeCallback = Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool]
 AutoDisconnectCallback = Callable[[JobContext], bool]
 AgentEntry = Callable[[JobContext], Coroutine]
