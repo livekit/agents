@@ -14,12 +14,14 @@
 
 from __future__ import annotations
 
+from typing import Coroutine, Optional, TYPE_CHECKING
+from livekit import api, rtc
+from livekit.protocol import worker, agent
+
 import asyncio
 import contextlib
 import logging
-from typing import Coroutine, Optional, TYPE_CHECKING
-from livekit import api, rtc
-from livekit.protocol import worker, agents
+from .client import IPCClient
 
 
 class JobContext:
@@ -29,8 +31,8 @@ class JobContext:
 
     def __init__(
         self,
-        send_queue: asyncio.Queue[worker.IPCJobMessage],
-        job: agents.Job,
+        client: IPCClient,
+        job: agent.Job,
         room: rtc.Room,
         participant: rtc.RemoteParticipant | None = None,
     ) -> None:
@@ -39,7 +41,7 @@ class JobContext:
         self._participant = participant
         self._tasks = set()
         self._lock = asyncio.Lock()
-        self._send_queue = send_queue
+        self._ipc_client = client
 
     @property
     def id(self) -> str:
@@ -78,7 +80,7 @@ class JobContext:
 
     async def shutdown(self) -> None:
         async with self._lock:
-            await self._send_queue.put(
+            await self._ipc_client.send(
                 worker.IPCJobMessage(job_shutdown=worker.JobShutdownRequest())
             )
 
@@ -95,7 +97,7 @@ class JobContext:
         self,
         userdata: str,
     ) -> None:
-        await self._send_queue.put(
+        await self._ipc_client.send(
             worker.IPCJobMessage(
                 update_job=worker.IPCUpdateJobStatus(userdata=userdata)
             )

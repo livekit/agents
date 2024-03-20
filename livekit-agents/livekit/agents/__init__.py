@@ -22,9 +22,9 @@ from .worker import (
 from .plugin import Plugin
 from .utils import AudioBuffer, merge_frames, AsyncIterableQueue
 from .job_request import AutoSubscribe, AutoDisconnect, JobRequest
-from .job_context import JobContext
-from .ipc import JobProcess
+from .ipc import JobContext
 
+from . import aio
 from . import ipc
 from . import stt
 from . import vad
@@ -38,7 +38,6 @@ __all__ = [
     "AutoSubscribe",
     "AutoDisconnect",
     "JobContext",
-    "JobProcess",
     "JobCancelledError",
     "AssignmentTimeoutError",
     "Plugin",

@@ -15,7 +15,7 @@
 import asyncio
 import logging
 from typing import Callable, Coroutine, Optional, TYPE_CHECKING, Union
-from .job_context import JobContext
+from .ipc import JobContext
 from livekit import rtc, protocol, api
 from livekit.protocol import agent as proto_agent
 

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import multiprocessing
 from livekit.protocol import worker
-from typing import Callable
+from typing import Callable, Tuple
+
 from .consts import IPC_PORT
-import asyncio
-import sys
 from ..log import process_logger
+
+import asyncio
+import multiprocessing
+import sys
 import logging
 
 
@@ -17,20 +19,20 @@ class LogHandler(logging.Handler):
         self._loop = loop
 
     def emit(self, record: logging.LogRecord) -> None:
-        level = worker.IPCLogLevel.NOTSET
+        level = worker.IPCLogLevel.IL_NOTSET
         if record.levelno == logging.CRITICAL:
-            level = worker.IPCLogLevel.CRITICAL
+            level = worker.IPCLogLevel.IL_CRITICAL
         elif record.levelno == logging.ERROR:
-            level = worker.IPCLogLevel.ERROR
+            level = worker.IPCLogLevel.IL_ERROR
         elif record.levelno == logging.WARNING:
-            level = worker.IPCLogLevel.WARNING
+            level = worker.IPCLogLevel.IL_WARNING
         elif record.levelno == logging.INFO:
-            level = worker.IPCLogLevel.INFO
+            level = worker.IPCLogLevel.IL_INFO
         elif record.levelno == logging.DEBUG:
-            level = worker.IPCLogLevel.DEBUG
+            level = worker.IPCLogLevel.IL_DEBUG
 
         msg = worker.IPCJobMessage(
-            log=worker.LogMessage(
+            log=worker.IPCLog(
                 level=level,
                 message=record.getMessage(),
             )
@@ -66,21 +68,43 @@ class IPCClient:
     def __init__(
         self,
         job_id: str,
-        send_queue: asyncio.Queue[worker.IPCJobMessage | None],
         recv_queue: asyncio.Queue[worker.IPCWorkerMessage],
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._job_id = job_id
-        self._send_queue = send_queue
+        self._send_queue = asyncio.Queue[worker.IPCJobMessage | None]()
         self._recv_queue = recv_queue
         self._loop = loop
         self._log_handler = LogHandler(self._send_queue, self._loop)
+
+        self._main_task = self._loop.create_task(self._run_conn())
+
+        def log_exception(task: asyncio.Task) -> None:
+            if not task.cancelled() and task.exception():
+                print(f"ipc task failed: {task.exception()}")
+
+        self._main_task.add_done_callback(log_exception)
+        self._closed = False
+
+    @staticmethod
+    def create(
+        job_id: str,
+        loop: asyncio.AbstractEventLoop,
+    ) -> Tuple[IPCClient, asyncio.Queue[worker.IPCWorkerMessage]]:
+        recv_queue = asyncio.Queue[worker.IPCWorkerMessage]()
+        return IPCClient(job_id, recv_queue, loop), recv_queue
 
     @property
     def log_handler(self) -> LogHandler:
         return self._log_handler
 
-    async def run(self) -> None:
+    async def send(self, msg: worker.IPCJobMessage) -> None:
+        if self._closed:
+            raise Exception("ipc client is closed")
+
+        await self._send_queue.put(msg)
+
+    async def _run_conn(self) -> None:
         process_logger.debug("connecting to ipc server")
         rx, tx = await asyncio.open_connection("127.0.0.1", IPC_PORT)
         await _write_msg(
@@ -103,5 +127,10 @@ class IPCClient:
                     await _write_msg(tx, msg)
 
             await asyncio.gather(read_task(), write_task())
-        except Exception as e:
+        except Exception:
             process_logger.exception("ipc client failed")
+
+    async def aclose(self) -> None:
+        self._closed = True
+        await self._send_queue.put(None)
+        await self._main_task

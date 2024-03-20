@@ -36,7 +36,7 @@ from livekit.protocol import agent as proto_agent
 from livekit.protocol import models as proto_models
 from livekit.protocol.agent import JobType
 from .job_request import JobRequest
-from .job_context import JobContext
+from .ipc import JobContext
 from .plugin import Plugin
 
 MAX_RECONNECT_ATTEMPTS = 10
