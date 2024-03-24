@@ -12,15 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import os
-from typing import AsyncIterable, Optional
+from collections.abc import AsyncIterable
+from typing import Optional
 
 import aiohttp
-from livekit import rtc
-from livekit.agents import codecs, tts, utils
-
-import openai
+from livekit.agents import codecs, tts
 
 from .models import TTSModels, TTSVoices
 
@@ -45,45 +42,22 @@ class TTS(tts.TTS):
         self._session = aiohttp.ClientSession(
             headers={"Authorization": f"Bearer {api_key}"}
         )
-        self._client = openai.AsyncOpenAI(api_key=api_key)
 
-    def synthesize(
+    async def synthesize(
         self, text: str, model: TTSModels = "tts-1", voice: TTSVoices = "alloy"
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         decoder = codecs.Mp3StreamDecoder()
-        results = utils.AsyncIterableQueue()
 
-        async def fetch():
-            async with self._session.post(
-                OPENAI_ENPOINT,
-                json={
-                    "input": text,
-                    "model": model,
-                    "voice": voice,
-                    "response_format": "mp3",
-                },
-            ) as resp:
-                async for data in resp.content.iter_chunked(4096):
-                    decoder.push_chunk(data)
-
-                decoder.close()
-
-        async def decoder_stream():
-            async for data in decoder:
-                results.put_nowait(
-                    tts.SynthesizedAudio(
-                        text=text,
-                        data=rtc.AudioFrame(
-                            data=data,
-                            sample_rate=OPENAI_TTS_SAMPLE_RATE,
-                            num_channels=OPENAI_TTS_CHANNELS,
-                            samples_per_channel=len(data) // 2,
-                        ),
-                    )
-                )
-            results.close()
-
-        asyncio.ensure_future(fetch())
-        asyncio.ensure_future(decoder_stream())
-
-        return results
+        async with self._session.post(
+            OPENAI_ENPOINT,
+            json={
+                "input": text,
+                "model": model,
+                "voice": voice,
+                "response_format": "mp3",
+            },
+        ) as resp:
+            async for data in resp.content.iter_chunked(4096):
+                frames = decoder.decode_chunk(data)
+                for frame in frames:
+                    yield tts.SynthesizedAudio(text=text, data=frame)

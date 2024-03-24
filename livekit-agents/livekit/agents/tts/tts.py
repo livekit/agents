@@ -69,7 +69,7 @@ class TTS(ABC):
         self._streaming_supported = streaming_supported
 
     @abstractmethod
-    def synthesize(self, *, text: str) -> AsyncIterable[SynthesizedAudio]:
+    async def synthesize(self, *, text: str) -> AsyncIterable[SynthesizedAudio]:
         pass
 
     def stream(self) -> SynthesizeStream:

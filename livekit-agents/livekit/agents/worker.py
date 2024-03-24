@@ -315,3 +315,4 @@ def _run_worker(
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
         asyncio.set_event_loop(None)
+
