@@ -36,7 +36,7 @@ Thanks for giving this a try! Goodbye for now.
 _DETECTION_THRESHOLD = 0.15
 _OUTPUT_HEIGHT = 720
 _OUTPUT_WIDTH = 960
-_ELEVEN_TTS_SAMPLE_RATE = 44100
+_ELEVEN_TTS_SAMPLE_RATE = 24000
 _ELEVEN_TTS_CHANNELS = 1
 
 
@@ -135,15 +135,15 @@ class Detection:
             current_time = time.time()
             if (current_time - last_processed_time) >= frame_interval:
                 last_processed_time = current_time
-                self.ctx.create_task(self.detect(frame))
+                self.ctx.create_task(self.detect(frame.frame))
 
             if len(self.latest_results) == 0:
-                self.video_out.capture_frame(frame)
+                self.video_out.capture_frame(frame.frame)
                 continue
 
-            argb_frame = frame.frame.convert(rtc.VideoBufferType.RGBA)
+            rgba_frame = frame.frame.convert(rtc.VideoBufferType.RGBA)
             image = Image.frombytes(
-                "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
+                "RGBA", (rgba_frame.width, rgba_frame.height), rgba_frame.data
             )
 
             # Draw red bounding box
@@ -155,19 +155,14 @@ class Detection:
                     width=3,
                 )
 
-            # LiveKit uses ARGB little-endian (so BGRA big-endian)
-            (r, g, b, a) = image.split()
-            # PIL we say "RGBA" because that's what PIL supports. But has no consequence, we store as BGRA
-            argb_image = Image.merge("RGBA", (b, g, r, a))
-
             # LiveKit stores underlying data as little-endian. So we set the BGRA data directly to an ARGB frame
-            argb_frame = rtc.VideoFrame(
-                argb_image.width,
-                argb_image.height,
-                rtc.VideoBufferType.ARGB,
-                argb_image.tobytes(),
+            rgba_frame = rtc.VideoFrame(
+                rgba_frame.width,
+                rgba_frame.height,
+                rtc.VideoBufferType.RGBA,
+                image.tobytes(),
             )
-            self.video_out.capture_frame(argb_frame)
+            self.video_out.capture_frame(rgba_frame)
 
     async def detect(self, frame: rtc.VideoFrame):
         if (not self.detector) or self.detecting:
