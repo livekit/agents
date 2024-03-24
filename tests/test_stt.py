@@ -1,13 +1,12 @@
 import asyncio
 import os
 import wave
-from difflib import SequenceMatcher
 from typing import List
 
 import pytest
-from utils import compare_word_counts
 from livekit import agents, rtc
 from livekit.plugins import deepgram, google, openai, silero
+from utils import compare_word_counts
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.wav")
 TEST_AUDIO_FILEPATH_2 = os.path.join(os.path.dirname(__file__), "long.mp3")
