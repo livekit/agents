@@ -17,8 +17,8 @@ from .version import __version__
 
 __all__ = ["VAD", "VADStream", "__version__"]
 
-from livekit.agents import Plugin
 import torch
+from livekit.agents import Plugin
 
 
 class SileroPlugin(Plugin):

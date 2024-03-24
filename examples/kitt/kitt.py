@@ -13,19 +13,19 @@
 # limitations under the License.
 
 import asyncio
-from datetime import datetime
-from enum import Enum
 import json
 import logging
+from datetime import datetime
+from enum import Enum
 from typing import AsyncIterable
 
-from livekit import rtc, agents
-from livekit.agents.tts import SynthesisEvent, SynthesisEventType
 from chatgpt import (
     ChatGPTMessage,
     ChatGPTMessageRole,
     ChatGPTPlugin,
 )
+from livekit import agents, rtc
+from livekit.agents.tts import SynthesisEvent, SynthesisEventType
 from livekit.plugins.deepgram import STT
 from livekit.plugins.elevenlabs import TTS
 

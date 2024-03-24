@@ -15,14 +15,17 @@
 from __future__ import annotations
 
 import dataclasses
-import os
 import io
+import os
 import wave
 from dataclasses import dataclass
+
 from livekit import agents
-from livekit.agents.utils import AudioBuffer
 from livekit.agents import stt
+from livekit.agents.utils import AudioBuffer
+
 import openai
+
 from .models import WhisperModels
 
 

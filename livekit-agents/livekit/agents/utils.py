@@ -1,5 +1,7 @@
 import asyncio
-from typing import Union, List
+import time
+from typing import List, Union
+
 from livekit import rtc
 
 AudioBuffer = Union[List[rtc.AudioFrame], rtc.AudioFrame]
@@ -61,3 +63,7 @@ class AsyncIterableQueue:
         if item is None:
             raise StopAsyncIteration
         return item
+
+
+def time_ms():
+    return int(time.time() * 1000)

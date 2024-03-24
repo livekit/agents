@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from enum import Enum
-from livekit import rtc
 from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncIterable, Optional
+from typing import AsyncIterable
 
 from livekit import rtc
 

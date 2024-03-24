@@ -1,8 +1,9 @@
 import logging
 from typing import List
+
 from .plugin import Plugin
-from .log import worker_logger
 from .worker import Worker, _run_worker
+
 
 def run_app(worker: Worker) -> None:
     """Run the CLI to interact with the worker"""

@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import List
 from dataclasses import dataclass, field
-from livekit import rtc
 from enum import Enum
+from typing import List
+
+from livekit import rtc
 
 
 class VADEventType(Enum):

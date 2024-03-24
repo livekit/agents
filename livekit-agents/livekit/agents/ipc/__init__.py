@@ -1,5 +1,4 @@
 from .job_context import JobContext
-from .server import IPCServer
-from .client import IPCClient
+from .job_process import JobProcess
 
-__all__ = ["IPCServer", "IPCServer", "IPCClient"]
+__all__ = ["JobContext", "JobProcess"]

@@ -14,14 +14,13 @@
 
 from __future__ import annotations
 
-from typing import Coroutine, Optional, TYPE_CHECKING
-from livekit import api, rtc
-from livekit.protocol import worker, agent
-
 import asyncio
 import contextlib
 import logging
-from .client import IPCClient
+from typing import Coroutine
+
+from livekit import rtc
+from livekit.protocol import agent, worker
 
 
 class JobContext:
@@ -31,7 +30,6 @@ class JobContext:
 
     def __init__(
         self,
-        client: IPCClient,
         job: agent.Job,
         room: rtc.Room,
         participant: rtc.RemoteParticipant | None = None,
@@ -41,7 +39,6 @@ class JobContext:
         self._participant = participant
         self._tasks = set()
         self._lock = asyncio.Lock()
-        self._ipc_client = client
 
     @property
     def id(self) -> str:

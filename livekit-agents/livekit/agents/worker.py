@@ -18,26 +18,21 @@ import asyncio
 import logging
 import os
 import signal
-import uuid
 from typing import (
     Any,
     Callable,
     Coroutine,
     Dict,
     Optional,
-    Tuple,
 )
 from urllib.parse import urlparse
 
 import websockets
-
 from livekit import api, protocol
 from livekit.protocol import agent as proto_agent
-from livekit.protocol import models as proto_models
 from livekit.protocol.agent import JobType
+
 from .job_request import JobRequest
-from .ipc import JobContext
-from .plugin import Plugin
 
 MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_INTERVAL = 5
@@ -171,7 +166,7 @@ class Worker:
         if which == "availability":
             # server is asking the worker if we are available for a job
             availability = msg.availability
-            job = JobRequest(self, availability.job)
+            job = JobRequest(self, ipc_server, availability.job)
             asyncio.ensure_future(self._handle_new_job(job), loop=self._loop)
         elif which == "assignment":
             # server is assigning a job to the worker
@@ -231,6 +226,7 @@ class Worker:
             if self._running:
                 raise Exception("worker is already running")
 
+            self._ipc_server.start()
             await self._connect()  # initial connection
             self._running = True
             self._task = self._loop.create_task(self._run())

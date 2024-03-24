@@ -15,8 +15,9 @@
 import asyncio
 import logging
 from typing import Optional, Set
+
 from livekit import agents, rtc
-from livekit.plugins.silero import VADPlugin, VADEventType
+from livekit.plugins.silero import VADEventType, VADPlugin
 
 
 class VAD:

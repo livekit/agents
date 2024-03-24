@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import logging
 import asyncio
-import openai
+import logging
+import os
 from dataclasses import dataclass
-from typing import AsyncIterable, List, Optional
 from enum import Enum
+from typing import AsyncIterable, List, Optional
+
+import openai
 
 ChatGPTMessageRole = Enum("MessageRole", ["system", "user", "assistant", "function"])
 

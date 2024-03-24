@@ -1,24 +1,22 @@
 from __future__ import annotations
 
-from livekit.protocol import worker, agent
-from livekit import rtc
-from typing import Callable
-from .consts import START_TIMEOUT
-from .client import IPCClient
-from ..log import process_logger
-from .job_context import JobContext
-from . import consts
-
 import asyncio
-import sys
-import multiprocessing
 import logging
-import contextlib
+
+from livekit import rtc
+from livekit.protocol import agent, worker
+
+from ..log import process_logger
+from . import protocol
+from .consts import START_TIMEOUT
+from .job_context import JobContext
 
 
-def _run_job(args: consts.JobMainArgs) -> None:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+def _run_job(cch: protocol.ProcessPipe, args: protocol.JobMainArgs) -> None:
+    protocol.write_msg(cch, protocol.Pong(last_timestamp=200, timestamp=200))
+    protocol.write_msg(cch, protocol.Log(level=logging.INFO, message="running job"))
+
+    return
 
     async def _run_job() -> None:
         client, rx = IPCClient.create(args.job_id, loop)

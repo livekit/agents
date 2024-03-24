@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from .tts import TTS, Voice, VoiceSettings, DEFAULT_VOICE
+from .tts import DEFAULT_VOICE, TTS, Voice, VoiceSettings
 from .version import __version__
 
 __all__ = ["TTS", "Voice", "VoiceSettings", "DEFAULT_VOICE", "__version__"]

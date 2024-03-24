@@ -14,20 +14,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import dataclasses
+import logging
+from dataclasses import dataclass
 from typing import AsyncIterable, List
+
+from livekit import agents, rtc
+from livekit.agents import stt
+from livekit.agents.utils import AudioBuffer
+
 from google.auth import credentials
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
-from livekit import rtc, agents
-from livekit.agents.utils import AudioBuffer
-from livekit.agents import stt
-from .models import SpeechModels, SpeechLanguages
-from dataclasses import dataclass
-import dataclasses
-import asyncio
-import logging
 
+from .models import SpeechLanguages, SpeechModels
 
 LgType = SpeechLanguages | str
 LanguageCode = LgType | List[LgType]

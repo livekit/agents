@@ -1,9 +1,10 @@
-from typing import List
-from livekit import agents
-from dataclasses import dataclass
-import dataclasses
-from typing import Optional
 import asyncio
+import dataclasses
+from dataclasses import dataclass
+from typing import List, Optional
+
+from livekit import agents
+
 import nltk
 
 # nltk is using the punkt tokenizer

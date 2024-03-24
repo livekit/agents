@@ -17,7 +17,6 @@ import pathlib
 
 import setuptools
 
-
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
 with open(os.path.join(here, "livekit", "agents", "version.py"), "r") as f:

@@ -1,13 +1,7 @@
 import asyncio
-import logging
+
+from livekit.agents.ipc import JobProcess
 from livekit.protocol import agent
-from livekit.agents.ipc import IPCServer
-
-
-def _start_server():
-    server = IPCServer()
-    server.start()
-    return server
 
 
 def fake_usercb():
@@ -15,12 +9,11 @@ def fake_usercb():
 
 
 async def test_job_process():
-    server = _start_server()
-
     fake_job = agent.Job()
     fake_job.id = "fake_job_id"
 
-    proc = server.new_process(fake_job, "http://localhost", "fake_token", fake_usercb)
-    await asyncio.sleep(2)
+    proc = JobProcess(fake_job, "fake_url", "fake_token", fake_usercb)
+    proc.start()
 
-    await server.aclose()
+    await asyncio.sleep(10)
+    await proc.aclose()

@@ -1,11 +1,11 @@
 import asyncio
-from collections import deque
-from typing import Generic, Tuple, TypeVar, Any
 import contextlib
+from collections import deque
+from typing import Any, Generic, Tuple, TypeVar
 
 T = TypeVar("T", bound=Any)
 
-# See https://github.com/python/cpython/blob/main/Lib/asyncio/queues.py
+# Based on asyncio.Queue, see https://github.com/python/cpython/blob/main/Lib/asyncio/queues.py
 
 
 class ChanClosed(Exception):
@@ -53,6 +53,15 @@ class ChanReceiver(Generic[T]):
 
     def close(self) -> None:
         self._chan.close()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> T:
+        try:
+            return await self.recv()
+        except ChanClosed:
+            raise StopAsyncIteration
 
 
 class Chan(Generic[T]):

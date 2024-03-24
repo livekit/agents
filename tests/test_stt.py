@@ -1,9 +1,10 @@
 import asyncio
-import wave
 import os
-from livekit import rtc, agents
-from livekit.plugins import deepgram, google, openai, silero
+import wave
 from difflib import SequenceMatcher
+
+from livekit import agents, rtc
+from livekit.plugins import deepgram, google, openai, silero
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.wav")
 TEST_AUDIO_TRANSCRIPT = "the people who are crazy enough to think they can change the world are the ones who do"

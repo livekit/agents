@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from .sentence_tokenizer import SentenceTokenizer, SentenceStream
+from .sentence_tokenizer import SentenceStream, SentenceTokenizer
 from .version import __version__
 
 __all__ = [
@@ -24,6 +24,7 @@ __all__ = [
 
 
 from livekit.agents import Plugin
+
 import nltk
 
 
