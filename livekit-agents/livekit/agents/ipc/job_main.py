@@ -1,23 +1,12 @@
 from __future__ import annotations
 
-import logging
-import threading
-import asyncio
-import logging
-import queue
 import asyncio
 import logging
 
 from livekit import rtc
-from livekit.protocol import agent, worker
 
-from . import apipe
 from ..log import logger
-from .. import aio
-from ..log import process_logger
-from . import protocol
-from .consts import START_TIMEOUT
-from .job_context import JobContext
+from . import apipe, protocol
 
 
 class LogHandler(logging.Handler):
@@ -43,7 +32,7 @@ async def _run_loop(
         room = rtc.Room()
         await room.connect(args.url, args.token)
 
-    except Exception as e:
+    except Exception:
         pass
 
 

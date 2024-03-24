@@ -24,7 +24,7 @@ from typing import AsyncIterable, List, Optional
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import tts, utils
+from livekit.agents import tts
 
 from .models import TTSModels
 

@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import ipc, stt, tokenize, tts, vad, aio
+from . import ipc, stt, tokenize, tts, vad
+from .codecs import Mp3StreamDecoder
 from .ipc import JobContext
 from .job_request import AutoDisconnect, AutoSubscribe, JobRequest
+from .plugin import Plugin
 from .utils import AsyncIterableQueue, AudioBuffer, merge_frames
 from .version import __version__
 from .worker import (
@@ -22,9 +24,6 @@ from .worker import (
     JobCancelledError,
     Worker,
 )
-from .plugin import Plugin
-from .codecs import Mp3StreamDecoder
-
 
 __all__ = [
     "__version__",

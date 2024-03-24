@@ -1,6 +1,6 @@
-import threading
-import queue
 import asyncio
+import queue
+import threading
 
 from .. import aio
 from . import protocol

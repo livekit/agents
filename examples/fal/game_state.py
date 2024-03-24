@@ -15,8 +15,8 @@
 import asyncio
 import os
 import random
-from typing import Callable
 from enum import Enum
+from typing import Callable
 
 import openai
 from livekit import agents

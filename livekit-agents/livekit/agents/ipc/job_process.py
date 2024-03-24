@@ -1,18 +1,16 @@
 import asyncio
 import contextlib
 import multiprocessing
-import queue
-import threading
 from typing import Callable
 
 from livekit.protocol import agent
 
 from .. import aio
-from ..log import logger 
-from . import apipe
+from ..log import logger
 from ..utils import time_ms
-from . import consts, protocol
+from . import apipe, consts, protocol
 from .job_main import _run_job
+
 
 class JobProcess:
     def __init__(
