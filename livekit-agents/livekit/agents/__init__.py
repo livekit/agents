@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import ipc, stt, tokenize, tts, vad
+from . import ipc, stt, tokenize, tts, vad, aio
 from .ipc import JobContext
 from .job_request import AutoDisconnect, AutoSubscribe, JobRequest
 from .utils import AsyncIterableQueue, AudioBuffer, merge_frames

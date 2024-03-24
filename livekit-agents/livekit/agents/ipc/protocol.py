@@ -28,7 +28,7 @@ class ProcessPipeWriter(Protocol):
         ...
 
 
-class ProcessPipe(ProcessPipeReader, ProcessPipeWriter):
+class ProcessPipe(ProcessPipeReader, ProcessPipeWriter, Protocol):
     ...
 
 

@@ -1,7 +1,4 @@
 import logging
 
-worker_logger = logging.getLogger("livekit.worker")
-job_logger = logging.getLogger("livekit.job")
+logger = logging.getLogger("livekit.agents")
 
-# Only used inside a job process
-process_logger = logging.getLogger("livekit.internal.process")
