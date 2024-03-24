@@ -1,4 +1,5 @@
 import asyncio
+import wave
 from livekit import agents
 from livekit.plugins import elevenlabs, openai
 from utils import compare_word_counts

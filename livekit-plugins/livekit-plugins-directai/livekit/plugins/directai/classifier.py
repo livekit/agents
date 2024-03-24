@@ -16,12 +16,13 @@ import asyncio
 import io
 import os
 from dataclasses import dataclass
-from typing import Optional, Dict, List
+from typing import Dict, List, Optional
 
 import aiohttp
-from ._utils import API_URL, generate_token
 from livekit import rtc
 from PIL import Image
+
+from ._utils import API_URL, generate_token
 
 
 class Classifier:

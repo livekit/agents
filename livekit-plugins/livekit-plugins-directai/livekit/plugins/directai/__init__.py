@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .detector import Detector
 from .classifier import Classifier
+from .detector import Detector
 from .version import __version__
 
 __all__ = ["Detector", "Classifier", "__version__"]

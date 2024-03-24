@@ -12,18 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import asyncio
-import logging
 import base64
+import contextlib
 import dataclasses
 import json
+import logging
 import os
 from dataclasses import dataclass
-from typing import List, Optional, AsyncIterable
+from typing import AsyncIterable, List, Optional
+
 import aiohttp
 from livekit import rtc
-from livekit.agents import tts
+from livekit.agents import tts, utils
+
 from .models import TTSModels
 
 

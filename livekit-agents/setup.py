@@ -16,8 +16,6 @@ import os
 import pathlib
 
 import setuptools
-import setuptools.command.build_py
-
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
@@ -53,7 +51,8 @@ setuptools.setup(
         "livekit>=0.9.0",
         "livekit-api>=0.4.1",
         "livekit-protocol>=0.3.0",
-        "websockets>=12,<13",
+        "protobuf>=3",
+        "types-protobuf>=4,<5",
     ],
     extras_require={
         "codecs": ["av>=11.0.0"],

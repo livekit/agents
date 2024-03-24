@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import contextlib
 import logging
-import asyncio
-from typing import List, Optional
-from livekit import rtc, agents
-import torch
-import numpy as np
 from collections import deque
+from typing import List, Optional
+
+import numpy as np
+import torch
+from livekit import agents, rtc
 
 
 class VAD(agents.vad.VAD):

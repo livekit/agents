@@ -1,16 +1,19 @@
 from __future__ import annotations
-import contextlib
+
 import asyncio
+import contextlib
 import logging
-from ..vad import VADStream, VADEventType
-from ..utils import merge_frames, AudioBuffer
-from .stt import (
-    STT,
-    SpeechStream,
-    SpeechEvent,
-)
+
 from livekit import rtc
 from livekit.agents import stt
+
+from ..utils import AudioBuffer, merge_frames
+from ..vad import VADEventType, VADStream
+from .stt import (
+    STT,
+    SpeechEvent,
+    SpeechStream,
+)
 
 
 class StreamAdapter(STT):

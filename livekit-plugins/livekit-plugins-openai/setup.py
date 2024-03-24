@@ -18,7 +18,6 @@ import pathlib
 import setuptools
 import setuptools.command.build_py
 
-
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
 with open(os.path.join(here, "livekit", "plugins", "openai", "version.py"), "r") as f:

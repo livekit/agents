@@ -1,7 +1,7 @@
 from .sentence_tokenizer import (
-    SentenceTokenizer,
-    SentenceStream,
     SegmentedSentence,
+    SentenceStream,
+    SentenceTokenizer,
 )
 
 __all__ = [

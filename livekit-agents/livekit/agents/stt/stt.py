@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from livekit import rtc
-from typing import List
 from dataclasses import dataclass, field
-from ..utils import AudioBuffer
 from enum import Enum
+from typing import List
+
+from livekit import rtc
+
+from ..utils import AudioBuffer
 
 
 class SpeechEventType(Enum):

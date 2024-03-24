@@ -14,14 +14,12 @@
 
 import asyncio
 import logging
-from typing import Callable, Coroutine, Optional, TYPE_CHECKING, Union
-from .job_context import JobContext
-from livekit import rtc, protocol, api
+from typing import Callable, Coroutine, Optional, Union
+
+from livekit import api, protocol, rtc
 from livekit.protocol import agent as proto_agent
 
-# TODO: refactor worker so we can avoid this circular import
-if TYPE_CHECKING:
-    from .worker import Worker
+from .ipc import JobContext
 
 AutoSubscribeCallback = Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool]
 AutoDisconnectCallback = Callable[[JobContext], bool]
@@ -116,6 +114,7 @@ class JobRequest:
         self._answered = False
         self._simulated = simulated
         self._lock = asyncio.Lock()
+        self._ipc_server = ipc_server
         self._grace_period_disconnect_task: Optional[asyncio.Task] = None
 
     @property
@@ -193,6 +192,13 @@ class JobRequest:
         async with self._lock:
             if self._answered:
                 raise Exception("job already answered")
+
+            proc = self._ipc_server.new_process(
+                self._info,
+                self._worker._rtc_url,
+                self._worker._api_key,
+                self._worker._api_secret,
+            )
 
             self._answered = True
 

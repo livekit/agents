@@ -12,30 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
 import signal
-import uuid
 from typing import (
     Any,
     Callable,
     Coroutine,
     Dict,
     Optional,
-    Tuple,
 )
 from urllib.parse import urlparse
 
 import websockets
-
 from livekit import api, protocol
 from livekit.protocol import agent as proto_agent
-from livekit.protocol import models as proto_models
 from livekit.protocol.agent import JobType
+
 from .job_request import JobRequest
-from .job_context import JobContext
-from .plugin import Plugin
 
 MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_INTERVAL = 5
@@ -73,31 +70,17 @@ class Worker:
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
     ) -> None:
-        """
-        Args:
-            request_handler (JobRequestHandler): Callback that is triggered when a new Job is available.
-            worker_type (JobType): What kind of jobs this worker can handle.
-            event_loop (Optional[asyncio.AbstractEventLoop]): Optional asyncio event loop to use for this worker. Defaults to None.
-            ws_url (str, optional): LiveKit websocket URL. Defaults to os.environ.get("LIVEKIT_URL", "http://localhost:7880").
-            api_key (str, optional): LiveKit API Key. Defaults to os.environ.get("LIVEKIT_API_KEY", "").
-            api_secret (str, optional): LiveKit API Secret. Defaults to os.environ.get("LIVEKIT_API_SECRET", "").
-        """
-
         self._loop = event_loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
         self._request_handler = request_handler
-        self._wid = "W-" + str(uuid.uuid4())[:12]
         self._worker_type = worker_type
         self._api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
-        self._api = None
         self._running = False
-        self._running_jobs: list["JobContext"] = []
         self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
-        self._rtc_url = None
-        self._agent_url = None
+
         ws_url = ws_url or os.environ.get("LIVEKIT_URL")
-        if ws_url:
+        if ws_url is not None:
             self._set_url(ws_url)
 
     def _set_url(self, ws_url: str) -> None:
@@ -113,15 +96,6 @@ class Worker:
         self._rtc_url = url
 
     async def _connect(self) -> protocol.agent.RegisterWorkerResponse:
-        if not self._rtc_url:
-            raise ValueError("No WebSocket URL provided, set LIVEKIT_URL env var")
-
-        if not self._api_key:
-            raise ValueError("No API key provided, set LIVEKIT_API_KEY env var")
-
-        if not self._api_secret:
-            raise ValueError("No API secret provided, set LIVEKIT_API_SECRET env var")
-
         self._api = api.LiveKitAPI(self._rtc_url, self._api_key, self._api_secret)
 
         join_jwt = (
@@ -131,7 +105,6 @@ class Worker:
         )
 
         req = protocol.agent.WorkerMessage()
-        req.register.worker_id = self._wid
         req.register.type = self._worker_type
 
         headers = {"Authorization": f"Bearer {join_jwt}"}
@@ -139,8 +112,8 @@ class Worker:
             self._agent_url, extra_headers=headers, close_timeout=0.150
         )
         await self._send(req)
-        res = await self._recv()
-        return res.register
+        msg = await self._recv()
+        return msg.register
 
     async def _send_availability(
         self, job_id: str, available: bool
@@ -161,35 +134,6 @@ class Worker:
                 f"assignment timeout for job {job_id}"
             ) from exc
 
-    async def _send_job_status(
-        self,
-        job_id: str,
-        status: protocol.agent.JobStatus.ValueType,
-        error: str,
-        user_data: str = "",
-    ) -> None:
-        req = protocol.agent.WorkerMessage()
-        req.job_update.job_id = job_id
-        req.job_update.status = status
-        req.job_update.error = error
-        req.job_update.user_data = user_data
-        await self._ws.send(req.SerializeToString())
-
-    def _simulate_job(
-        self,
-        room: proto_models.Room,
-        participant: Optional[proto_models.ParticipantInfo],
-    ):
-        # TODO(theomonnom): the server could handle the JobSimulation like
-        # we're doing with the SFU today
-        job_id = "JR_" + str(uuid.uuid4())[:12]
-        job_type = JobType.JT_ROOM if participant is None else JobType.JT_PUBLISHER
-        job = proto_agent.Job(
-            id=job_id, type=job_type, room=room, participant=participant
-        )
-        job = JobRequest(self, job, simulated=True)
-        asyncio.ensure_future(self._handle_new_job(job), loop=self._loop)
-
     async def _recv(self) -> proto_agent.ServerMessage:
         message = await self._ws.recv()
         msg = protocol.agent.ServerMessage()
@@ -204,9 +148,6 @@ class Worker:
             pass
 
     async def _handle_new_job(self, job: "JobRequest") -> None:
-        """Execute the available callback, and automatically deny the job if the callback
-        does not send an answer or raises an exception"""
-
         try:
             await self._request_handler(job)
         except Exception:
@@ -225,7 +166,7 @@ class Worker:
         if which == "availability":
             # server is asking the worker if we are available for a job
             availability = msg.availability
-            job = JobRequest(self, availability.job)
+            job = JobRequest(self, ipc_server, availability.job)
             asyncio.ensure_future(self._handle_new_job(job), loop=self._loop)
         elif which == "assignment":
             # server is assigning a job to the worker
@@ -285,6 +226,7 @@ class Worker:
             if self._running:
                 raise Exception("worker is already running")
 
+            self._ipc_server.start()
             await self._connect()  # initial connection
             self._running = True
             self._task = self._loop.create_task(self._run())
@@ -374,118 +316,3 @@ def _run_worker(
         loop.close()
         asyncio.set_event_loop(None)
 
-
-def run_app(worker: Worker) -> None:
-    """Run the CLI to interact with the worker"""
-
-    import click
-
-    @click.group()
-    @click.option(
-        "--log-level",
-        default="INFO",
-        type=click.Choice(
-            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
-        ),
-        help="Set the logging level",
-    )
-    def cli(log_level: str) -> None:
-        logging.basicConfig(level=log_level)
-
-    @cli.command(help="Start the worker")
-    @click.option(
-        "--url",
-        required=True,
-        envvar="LIVEKIT_URL",
-        help="LiveKit server or Cloud project WebSocket URL",
-        default="ws://localhost:7880",
-    )
-    @click.option(
-        "--api-key",
-        envvar="LIVEKIT_API_KEY",
-        help="LiveKit server or Cloud project's API key",
-        required=True,
-    )
-    @click.option(
-        "--api-secret",
-        envvar="LIVEKIT_API_SECRET",
-        help="LiveKit server or Cloud project's API secret",
-        required=True,
-    )
-    def start(url: str, api_key: str, api_secret: str) -> None:
-        worker._set_url(url)
-        worker._api_key = api_key
-        worker._api_secret = api_secret
-        _run_worker(worker)
-
-    @cli.command(help="Start a worker and simulate a job, useful for testing")
-    @click.option("--room-name", help="The room name", required=True)
-    @click.option("--identity", help="The participant identity")
-    @click.option(
-        "--url",
-        required=True,
-        envvar="LIVEKIT_URL",
-        help="LiveKit server or Cloud project WebSocket URL",
-        default="ws://localhost:7880",
-    )
-    @click.option(
-        "--api-key",
-        envvar="LIVEKIT_API_KEY",
-        help="LiveKit server or Cloud project's API key",
-        required=True,
-    )
-    @click.option(
-        "--api-secret",
-        envvar="LIVEKIT_API_SECRET",
-        help="LiveKit server or Cloud project's API secret",
-        required=True,
-    )
-    def simulate_job(
-        room_name: str, identity: str, url: str, api_key: str, api_secret: str
-    ) -> None:
-        worker._set_url(url)
-        worker._api_key = api_key
-        worker._api_secret = api_secret
-
-        async def _pre_run() -> (
-            Tuple[proto_models.Room, Optional[proto_models.ParticipantInfo]]
-        ):
-            lkapi = api.LiveKitAPI(worker._rtc_url, worker._api_key, worker._api_secret)
-
-            try:
-                room = await lkapi.room.create_room(
-                    api.CreateRoomRequest(name=room_name)
-                )
-
-                participant = None
-                if identity:
-                    participant = await lkapi.room.get_participant(
-                        api.RoomParticipantIdentity(room=room_name, identity=identity)
-                    )
-
-                return room, participant
-            finally:
-                await lkapi.aclose()
-
-        room_info, participant = worker._loop.run_until_complete(_pre_run())
-        logging.info(f"Simulating job for room {room_info.name} ({room_info.sid})")
-        _run_worker(
-            worker, started_cb=lambda _: worker._simulate_job(room_info, participant)
-        )
-
-    @cli.command(help="List used plugins")
-    def plugins() -> None:
-        for plugin in Plugin.registered_plugins:
-            logging.info(plugin.title)
-
-    @cli.command(help="Download required files of used plugins")
-    @click.option("--exclude", help="Exclude plugins", multiple=True)
-    def download_files(exclude: Tuple[str]) -> None:
-        for plugin in Plugin.registered_plugins:
-            if plugin.title in exclude:
-                continue
-
-            logging.info("Setup data for plugin %s", plugin.title)
-            plugin.download_files()
-
-    cli()
