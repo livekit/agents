@@ -65,6 +65,9 @@ class SelectLoop:
     def _done(self) -> bool:
         return not self._pending_tasks and not self._gens and not self._q
 
+    def __call__(self) -> Awaitable[SelectLoop.Completed]:
+        return self.__anext__()
+
     async def __anext__(self) -> Completed:
         if self._q:
             return self._q.popleft()

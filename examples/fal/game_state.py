@@ -51,14 +51,12 @@ PRE_GAME_PROMPT = "You are a game running agent in the pregame phase.\
                 your only job is to return the string 'start'. Do not return any other strings. Just return 'start'\
                 when the user has expressed intent to start playing."
 
-PLAYING_PROMPT_TEMPLATE = (
-    "You are an agent that can return two types of responses: A correct guess or an incorrect guess.\
+PLAYING_PROMPT_TEMPLATE = "You are an agent that can return two types of responses: A correct guess or an incorrect guess.\
     If the guess is correct, return the 'correct' string. Don't return anything else if the guess is correct.\
     If the guess is incorrect, return a short response that conveys that the guess was incorrect and give\
     a useful hint about what the answer is without revealing the name.\
     Do not return any other strings. Return 'correct' if the user has guessed the name %s correctly.\
     The spelling may be off so don't worry too much about that. Be generous."
-)
 
 
 class GameState:

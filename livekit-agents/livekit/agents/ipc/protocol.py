@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pickle
 from typing import Callable, ClassVar, Protocol
 
@@ -75,7 +77,7 @@ class StartJobRequest:
 @define(kw_only=True)
 class StartJobResponse:
     MSG_ID: ClassVar[int] = 1
-    exc: Exception | None = None
+    exc: BaseException | None = None
 
     def write(self, p: ProcessPipeWriter) -> None:
         if self.exc is None:
@@ -138,10 +140,46 @@ class Pong:
         self.timestamp = int.from_bytes(p.recv_bytes(8))
 
 
+@define(kw_only=True)
+class ShutdownRequest:
+    MSG_ID: ClassVar[int] = 5
+
+    def write(self, p: ProcessPipeWriter) -> None:
+        pass
+
+    def read(self, p: ProcessPipeReader) -> None:
+        pass
+
+
+@define(kw_only=True)
+class ShutdownResponse:
+    MSG_ID: ClassVar[int] = 6
+
+    def write(self, p: ProcessPipeWriter) -> None:
+        pass
+
+    def read(self, p: ProcessPipeReader) -> None:
+        pass
+
+
+@define(kw_only=True)
+class UserExit:
+    MSG_ID: ClassVar[int] = 7
+
+    def write(self, p: ProcessPipeWriter) -> None:
+        pass
+
+    def read(self, p: ProcessPipeReader) -> None:
+        pass
+
+
 MESSAGES = {
     StartJobRequest.MSG_ID: StartJobRequest,
     StartJobResponse.MSG_ID: StartJobResponse,
     Log.MSG_ID: Log,
     Ping.MSG_ID: Ping,
     Pong.MSG_ID: Pong,
+    ShutdownRequest.MSG_ID: ShutdownRequest,
+    ShutdownResponse.MSG_ID: ShutdownResponse,
+    UserExit.MSG_ID: UserExit,
 }

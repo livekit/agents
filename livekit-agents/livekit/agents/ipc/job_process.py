@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
 import multiprocessing
+import sys
+import threading
 from typing import Callable
 
 from livekit.protocol import agent
@@ -25,7 +27,9 @@ class JobProcess:
         self._job = job
         pch, cch = multiprocessing.Pipe(duplex=True)
         args = (cch, protocol.JobMainArgs(job.id, url, token, target))
-        self._process = multiprocessing.Process(target=_run_job, args=args)
+        self._process = multiprocessing.Process(
+            target=_run_job, args=args, daemon=True
+        )  # daemon=True to avoid unresponsive process in production
         self._pipe = apipe.AsyncPipe(pch, loop=self._loop)
 
     def start(self) -> None:
@@ -42,7 +46,6 @@ class JobProcess:
 
         self._task.add_done_callback(_log_exc)
 
-
     async def _proc_task(self) -> None:
         start_timeout = asyncio.sleep(consts.START_TIMEOUT)
         ping_interval = aio.interval(consts.PING_INTERVAL)
@@ -53,27 +56,27 @@ class JobProcess:
         async with contextlib.aclosing(
             aio.select([self._pipe, start_timeout, ping_interval, pong_timeout])
         ) as select:
-            async for s in select:
-                # self._job_rx has been closed, break the loop
-                if isinstance(s.exc, aio.ChanClosed):
+            while True:
+                s = await select()
+                if s.selected is start_timeout and start_res is None:
+                    logger.error(
+                        "process start timed out, killing job",
+                        extra=self.logging_extra(),
+                    )
+                    self._sig_kill()
                     break
 
-                # timeout the beginning of the process
-                # this make sure to avoid zombie if something failed
-                if s.selected == start_timeout:
-                    if start_res is None:
-                        logger.error(
-                            "process start timed out", extra=self.logging_extra()
-                        )
-                        break
-
-                if s.selected == pong_timeout:
-                    # process main thread is unresponsive?
+                if s.selected is pong_timeout:
+                    logger.error(
+                        "job ping timeout, killing job",
+                        extra=self.logging_extra(),
+                    )
+                    self._sig_kill()
                     break
 
-                # send ping each consts.PING_INTERVAL
-                if s.selected == ping_interval:
-                    await self._pipe.write(protocol.Ping(timestamp=time_ms()))
+                if s.selected is ping_interval:
+                    ping = protocol.Ping(timestamp=time_ms())
+                    await self._pipe.write(ping)  # send ping each consts.PING_INTERVAL
                     continue
 
                 res = s.result()
@@ -82,17 +85,43 @@ class JobProcess:
                 if isinstance(res, protocol.Log):
                     logger.log(res.level, res.message)
                 if isinstance(res, protocol.Pong):
-                    logger.log(res.level, res.message)
-                if isinstance(res, protocol.Pong):
-                    print("pong")
-                if isinstance(res, protocol.Pong):
+                    delay = time_ms() - res.timestamp
+                    if delay > consts.HIGH_PING_THRESHOLD * 1000:
+                        logger.warning(
+                            "job is unresponsive",
+                            extra={"delay": delay, **self.logging_extra()},
+                        )
+
                     with contextlib.suppress(aio.SleepFinished):
                         pong_timeout.reset()
-                    last_ping = time_ms()
+
+                if isinstance(res, protocol.UserExit) or isinstance(
+                    res, protocol.ShutdownResponse
+                ):
+                    logger.info("job exiting", extra=self.logging_extra())
+                    break
+
+        f = asyncio.Future()
+
+        def _join_process():
+            self._process.join()
+            self._loop.call_soon_threadsafe(f.set_result, None)
+
+        join_t = threading.Thread(target=self._process.join, daemon=True)
+        join_t.start()
+        await f
+
+    def _sig_kill(self) -> None:
+        if self._process.is_alive():
+            if sys.platform == "win32":
+                self._process.terminate()
+            else:
+                self._process.kill()
 
     async def aclose(self) -> None:
-        self._pipe.close()
+        await self._pipe.write(protocol.ShutdownRequest())
         await self._task
+        self._pipe.close()
 
     @property
     def job_id(self) -> str:

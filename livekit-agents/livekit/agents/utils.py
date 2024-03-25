@@ -1,4 +1,3 @@
-import asyncio
 import time
 from typing import List, Union
 
@@ -42,29 +41,5 @@ def merge_frames(buffer: AudioBuffer) -> rtc.AudioFrame:
     return buffer
 
 
-class AsyncIterableQueue:
-    def __init__(self):
-        self._queue = asyncio.Queue()
-
-    def put_nowait(self, item):
-        self._queue.put_nowait(item)
-
-    async def put(self, item):
-        await self._queue.put(item)
-
-    def close(self):
-        self._queue.put_nowait(None)
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        item = await self._queue.get()
-        if item is None:
-            raise StopAsyncIteration
-        return item
-
-
-def time_ms():
+def time_ms() -> int:
     return int(time.time() * 1000)
-

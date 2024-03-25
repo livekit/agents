@@ -41,25 +41,7 @@ ASSIGNMENT_TIMEOUT = 15
 JobRequestHandler = Callable[["JobRequest"], Coroutine]
 
 
-class AssignmentTimeoutError(Exception):
-    """Worker timed out when joining the worker-pool"""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-
-
-class JobCancelledError(Exception):
-    """Job was cancelled by the server"""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-
-
 class Worker:
-    """A Worker is a client that connects to LiveKit Cloud (or a LiveKit server) and receives Agent jobs.
-    For Job the Worker accepts, it will connect to the room and handle track subscriptions.
-    """
-
     def __init__(
         self,
         request_handler: JobRequestHandler,
@@ -67,15 +49,11 @@ class Worker:
         worker_type: JobType.ValueType = JobType.JT_ROOM,
         event_loop: Optional[asyncio.AbstractEventLoop] = None,
         ws_url: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_secret: Optional[str] = None,
     ) -> None:
         self._loop = event_loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
         self._request_handler = request_handler
         self._worker_type = worker_type
-        self._api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
-        self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
         self._running = False
         self._pending_jobs: Dict[str, asyncio.Future[proto_agent.JobAssignment]] = {}
 
@@ -96,8 +74,6 @@ class Worker:
         self._rtc_url = url
 
     async def _connect(self) -> protocol.agent.RegisterWorkerResponse:
-        self._api = api.LiveKitAPI(self._rtc_url, self._api_key, self._api_secret)
-
         join_jwt = (
             api.AccessToken(self._api_key, self._api_secret)
             .with_grants(api.VideoGrants(agent=True))
@@ -242,19 +218,11 @@ class Worker:
 
     @property
     def id(self) -> str:
-        """Worker ID"""
         return self._wid
 
     @property
     def running(self) -> bool:
-        """Whether the worker is running.
-        Running is first set to True when the websocket connection is established and
-        the Worker has been acknowledged by a LiveKit Server."""
         return self._running
-
-    @property
-    def api(self) -> Optional[api.LiveKitAPI]:
-        return self._api
 
 
 def _run_worker(
@@ -315,4 +283,3 @@ def _run_worker(
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
         asyncio.set_event_loop(None)
-
