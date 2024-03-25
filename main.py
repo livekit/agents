@@ -111,8 +111,8 @@ class KITT:
         # anything in the beginning
         await asyncio.sleep(1)
 
-        sip = self.ctx.room.name.startswith("sip")
-        await self.process_chatgpt_result(intro_text_stream(sip))
+        #sip = self.ctx.room.name.startswith("sip")
+        await self.process_chatgpt_result(intro_text_stream(True))
         self.update_state()
 
     def on_chat_received(self, message: rtc.ChatMessage):
