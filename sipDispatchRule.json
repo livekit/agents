@@ -1,8 +1,9 @@
 {
-	"trunk_ids": ["ST_5YdzReqvYc4G"],
+	"trunk_ids": [],
+	"hide_phone_number": false,
 	"rule": {
-		"dispatchRuleDirect": {
-			"roomName": "my-sip-room",
+		"dispatchRuleIndividual": {
+			"roomPrefix": "call-",
 			"pin": ""
 		}
 	}
