@@ -94,8 +94,6 @@ class KITT:
 
         self.chat.on("message_received", self.on_chat_received)
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
-        # Listen to the disconnected event to handle proper shutdown
-        self.ctx.room.on("disconnected", self.on_disconnected)
 
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
@@ -212,12 +210,6 @@ class KITT:
         )
         self.ctx.create_task(self.ctx.room.local_participant.update_metadata(metadata))
 
-    # Add this method to your KITT class
-    async def on_disconnected(self):
-        # Implement your shutdown logic here
-        await self.ctx.disconnect()  # Example: disconnect the job context
-        # Add any additional cleanup logic here
-
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
@@ -227,7 +219,8 @@ if __name__ == "__main__":
 
         await job_request.accept(
             KITT.create,
-            identity="kitt_agent",
+            #identity="kitt_agent",
+            identity=agents.utils.generate_random_string(8),
             name="KITT",
             auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY,
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
