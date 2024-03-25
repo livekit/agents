@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import random
+import string
 import asyncio
 from datetime import datetime
 from enum import Enum
@@ -188,6 +190,7 @@ class KITT:
                 self.update_state(sending_audio=False)
             elif e.type == SynthesisEventType.AUDIO:
                 await self.audio_out.capture_frame(e.audio.data)
+
         await tts_stream.aclose()
 
     def update_state(self, sending_audio: bool = None, processing: bool = None):
@@ -216,13 +219,14 @@ if __name__ == "__main__":
 
     async def job_request_cb(job_request: agents.JobRequest):
         logging.info("Accepting job for KITT")
-        name = agents.utils.generate_random_string(8)
-        
+
+        random_string = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+        logging.info(f"Generated random string: {random_string}")
+
         await job_request.accept(
             KITT.create,
-            #identity="kitt_agent",
-            identity=name,
-            name=name,
+            identity=random_string,
+            name=random_string,
             auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY,
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
