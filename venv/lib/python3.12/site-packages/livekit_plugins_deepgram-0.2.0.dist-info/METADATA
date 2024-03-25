@@ -1,0 +1,38 @@
+Metadata-Version: 2.1
+Name: livekit-plugins-deepgram
+Version: 0.2.0
+Summary: Agent Framework plugin for services using DeepGram's API.
+Home-page: https://github.com/livekit/agents
+License: Apache-2.0
+Project-URL: Documentation, https://docs.livekit.io
+Project-URL: Website, https://livekit.io/
+Project-URL: Source, https://github.com/livekit/agents
+Keywords: webrtc,realtime,audio,video,livekit
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Topic :: Multimedia :: Sound/Audio
+Classifier: Topic :: Multimedia :: Video
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3 :: Only
+Requires-Python: >=3.10.0
+Description-Content-Type: text/markdown
+Requires-Dist: livekit >=0.9.0
+Requires-Dist: livekit-agents >=0.3.0
+Requires-Dist: aiohttp >=3.7.4
+
+# LiveKit Plugins DeepGram
+
+Agent Framework plugin for speech-to-text with [DeepGram](https://deepgram.com/)'s API. Currently supports speech-to-text.
+
+## Installation
+
+```bash
+pip install livekit-plugins-deepgram
+```
+
+## Pre-requisites
+
+You'll need an API key from DeepGram. It can be set as an environment variable: `DEEPGRAM_API_KEY`

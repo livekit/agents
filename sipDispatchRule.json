@@ -1,0 +1,9 @@
+{
+	"trunk_ids": ["ST_5YdzReqvYc4G"],
+	"rule": {
+		"dispatchRuleDirect": {
+			"roomName": "my-sip-room",
+			"pin": ""
+		}
+	}
+}

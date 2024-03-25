@@ -1,0 +1,10 @@
+{
+    "outbound_address": "carlota.pstn.twilio.com",
+    "outbound_number": "+18559202838",
+    "outbound_username": "carlota",
+    "outbound_password": "&8XSTkN4STiES3p4",
+    "inbound_addresses": [],
+    "inbound_numbers_regex": [],
+    "inbound_username": "",
+    "inbound_password": ""
+}

@@ -1,0 +1,43 @@
+Metadata-Version: 2.1
+Name: types-protobuf
+Version: 4.24.0.20240311
+Summary: Typing stubs for protobuf
+Home-page: https://github.com/python/typeshed
+License: Apache-2.0 license
+Project-URL: GitHub, https://github.com/python/typeshed
+Project-URL: Changes, https://github.com/typeshed-internal/stub_uploader/blob/main/data/changelogs/protobuf.md
+Project-URL: Issue tracker, https://github.com/python/typeshed/issues
+Project-URL: Chat, https://gitter.im/python/typing
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python :: 3
+Classifier: Typing :: Stubs Only
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+
+## Typing stubs for protobuf
+
+This is a [PEP 561](https://peps.python.org/pep-0561/)
+type stub package for the [`protobuf`](https://github.com/protocolbuffers/protobuf) package.
+It can be used by type-checking tools like
+[mypy](https://github.com/python/mypy/),
+[pyright](https://github.com/microsoft/pyright),
+[pytype](https://github.com/google/pytype/),
+PyCharm, etc. to check code that uses
+`protobuf`.
+
+This version of `types-protobuf` aims to provide accurate annotations
+for `protobuf==4.24.*`.
+The source for this package can be found at
+https://github.com/python/typeshed/tree/main/stubs/protobuf. All fixes for
+types and metadata should be contributed there.
+
+Generated using [mypy-protobuf==3.5.0](https://github.com/nipunn1313/mypy-protobuf/tree/v3.5.0) on protobuf==4.21.8
+
+This stub package is marked as [partial](https://peps.python.org/pep-0561/#partial-stub-packages).
+If you find that annotations are missing, feel free to contribute and help complete them.
+
+
+See https://github.com/python/typeshed/blob/main/README.md for more details.
+This package was generated from typeshed commit `3802899a01269df575ea32a21534c5400fb9218a` and was tested
+with mypy 1.9.0, pyright 1.1.350, and
+pytype 2024.2.27.

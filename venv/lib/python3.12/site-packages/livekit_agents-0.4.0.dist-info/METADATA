@@ -1,0 +1,30 @@
+Metadata-Version: 2.1
+Name: livekit-agents
+Version: 0.4.0
+Summary: LiveKit Python Agents
+Home-page: https://github.com/livekit/agents
+License: Apache-2.0
+Project-URL: Documentation, https://docs.livekit.io
+Project-URL: Website, https://livekit.io/
+Project-URL: Source, https://github.com/livekit/agents
+Keywords: webrtc,realtime,audio,video,livekit,agents,AI
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Topic :: Multimedia :: Sound/Audio
+Classifier: Topic :: Multimedia :: Video
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3 :: Only
+Requires-Python: >=3.9.0
+Description-Content-Type: text/markdown
+Requires-Dist: click ~=8.1.0
+Requires-Dist: livekit >=0.9.0
+Requires-Dist: livekit-api >=0.4.1
+Requires-Dist: livekit-protocol >=0.3.0
+Requires-Dist: websockets <13,>=12
+
+# LiveKit Agents
+
+The core LiveKit Agents Framework. See top-level README for more information.
