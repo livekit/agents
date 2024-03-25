@@ -216,12 +216,13 @@ if __name__ == "__main__":
 
     async def job_request_cb(job_request: agents.JobRequest):
         logging.info("Accepting job for KITT")
-
+        name = agents.utils.generate_random_string(8)
+        
         await job_request.accept(
             KITT.create,
             #identity="kitt_agent",
-            identity=agents.utils.generate_random_string(8),
-            name="KITT",
+            identity=name,
+            name=name,
             auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY,
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
