@@ -100,6 +100,8 @@ class KITT:
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
         # self.ctx.room.on("disconnected", your_cleanup_function)
+        # Listen to the disconnected event to handle proper shutdown
+        self.ctx.room.on("disconnected", self.on_disconnected)
 
         # publish audio track
         track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.audio_out)
@@ -212,6 +214,13 @@ class KITT:
             }
         )
         self.ctx.create_task(self.ctx.room.local_participant.update_metadata(metadata))
+
+    # Add this method to your KITT class
+    async def on_disconnected(self):
+        # Implement your shutdown logic here
+        await self.ctx.disconnect()  # Example: disconnect the job context
+        # Add any additional cleanup logic here
+
 
 
 if __name__ == "__main__":
