@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from livekit import agents
 
-import nltk
+import nltk  # type: ignore
 
 # nltk is using the punkt tokenizer
 # https://www.nltk.org/_modules/nltk/tokenize/punkt.html
