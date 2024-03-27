@@ -163,8 +163,8 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = False
 
         self._session = aiohttp.ClientSession()
-        self._queue = asyncio.Queue[rtc.AudioFrame, str]()
-        self._event_queue = asyncio.Queue[stt.SpeechEvent, None]()
+        self._queue = asyncio.Queue[Union[rtc.AudioFrame, str]]()
+        self._event_queue = asyncio.Queue[Union[stt.SpeechEvent, None]]()
         self._closed = False
         self._main_task = asyncio.create_task(self._run(max_retry))
 

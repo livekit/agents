@@ -31,8 +31,8 @@ from google.cloud.speech_v2.types import cloud_speech
 
 from .models import SpeechLanguages, SpeechModels
 
-LgType = Union[SpeechLanguages | str]
-LanguageCode = Union[LgType | List[LgType]]
+LgType = Union[SpeechLanguages, str]
+LanguageCode = Union[LgType, List[LgType]]
 
 
 # This class is only be used internally to encapsulate the options
