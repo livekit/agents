@@ -67,8 +67,8 @@ AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 ELEVEN_TTS_SAMPLE_RATE = 24000
 ELEVEN_TTS_CHANNELS = 1
 CARLOTA_VOICE = Voice(
-    id="mhDEbUHjqavMXuFTyLxq",
-    name="Carlota",
+    id="aEO01A4wXwd1O8GPgGlF",
+    name="Arabella",
     category="generated",
     settings=VoiceSettings(
         stability=0.5, similarity_boost=0.75, style=0.0, use_speaker_boost=True
