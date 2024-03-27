@@ -87,13 +87,18 @@ class KITT:
         self.ctx: agents.JobContext = ctx
         self.chat = rtc.ChatManager(ctx.room)
          # Print the room name
-        self.phone_number = ctx.room.name.split('_')[1]
+        room_parts = ctx.room.name.split('_')
+        self.phone_number = room_parts[1] if len(room_parts) > 1 else None
+        
         print(f'Connected to room: {ctx.room.name}, with phone number: {self.phone_number}')
 
-        # Use the phone number to retrieve the first name and language
-        user_details = get_user_details_by_phone(self.phone_number)
-        self.first_name = user_details.get('first_name')
-        self.language = user_details.get('language')
+        if self.phone_number:
+            user_details = get_user_details_by_phone(self.phone_number)
+            self.first_name = user_details.get('first_name')
+            self.language = user_details.get('language')
+        else:
+            self.first_name = None
+            self.language = None
 
         # plugins
         self.chatgpt_plugin = ChatGPTPlugin(
