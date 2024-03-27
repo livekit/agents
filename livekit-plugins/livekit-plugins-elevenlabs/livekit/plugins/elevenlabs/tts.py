@@ -20,7 +20,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import AsyncIterable, List, Optional
+from typing import Any, AsyncIterable, Dict, List, Optional
 
 import aiohttp
 from livekit import rtc
@@ -105,8 +105,8 @@ class TTS(tts.TTS):
 
     async def synthesize(
         self,
-        *,
         text: str,
+        **_,
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         voice = self._config.voice
 
@@ -166,7 +166,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         model_id = self._config.model_id
         return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format=pcm_{self._config.sample_rate}&optimize_streaming_latency={self._config.latency}"
 
-    def push_text(self, token: str) -> None:
+    def push_text(self, token: str | None) -> None:
         if self._closed:
             raise ValueError("cannot push to a closed stream")
 
@@ -286,9 +286,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
 
-            msg = json.loads(msg.data)
-            if msg.get("audio"):
-                data = base64.b64decode(msg["audio"])
+            jsonMessage: Dict[str, Any] = json.loads(str(msg.data))
+            if jsonMessage.get("audio"):
+                data = base64.b64decode(jsonMessage["audio"])
                 audio_frame = rtc.AudioFrame(
                     data=data,
                     sample_rate=self._config.sample_rate,
@@ -301,7 +301,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         audio=tts.SynthesizedAudio(text="", data=audio_frame),
                     )
                 )
-            elif msg.get("isFinal"):
+            elif jsonMessage.get("isFinal"):
                 break
             else:
                 logging.error(f"Unhandled message from ElevenLabs: {msg}")
@@ -312,7 +312,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._queue.put_nowait(STREAM_EOS)
         await self._queue.join()
 
-    async def aclose(self) -> None:
+    async def aclose(self, wait=False) -> None:
+        if wait:
+            logging.warning(
+                "wait=True is not yet supported for ElevenLabs TTS. Closing immediately."
+            )
         self._main_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task

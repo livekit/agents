@@ -197,8 +197,8 @@ class VADStream(agents.vad.VADStream):
             ]
 
         max_buffer_len = padding_count + max(
-            self._max_buffered_samples // samples_10ms,
-            self._min_speaking_samples // samples_10ms,
+            int(self._max_buffered_samples // samples_10ms),
+            int(self._min_speaking_samples // samples_10ms),
         )
         if len(self._buffered_frames) > max_buffer_len:
             # if unaware of this, may be hard to debug, so logging seems ok here
