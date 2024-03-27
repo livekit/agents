@@ -111,6 +111,9 @@ class KITT:
         # anything in the beginning
         await asyncio.sleep(1)
 
+         # Print the room name
+        print(f'Connected to room: {self.ctx.room.name}')
+
         #sip = self.ctx.room.name.startswith("sip")
         await self.process_chatgpt_result(intro_text_stream(True))
         self.update_state()
@@ -229,13 +232,10 @@ if __name__ == "__main__":
     async def job_request_cb(job_request: agents.JobRequest):
         logging.info("Accepting job for KITT")
 
-        random_string = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
-        logging.info(f"Generated random string: {random_string}")
-
         await job_request.accept(
             KITT.create,
-            identity="Identity!",
-            name="Name!",
+            identity="Carlota AI",
+            name="Carlota AI",
             auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY,
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
