@@ -48,11 +48,9 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "livekit >= 0.9.0",
+        "livekit >= 0.9.2",
         "livekit-agents >= 0.3.0",
-        "numpy >= 1.24.0",
         "openai >= 1.0.0",
-        "audioread >= 3, < 4",
         "opencv-python >= 4, < 5",
         "requests >= 2, < 3",
     ],

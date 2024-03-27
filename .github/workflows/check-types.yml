@@ -1,0 +1,40 @@
+name: Check Types 
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  type-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+    
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.9
+
+    - name: Download ffi
+      run: python -m pip install requests && python livekit-rtc/rust-sdks/download_ffi.py --output $(python -m site --user-site)/livekit/rtc/resources
+
+    - name: Install mypy 
+      run: python -m pip install --upgrade mypy 
+
+    - name: Install all packages
+      run: |
+        find . -name setup.py | xargs -n 1 dirname | xargs -n 1 python -m pip install
+
+    - name: Check Types 
+      run: |
+        for d in $(find . -name setup.py | xargs -n 1 dirname | xargs -n 1 basename); do
+          echo "Checking types for package: $d"
+          python -m mypy --non-interactive --install-type -p '$d'
+        done
