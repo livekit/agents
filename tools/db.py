@@ -10,9 +10,12 @@ key: str = os.getenv('SUPABASE_KEY')
 supabase: Client = create_client(url, key)
 
 # Function to retrieve first_name by phone
-def get_first_name_by_phone(phone: str) -> str:
-    data = supabase.table("users").select("first_name").eq("phone", phone).execute()
+def get_user_details_by_phone(phone: str) -> dict:
+    data = supabase.table("users").select("first_name, language").eq("phone", phone).execute()
     if data.data and len(data.data) > 0:
-        return data.data[0]['first_name']
+        return {
+            'first_name': data.data[0]['first_name'],
+            'language': data.data[0]['language']
+        }
     else:
-        return ""
+        return {'first_name': "", 'language': ""}

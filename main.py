@@ -30,7 +30,7 @@ from chatgpt import (
 )
 from livekit.plugins.deepgram import STT
 from livekit.plugins.elevenlabs import TTS, Voice, VoiceSettings
-from tools.db import get_first_name_by_phone 
+from tools.db import get_user_details_by_phone 
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -41,16 +41,23 @@ PROMPT = "You are Carlota, a friendly voice assistant for elderly.  \
           Don't respond with more than a few sentences."
 
 # Modify the intro_text_stream function
-async def intro_text_stream(phone_number: str):
-    # Use the phone number to retrieve the first name
-    first_name = get_first_name_by_phone(phone_number)
+async def intro_text_stream(phone_number: str, first_name, language):
+    
     # Customize the intro message if the first name is found
     if first_name:
-        personalized_intro = f"Hello {first_name}, I am Carlota, your friendly voice assistant. " \
-                             "Feel free to ask me anything — I'm here to help! Just start talking."
+        if language == 'es':
+            personalized_intro = f"¡Hola {first_name}! Soy Carlota, tu asistente de voz amigable. " \
+                                 "Siéntete libre de preguntarme cualquier cosa. ¡Estoy aquí para ayudar! Solo empieza a hablar."
+        else:
+            personalized_intro = f"Hello {first_name}! I am Carlota, your friendly voice assistant. " \
+                                 "Feel free to ask me anything. I'm here to help! Just start talking."
     else:
-        personalized_intro = "Hello, I am Carlota, a friendly voice assistant. " \
-                             "Feel free to ask me anything — I'm here to help! Just start talking."
+        if language == 'es':
+            personalized_intro = "¡Hola! Soy Carlota, una asistente de voz amigable. " \
+                                 "Siéntete libre de preguntarme cualquier cosa. ¡Estoy aquí para ayudar! Solo empieza a hablar."
+        else:
+            personalized_intro = "Hello! I am Carlota, a friendly voice assistant. " \
+                                 "Feel free to ask me anything. I'm here to help! Just start talking."
     yield personalized_intro
 
 
@@ -75,8 +82,19 @@ class KITT:
         await kitt.start()
 
     def __init__(self, ctx: agents.JobContext):
+
+        self.ctx: agents.JobContext = ctx
+        self.chat = rtc.ChatManager(ctx.room)
+         # Print the room name
+        self.phone_number = ctx.room.name.split('_')[1]
+        print(f'Connected to room: {ctx.room.name}, with phone number: {self.phone_number}')
+
+        # Use the phone number to retrieve the first name and language
+        user_details = get_user_details_by_phone(self.phone_number)
+        self.first_name = user_details.get('first_name')
+        self.language = user_details.get('language')
+
         # plugins
-        
         self.chatgpt_plugin = ChatGPTPlugin(
             prompt=PROMPT, message_capacity=20, model="gpt-4-1106-preview"
         )
@@ -84,11 +102,10 @@ class KITT:
             min_silence_duration=100,
         )
         self.tts_plugin = TTS(
-            model_id="eleven_turbo_v2", sample_rate=ELEVEN_TTS_SAMPLE_RATE, voice=CARLOTA_VOICE
+            model_id="eleven_multilingual_v2" if self.language == 'es' else "eleven_turbo_v2",
+            sample_rate=ELEVEN_TTS_SAMPLE_RATE,
+            voice=CARLOTA_VOICE
         )
-
-        self.ctx: agents.JobContext = ctx
-        self.chat = rtc.ChatManager(ctx.room)
         self.audio_out = rtc.AudioSource(ELEVEN_TTS_SAMPLE_RATE, ELEVEN_TTS_CHANNELS)
 
         self._sending_audio = False
@@ -112,12 +129,7 @@ class KITT:
         # anything in the beginning
         await asyncio.sleep(1)
 
-         # Print the room name
-        phone_number = self.ctx.room.name.split('_')[1]
-        print(f'Connected to room: {self.ctx.room.name}, with phone number: {phone_number}')
-
-        #sip = self.ctx.room.name.startswith("sip")
-        await self.process_chatgpt_result(intro_text_stream(phone_number))
+        await self.process_chatgpt_result(intro_text_stream(self.phone_number, self.first_name, self.language))
         self.update_state()
 
     def on_chat_received(self, message: rtc.ChatMessage):
