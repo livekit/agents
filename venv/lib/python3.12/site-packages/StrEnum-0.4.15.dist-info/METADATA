@@ -1,0 +1,211 @@
+Metadata-Version: 2.1
+Name: StrEnum
+Version: 0.4.15
+Summary: An Enum that inherits from str.
+Home-page: https://github.com/irgeek/StrEnum
+Author: James Sinclair
+Author-email: james@nurfherder.com
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Provides-Extra: docs
+Requires-Dist: sphinx ; extra == 'docs'
+Requires-Dist: sphinx-rtd-theme ; extra == 'docs'
+Requires-Dist: myst-parser[linkify] ; extra == 'docs'
+Provides-Extra: release
+Requires-Dist: twine ; extra == 'release'
+Provides-Extra: test
+Requires-Dist: pytest ; extra == 'test'
+Requires-Dist: pytest-black ; extra == 'test'
+Requires-Dist: pytest-cov ; extra == 'test'
+Requires-Dist: pytest-pylint ; extra == 'test'
+Requires-Dist: pylint ; extra == 'test'
+
+# StrEnum
+
+[![Build Status](https://github.com/irgeek/StrEnum/workflows/Python%20package/badge.svg)](https://github.com/irgeek/StrEnum/actions)
+
+StrEnum is a Python `enum.Enum` that inherits from `str` to complement
+`enum.IntEnum` in the standard library. Supports python 3.7+.
+
+## Installation
+
+You can use [pip](https://pip.pypa.io/en/stable/) to install.
+
+```bash
+pip install StrEnum
+```
+
+## Usage
+
+```python
+from enum import auto
+from strenum import StrEnum
+
+
+class HttpMethod(StrEnum):
+    GET = auto()
+    HEAD = auto()
+    POST = auto()
+    PUT = auto()
+    DELETE = auto()
+    CONNECT = auto()
+    OPTIONS = auto()
+    TRACE = auto()
+    PATCH = auto()
+
+
+assert HttpMethod.GET == "GET"
+
+# You can use StrEnum values just like strings:
+
+import urllib.request
+
+req = urllib.request.Request('https://www.python.org/', method=HttpMethod.HEAD)
+with urllib.request.urlopen(req) as response:
+    html = response.read()
+
+assert len(html) == 0  # HEAD requests do not (usually) include a body
+```
+
+There are classes whose `auto()` value folds each member name to upper or lower
+case:
+
+```python
+from enum import auto
+from strenum import LowercaseStrEnum, UppercaseStrEnum
+
+
+class Tag(LowercaseStrEnum):
+    Head = auto()
+    Body = auto()
+    Div = auto()
+
+
+assert Tag.Head == "head"
+assert Tag.Body == "body"
+assert Tag.Div == "div"
+
+
+class HttpMethod(UppercaseStrEnum):
+    Get = auto()
+    Head = auto()
+    Post = auto()
+
+
+assert HttpMethod.Get == "GET"
+assert HttpMethod.Head == "HEAD"
+assert HttpMethod.Post == "POST"
+```
+
+As well as classes whose `auto()` value converts each member name to camelCase,
+PascalCase, kebab-case, snake_case and MACRO_CASE:
+
+```python
+from enum import auto
+from strenum import CamelCaseStrEnum, PascalCaseStrEnum
+from strenum import KebabCaseStrEnum, SnakeCaseStrEnum
+from strenum import MacroCaseStrEnum
+
+
+class CamelTestEnum(CamelCaseStrEnum):
+    OneTwoThree = auto()
+
+
+class PascalTestEnum(PascalCaseStrEnum):
+    OneTwoThree = auto()
+
+
+class KebabTestEnum(KebabCaseStrEnum):
+    OneTwoThree = auto()
+
+
+class SnakeTestEnum(SnakeCaseStrEnum):
+    OneTwoThree = auto()
+
+
+class MacroTestEnum(MacroCaseStrEnum):
+    OneTwoThree = auto()
+
+
+assert CamelTestEnum.OneTwoThree == "oneTwoThree"
+assert PascalTestEnum.OneTwoThree == "OneTwoThree"
+assert KebabTestEnum.OneTwoThree == "one-two-three"
+assert SnakeTestEnum.OneTwoThree == "one_two_three"
+assert MacroTestEnum.OneTwoThree == "ONE_TWO_THREE"
+```
+
+As with any Enum you can, of course, manually assign values.
+
+```python
+from strenum import StrEnum
+
+
+class Shape(StrEnum):
+    CIRCLE = "Circle"
+
+
+assert Shape.CIRCLE == "Circle"
+```
+
+Doing this with the case-changing classes, though, won't manipulate
+values--whatever you assign is the value they end up with.
+
+```python
+from strenum import KebabCaseStrEnum
+
+
+class Shape(KebabCaseStrEnum):
+    CIRCLE = "Circle"
+
+
+# This will raise an AssertionError because the value wasn't converted to kebab-case.
+assert Shape.CIRCLE == "circle"
+```
+
+## Contributing
+
+Pull requests are welcome. For major changes, please open an issue first to
+discuss what you would like to change.
+
+Please ensure tests pass before submitting a PR. This repository uses
+[Black](https://black.readthedocs.io/en/stable/) and
+[Pylint](https://www.pylint.org/) for consistency. Both are run automatically
+as part of the test suite.
+
+## Running the tests
+
+Tests can be run using `make`:
+
+```
+make test
+```
+
+This will create a virutal environment, install the module and its test
+dependencies and run the tests. Alternatively you can do the same thing
+manually:
+
+```
+python3 -m venv .venv
+.venv/bin/pip install .[test]
+.venv/bin/pytest
+```
+
+## License
+
+[MIT](https://choosealicense.com/licenses/mit/)
+
+**N.B. Starting with Python 3.11, `enum.StrEnum` is available in the standard
+library. This implementation is _not_ a drop-in replacement for the standard
+library implementation. Specifically, the Python devs have decided to case fold
+name to lowercase by default when `auto()` is used which I think violates the
+principle of least surprise.**

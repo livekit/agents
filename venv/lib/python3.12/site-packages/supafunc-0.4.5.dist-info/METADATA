@@ -1,0 +1,43 @@
+Metadata-Version: 2.1
+Name: supafunc
+Version: 0.4.5
+Summary: Library for Supabase Functions
+Home-page: https://github.com/supabase-community/functions-py
+License: MIT
+Author: Joel Lee
+Author-email: joel@joellee.org
+Requires-Python: >=3.8,<4.0
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Requires-Dist: httpx (>=0.24,<0.28)
+Project-URL: Repository, https://github.com/supabase-community/functions-py
+Description-Content-Type: text/markdown
+
+# Functions-py
+
+
+## Installation
+
+`pip3 install supafunc`
+
+## Usage
+
+Deploy your function as per documentation.
+
+
+```python3
+import asyncio
+from supafunc import AsyncFunctionsClient
+async def run_func():
+    fc = AsyncFunctionsClient("https://<project_ref>.functions.supabase.co", {})
+    res = await fc.invoke("payment-sheet", {"responseType": "json"})
+
+if __name__ == "__main__":
+    asyncio.run(run_func())
+```
+

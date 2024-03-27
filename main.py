@@ -30,6 +30,7 @@ from chatgpt import (
 )
 from livekit.plugins.deepgram import STT
 from livekit.plugins.elevenlabs import TTS, Voice, VoiceSettings
+from tools.db import get_first_name_by_phone 
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,19 +39,19 @@ PROMPT = "You are Carlota, a friendly voice assistant for elderly.  \
           Conversation should be personable, and be sure to ask follow up questions. \
           If your response is a question, please append a question mark symbol to the end of it.\
           Don't respond with more than a few sentences."
-INTRO = "Hello, I am Carlota, a friendly voice assistant. \
-        Feel free to ask me anything — I'm here to help! Just start talking."
-SIP_INTRO = "Hello, I am Carlota, a friendly voice assistant. \
-        Feel free to ask me anything — I'm here to help! Just start talking."
 
-
-# convert intro response to a stream
-async def intro_text_stream(sip: bool):
-    if sip:
-        yield SIP_INTRO
-        return
-
-    yield INTRO
+# Modify the intro_text_stream function
+async def intro_text_stream(phone_number: str):
+    # Use the phone number to retrieve the first name
+    first_name = get_first_name_by_phone(phone_number)
+    # Customize the intro message if the first name is found
+    if first_name:
+        personalized_intro = f"Hello {first_name}, I am Carlota, your friendly voice assistant. " \
+                             "Feel free to ask me anything — I'm here to help! Just start talking."
+    else:
+        personalized_intro = "Hello, I am Carlota, a friendly voice assistant. " \
+                             "Feel free to ask me anything — I'm here to help! Just start talking."
+    yield personalized_intro
 
 
 AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
@@ -112,10 +113,11 @@ class KITT:
         await asyncio.sleep(1)
 
          # Print the room name
-        print(f'Connected to room: {self.ctx.room.name}')
+        phone_number = self.ctx.room.name.split('_')[1]
+        print(f'Connected to room: {self.ctx.room.name}, with phone number: {phone_number}')
 
         #sip = self.ctx.room.name.startswith("sip")
-        await self.process_chatgpt_result(intro_text_stream(True))
+        await self.process_chatgpt_result(intro_text_stream(phone_number))
         self.update_state()
 
     def on_chat_received(self, message: rtc.ChatMessage):

@@ -1,0 +1,3 @@
+[console_scripts]
+tests=poetry_scripts:run_tests
+

@@ -1,0 +1,55 @@
+Metadata-Version: 2.1
+Name: storage3
+Version: 0.7.4
+Summary: Supabase Storage client for Python.
+Home-page: https://supabase-community.github.io/storage-py
+License: MIT
+Author: Joel Lee
+Author-email: joel@joellee.org
+Requires-Python: >=3.8,<4.0
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Requires-Dist: httpx (>=0.24,<0.28)
+Requires-Dist: python-dateutil (>=2.8.2,<3.0.0)
+Requires-Dist: typing-extensions (>=4.2.0,<5.0.0)
+Project-URL: Documentation, https://supabase-community.github.io/storage-py
+Project-URL: Repository, https://github.com/supabase-community/storage-py
+Description-Content-Type: text/markdown
+
+# Storage-py
+
+Python Client library to interact with Supabase Storage.
+
+
+
+## How to use
+
+As it takes some effort to get the headers. We suggest that you use the storage functionality through the main [Supabase Python Client](https://github.com/supabase-community/supabase-py)
+
+
+```python3
+from storage3 import create_client
+
+url = "https://<your_supabase_id>.supabase.co/storage/v1"
+key = "<your api key>"
+headers = {"apiKey": key, "Authorization": f"Bearer {key}"}
+
+# pass in is_async=True to create an async client
+storage_client = create_client(url, headers, is_async=False)
+
+storage_client.list_buckets()
+```
+
+### Uploading files
+When uploading files, make sure to set the correct mimetype by using the `file_options` argument:
+```py
+storage_client.from_("bucket").upload("/folder/file.png", file_object, {"content-type": "image/png"})
+```
+If no mime type is given, the default `text/plain` will be used.
+
