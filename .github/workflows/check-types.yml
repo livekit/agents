@@ -22,9 +22,6 @@ jobs:
       with:
         python-version: 3.9
 
-    - name: Download ffi
-      run: python -m pip install requests && python livekit-rtc/rust-sdks/download_ffi.py --output $(python -m site --user-site)/livekit/rtc/resources
-
     - name: Install mypy 
       run: python -m pip install --upgrade mypy 
 
