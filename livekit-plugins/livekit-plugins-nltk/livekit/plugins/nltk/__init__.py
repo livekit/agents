@@ -25,7 +25,7 @@ __all__ = [
 
 from livekit.agents import Plugin
 
-import nltk
+import nltk  # type: ignore
 
 
 class NltkPlugin(Plugin):

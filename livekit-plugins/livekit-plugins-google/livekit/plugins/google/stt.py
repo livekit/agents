@@ -179,8 +179,8 @@ class SpeechStream(stt.SpeechStream):
         self._sample_rate = sample_rate
         self._num_channels = num_channels
 
-        self._queue = asyncio.Queue[rtc.AudioFrame, None]()
-        self._event_queue = asyncio.Queue[stt.SpeechEvent, None]()
+        self._queue = asyncio.Queue[Union[rtc.AudioFrame, None]]()
+        self._event_queue = asyncio.Queue[Union[stt.SpeechEvent, None]]()
         self._closed = False
         self._main_task = asyncio.create_task(self._run(max_retry=max_retry))
 
