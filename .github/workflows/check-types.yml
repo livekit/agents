@@ -21,11 +21,14 @@ jobs:
 
     - name: Install all packages
       run: |
-        find . -name setup.py | xargs -n 1 dirname | xargs -n 1 python -m pip install
+        pip install ./python-agents
+  # find . -name setup.py | xargs -n 1 dirname | xargs -n 1 python -m pip install
 
     - name: Check Types 
-      run: |
-        for d in $(find . -name setup.py | xargs -n 1 dirname | xargs -n 1 basename); do
-          echo "Checking types for package: $d"
-          python -m mypy --non-interactive --install-type -p '$d'
-        done
+      run : |
+        mypy --non-interactive --install-type -p python-agents
+ #     run: |
+ #       for d in $(find . -name setup.py | xargs -n 1 dirname | xargs -n 1 basename); do
+ #         echo "Checking types for package: $d"
+ #         python -m mypy --non-interactive --install-type -p '$d'
+ #       done
