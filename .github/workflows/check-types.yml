@@ -21,12 +21,12 @@ jobs:
 
     - name: Install all packages
       run: |
-        pip install ./livekit-agents
+        pip install ./livekit-plugins-openai
   # find . -name setup.py | xargs -n 1 dirname | xargs -n 1 python -m pip install
 
     - name: Check Types 
       run : |
-        mypy --non-interactive --install-type -p livekit-agents
+        mypy --non-interactive --install-type -p livekit-plugins-openai
  #     run: |
  #       for d in $(find . -name setup.py | xargs -n 1 dirname | xargs -n 1 basename); do
  #         echo "Checking types for package: $d"
