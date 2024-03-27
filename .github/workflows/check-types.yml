@@ -1,6 +1,9 @@
 name: Check Types 
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
     branches:
       - main
