@@ -19,7 +19,7 @@ import contextlib
 import dataclasses
 import logging
 from dataclasses import dataclass
-from typing import Any, AsyncIterable, Dict, List, Union
+from typing import Any, AsyncIterable, Dict, List
 
 from livekit import agents, rtc
 from livekit.agents import stt
@@ -31,8 +31,8 @@ from google.cloud.speech_v2.types import cloud_speech
 
 from .models import SpeechLanguages, SpeechModels
 
-LgType = Union[SpeechLanguages, str]
-LanguageCode = Union[LgType, List[LgType]]
+LgType = SpeechLanguages | str
+LanguageCode = LgType | List[LgType]
 
 
 # This class is only be used internally to encapsulate the options
@@ -56,8 +56,8 @@ class STT(stt.STT):
         punctuate: bool = True,
         spoken_punctuation: bool = True,
         model: SpeechModels = "long",
-        credentials_info: Union[Dict[str, Any], None] = None,
-        credentials_file: Union[str, None] = None,
+        credentials_info: Dict[str, Any] | None = None,
+        credentials_file: str | None = None,
     ):
         """
         if no credentials is provided, it will use the credentials on the environment
@@ -116,7 +116,7 @@ class STT(stt.STT):
         self,
         *,
         buffer: AudioBuffer,
-        language: Union[SpeechLanguages, str, None] = None,
+        language: SpeechLanguages | str | None = None,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
         buffer = agents.utils.merge_frames(buffer)
@@ -148,7 +148,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: Union[SpeechLanguages, str, None] = None,
+        language: SpeechLanguages | str | None = None,
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
         return SpeechStream(
@@ -179,8 +179,8 @@ class SpeechStream(stt.SpeechStream):
         self._sample_rate = sample_rate
         self._num_channels = num_channels
 
-        self._queue = asyncio.Queue[Union[rtc.AudioFrame, None]]()
-        self._event_queue = asyncio.Queue[Union[stt.SpeechEvent, None]]()
+        self._queue = asyncio.Queue[rtc.AudioFrame | None]()
+        self._event_queue = asyncio.Queue[stt.SpeechEvent | None]()
         self._closed = False
         self._main_task = asyncio.create_task(self._run(max_retry=max_retry))
 

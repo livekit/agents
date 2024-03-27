@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import asyncio
 import dataclasses
 import logging
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import List, Optional
 
 from livekit import agents
 
@@ -79,9 +81,7 @@ class SentenceStream(agents.tokenize.SentenceStream):
         self._language = language
         self._context_len = context_len
         self._min_sentence_len = min_sentence_len
-        self._event_queue = asyncio.Queue[
-            Union[agents.tokenize.SegmentedSentence, None]
-        ]()
+        self._event_queue = asyncio.Queue[agents.tokenize.SegmentedSentence | None]()
         self._closed = False
 
         self._incomplete_sentences: List[str] = []  # <= min_sentence_len

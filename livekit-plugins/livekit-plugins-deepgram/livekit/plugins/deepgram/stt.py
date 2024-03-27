@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import asyncio
 import dataclasses
 import io
@@ -21,7 +23,7 @@ import os
 import wave
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import List, Union
+from typing import List
 from urllib.parse import urlencode
 
 import aiohttp
@@ -34,13 +36,13 @@ from .models import DeepgramLanguages, DeepgramModels
 
 @dataclass
 class STTOptions:
-    language: Union[DeepgramLanguages, str, None]
+    language: DeepgramLanguages | str | None
     detect_language: bool
     interim_results: bool
     punctuate: bool
     model: DeepgramModels
     smart_format: bool
-    endpointing: Union[int, None]
+    endpointing: int | None
 
 
 class STT(stt.STT):
@@ -53,7 +55,7 @@ class STT(stt.STT):
         punctuate: bool = True,
         smart_format: bool = True,
         model: DeepgramModels = "nova-2-general",
-        api_key: Union[str, None] = None,
+        api_key: str | None = None,
         min_silence_duration: int = 100,  # 100ms for a RTC app seems like a strong default
     ) -> None:
         super().__init__(streaming_supported=True)
@@ -76,7 +78,7 @@ class STT(stt.STT):
         self,
         *,
         buffer: AudioBuffer,
-        language: Union[DeepgramLanguages, str, None] = None,
+        language: DeepgramLanguages | str | None = None,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 
@@ -120,7 +122,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: Union[DeepgramLanguages, str, None] = None,
+        language: DeepgramLanguages | str | None = None,
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
         return SpeechStream(config, api_key=self._api_key)
@@ -128,7 +130,7 @@ class STT(stt.STT):
     def _sanitize_options(
         self,
         *,
-        language: Union[str, None] = None,
+        language: str | None = None,
     ) -> STTOptions:
         config = dataclasses.replace(self._config)
         config.language = language or config.language
@@ -163,8 +165,8 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = False
 
         self._session = aiohttp.ClientSession()
-        self._queue = asyncio.Queue[Union[rtc.AudioFrame, str]]()
-        self._event_queue = asyncio.Queue[Union[stt.SpeechEvent, None]]()
+        self._queue = asyncio.Queue[rtc.AudioFrame | str]()
+        self._event_queue = asyncio.Queue[stt.SpeechEvent | None]()
         self._closed = False
         self._main_task = asyncio.create_task(self._run(max_retry))
 
@@ -435,9 +437,7 @@ def live_transcription_to_speech_data(
 
 
 def prerecorded_transcription_to_speech_event(
-    language: Union[
-        str, None
-    ],  # language should be None when 'detect_language' is enabled
+    language: str | None,  # language should be None when 'detect_language' is enabled
     data: dict,
 ) -> stt.SpeechEvent:
     # We only support one channel for now
