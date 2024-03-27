@@ -21,7 +21,7 @@ jobs:
 
     - name: Install all packages
       run: |
-        pip install ./python-agents
+        pip install ./livekit-agents
   # find . -name setup.py | xargs -n 1 dirname | xargs -n 1 python -m pip install
 
     - name: Check Types 
