@@ -37,11 +37,7 @@ AutoDisconnect = Enum(
 
 
 class JobRequest:
-    def __init__(
-        self,
-        job: agent.Job,
-        answer_tx: aio.ChanSender[bool]
-    ) -> None:
+    def __init__(self, job: agent.Job, answer_tx: aio.ChanSender[bool]) -> None:
         self._job = job
         self._lock = asyncio.Lock()
         self._answer_tx = answer_tx
@@ -92,8 +88,7 @@ class JobRequest:
 
             proc = self._ipc_server.new_process(
                 self._info,
-                s
-                elf._worker._rtc_url,
+                self._worker._rtc_url,
                 self._worker._api_key,
                 self._worker._api_secret,
             )
