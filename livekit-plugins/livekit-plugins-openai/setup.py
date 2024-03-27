@@ -54,7 +54,9 @@ setuptools.setup(
         "opencv-python >= 4, < 5",
         "requests >= 2, < 3",
     ],
-    package_data={},
+    package_data={
+        "livekit.plugins.openai": ["py.typed"],
+    },
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

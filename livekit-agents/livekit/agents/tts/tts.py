@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncIterable
+from typing import AsyncIterable, Any, Coroutine
 
 from livekit import rtc
 
@@ -69,8 +69,12 @@ class TTS(ABC):
         self._streaming_supported = streaming_supported
 
     @abstractmethod
-    async def synthesize(self, *, text: str) -> AsyncIterable[SynthesizedAudio]:
-        pass
+    async def synthesize(self, text: str, **_: Any) -> AsyncIterable[SynthesizedAudio]:
+        raise NotImplementedError("synthesize is not implemented")
+        # This is needed to avoid a mypy error.
+        # The 'yield' changes the return type. It's an old trick: https://github.com/python/mypy/issues/5070
+        if False:
+            yield SynthesizedAudio("", rtc.AudioFrame())
 
     def stream(self) -> SynthesizeStream:
         raise NotImplementedError(
