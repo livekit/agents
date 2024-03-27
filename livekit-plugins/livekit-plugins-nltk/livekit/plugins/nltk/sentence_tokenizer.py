@@ -2,7 +2,7 @@ import asyncio
 import dataclasses
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from livekit import agents
 
@@ -79,10 +79,12 @@ class SentenceStream(agents.tokenize.SentenceStream):
         self._language = language
         self._context_len = context_len
         self._min_sentence_len = min_sentence_len
-        self._event_queue = asyncio.Queue()
+        self._event_queue = asyncio.Queue[
+            Union[agents.tokenize.SegmentedSentence, None]
+        ]()
         self._closed = False
 
-        self._incomplete_sentences = []  # <= min_sentence_len
+        self._incomplete_sentences: List[str] = []  # <= min_sentence_len
         self._buffer = ""
 
     def push_text(self, text: str) -> None:

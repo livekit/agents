@@ -19,7 +19,7 @@ import contextlib
 import dataclasses
 import logging
 from dataclasses import dataclass
-from typing import AsyncIterable, List
+from typing import Any, AsyncIterable, Dict, List, Union
 
 from livekit import agents, rtc
 from livekit.agents import stt
@@ -31,8 +31,8 @@ from google.cloud.speech_v2.types import cloud_speech
 
 from .models import SpeechLanguages, SpeechModels
 
-LgType = SpeechLanguages | str
-LanguageCode = LgType | List[LgType]
+LgType = Union[SpeechLanguages | str]
+LanguageCode = Union[LgType | List[LgType]]
 
 
 # This class is only be used internally to encapsulate the options
@@ -56,8 +56,8 @@ class STT(stt.STT):
         punctuate: bool = True,
         spoken_punctuation: bool = True,
         model: SpeechModels = "long",
-        credentials_info: dict | None = None,
-        credentials_file: str | None = None,
+        credentials_info: Union[Dict[str, Any], None] = None,
+        credentials_file: Union[str, None] = None,
     ):
         """
         if no credentials is provided, it will use the credentials on the environment
