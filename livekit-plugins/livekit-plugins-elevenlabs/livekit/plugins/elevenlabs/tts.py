@@ -106,7 +106,6 @@ class TTS(tts.TTS):
     async def synthesize(
         self,
         text: str,
-        **_,
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         voice = self._config.voice
 

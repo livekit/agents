@@ -13,8 +13,7 @@
 # limitations under the License.
 
 import os
-from collections.abc import AsyncIterable
-from typing import Optional, TypedDict, AsyncIterable
+from typing import AsyncIterable, Optional
 
 import aiohttp
 from livekit.agents import codecs, tts
@@ -26,13 +25,10 @@ OPENAI_TTS_CHANNELS = 1
 OPENAI_ENPOINT = "https://api.openai.com/v1/audio/speech"
 
 
-class SynthesizeParams(TypedDict, total=False):
-    model: TTSModels
-    voice: TTSVoices
-
-
 class TTS(tts.TTS):
-    def __init__(self, api_key: Optional[str] = None) -> None:
+    def __init__(
+        self, model: TTSModels, voice: TTSVoices, api_key: Optional[str] = None
+    ) -> None:
         super().__init__(streaming_supported=False)
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not api_key:
@@ -48,21 +44,21 @@ class TTS(tts.TTS):
             headers={"Authorization": f"Bearer {api_key}"}
         )
 
+        self._model = model
+        self._voice = voice
+
     async def synthesize(
         self,
         text: str,
-        **kwargs: SynthesizeParams,
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         decoder = codecs.Mp3StreamDecoder()
-        model = kwargs.get("model", "tts-1")
-        voice = kwargs.get("voice", "alloy")
 
         async with self._session.post(
             OPENAI_ENPOINT,
             json={
                 "input": text,
-                "model": model,
-                "voice": voice,
+                "model": self._model,
+                "voice": self._voice,
                 "response_format": "mp3",
             },
         ) as resp:
