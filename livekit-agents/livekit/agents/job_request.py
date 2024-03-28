@@ -16,15 +16,15 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Optional, Union
+from typing import Optional
 
 from livekit import api, protocol, rtc
 from livekit.protocol import agent
 
+from . import aio
 from .exceptions import JobRequestAnsweredError
 from .job_context import JobContext
 from .log import logger
-from . import aio
 
 AutoSubscribe = Enum(
     "AutoSubscribe", ["SUBSCRIBE_ALL", "SUBSCRIBE_NONE", "VIDEO_ONLY", "AUDIO_ONLY"]
@@ -37,11 +37,7 @@ AutoDisconnect = Enum(
 
 
 class JobRequest:
-    def __init__(
-        self,
-        job: agent.Job,
-        answer_tx: aio.ChanSender[bool]
-    ) -> None:
+    def __init__(self, job: agent.Job, answer_tx: aio.ChanSender[bool]) -> None:
         self._job = job
         self._lock = asyncio.Lock()
         self._answer_tx = answer_tx
@@ -76,9 +72,7 @@ class JobRequest:
     async def accept(
         self,
         agent: AgentEntry,
-        auto_subscribe: Union[
-            AutoSubscribeCallback, bool
-        ] = AutoSubscribe.SUBSCRIBE_NONE,
+        auto_subscribe: AutoSubscribeCallback | bool = AutoSubscribe.SUBSCRIBE_NONE,
         auto_disconnect: AutoDisconnectCallback = AutoDisconnect.DEFAULT,
         disconnect_grace_period: float = 30,
         grants: api.VideoGrants = api.VideoGrants(),
@@ -92,8 +86,7 @@ class JobRequest:
 
             proc = self._ipc_server.new_process(
                 self._info,
-                s
-                elf._worker._rtc_url,
+                self._worker._rtc_url,
                 self._worker._api_key,
                 self._worker._api_secret,
             )

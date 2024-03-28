@@ -14,7 +14,7 @@
 
 import os
 from collections.abc import AsyncIterable
-from typing import Optional
+from typing import Optional, TypedDict, AsyncIterable
 
 import aiohttp
 from livekit.agents import codecs, tts
@@ -24,6 +24,11 @@ from .models import TTSModels, TTSVoices
 OPENAI_TTS_SAMPLE_RATE = 24000
 OPENAI_TTS_CHANNELS = 1
 OPENAI_ENPOINT = "https://api.openai.com/v1/audio/speech"
+
+
+class SynthesizeParams(TypedDict, total=False):
+    model: TTSModels
+    voice: TTSVoices
 
 
 class TTS(tts.TTS):
@@ -44,9 +49,13 @@ class TTS(tts.TTS):
         )
 
     async def synthesize(
-        self, text: str, model: TTSModels = "tts-1", voice: TTSVoices = "alloy"
+        self,
+        text: str,
+        **kwargs: SynthesizeParams,
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         decoder = codecs.Mp3StreamDecoder()
+        model = kwargs.get("model", "tts-1")
+        voice = kwargs.get("voice", "alloy")
 
         async with self._session.post(
             OPENAI_ENPOINT,

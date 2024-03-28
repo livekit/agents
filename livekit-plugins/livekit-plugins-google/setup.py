@@ -58,10 +58,12 @@ setuptools.setup(
         "google-cloud-texttospeech >= 2, < 3",
         "google-cloud-translate >= 3, < 4",
         "googleapis-common-protos >= 1, < 2",
-        "livekit >= 0.9.0",
-        "livekit-agents >= 0.3.0",
+        "livekit >= 0.9.2",
+        "livekit-agents >= 0.4.0",
     ],
-    package_data={},
+    package_data={
+        "livekit.plugins.google": ["py.typed"],
+    },
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

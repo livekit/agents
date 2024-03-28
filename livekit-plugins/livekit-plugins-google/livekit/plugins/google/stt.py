@@ -19,13 +19,13 @@ import contextlib
 import dataclasses
 import logging
 from dataclasses import dataclass
-from typing import AsyncIterable, List
+from typing import Any, AsyncIterable, Dict, List
 
 from livekit import agents, rtc
 from livekit.agents import stt
 from livekit.agents.utils import AudioBuffer
 
-from google.auth import credentials
+from google.auth import credentials  # type: ignore
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
 
@@ -56,7 +56,7 @@ class STT(stt.STT):
         punctuate: bool = True,
         spoken_punctuation: bool = True,
         model: SpeechModels = "long",
-        credentials_info: dict | None = None,
+        credentials_info: Dict[str, Any] | None = None,
         credentials_file: str | None = None,
     ):
         """
@@ -179,12 +179,12 @@ class SpeechStream(stt.SpeechStream):
         self._sample_rate = sample_rate
         self._num_channels = num_channels
 
-        self._queue = asyncio.Queue()
-        self._event_queue = asyncio.Queue()
+        self._queue = asyncio.Queue[rtc.AudioFrame | None]()
+        self._event_queue = asyncio.Queue[stt.SpeechEvent | None]()
         self._closed = False
         self._main_task = asyncio.create_task(self._run(max_retry=max_retry))
 
-        self._final_events = []
+        self._final_events: List[stt.SpeechEvent] = []
         self._speaking = False
 
         self._streaming_config = cloud_speech.StreamingRecognitionConfig(
@@ -323,7 +323,7 @@ class SpeechStream(stt.SpeechStream):
                     if not self._speaking:
                         # With Google STT, we receive the final event after the END_OF_SPEECH event
                         sentence = ""
-                        confidence = 0
+                        confidence = 0.0
                         for alt in self._final_events:
                             sentence += f"{alt.alternatives[0].text.strip()} "
                             confidence += alt.alternatives[0].confidence

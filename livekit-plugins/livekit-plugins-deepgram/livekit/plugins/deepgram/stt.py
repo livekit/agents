@@ -1,3 +1,19 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
 import asyncio
 import dataclasses
 import io
@@ -67,7 +83,7 @@ class STT(stt.STT):
         config = self._sanitize_options(language=language)
 
         recognize_config = {
-            "model": config.model,
+            "model": str(config.model),
             "punctuate": config.punctuate,
             "detect_language": config.detect_language,
             "smart_format": config.smart_format,
@@ -149,13 +165,13 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = False
 
         self._session = aiohttp.ClientSession()
-        self._queue = asyncio.Queue()
-        self._event_queue = asyncio.Queue()
+        self._queue = asyncio.Queue[rtc.AudioFrame | str]()
+        self._event_queue = asyncio.Queue[stt.SpeechEvent | None]()
         self._closed = False
         self._main_task = asyncio.create_task(self._run(max_retry))
 
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
-        self._final_events = []
+        self._final_events: List[stt.SpeechEvent] = []
 
         def log_exception(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():
@@ -316,7 +332,7 @@ class SpeechStream(stt.SpeechStream):
 
         # combine all final transcripts since the start of the speech
         sentence = ""
-        confidence = 0
+        confidence = 0.0
         for alt in self._final_events:
             sentence += f"{alt.alternatives[0].text.strip()} "
             confidence += alt.alternatives[0].confidence
@@ -328,7 +344,7 @@ class SpeechStream(stt.SpeechStream):
             type=stt.SpeechEventType.END_OF_SPEECH,
             alternatives=[
                 stt.SpeechData(
-                    language=self._config.language,
+                    language=str(self._config.language),
                     start_time=self._final_events[0].alternatives[0].start_time,
                     end_time=self._final_events[-1].alternatives[0].end_time,
                     confidence=confidence,
