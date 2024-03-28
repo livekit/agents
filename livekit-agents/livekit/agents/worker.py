@@ -96,7 +96,7 @@ class Worker:
         scheme = parse.scheme
         if scheme.startswith("http"):
             scheme = scheme.replace("http", "ws")
-        agent_url = f"{scheme}://{parse.netloc}/{parse.path.rstrip("/")}/agent"
+        agent_url = f"{scheme}://{parse.netloc}/{parse.path.rstrip('/')}/agent"
 
         self._opts = WorkerOptions(
             request_fnc=request_fnc,
