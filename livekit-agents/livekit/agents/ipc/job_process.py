@@ -31,22 +31,11 @@ class JobProcess:
             target=_run_job, args=args, daemon=True
         )  # daemon=True to avoid unresponsive process in production
         self._pipe = apipe.AsyncPipe(pch, loop=self._loop)
+        self._close_future = asyncio.Future()
 
-    def start(self) -> None:
+    async def run(self) -> None:
         self._process.start()
-        self._task = asyncio.create_task(self._proc_task())
 
-        def _log_exc(task: asyncio.Task):
-            if not task.cancelled() and task.exception():
-                logger.error(
-                    "error in job process",
-                    exc_info=task.exception(),
-                    extra=self.logging_extra(),
-                )
-
-        self._task.add_done_callback(_log_exc)
-
-    async def _proc_task(self) -> None:
         start_timeout = asyncio.sleep(consts.START_TIMEOUT)
         ping_interval = aio.interval(consts.PING_INTERVAL)
         pong_timeout = aio.sleep(consts.PING_TIMEOUT)
@@ -101,31 +90,33 @@ class JobProcess:
                     logger.info("job exiting", extra=self.logging_extra())
                     break
 
-        f = asyncio.Future()
-
         def _join_process():
             self._process.join()
-            self._loop.call_soon_threadsafe(f.set_result, None)
+            self._loop.call_soon_threadsafe(self._close_future.set_result, None)
 
-        join_t = threading.Thread(target=self._process.join, daemon=True)
+        join_t = threading.Thread(target=_join_process, daemon=True)
         join_t.start()
-        await f
+        await self._close_future
+
+        logger.debug("job process closed", extra=self.logging_extra())
 
     def _sig_kill(self) -> None:
-        if self._process.is_alive():
-            if sys.platform == "win32":
-                self._process.terminate()
-            else:
-                self._process.kill()
+        if not self._process.is_alive():
+            return
+
+        if sys.platform == "win32":
+            self._process.terminate()
+        else:
+            self._process.kill()
 
     async def aclose(self) -> None:
         await self._pipe.write(protocol.ShutdownRequest())
-        await self._task
+        await self._close_future
         self._pipe.close()
 
     @property
-    def job_id(self) -> str:
-        return self._job.id
+    def job(self) -> agent.Job:
+        return self._job
 
     def logging_extra(self) -> dict:
         return {"job_id": self._job.id, "pid": self._process.pid}

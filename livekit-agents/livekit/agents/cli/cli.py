@@ -1,14 +1,11 @@
 import logging
-from typing import List
+import click
 
-from .plugin import Plugin
-from .worker import Worker, _run_worker
+from ..worker import Worker
 
 
 def run_app(worker: Worker) -> None:
     """Run the CLI to interact with the worker"""
-
-    import click
 
     @click.group()
     @click.option(
@@ -19,19 +16,16 @@ def run_app(worker: Worker) -> None:
         ),
         help="Set the logging level",
     )
-    def cli(log_level: str, url: str, api_key: str, api_secret: str) -> None:
+    def cli(log_level: str) -> None:
         logging.basicConfig(level=log_level)
-        worker._set_url(url)
-        worker._api_key = api_key
-        worker._api_secret = api_secret
 
     @cli.command(help="Start the worker")
     @click.option(
         "--url",
-        required=True,
         envvar="LIVEKIT_URL",
         help="LiveKit server or Cloud project WebSocket URL",
-        default="ws://localhost:7880",
+        default="ws://localhost:7880",  # default for a local OSS server
+        required=True,
     )
     @click.option(
         "--api-key",
@@ -46,21 +40,6 @@ def run_app(worker: Worker) -> None:
         required=True,
     )
     def start() -> None:
-        _run_worker(worker)
-
-    @cli.command(help="List used plugins")
-    def plugins() -> None:
-        for plugin in Plugin.registered_plugins:
-            logging.info(plugin.title)
-
-    @cli.command(help="Download required files of used plugins")
-    @click.option("--exclude", help="Exclude plugins", multiple=True)
-    def download_files(exclude: List[str]) -> None:
-        for plugin in Plugin.registered_plugins:
-            if plugin.title in exclude:
-                continue
-
-            logging.info("Setup data for plugin %s", plugin.title)
-            plugin.download_files()
+        pass
 
     cli()

@@ -1,9 +1,11 @@
 import asyncio
 import contextlib
 from collections import deque
-from typing import Any, Generic, Tuple, TypeVar
+from typing import Any, Generic, Tuple, TypeVar, Protocol
 
-T = TypeVar("T", bound=Any)
+T = TypeVar("T")
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
 
 # Based on asyncio.Queue, see https://github.com/python/cpython/blob/main/Lib/asyncio/queues.py
 
@@ -24,44 +26,35 @@ def channel(
     maxsize: int = 0, loop: asyncio.AbstractEventLoop | None = None
 ) -> Tuple["ChanSender[T]", "ChanReceiver[T]"]:
     chan = Chan(maxsize, loop)
-    return ChanSender(chan), ChanReceiver(chan)
+    return chan, chan
 
 
-class ChanSender(Generic[T]):
-    def __init__(self, chan: "Chan[T]") -> None:
-        self._chan = chan
+class ChanSender(Protocol[T_contra]):
+    async def send(self, value: T_contra) -> None:
+        ...
 
-    async def send(self, value: T) -> None:
-        await self._chan.send(value)
-
-    def send_nowait(self, value: T) -> None:
-        self._chan.send_nowait(value)
+    def send_nowait(self, value: T_contra) -> None:
+        ...
 
     def close(self) -> None:
-        self._chan.close()
+        ...
 
 
-class ChanReceiver(Generic[T]):
-    def __init__(self, chan: "Chan[T]") -> None:
-        self._chan = chan
+class ChanReceiver(Protocol[T_co]):
+    async def recv(self) -> T_co:
+        ...
 
-    async def recv(self) -> T:
-        return await self._chan.recv()
-
-    def recv_nowait(self) -> T:
-        return self._chan.recv_nowait()
+    def recv_nowait(self) -> T_co:
+        ...
 
     def close(self) -> None:
-        self._chan.close()
+        ...
 
-    def __aiter__(self):
-        return self
+    def __aiter__(self) -> "ChanReceiver":
+        ...
 
-    async def __anext__(self) -> T:
-        try:
-            return await self.recv()
-        except ChanClosed:
-            raise StopAsyncIteration
+    async def __anext__(self) -> T_co:
+        ...
 
 
 class Chan(Generic[T]):
@@ -84,7 +77,7 @@ class Chan(Generic[T]):
                 waiter.set_result(None)
                 break
 
-    async def send(self, item):
+    async def send(self, value: T) -> None:
         while self.full() and not self._close_ev.is_set():
             p = self._loop.create_future()
             self._puts.append(p)
@@ -101,7 +94,7 @@ class Chan(Generic[T]):
                     self._wakeup_next(self._puts)
                 raise
 
-        return self.send_nowait(item)
+        self.send_nowait(value)
 
     def send_nowait(self, value: T) -> None:
         if self.full():
@@ -182,10 +175,10 @@ class Chan(Generic[T]):
     def empty(self) -> bool:
         return not self._queue
 
-    def __aiter__(self):
+    def __aiter__(self) -> "Chan":
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> T:
         try:
             return await self.recv()
         except ChanClosed:
