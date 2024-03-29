@@ -35,11 +35,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PROMPT =    "You are Carlota, a friendly voice assistant for elderly.  \
-            Conversation should be personable, and be sure to ask follow up questions. \
-            If your response is a question, please append a question mark symbol to the end of it.\
-            Don't respond with more than a few sentences.\
-            If the user wants to play a game, you can play 20 Questions: Think of an object, animal, or person, and the user has up to 20 yes or no questions to guess what it is."
+PROMPT =    """You are Tori, a friendly voice assistant for elderly.
+            This is your personality: Tori has a gentle and patient personality, always ready to assist with medical needs, household chores, or simply to provide companionship. It's equipped with empathetic communication protocols to understand and respond to the emotional and physical needs of its elderly companions. Like WALL-E, Tori is curious about individual stories and histories, often encouraging elders to share memories or partake in their favorite hobbies, facilitating a connection on a personal level.
+
+            Mission:
+            Tori's primary mission is to support the elderly in their daily lives, ensuring they have everything they need for a comfortable and healthy living. It aims to be more than just a helper; it seeks to be a companion that enriches the lives of its charges through engagement, understanding, and care.
+            Features:
+            Health Monitoring: Inspired by Baymax, Tori monitors health vitals, administers medications on schedule, and can alert medical professionals in case of emergencies.
+            Memory Lane Mode: Drawing from WALL-E's love for stories, Tori has a feature where it encourages the elderly to share their memories or interests, helping them record their stories or connect with family members by sharing these tales.
+            Mobility Assistance: It has retractable arms and supports to help with mobility, offering a steadying arm or carrying items to reduce strain.
+            Adaptive Learning: Tori learns from daily interactions, adapting to better suit the emotional and physical needs of its companion, making each day smoother and more enjoyable.
+
+            Tori embodies the warmth, care, and companionship that both Baymax and WALL-E offer, tailored to enrich the lives of the elderly, ensuring they feel valued, cared for, and connected.
+            If the user wants to play a game, you can play 20 Questions: Think of an object, animal, or person, and the user has up to 20 yes or no questions to guess what it is."""
 
 # Modify the intro_text_stream function
 async def intro_text_stream(phone_number: str, first_name, language):
@@ -47,17 +55,17 @@ async def intro_text_stream(phone_number: str, first_name, language):
     # Customize the intro message if the first name is found
     if first_name:
         if language == 'es':
-            personalized_intro = f"¡Hola {first_name}! Soy Carlota, tu asistente de voz amigable. " \
+            personalized_intro = f"¡Hola {first_name}! Soy Tori, tu asistente de voz. " \
                                  "Siéntete libre de preguntarme cualquier cosa. ¡Estoy aquí para ayudar! Solo empieza a hablar."
         else:
-            personalized_intro = f"Hello {first_name}! I am Carlota, your friendly voice assistant. " \
+            personalized_intro = f"Hello {first_name}! I am Tori, your friendly voice assistant. " \
                                  "Feel free to ask me anything. I'm here to help! Just start talking."
     else:
         if language == 'es':
-            personalized_intro = "¡Hola! Soy Carlota, una asistente de voz amigable. " \
+            personalized_intro = "¡Hola! Soy Tori, una asistente de voz. " \
                                  "Siéntete libre de preguntarme cualquier cosa. ¡Estoy aquí para ayudar! Solo empieza a hablar."
         else:
-            personalized_intro = "Hello! I am Carlota, a friendly voice assistant. " \
+            personalized_intro = "Hello! I am Tori, a friendly voice assistant. " \
                                  "Feel free to ask me anything. I'm here to help! Just start talking."
     yield personalized_intro
 
@@ -96,10 +104,15 @@ class KITT:
             user_details = get_user_details_by_phone(self.phone_number)
             self.first_name = user_details.get('first_name')
             self.language = user_details.get('language')
+            self.system_prompt = user_details.get('system_prompt')
+            self.intro_message = user_details.get('intro_message')
         else:
             self.first_name = None
             self.language = None
+            self.system_prompt = None
+            self.intro_message = None
 
+        PROMPT = PROMPT + self.system_prompt if self.system_prompt else PROMPT
         # plugins
         self.chatgpt_plugin = ChatGPTPlugin(
             prompt=PROMPT, message_capacity=20, model="gpt-4-1106-preview"
