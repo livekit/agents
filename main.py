@@ -112,13 +112,14 @@ class KITT:
             self.system_prompt = None
             self.intro_message = None
 
-        PROMPT = PROMPT + self.system_prompt if self.system_prompt else PROMPT
         # plugins
         self.chatgpt_plugin = ChatGPTPlugin(
-            prompt=PROMPT, message_capacity=20, model="gpt-4-1106-preview"
+            prompt=PROMPT + self.system_prompt if self.system_prompt else PROMPT,
+            message_capacity=100,
+            model="gpt-4-1106-preview"
         )
         self.stt_plugin = STT(
-            min_silence_duration=100,
+            min_silence_duration=200,
             language=self.language
         )
         self.tts_plugin = TTS(
