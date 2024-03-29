@@ -119,7 +119,7 @@ class KITT:
             model="gpt-4-1106-preview"
         )
         self.stt_plugin = STT(
-            min_silence_duration=200,
+            min_silence_duration=100,
             language=self.language
         )
         self.tts_plugin = TTS(
