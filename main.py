@@ -115,12 +115,12 @@ class KITT:
         # plugins
         self.chatgpt_plugin = ChatGPTPlugin(
             prompt=PROMPT + self.system_prompt if self.system_prompt else PROMPT,
-            message_capacity=100,
+            message_capacity=20,
             model="gpt-4-1106-preview"
         )
         self.stt_plugin = STT(
             min_silence_duration=100,
-            language=self.language
+            language=self.language if self.language else 'en'
         )
         self.tts_plugin = TTS(
             model_id="eleven_multilingual_v2" if self.language == 'es' else "eleven_turbo_v2",
