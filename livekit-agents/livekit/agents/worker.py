@@ -13,28 +13,26 @@
 # limitations under the License.
 
 from __future__ import annotations
-from attr import define
 
-import psutil
 import asyncio
 import contextlib
-import aiohttp
 import os
 from typing import (
     Callable,
     Coroutine,
 )
-from .log import logger
 from urllib.parse import urlparse
-from livekit.protocol import agent, models
-from livekit import api
-from .job_request import AvailRes, JobRequest, AgentEntry
-from .version import __version__
 
-from . import aio
-from . import consts
-from . import ipc
-from . import http_server
+import aiohttp
+import psutil
+from attr import define
+from livekit import api
+from livekit.protocol import agent, models
+
+from . import aio, consts, http_server, ipc
+from .job_request import AgentEntry, AvailRes, JobRequest
+from .log import logger
+from .version import __version__
 
 JobRequestFnc = Callable[[JobRequest], Coroutine]
 LoadFnc = Callable[[ipc.JobProcess | None], float]
@@ -44,7 +42,7 @@ def cpu_load_fnc(_: ipc.JobProcess | None = None) -> float:
     return psutil.cpu_percent()
 
 
-@define(kw_only=True, frozen=True)
+@define(kw_only=True)
 class WorkerOptions:
     request_fnc: JobRequestFnc
     load_fnc: LoadFnc
@@ -53,7 +51,6 @@ class WorkerOptions:
     worker_type: agent.JobType.ValueType
     max_retry: int
     ws_url: str
-    agent_url: str
     api_key: str
     api_secret: str
     host: str
@@ -70,33 +67,17 @@ class Worker:
         permissions: models.ParticipantPermission = models.ParticipantPermission(),
         worker_type: agent.JobType.ValueType = agent.JobType.JT_ROOM,
         max_retry: int = consts.MAX_RECONNECT_ATTEMPTS,
-        ws_url: str | None = None,
+        ws_url: str | None = "ws://localhost:7880",
         api_key: str | None = None,
         api_secret: str | None = None,
         host: str = "localhost",
-        port: int = 80,
+        port: int = 8081,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
-        ws_url = ws_url or os.environ.get("LIVEKIT_URL", "")
-        api_key = api_key or os.environ.get("LIVEKIT_API_KEY", "")
-        api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET", "")
 
-        if not ws_url:
-            raise ValueError("ws_url is required, or set LIVEKIT_URL env var")
-
-        if not api_key:
-            raise ValueError("api_key is required, or set LIVEKIT_API_KEY env var")
-
-        if not api_secret:
-            raise ValueError(
-                "api_secret is required, or set LIVEKIT_API_SECRET env var"
-            )
-
-        parse = urlparse(ws_url)
-        scheme = parse.scheme
-        if scheme.startswith("http"):
-            scheme = scheme.replace("http", "ws")
-        agent_url = f"{scheme}://{parse.netloc}/{parse.path.rstrip('/')}/agent"
+        ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
+        api_key = api_key or os.environ.get("LIVEKIT_API_KEY") or ""
+        api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
 
         self._opts = WorkerOptions(
             request_fnc=request_fnc,
@@ -106,7 +87,6 @@ class Worker:
             worker_type=worker_type,
             max_retry=max_retry,
             ws_url=ws_url,
-            agent_url=agent_url,
             api_key=api_key,
             api_secret=api_secret,
             host=host,
@@ -122,10 +102,37 @@ class Worker:
         self._processes = dict[str, ipc.JobProcess]()
         self._close_future = asyncio.Future()
 
+        self._chan = aio.Chan[agent.WorkerMessage](32, loop=self._loop)
         # We use the same event loop as the worker (so the health checks are more accurate)
         self._http_server = http_server.HttpServer(host, port, loop=self._loop)
 
+    def _update_opts(
+        self,
+        ws_url: str,
+        api_key: str,
+        api_secret: str,
+    ):
+        if ws_url:
+            self._opts.ws_url = ws_url
+
+        if api_key:
+            self._opts.api_key = api_key
+
+        if api_secret:
+            self._opts.api_secret = api_secret
+
     async def run(self):
+        if not self._opts.ws_url:
+            raise ValueError("ws_url is required, or set LIVEKIT_URL env var")
+
+        if not self._opts.api_key:
+            raise ValueError("api_key is required, or set LIVEKIT_API_KEY env var")
+
+        if not self._opts.api_secret:
+            raise ValueError(
+                "api_secret is required, or set LIVEKIT_API_SECRET env var"
+            )
+
         async def _worker_ws():
             retry_count = 0
             while not self._closed:
@@ -137,9 +144,16 @@ class Worker:
                     )
 
                     headers = {"Authorization": f"Bearer {join_jwt}"}
-                    ws = await self._session.ws_connect(
-                        self._opts.agent_url, headers=headers
+
+                    parse = urlparse(self._opts.ws_url)
+                    scheme = parse.scheme
+                    if scheme.startswith("http"):
+                        scheme = scheme.replace("http", "ws")
+                    agent_url = (
+                        f"{scheme}://{parse.netloc}/{parse.path.rstrip("/")}/agent"
                     )
+
+                    ws = await self._session.ws_connect(agent_url, headers=headers)
                     retry_count = 0
 
                     await self._run_ws(ws)
@@ -176,7 +190,6 @@ class Worker:
         await self._close_future
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse):
-        self._chan = aio.Chan[agent.WorkerMessage](32, loop=self._loop)
         closing_ws = False
 
         # register the worker
@@ -294,7 +307,7 @@ class Worker:
                     ),
                 )
 
-            av: AvailRes = await answer_rx.recv()
+            av: AvailRes = await answer_rx.recv()  # wait for user answer
             msg = agent.WorkerMessage()
             msg.availability.available = av.avail
 
@@ -313,6 +326,7 @@ class Worker:
 
             await send_ignore_err(self._chan, msg)
 
+            # wait for server assignment
             try:
                 await asyncio.wait_for(wait_assignment, consts.ASSIGNMENT_TIMEOUT)
                 await av.data.assignment_tx.send(None)

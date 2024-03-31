@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import aio, codecs, ipc, stt, tokenize, tts, vad
+from . import aio, codecs, ipc, llm, stt, tokenize, tts, vad
 from .job_context import JobContext
 from .job_request import AutoDisconnect, AutoSubscribe, JobRequest
 from .plugin import Plugin
@@ -34,4 +34,5 @@ __all__ = [
     "tts",
     "aio",
     "tokenize",
+    "llm",
 ]

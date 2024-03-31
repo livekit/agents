@@ -34,6 +34,13 @@ class Sleep:
         loop = asyncio.get_event_loop()
         self._handler = loop.call_later(new_delay, _finish_fut, self._fut)
 
+    def cancel(self) -> None:
+        if self._handler is None:
+            return
+
+        self._handler.cancel()
+        self._fut.cancel()
+
     async def _sleep(self) -> None:
         if self._delay <= 0:
             self._fut = asyncio.Future()
