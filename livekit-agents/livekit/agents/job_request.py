@@ -17,9 +17,9 @@ from __future__ import annotations
 import asyncio
 from enum import Enum
 from typing import Callable, Coroutine
-from attr import define
 
-from livekit import api, rtc
+from attr import define
+from livekit import api
 from livekit.protocol import agent, models
 
 from . import aio

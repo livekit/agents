@@ -14,14 +14,14 @@ class VADEventType(Enum):
 
 @dataclass
 class VADEvent:
-    # type of the event
     type: VADEventType
-    # index of the samples of the event (when the event was fired)
+    """type of the event"""
     samples_index: int
-    # duration of the speech in seconds (only for END_SPEAKING event)
+    """index of the samples of the event (when the event was fired)"""
     duration: float = 0.0
-    # list of audio frames of the speech
+    """duration of the speech in seconds (only for END_SPEAKING event)"""
     speech: List[rtc.AudioFrame] = field(default_factory=list)
+    """list of audio frames of the speech"""
 
 
 class VAD(ABC):

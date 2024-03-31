@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .llm import LLM
 from .models import TTSModels, TTSVoices, WhisperModels
 from .stt import STT
 from .tts import TTS
@@ -20,10 +21,10 @@ from .version import __version__
 __all__ = [
     "STT",
     "TTS",
+    "LLM",
     "WhisperModels",
     "TTSModels",
     "TTSVoices",
-    "Dalle3",
     "__version__",
 ]
 

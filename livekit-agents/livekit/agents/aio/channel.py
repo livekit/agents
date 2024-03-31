@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 from collections import deque
-from typing import Any, Generic, Tuple, TypeVar, Protocol
+from typing import Generic, Protocol, Tuple, TypeVar
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
