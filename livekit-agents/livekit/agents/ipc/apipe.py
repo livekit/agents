@@ -1,3 +1,4 @@
+import contextlib
 import asyncio
 import queue
 import threading
@@ -34,7 +35,7 @@ class AsyncPipe:
                     _ = asyncio.ensure_future(self._read_ch.send(msg))
 
                 self._loop.call_soon_threadsafe(_put_msg, msg)
-            except (EOFError, BrokenPipeError):
+            except (OSError, EOFError, BrokenPipeError):
                 break
 
         self._loop.call_soon_threadsafe(self.close)
@@ -44,7 +45,7 @@ class AsyncPipe:
             try:
                 msg = self._write_q.get()
                 protocol.write_msg(self._p, msg)
-            except BrokenPipeError:
+            except (OSError, BrokenPipeError):
                 break
 
         self._loop.call_soon_threadsafe(self.close)
@@ -62,5 +63,6 @@ class AsyncPipe:
         return await self.read()
 
     def close(self) -> None:
+        self._p.close()
         self._read_ch.close()
         self._exit_ev.set()
