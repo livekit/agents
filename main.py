@@ -187,7 +187,6 @@ class KITT:
     async def process_stt_stream(self, stream):
         buffered_text = ""
         async for event in stream:
-            logging.info(f"Language used for transcription: {event.alternatives[0].language}")  # Add this line
             if event.alternatives[0].text == "":
                 continue
             if event.is_final:
