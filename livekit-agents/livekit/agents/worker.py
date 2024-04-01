@@ -37,6 +37,14 @@ from .version import __version__
 JobRequestFnc = Callable[[JobRequest], Coroutine]
 LoadFnc = Callable[[ipc.JobProcess | None], float]
 
+DEFAULT_PERMISSIONS = models.ParticipantPermission(
+    can_publish=True,
+    can_subscribe=True,
+    can_publish_data=True,
+    can_update_metadata=True,
+    agent=True,
+)
+
 
 def cpu_load_fnc(_: ipc.JobProcess | None = None) -> float:
     return psutil.cpu_percent()
@@ -48,7 +56,7 @@ class WorkerOptions:
     load_fnc: LoadFnc
     namespace: str
     permissions: models.ParticipantPermission
-    worker_type: agent.JobType.ValueType
+    worker_type: agent.JobType
     max_retry: int
     ws_url: str
     api_key: str
@@ -64,8 +72,8 @@ class Worker:
         *,
         load_fnc: LoadFnc = cpu_load_fnc,
         namespace: str = "default",
-        permissions: models.ParticipantPermission = models.ParticipantPermission(),
-        worker_type: agent.JobType.ValueType = agent.JobType.JT_ROOM,
+        permissions: models.ParticipantPermission = DEFAULT_PERMISSIONS,
+        worker_type: agent.JobType = agent.JobType.JT_ROOM,
         max_retry: int = consts.MAX_RECONNECT_ATTEMPTS,
         ws_url: str | None = "ws://localhost:7880",
         api_key: str | None = None,
