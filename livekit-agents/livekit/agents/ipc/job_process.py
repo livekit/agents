@@ -67,8 +67,16 @@ class JobProcess:
                     ping = protocol.Ping(timestamp=time_ms())
                     await self._pipe.write(ping)  # send ping each consts.PING_INTERVAL
                     continue
+    
+                try:
+                    res = s.result()
+                except aio.ChanClosed:
+                    logger.error(
+                        "pipe closed, exiting job",
+                        extra=self.logging_extra(),
+                    )
+                    break
 
-                res = s.result()
                 if isinstance(res, protocol.StartJobResponse):
                     start_res = res
                 if isinstance(res, protocol.Log):
