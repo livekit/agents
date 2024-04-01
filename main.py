@@ -108,6 +108,7 @@ class KITT:
             self.language = user_details.get('language')
             self.system_prompt = user_details.get('system_prompt')
             self.intro_message = user_details.get('intro_message')
+            print("USER DETAILSSSS: " + user_details)
         else:
             self.first_name = None
             self.language = None
