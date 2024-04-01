@@ -108,10 +108,10 @@ class KITT:
             self.language = user_details.get('language')
             self.system_prompt = user_details.get('system_prompt')
             self.intro_message = user_details.get('intro_message')
-            print("USER DETAILSSSS: " + user_details)
+            print("USER DETAILSSSS: " + str(user_details))
         else:
             self.first_name = None
-            self.language = None
+            self.language = 'es'
             self.system_prompt = None
             self.intro_message = None
 
@@ -123,7 +123,7 @@ class KITT:
         )
         self.stt_plugin = STT(
             min_silence_duration=100,
-            language=self.language if self.language else 'en',
+            language='es',
             detect_language=True
         )
         self.tts_plugin = TTS(
@@ -176,7 +176,7 @@ class KITT:
 
     async def process_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        stream = self.stt_plugin.stream()
+        stream = self.stt_plugin.stream(language='es')
         self.ctx.create_task(self.process_stt_stream(stream))
         async for audio_frame_event in audio_stream:
             if self._agent_state != AgentState.LISTENING:
@@ -187,6 +187,7 @@ class KITT:
     async def process_stt_stream(self, stream):
         buffered_text = ""
         async for event in stream:
+            logging.info(f"Language used for transcription: {event.alternatives[0].language}")  # Add this line
             if event.alternatives[0].text == "":
                 continue
             if event.is_final:
