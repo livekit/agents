@@ -111,7 +111,7 @@ class KITT:
             print("USER DETAILSSSS: " + str(user_details))
         else:
             self.first_name = None
-            self.language = 'en'
+            self.language = 'es'
             self.system_prompt = None
             self.intro_message = None
 
