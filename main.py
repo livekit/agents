@@ -122,7 +122,8 @@ class KITT:
         )
         self.stt_plugin = STT(
             min_silence_duration=100,
-            language=self.language if self.language else 'en'
+            language=self.language if self.language else 'en',
+            detect_language=True
         )
         self.tts_plugin = TTS(
             model_id="eleven_multilingual_v2" if self.language == 'es' else "eleven_turbo_v2",
