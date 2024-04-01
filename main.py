@@ -81,7 +81,7 @@ CARLOTA_VOICE = Voice(
     name="baymax",
     category="generated",
     settings=VoiceSettings(
-        stability=0.32, similarity_boost=0.75, style=0.30, use_speaker_boost=True
+        stability=0.40, similarity_boost=0.75, style=0.36, use_speaker_boost=True
     ),
 )
 
