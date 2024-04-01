@@ -94,7 +94,7 @@ class Worker:
 
         self._loop = loop or asyncio.get_event_loop()
         self._id = "unregistered"
-        self._session = aiohttp.ClientSession()
+        self._session = aiohttp.ClientSession(loop=self._loop)
         self._closed = False
         self._tasks = set()
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
@@ -286,25 +286,28 @@ class Worker:
         req = JobRequest(msg.job, answer_tx)
 
         async def _wait_response():
-            try:
-                await self._opts.request_fnc(req)
-            except Exception:
-                logger.exception(
-                    f"user request handler for job {req.id} failed",
-                    extra={"req": req},
-                )
+            async def _user_cb():
+                try:
+                    await self._opts.request_fnc(req)
+                except Exception:
+                    logger.exception(
+                        f"user request handler for job {req.id} failed",
+                        extra={"req": req},
+                    )
 
-            if not req.answered:
-                logger.warning(
-                    f"no answer for job {req.id}, automatically rejecting the job",
-                    extra={"req": req},
-                )
-                await send_ignore_err(
-                    self._chan,
-                    agent.WorkerMessage(
-                        availability=agent.AvailabilityResponse(available=False)
-                    ),
-                )
+                if not req.answered:
+                    logger.warning(
+                        f"no answer for job {req.id}, automatically rejecting the job",
+                        extra={"req": req},
+                    )
+                    await send_ignore_err(
+                        self._chan,
+                        agent.WorkerMessage(
+                            availability=agent.AvailabilityResponse(available=False)
+                        ),
+                    )
+
+            task = self._loop.create_task(_user_cb())
 
             av: AvailRes = await answer_rx.recv()  # wait for user answer
             msg = agent.WorkerMessage()
@@ -329,16 +332,19 @@ class Worker:
             try:
                 await asyncio.wait_for(wait_assignment, consts.ASSIGNMENT_TIMEOUT)
                 await av.data.assignment_tx.send(None)
+                await task
             except asyncio.TimeoutError as e:
-                await av.data.assignment_tx.send(e)
                 logger.warning(
                     f"assignment for job {req.id} timed out",
                     extra={"req": req},
                 )
+                await av.data.assignment_tx.send(e)
+                await task
                 return
 
             asgn = wait_assignment.result()
             url = asgn.url
+
             if not url:
                 url = self._opts.ws_url
 
