@@ -219,11 +219,13 @@ class KITT:
         all_text = ""
         async for text in text_stream:
             stream.push_text(text)
+            print(text)
             all_text += text
 
         self.update_state(processing=False)
         # buffer up the entire response from ChatGPT before sending a chat message
         await self.chat.send_message(all_text)
+        print(all_text)
         await stream.flush()
 
     async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent]):
