@@ -124,6 +124,7 @@ class KITT:
         self.stt_plugin = STT(
             min_silence_duration=100,
             language='es',
+            detect_language=False
         )
         self.tts_plugin = TTS(
             model_id="eleven_multilingual_v2" if self.language == 'es' else "eleven_turbo_v2",
@@ -219,7 +220,6 @@ class KITT:
         all_text = ""
         async for text in text_stream:
             stream.push_text(text)
-            print(text)
             all_text += text
 
         self.update_state(processing=False)
