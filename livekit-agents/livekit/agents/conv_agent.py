@@ -1,9 +1,8 @@
 import asyncio
-from collections import deque
 import contextlib
-from typing import Literal
-from attrs import evolve, define
+from typing import Literal, Optional
 
+from attrs import define, evolve
 from livekit import rtc
 
 from . import aio
@@ -11,21 +10,6 @@ from . import llm as allm
 from . import stt as astt
 from . import tts as atts
 from . import vad as avad
-
-
-@define
-class _PlayoutSync:
-    type = Literal[
-        "synthesize",  # for TTS
-        "clear",  # clear playout buffer
-        "validate",  # valdiate buffer, start playout
-    ]
-    text: str | None = None
-
-
-@define
-class _VADSync:
-    type = Literal["user_interruption",]
 
 
 class ConvAgent:
@@ -40,73 +24,145 @@ class ConvAgent:
         allow_interruptions: bool = True,
         # TODO(theomonnom): document how this is dependent on the given VAD parameters the user has set (default values are OK for now)
         # or mb substracts the VAD parameters from the interrupt_speech_duration?
+        base_volume: float = 1.0,
         interrupt_speech_duration: float = 0.5,
         interrupt_speech_validation: float = 1.5,
+        interrupt_volume: float = 0.3,
+        interrupt_volume_duration: float = 1,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         loop = loop or asyncio.get_event_loop()
         self._vad, self._tts, self._llm, self._stt = vad, tts, llm, stt
         self._fnc_ctx = fnc_ctx
         self._allow_interruptions = allow_interruptions
+        self._base_volume = base_volume
         self._int_speech_duration = interrupt_speech_duration
         self._int_speech_validation = interrupt_speech_validation
-
+        self._int_volume = interrupt_volume
+        self._int_volume_duration = interrupt_volume_duration
         self._chat_ctx = allm.ChatContext()
-        self._llm_gen: asyncio.Task | None = None
-
-        self._int_start_sleep, self._int_validate_sleep = None, None
 
     async def run(
         self, audio_stream: rtc.AudioStream, audio_source: rtc.AudioSource
     ) -> None:
-        def _interp(a: float, b: float, t: float) -> float:
-            return a + (b - a) * (3 * t**2 - 2 * t**3)
-
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
-        tts_stream = self._tts.stream()
 
-        llm_task: asyncio.Task | None = None
+        po_validate = asyncio.Condition()
 
-        po_buffer = asyncio.Queue[rtc.AudioFrame]()
-        po_validate = asyncio.Event()  # decides when to start playout
-        po_task = None
+        play_task: asyncio.Task | None = None
+        synth_task: asyncio.Task | None = None
+        int_tx: aio.ChanSender[bool] | None = None
+        int_task: asyncio.Task | None = None
 
         user_speech = ""
         user_speaking = False
+        agent_speaking = False
 
-        async def _playout_task():
-            """
-            Playout task that consumes the playout buffer and sends it to the audio source
-            Also apply volume reduction when the user is speaking
-            """
-            while True:
-                frame = await buffer.get()
-                await asyncio.shield(audio_source.capture_frame(frame))
-
-        async def _llm_task(self, speech: str) -> None:
-            if self._llm_gen is not None:
-                self._llm_gen.cancel()
+        async def _cancel_synthesis():
+            nonlocal synth_task, play_task, int_tx
+            if synth_task is not None:
+                assert play_task
+                synth_task.cancel()
+                play_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
-                    await self._llm_gen
+                    await asyncio.gather(synth_task, play_task, return_exceptions=True)
+
+                synth_task = play_task = int_tx = None
+
+        async def _start_synthesis(text: str) -> None:
+            nonlocal synth_task, play_task, int_tx
+            await _cancel_synthesis()
+
+            async def _playout_task(
+                chat_ctx: allm.ChatContext,
+                po_rx: aio.ChanReceiver[rtc.AudioFrame],
+                int_rx: aio.ChanReceiver[bool],
+            ):
+                def _interp(a: float, b: float, t: float) -> float:
+                    return a + (b - a) * (3 * t**2 - 2 * t**3)
+
+                nonlocal agent_speaking
+                await po_validate.wait()
+
+                sample_rate = 24000  # TODO(theomonnom): rm hardcoded
+
+                # synthesis validated, start playout
+                try:
+                    agent_speaking = True
+                    int_status = False
+                    int_samples = 0
+                    samples = 0
+
+                    select = aio.select([po_rx, int_rx])
+                    async for s in select:
+                        if s.selected is po_rx:
+                            if isinstance(s.exc, aio.ChanClosed):
+                                break
+                            frame: rtc.AudioFrame = s.result()
+                            data = frame.data
+
+                            for i in range(0, len(data)):
+                                samples += 1
+                                e = data[i] / 32768
+
+                                if int_status:
+                                    t_vol = self._base_volume * self._int_volume
+                                    e *= max(
+                                        _interp(
+                                            self._base_volume,
+                                            t_vol,
+                                            samples / int_samples,
+                                        ),
+                                        t_vol,
+                                    )
+
+                                data[i] = int(e * 32768)
+
+                            await audio_source.capture_frame(frame)
+
+                        if s.selected is int_rx:
+                            int_status = s.result()
+                            int_samples = samples + int(
+                                self._int_volume_duration * sample_rate
+                            )
+
+                    # TODO everything is played out, should we update the chat ctx here?
+                finally:
+                    agent_speaking = False
 
             chat_ctx = evolve(self._chat_ctx)
             chat_ctx.messages.append(
-                allm.ChatMessage(role=allm.ChatRole.USER, text=speech)
+                allm.ChatMessage(role=allm.ChatRole.USER, text=text)
             )
 
-            stream: allm.LLMStream | None = None
-            try:
-                stream = await self._llm.chat(chat_ctx, self._fnc_ctx)
-                async for chunk in stream:
-                    # forward the chunk to the playout task
-                    pass
-            except asyncio.CancelledError:
-                if stream is not None:
-                    # wait=False will cancel running functions
-                    await asyncio.shield(stream.aclose(wait=False))
+            po_tx, po_rx = aio.channel()
+            int_tx, int_rx = aio.channel()
+            synth_task = asyncio.create_task(self._synthesize(chat_ctx, po_tx))
+            play_task = asyncio.create_task(_playout_task(chat_ctx, po_rx, int_rx))
 
-        select = aio.select([vad_stream, tts_stream, stt_stream, audio_stream])
+        async def _cancel_interruption():
+            nonlocal int_task, int_tx
+            if int_task is not None:
+                int_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await int_task
+
+                int_task = None
+
+        async def _start_interruption():
+            nonlocal int_task, int_tx
+            if int_tx is None or int_task is not None:
+                return
+
+            try:
+                await asyncio.sleep(self._int_speech_duration)
+                int_tx.send_nowait(True)
+                await asyncio.sleep(self._int_speech_validation)
+            except asyncio.CancelledError:
+                int_tx.send_nowait(False)
+
+        select = aio.select([vad_stream, stt_stream, audio_stream])
         async with contextlib.aclosing(select) as select:
             async for s in select:
                 if s.selected is audio_stream:
@@ -120,8 +176,16 @@ class ConvAgent:
                     vad_event: avad.VADEvent = s.result()
                     if vad_event.type == avad.VADEventType.START_OF_SPEECH:
                         user_speaking = True
+
+                        if agent_speaking:
+                            await _start_interruption()
+                        else:
+                            await _cancel_synthesis()
+
                     elif vad_event.type == avad.VADEventType.END_OF_SPEECH:
                         user_speaking = False
+                        po_validate.notify()
+                        await _cancel_interruption()
 
                 elif s.selected is stt_stream:
                     # handle STT events
@@ -130,52 +194,47 @@ class ConvAgent:
                         alt = stt_event.alternatives[0]
                         user_speech += f"{alt.text} "
 
-                        if not user_speaking:
-                            # cancel everything and start the LLM call
-                            await self._make_llm_call(self._user_speech)
+                        if not agent_speaking:
+                            await _start_synthesis(user_speech)
+                        else:
+                            await _start_interruption()
 
                     elif stt_event.type == astt.SpeechEventType.END_OF_SPEECH:
-                        self._user_speech = ""
-                        po_validate.set()
+                        po_validate.notify()
 
-                elif s.selected is tts_stream:
-                    # add TTS audio to the playout buffer
-                    tts_event: atts.SynthesisEvent = s.result()
-                    if tts_event.type == atts.SynthesisEventType.AUDIO:
-                        assert tts_event.audio
-                        po_buffer.put_nowait(tts_event.audio.data)
+    async def _synthesize(
+        self, chat_ctx: allm.ChatContext, po_tx: aio.ChanSender[rtc.AudioFrame]
+    ) -> None:
+        tts_stream = self._tts.stream()
 
-                elif s.selected is self._playout_ch:
-                    res: _PlayoutSync = s.result()
-                    if res.type == "clear":
-                        buffer = asyncio.Queue()
-                        # recreate a new tts stream
-                        await tts_stream.aclose(wait=False)
-                        tts_stream = self._tts.stream()
-                    elif res.type == "synthesize":
-                        tts_stream.push_text(res.text)
-                    elif res.type == "validate":
-                        playout_task = asyncio.create_task(_playout())
+        async def _llm_gen():
+            stream: allm.LLMStream | None = None
+            try:
+                stream = await self._llm.chat(chat_ctx, self._fnc_ctx)
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    tts_stream.push_text(delta.content)
 
+                tts_stream.mark_segment_end()
+            except asyncio.CancelledError:
+                if stream is not None:
+                    # wait=False will cancel running functions
+                    await asyncio.shield(stream.aclose(wait=False))
 
-"""
-            if self._llm_gen is not None:  # TODO Also TTS
-                self._int_start_sleep = aio.sleep(self._int_speech_duration)
-                self._int_validate_sleep = aio.sleep(
-                    self._int_speech_duration + self._int_speech_validation
-                )
+        async def _tts_gen():
+            try:
+                async for event in tts_stream:
+                    if event.type == atts.SynthesisEventType.FINISHED:
+                        break
 
-                async def _interrupt_validator_h():
-                    assert self._int_start_sleep
-                    assert self._int_validate_sleep
-                    await self._int_start_sleep
-                    # start to decrease the volume here?
+                    if event.type != atts.SynthesisEventType.AUDIO:
+                        continue
 
-                    await self._int_validate_sleep
+                    assert event.audio
+                    po_tx.send_nowait(event.audio.data)
+            except asyncio.CancelledError:
+                await tts_stream.aclose(wait=False)
+            finally:
+                po_tx.close()
 
-                    # interruption validation passed, interrupt the LLM/FNC/TTS
-                    await self._handle_interruption()
-
-                self._int_validator_task = asyncio.create_task(_interrupt_validator_h())
-
-                """
+        await asyncio.gather(_llm_gen(), _tts_gen())

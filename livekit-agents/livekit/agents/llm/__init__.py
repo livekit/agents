@@ -14,10 +14,12 @@ from .llm import (
     ChatRole,
     Choice,
     ChoiceDelta,
+    LLMStream,
 )
 
 __all__ = [
     "LLM",
+    "LLMStream",
     "ChatContext",
     "ChatRole",
     "ChatMessage",

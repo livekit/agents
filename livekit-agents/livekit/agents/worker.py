@@ -74,7 +74,6 @@ class Worker:
         port: int = 8081,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
-
         ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
         api_key = api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
