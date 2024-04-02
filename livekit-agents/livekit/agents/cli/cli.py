@@ -11,6 +11,7 @@ from ..worker import Worker
 
 def _setup_logging(log_level: str, production: bool = True) -> None:
     h = logging.StreamHandler()
+
     if production:
         # in production, log in json format
         from pythonjsonlogger import jsonlogger
@@ -28,24 +29,28 @@ def _setup_logging(log_level: str, production: bool = True) -> None:
         import colorlog
 
         formatter = colorlog.ColoredFormatter(
-            "%(asctime)s %(log_color)s%(levelname)-4s %(bold_white)s %(name)s %(reset)s %(message)s"
+            "%(asctime)s %(log_color)s%(levelname)-4s %(bold_white)s %(name)s %(reset)s %(message)s",
+            log_colors={
+                **colorlog.default_log_colors,
+                "DEBUG": "blue",
+            },
         )
 
         class ExtraLogFormatter(logging.Formatter):
             def format(self, record):
                 # less hacky solution?
                 dummy = logging.LogRecord("", 0, "", 0, None, None, None)
-                extra_txt = ""
+                extra_txt = "\t "
                 for k, v in record.__dict__.items():
                     if k not in dummy.__dict__:
-                        extra_txt += ", {}={}".format(k, str(v).replace("\n", " "))
+                        extra_txt += " {}={}".format(k, str(v).replace("\n", " "))
                 message = formatter.format(record)
                 return message + extra_txt
 
         h.setFormatter(ExtraLogFormatter())
 
-    logger.addHandler(h)
-    logger.setLevel(log_level)
+    logging.root.addHandler(h)
+    logging.root.setLevel(log_level)
 
 
 def run_app(worker: Worker) -> None:
@@ -124,6 +129,7 @@ async def _worker_run(worker: Worker) -> None:
 
 def _run_worker_blocking(worker: Worker) -> None:
     loop = asyncio.get_event_loop()
+    loop.slow_callback_duration = 0.01  # 10ms
 
     try:
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -138,7 +144,6 @@ def _run_worker_blocking(worker: Worker) -> None:
     except (GracefulShutdown, KeyboardInterrupt):
         pass
 
-    logger.info("shutting down worker")
     main_task.cancel()
     loop.run_until_complete(main_task)
 

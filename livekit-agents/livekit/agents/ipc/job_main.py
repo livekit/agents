@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import asyncio
 import contextlib
 import logging
@@ -21,10 +22,13 @@ class LogHandler(logging.Handler):
         self._writer = writer
 
     def emit(self, record: logging.LogRecord) -> None:
-        protocol.write_msg(
-            self._writer,
-            protocol.Log(level=record.levelno, message=record.getMessage()),
-        )
+        try:
+            protocol.write_msg(
+                self._writer,
+                protocol.Log(level=record.levelno, message=record.getMessage()),
+            )
+        except Exception as e:
+            print(f"failed to write log: {e}")
 
 
 async def _start(
@@ -72,8 +76,9 @@ async def _start(
                 start_req = msg
                 await _start_if_valid()
             if isinstance(msg, protocol.Ping):
+                last_timestamp = msg.timestamp
                 await pipe.write(
-                    protocol.Pong(last_timestamp=msg.timestamp, timestamp=time_ms())
+                    protocol.Pong(last_timestamp=last_timestamp, timestamp=time_ms())
                 )
 
     await room.disconnect()
@@ -87,8 +92,16 @@ def _run_job(cch: protocol.ProcessPipe, args: protocol.JobMainArgs) -> None:
     """Entry point for a job process"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    logging.basicConfig(handlers=[LogHandler(cch)], level=logging.NOTSET)
-    logger.debug("process started")
+
+    logging.root.setLevel(logging.NOTSET)
+    logging.root.propagate = False
+    logging.root.addHandler(LogHandler(cch))
+
+    # current process pid
+    pid = os.getpid()
+    logging.debug(
+        "process started", extra={"job_id": args.job_id, "url": args.url, "pid": pid}
+    )
 
     pipe = apipe.AsyncPipe(cch, loop=loop)
     loop.slow_callback_duration = 0.01  # 10ms
