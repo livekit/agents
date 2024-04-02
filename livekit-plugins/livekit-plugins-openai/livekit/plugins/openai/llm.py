@@ -20,7 +20,10 @@ class LLMOptions:
 
 class LLM(llm.LLM):
     def __init__(
-        self, *, model: str | ChatModels, client: openai.AsyncClient | None = None
+        self,
+        *,
+        model: str | ChatModels = "gpt-4-1106-preview",
+        client: openai.AsyncClient | None = None,
     ) -> None:
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient()

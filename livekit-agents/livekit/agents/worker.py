@@ -102,7 +102,7 @@ class Worker:
 
         self._loop = loop or asyncio.get_event_loop()
         self._id = "unregistered"
-        self._session = aiohttp.ClientSession(loop=self._loop)
+        self._session = None
         self._closed = False
         self._tasks = set()
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
@@ -140,6 +140,8 @@ class Worker:
                 "api_secret is required, or set LIVEKIT_API_SECRET env var"
             )
 
+        self._session = aiohttp.ClientSession()
+
         async def _worker_ws():
             retry_count = 0
             while not self._closed:
@@ -166,33 +168,41 @@ class Worker:
                     await self._run_ws(ws)
                 except Exception as e:
                     if retry_count >= self._opts.max_retry:
-                        logger.exception(
-                            f"failed to connect to livekit-server after {retry_count} attempts"
+                        raise Exception(
+                            f"failed to connect to livekit-server after {retry_count} attempts: {e}"
                         )
-                        break
 
                     retry_delay = min(retry_count * 2, 10)
                     retry_count += 1
 
                     logger.warning(
-                        f"failed to connect to livekit-server, retrying in {retry_delay}s",
-                        exc_info=e,
+                        f"failed to connect to livekit-server, retrying in {retry_delay}s: {e}",
                     )
                     await asyncio.sleep(retry_delay)
 
         async def _http_server():
             await self._http_server.run()
 
-        await asyncio.gather(_worker_ws(), _http_server())
-        self._close_future.set_result(None)
+        try:
+            await asyncio.gather(_worker_ws(), _http_server())
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._close_future.set_result(None)
 
     @property
     def id(self) -> str:
         return self._id
 
     async def aclose(self) -> None:
+        if self._closed:
+            return
+
+        logger.info("shutting down worker", extra={"id": self.id})
         self._closed = True
         self._chan.close()
+        if self._session:
+            await self._session.close()
         await self._http_server.aclose()
         await self._close_future
 
@@ -285,7 +295,7 @@ class Worker:
     def _handle_register(self, reg: agent.RegisterWorkerResponse):
         self._id = reg.worker_id
         logger.info(
-            f"registered worker {reg.worker_id}",
+            f"registered worker",
             extra={"id": reg.worker_id, "server_info": reg.server_info},
         )
 
@@ -308,21 +318,21 @@ class Worker:
                         f"no answer for job {req.id}, automatically rejecting the job",
                         extra={"req": req},
                     )
-                    await send_ignore_err(
+                    await _send_ignore_err(
                         self._chan,
                         agent.WorkerMessage(
                             availability=agent.AvailabilityResponse(available=False)
                         ),
                     )
 
-            task = self._loop.create_task(_user_cb())
+            user_task = self._loop.create_task(_user_cb())
 
             av: AvailRes = await answer_rx.recv()  # wait for user answer
             msg = agent.WorkerMessage()
             msg.availability.available = av.avail
 
             if not av.avail:
-                await send_ignore_err(self._chan, msg)
+                await _send_ignore_err(self._chan, msg)
                 return
 
             assert av.data is not None
@@ -334,21 +344,21 @@ class Worker:
             wait_assignment = asyncio.Future[agent.JobAssignment]()
             self._pending_assignments[req.id] = wait_assignment
 
-            await send_ignore_err(self._chan, msg)
+            await _send_ignore_err(self._chan, msg)
 
             # wait for server assignment
             try:
                 await asyncio.wait_for(wait_assignment, consts.ASSIGNMENT_TIMEOUT)
                 await av.data.assignment_tx.send(None)
-                await task
             except asyncio.TimeoutError as e:
                 logger.warning(
                     f"assignment for job {req.id} timed out",
                     extra={"req": req},
                 )
                 await av.data.assignment_tx.send(e)
-                await task
                 return
+            finally:
+                await user_task
 
             asgn = wait_assignment.result()
             url = asgn.url
@@ -374,7 +384,7 @@ class Worker:
             )
 
 
-async def send_ignore_err(
+async def _send_ignore_err(
     ch: aio.ChanSender[agent.WorkerMessage], msg: agent.WorkerMessage
 ):
     # Used when we don't care about the result of sending

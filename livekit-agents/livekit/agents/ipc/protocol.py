@@ -14,6 +14,7 @@ class JobMainArgs:
     url: str
     token: str
     target: Callable
+    asyncio_debug: bool
 
 
 class ProcessPipeReader(Protocol):

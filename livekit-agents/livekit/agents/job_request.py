@@ -19,7 +19,6 @@ from enum import Enum
 from typing import Callable, Coroutine
 
 from attr import define
-from livekit import api
 from livekit.protocol import agent, models
 
 from . import aio
@@ -40,7 +39,6 @@ class AcceptData:
     entry: AgentEntry
     auto_subscribe: AutoSubscribe
     auto_disconnect: AutoDisconnect
-    grants: api.VideoGrants
     name: str
     identity: str
     metadata: str
@@ -95,7 +93,6 @@ class JobRequest:
         *,
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         auto_disconnect: AutoDisconnect = AutoDisconnect.ROOM_EMPTY,
-        grants: api.VideoGrants = api.VideoGrants(),
         name: str = "",
         identity: str = "",
         metadata: str = "",
@@ -105,12 +102,14 @@ class JobRequest:
                 raise AvailabilityAnsweredError
             self._answered = True
 
+        if not identity:
+            identity = "agent-" + self.id
+
         assign_tx, assign_rx = aio.channel(1)
         data = AcceptData(
             entry=entry,
             auto_subscribe=auto_subscribe,
             auto_disconnect=auto_disconnect,
-            grants=grants,
             name=name,
             identity=identity,
             metadata=metadata,

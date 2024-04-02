@@ -4,6 +4,7 @@ from typing import Literal, Optional
 
 from attrs import define, evolve
 from livekit import rtc
+from .log import logger
 
 from . import aio
 from . import llm as allm
@@ -12,7 +13,7 @@ from . import tts as atts
 from . import vad as avad
 
 
-class ConvAgent:
+class VoiceAssistant:
     def __init__(
         self,
         *,
@@ -56,10 +57,10 @@ class ConvAgent:
         int_task: asyncio.Task | None = None
 
         user_speech = ""
-        user_speaking = False
         agent_speaking = False
 
         async def _cancel_synthesis():
+            logger.debug("_cancel_synthesis")
             nonlocal synth_task, play_task, int_tx
             if synth_task is not None:
                 assert play_task
@@ -71,6 +72,7 @@ class ConvAgent:
                 synth_task = play_task = int_tx = None
 
         async def _start_synthesis(text: str) -> None:
+            logger.debug("_start_synthesis")
             nonlocal synth_task, play_task, int_tx
             await _cancel_synthesis()
 
@@ -79,6 +81,10 @@ class ConvAgent:
                 po_rx: aio.ChanReceiver[rtc.AudioFrame],
                 int_rx: aio.ChanReceiver[bool],
             ):
+                """
+                Playout the synthesized audio, & handle interruptions.
+                """
+
                 def _interp(a: float, b: float, t: float) -> float:
                     return a + (b - a) * (3 * t**2 - 2 * t**3)
 
@@ -142,6 +148,10 @@ class ConvAgent:
             play_task = asyncio.create_task(_playout_task(chat_ctx, po_rx, int_rx))
 
         async def _cancel_interruption():
+            """
+            Cancel the interruption task, interruption isn't needed anymore.
+            """
+            logger.debug("_cancel_interruption")
             nonlocal int_task, int_tx
             if int_task is not None:
                 int_task.cancel()
@@ -151,6 +161,10 @@ class ConvAgent:
                 int_task = None
 
         async def _start_interruption():
+            """
+            Notify the playout task we want to smoothly interrupt the agent voice.
+            """
+            logger.debug("_start_interruption")
             nonlocal int_task, int_tx
             if int_tx is None or int_task is not None:
                 return
@@ -175,15 +189,12 @@ class ConvAgent:
                     # handle VAD events
                     vad_event: avad.VADEvent = s.result()
                     if vad_event.type == avad.VADEventType.START_OF_SPEECH:
-                        user_speaking = True
-
                         if agent_speaking:
                             await _start_interruption()
                         else:
                             await _cancel_synthesis()
 
                     elif vad_event.type == avad.VADEventType.END_OF_SPEECH:
-                        user_speaking = False
                         po_validate.notify()
                         await _cancel_interruption()
 
@@ -205,6 +216,9 @@ class ConvAgent:
     async def _synthesize(
         self, chat_ctx: allm.ChatContext, po_tx: aio.ChanSender[rtc.AudioFrame]
     ) -> None:
+        """
+        Do LLM inference and TTS synthesis.
+        """
         tts_stream = self._tts.stream()
 
         async def _llm_gen():

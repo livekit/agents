@@ -26,7 +26,8 @@ class JobProcess:
         self._loop = loop or asyncio.get_event_loop()
         self._job = job
         pch, cch = multiprocessing.Pipe(duplex=True)
-        args = (cch, protocol.JobMainArgs(job.id, url, token, target))
+        asyncio_debug = self._loop.get_debug()
+        args = (cch, protocol.JobMainArgs(job.id, url, token, target, asyncio_debug))
         self._process = multiprocessing.Process(
             target=_run_job, args=args, daemon=True
         )  # daemon=True to avoid unresponsive process in production
@@ -42,6 +43,7 @@ class JobProcess:
 
         start_res: protocol.StartJobResponse | None = None
 
+        await self._pipe.write(protocol.StartJobRequest(job=self._job))
         async with contextlib.aclosing(
             aio.select([self._pipe, start_timeout, ping_interval, pong_timeout])
         ) as select:
@@ -67,7 +69,7 @@ class JobProcess:
                     ping = protocol.Ping(timestamp=time_ms())
                     await self._pipe.write(ping)  # send ping each consts.PING_INTERVAL
                     continue
-    
+
                 try:
                     res = s.result()
                 except aio.ChanClosed:
@@ -80,7 +82,7 @@ class JobProcess:
                 if isinstance(res, protocol.StartJobResponse):
                     start_res = res
                 if isinstance(res, protocol.Log):
-                    logger.log(res.level, res.message)
+                    logger.log(res.level, res.message, extra=self.logging_extra())
                 if isinstance(res, protocol.Pong):
                     delay = time_ms() - res.timestamp
                     if delay > consts.HIGH_PING_THRESHOLD * 1000:

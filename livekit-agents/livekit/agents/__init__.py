@@ -18,9 +18,11 @@ from .job_request import AutoDisconnect, AutoSubscribe, JobRequest
 from .plugin import Plugin
 from .version import __version__
 from .worker import Worker
+from .voice_assistant import VoiceAssistant
 
 __all__ = [
     "__version__",
+    "VoiceAssistant",
     "Worker",
     "JobRequest",
     "AutoSubscribe",

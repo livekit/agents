@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 
 from livekit import rtc
 from livekit.agents import stt
 
+from ..log import logger
 from ..utils import AudioBuffer, merge_frames
 from ..vad import VADEventType, VADStream
 from .stt import (
@@ -64,7 +64,7 @@ class StreamAdapterWrapper(SpeechStream):
 
         def log_exception(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():
-                logging.error(f"stream adapter task failed: {task.exception()}")
+                logger.error(f"stream adapter task failed: {task.exception()}")
 
         self._main_task.add_done_callback(log_exception)
 
