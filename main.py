@@ -64,7 +64,7 @@ async def intro_text_stream(phone_number: str, first_name, language):
                                  "Feel free to ask me anything. -- I'm here to help! Just start talking."
     else:
         if language == 'es':
-            personalized_intro = "¡Hola! Soy Tori, una asistente de voz. " \
+            personalized_intro = "¡Hola! Soy Tori, tu asistente de voz. " \
                                  "Siéntete libre de preguntarme cualquier cosa. ¡Estoy aquí para ayudar! Solo empieza a hablar."
         else:
             personalized_intro = "Hello! I am Tori, a friendly voice assistant. " \
@@ -74,7 +74,7 @@ async def intro_text_stream(phone_number: str, first_name, language):
 
 AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 
-ELEVEN_TTS_SAMPLE_RATE = 22050
+ELEVEN_TTS_SAMPLE_RATE = 16000
 ELEVEN_TTS_CHANNELS = 1
 CARLOTA_VOICE = Voice(
     id="U9LgUGD8IKHSm9nHVe7R",
@@ -85,6 +85,14 @@ CARLOTA_VOICE = Voice(
     ),
 )
 
+CARLOTA_VOICE_ES = Voice(
+    id="U9LgUGD8IKHSm9nHVe7R",
+    name="baymax",
+    category="generated",
+    settings=VoiceSettings(
+        stability=0.40, similarity_boost=0.75, style=0, use_speaker_boost=False
+    ),
+)
 
 class KITT:
     @classmethod
@@ -114,6 +122,7 @@ class KITT:
             self.language = 'es'
             self.system_prompt = None
             self.intro_message = None
+            print("LANGUAGEEEEE: " + str(self.language))
 
         # plugins
         self.chatgpt_plugin = ChatGPTPlugin(
@@ -129,7 +138,7 @@ class KITT:
         self.tts_plugin = TTS(
             model_id="eleven_multilingual_v2" if self.language == 'es' else "eleven_turbo_v2",
             sample_rate=ELEVEN_TTS_SAMPLE_RATE,
-            voice=CARLOTA_VOICE
+            voice=CARLOTA_VOICE_ES if self.language == 'es' else CARLOTA_VOICE
         )
         self.audio_out = rtc.AudioSource(ELEVEN_TTS_SAMPLE_RATE, ELEVEN_TTS_CHANNELS)
 
