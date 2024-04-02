@@ -5,6 +5,7 @@ import logging
 import signal
 import click
 
+from .. import aio
 from ..log import logger
 from ..worker import Worker
 
@@ -55,6 +56,7 @@ def _setup_logging(log_level: str, production: bool = True) -> None:
 
 def run_app(worker: Worker) -> None:
     """Run the CLI to interact with the worker"""
+    loop = asyncio.get_event_loop()
 
     def shared_args(func):
         @click.option(
@@ -102,9 +104,17 @@ def run_app(worker: Worker) -> None:
 
     @cli.command(help="Send a message to the worker")
     @shared_args
-    def dev(log_level: str, url: str, api_key: str, api_secret: str) -> None:
+    @click.option(
+        "--asyncio-debug/--no-asyncio-debug",
+        default=False,
+        help="Enable debugging feature of asyncio",
+    )
+    def dev(
+        log_level: str, url: str, api_key: str, api_secret: str, asyncio_debug: bool
+    ) -> None:
         _setup_logging(log_level, False)
         _update_opts(worker, url, api_key, api_secret)
+        loop.set_debug(asyncio_debug)
         _run_worker_blocking(worker)
 
     cli()
@@ -129,7 +139,8 @@ async def _worker_run(worker: Worker) -> None:
 
 def _run_worker_blocking(worker: Worker) -> None:
     loop = asyncio.get_event_loop()
-    loop.slow_callback_duration = 0.01  # 10ms
+    loop.slow_callback_duration = 0.02  # 20ms
+    aio.debug.hook_slow_callbacks(0.75)
 
     try:
         for sig in (signal.SIGINT, signal.SIGTERM):

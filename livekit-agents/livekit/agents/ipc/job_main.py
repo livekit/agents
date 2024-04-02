@@ -9,7 +9,6 @@ from livekit import rtc
 
 from .. import aio
 from ..job_context import JobContext
-from ..log import logger
 from ..utils import time_ms
 from . import apipe, protocol
 
@@ -94,7 +93,7 @@ def _run_job(cch: protocol.ProcessPipe, args: protocol.JobMainArgs) -> None:
     asyncio.set_event_loop(loop)
 
     logging.root.setLevel(logging.NOTSET)
-    logging.root.propagate = False
+    # logging.root.propagate = False
     logging.root.addHandler(LogHandler(cch))
 
     # current process pid
@@ -104,5 +103,7 @@ def _run_job(cch: protocol.ProcessPipe, args: protocol.JobMainArgs) -> None:
     )
 
     pipe = apipe.AsyncPipe(cch, loop=loop)
-    loop.slow_callback_duration = 0.01  # 10ms
+    loop.slow_callback_duration = 0.02  # 20ms
+    aio.debug.hook_slow_callbacks(0.75)
+    loop.set_debug(args.asyncio_debug)
     loop.run_until_complete(_start(pipe, args))
