@@ -60,7 +60,7 @@ async def intro_text_stream(phone_number: str, first_name, language):
             personalized_intro = f"¡Hola {first_name}! Soy Tori, tu asistente de voz. " \
                                  "Siéntete libre de preguntarme cualquier cosa. ¡Estoy aquí para ayudar! Solo empieza a hablar."
         else:
-            personalized_intro = (f"Hello {first_name}! I am Tori, your friendly voice assistant. "
+            personalized_intro = (f"Hello {first_name}! <break time=\"1.0s\" /> I am Tori, your friendly voice assistant. "
                                  "<break time=\"1.0s\" /> Feel free to ask me anything. "
                                  "<break time=\"1.0s\" /> I'm here to help! Just start talking.")
     else:
