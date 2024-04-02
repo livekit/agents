@@ -53,8 +53,7 @@ class Message(Protocol):
 
 @staticmethod
 def read_msg(p: ProcessPipeReader) -> "Message":
-    msg = p.recv_bytes()
-    b = io.BytesIO(msg)
+    b = io.BytesIO(p.recv_bytes())
     msg_id = int.from_bytes(b.read(4))
     msg = MESSAGES[msg_id]()
     msg.read(b)
