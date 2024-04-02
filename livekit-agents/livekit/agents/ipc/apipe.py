@@ -1,4 +1,3 @@
-import contextlib
 import asyncio
 import queue
 import threading
