@@ -17,11 +17,14 @@ from .job_context import JobContext
 from .job_request import AutoDisconnect, AutoSubscribe, JobRequest
 from .plugin import Plugin
 from .version import __version__
-from .worker import Worker
+from .worker import Worker, WorkerOptions
+from .voice_assistant import VoiceAssistant
 
 __all__ = [
     "__version__",
+    "VoiceAssistant",
     "Worker",
+    "WorkerOptions",
     "JobRequest",
     "AutoSubscribe",
     "AutoDisconnect",

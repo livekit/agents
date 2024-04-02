@@ -23,6 +23,7 @@ from typing import (
 )
 from urllib.parse import urlparse
 
+import io
 import aiohttp
 import psutil
 from attr import define
@@ -43,59 +44,45 @@ def cpu_load_fnc(_: ipc.JobProcess | None = None) -> float:
 
 
 @define(kw_only=True)
+class WorkerPermissions:
+    can_publish: bool = True
+    can_subscribe: bool = True
+    can_publish_data: bool = True
+    can_update_metadata: bool = True
+    hidden: bool = False
+
+
+# NOTE: this object must be pickle-able
+@define(kw_only=True)
 class WorkerOptions:
     request_fnc: JobRequestFnc
-    load_fnc: LoadFnc
-    namespace: str
-    permissions: models.ParticipantPermission
-    worker_type: agent.JobType.ValueType
-    max_retry: int
-    ws_url: str
-    api_key: str
-    api_secret: str
-    host: str
-    port: int
+    load_fnc: LoadFnc = cpu_load_fnc
+    namespace: str = "default"
+    permissions: WorkerPermissions = WorkerPermissions()
+    worker_type: agent.JobType = agent.JobType.JT_ROOM
+    max_retry: int = consts.MAX_RECONNECT_ATTEMPTS
+    ws_url: str = "ws://localhost:7880"
+    api_key: str | None = None
+    api_secret: str | None = None
+    host: str = "localhost"
+    port: int = 8081
 
 
 class Worker:
     def __init__(
         self,
-        request_fnc: JobRequestFnc,
+        opts: WorkerOptions,
         *,
-        load_fnc: LoadFnc = cpu_load_fnc,
-        namespace: str = "default",
-        permissions: models.ParticipantPermission = models.ParticipantPermission(),
-        worker_type: agent.JobType.ValueType = agent.JobType.JT_ROOM,
-        max_retry: int = consts.MAX_RECONNECT_ATTEMPTS,
-        ws_url: str | None = "ws://localhost:7880",
-        api_key: str | None = None,
-        api_secret: str | None = None,
-        host: str = "localhost",
-        port: int = 8081,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
+        opts.ws_url = opts.ws_url or opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
+        opts.api_key = opts.api_key or os.environ.get("LIVEKIT_API_KEY") or ""
+        opts.api_secret = opts.api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
 
-        ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
-        api_key = api_key or os.environ.get("LIVEKIT_API_KEY") or ""
-        api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
-
-        self._opts = WorkerOptions(
-            request_fnc=request_fnc,
-            load_fnc=load_fnc,
-            namespace=namespace,
-            permissions=permissions,
-            worker_type=worker_type,
-            max_retry=max_retry,
-            ws_url=ws_url,
-            api_key=api_key,
-            api_secret=api_secret,
-            host=host,
-            port=port,
-        )
-
+        self._opts = opts
         self._loop = loop or asyncio.get_event_loop()
         self._id = "unregistered"
-        self._session = aiohttp.ClientSession()
+        self._session = None
         self._closed = False
         self._tasks = set()
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
@@ -104,7 +91,9 @@ class Worker:
 
         self._chan = aio.Chan[agent.WorkerMessage](32, loop=self._loop)
         # We use the same event loop as the worker (so the health checks are more accurate)
-        self._http_server = http_server.HttpServer(host, port, loop=self._loop)
+        self._http_server = http_server.HttpServer(
+            opts.host, opts.port, loop=self._loop
+        )
 
     def _update_opts(
         self,
@@ -133,6 +122,8 @@ class Worker:
                 "api_secret is required, or set LIVEKIT_API_SECRET env var"
             )
 
+        self._session = aiohttp.ClientSession()
+
         async def _worker_ws():
             retry_count = 0
             while not self._closed:
@@ -159,33 +150,41 @@ class Worker:
                     await self._run_ws(ws)
                 except Exception as e:
                     if retry_count >= self._opts.max_retry:
-                        logger.exception(
-                            f"failed to connect to livekit-server after {retry_count} attempts"
+                        raise Exception(
+                            f"failed to connect to livekit-server after {retry_count} attempts: {e}"
                         )
-                        break
 
                     retry_delay = min(retry_count * 2, 10)
                     retry_count += 1
 
                     logger.warning(
-                        f"failed to connect to livekit-server, retrying in {retry_delay}s",
-                        exc_info=e,
+                        f"failed to connect to livekit-server, retrying in {retry_delay}s: {e}",
                     )
                     await asyncio.sleep(retry_delay)
 
         async def _http_server():
             await self._http_server.run()
 
-        await asyncio.gather(_worker_ws(), _http_server())
-        self._close_future.set_result(None)
+        try:
+            await asyncio.gather(_worker_ws(), _http_server())
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._close_future.set_result(None)
 
     @property
     def id(self) -> str:
         return self._id
 
     async def aclose(self) -> None:
+        if self._closed:
+            return
+
+        logger.info("shutting down worker", extra={"id": self.id})
         self._closed = True
         self._chan.close()
+        if self._session:
+            await self._session.close()
         await self._http_server.aclose()
         await self._close_future
 
@@ -195,7 +194,16 @@ class Worker:
         # register the worker
         req = agent.WorkerMessage()
         req.register.type = self._opts.worker_type
-        req.register.allowed_permissions.CopyFrom(self._opts.permissions)
+        req.register.allowed_permissions.CopyFrom(
+            models.ParticipantPermission(
+                can_publish=self._opts.permissions.can_publish,
+                can_subscribe=self._opts.permissions.can_subscribe,
+                can_publish_data=self._opts.permissions.can_publish_data,
+                can_update_metadata=self._opts.permissions.can_update_metadata,
+                hidden=self._opts.permissions.hidden,
+                agent=True,
+            )
+        )
         req.register.namespace = self._opts.namespace
         req.register.version = __version__
         await self._chan.send(req)
@@ -278,7 +286,7 @@ class Worker:
     def _handle_register(self, reg: agent.RegisterWorkerResponse):
         self._id = reg.worker_id
         logger.info(
-            f"registered worker {reg.worker_id}",
+            f"registered worker",
             extra={"id": reg.worker_id, "server_info": reg.server_info},
         )
 
@@ -287,32 +295,35 @@ class Worker:
         req = JobRequest(msg.job, answer_tx)
 
         async def _wait_response():
-            try:
-                await self._opts.request_fnc(req)
-            except Exception:
-                logger.exception(
-                    f"user request handler for job {req.id} failed",
-                    extra={"req": req},
-                )
+            async def _user_cb():
+                try:
+                    await self._opts.request_fnc(req)
+                except Exception:
+                    logger.exception(
+                        f"user request handler for job {req.id} failed",
+                        extra={"req": req},
+                    )
 
-            if not req.answered:
-                logger.warning(
-                    f"no answer for job {req.id}, automatically rejecting the job",
-                    extra={"req": req},
-                )
-                await send_ignore_err(
-                    self._chan,
-                    agent.WorkerMessage(
-                        availability=agent.AvailabilityResponse(available=False)
-                    ),
-                )
+                if not req.answered:
+                    logger.warning(
+                        f"no answer for job {req.id}, automatically rejecting the job",
+                        extra={"req": req},
+                    )
+                    await _send_ignore_err(
+                        self._chan,
+                        agent.WorkerMessage(
+                            availability=agent.AvailabilityResponse(available=False)
+                        ),
+                    )
+
+            user_task = self._loop.create_task(_user_cb())
 
             av: AvailRes = await answer_rx.recv()  # wait for user answer
             msg = agent.WorkerMessage()
             msg.availability.available = av.avail
 
             if not av.avail:
-                await send_ignore_err(self._chan, msg)
+                await _send_ignore_err(self._chan, msg)
                 return
 
             assert av.data is not None
@@ -324,22 +335,25 @@ class Worker:
             wait_assignment = asyncio.Future[agent.JobAssignment]()
             self._pending_assignments[req.id] = wait_assignment
 
-            await send_ignore_err(self._chan, msg)
+            await _send_ignore_err(self._chan, msg)
 
             # wait for server assignment
             try:
                 await asyncio.wait_for(wait_assignment, consts.ASSIGNMENT_TIMEOUT)
                 await av.data.assignment_tx.send(None)
             except asyncio.TimeoutError as e:
-                await av.data.assignment_tx.send(e)
                 logger.warning(
                     f"assignment for job {req.id} timed out",
                     extra={"req": req},
                 )
+                await av.data.assignment_tx.send(e)
                 return
+            finally:
+                await user_task
 
             asgn = wait_assignment.result()
             url = asgn.url
+
             if not url:
                 url = self._opts.ws_url
 
@@ -361,7 +375,7 @@ class Worker:
             )
 
 
-async def send_ignore_err(
+async def _send_ignore_err(
     ch: aio.ChanSender[agent.WorkerMessage], msg: agent.WorkerMessage
 ):
     # Used when we don't care about the result of sending

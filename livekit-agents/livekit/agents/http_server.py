@@ -30,4 +30,5 @@ class HttpServer:
             await self._runner.cleanup()
 
     async def aclose(self) -> None:
-        self._close_future.set_result(None)
+        if not self._close_future.done():
+            self._close_future.set_result(None)

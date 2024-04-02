@@ -3,6 +3,7 @@ from .interval import Interval, interval
 from .select import SelectLoop, select
 from .sleep import Sleep, SleepFinished, sleep
 from .wait_group import WaitGroup
+from . import debug
 
 __all__ = [
     "ChanClosed",
@@ -18,4 +19,5 @@ __all__ = [
     "SleepFinished",
     "sleep",
     "WaitGroup",
+    "debug",
 ]

@@ -27,33 +27,41 @@ class AsyncPipe:
 
     def _read_thread(self) -> None:
         while not self._exit_ev.is_set():
-            msg = protocol.read_msg(self._p)
+            try:
+                msg = protocol.read_msg(self._p)
 
-            def _put_msg(msg):
-                _ = asyncio.ensure_future(self._read_ch.send(msg))
+                def _put_msg(msg):
+                    _ = asyncio.ensure_future(self._read_ch.send(msg))
 
-            self._loop.call_soon_threadsafe(_put_msg, msg)
+                self._loop.call_soon_threadsafe(_put_msg, msg)
+            except (OSError, EOFError, BrokenPipeError):
+                break
+
+        self._loop.call_soon_threadsafe(self.close)
 
     def _write_thread(self) -> None:
         while not self._exit_ev.is_set():
-            msg = self._write_q.get()
-            protocol.write_msg(self._p, msg)
+            try:
+                msg = self._write_q.get()
+                protocol.write_msg(self._p, msg)
+            except (OSError, BrokenPipeError):
+                break
+
+        self._loop.call_soon_threadsafe(self.close)
 
     async def read(self) -> protocol.Message:
         return await self._read_ch.recv()
 
     async def write(self, msg: protocol.Message) -> None:
-        if asyncio.get_running_loop() is not self._loop:
-            raise RuntimeError("write must be called from the same loop as the pipe")
-
         await asyncio.to_thread(self._write_q.put, msg)
 
-    def __aiter__(self):
+    def __aiter__(self) -> "AsyncPipe":
         return self
 
     async def __anext__(self) -> protocol.Message:
         return await self.read()
 
     def close(self) -> None:
+        self._p.close()
         self._read_ch.close()
         self._exit_ev.set()
