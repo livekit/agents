@@ -74,7 +74,7 @@ async def intro_text_stream(phone_number: str, first_name, language):
 
 AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 
-ELEVEN_TTS_SAMPLE_RATE = 'mp3_22050_32'
+ELEVEN_TTS_SAMPLE_RATE = '22050'
 ELEVEN_TTS_CHANNELS = 1
 CARLOTA_VOICE = Voice(
     id="U9LgUGD8IKHSm9nHVe7R",
