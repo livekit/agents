@@ -1,4 +1,0 @@
-livekit
-livekit-api
-livekit-agents
-livekit-plugins-silero
