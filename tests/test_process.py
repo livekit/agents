@@ -2,10 +2,11 @@ import asyncio
 import logging
 import multiprocessing
 from os import environ
+import pickle
 
 from livekit import api
 from livekit import rtc
-from livekit.agents import ipc
+from livekit.agents import ipc, WorkerOptions
 from livekit.protocol import agent
 
 TEST_STR = "the people who are crazy enough to think they can change the world are the ones who do"
@@ -77,3 +78,10 @@ def test_rtc():
     assert room_sid.startswith("RM_")
 
     proc.join()
+
+def _request_fnc(x):
+    pass
+
+def test_ser():
+    # make sure WorkerOptions is serializable with pickle
+    pickle.loads(pickle.dumps(WorkerOptions(request_fnc=_request_fnc)))
