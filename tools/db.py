@@ -11,7 +11,7 @@ supabase: Client = create_client(url, key)
 
 # Function to retrieve user details by phone
 def get_user_details_by_phone(phone: str) -> dict:
-    data = supabase.table("users").select("first_name, language, system_prompt, intro_message").eq("phone", phone).execute()
+    data = supabase.table("users").select("first_name, language, system_prompt, intro_message, id").eq("phone", phone).execute()
     if data.data and len(data.data) > 0:
         return {
             'first_name': data.data[0]['first_name'],
