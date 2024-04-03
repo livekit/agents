@@ -1,23 +1,15 @@
-import logging
 import functools
+import pathlib
 import asyncio
-import logging
 import signal
 import click
+import sys
 
-from attrs import define
-
+from . import protocol
+from .log import setup_logging
 from .. import aio
 from ..log import logger
 from ..worker import Worker, WorkerOptions
-
-
-@define(kw_only=True)
-class CliArgs:
-    opts: WorkerOptions
-    log_level: str
-    production: bool
-    asyncio_debug: bool
 
 
 def run_app(opts: WorkerOptions) -> None:
@@ -55,52 +47,73 @@ def run_app(opts: WorkerOptions) -> None:
 
     cli = click.Group()
 
-    @cli.command(help="Start the worker")
+    @cli.command(
+        help="Start the worker in production mode. Use a json logger by default."
+    )
     @shared_args
     def start(log_level: str, url: str, api_key: str, api_secret: str) -> None:
         opts.ws_url = url or opts.ws_url
         opts.api_key = api_key or opts.api_key
         opts.api_secret = api_secret or opts.api_secret
-        args = CliArgs(
-            opts=opts, log_level=log_level, production=True, asyncio_debug=False
+        args = protocol.CliArgs(
+            opts=opts,
+            log_level=log_level,
+            production=True,
+            asyncio_debug=False,
+            watch=False,
         )
-        _run_worker_blocking(args)
+        run_worker(args)
 
-    @cli.command(help="Send a message to the worker")
+    @cli.command(help="Start the worker in development mode")
     @shared_args
     @click.option(
         "--asyncio-debug/--no-asyncio-debug",
         default=False,
         help="Enable debugging feature of asyncio",
     )
+    @click.option(
+        "--watch/--no-watch",
+        default=True,
+        help="Watch for changes in the current directory and plugins in editable mode",
+    )
     def dev(
-        log_level: str, url: str, api_key: str, api_secret: str, asyncio_debug: bool
+        log_level: str,
+        url: str,
+        api_key: str,
+        api_secret: str,
+        asyncio_debug: bool,
+        watch: bool,
     ) -> None:
-        from watchfiles import run_process
-
         opts.ws_url = url or opts.ws_url
         opts.api_key = api_key or opts.api_key
         opts.api_secret = api_secret or opts.api_secret
-        args = CliArgs(
+        args = protocol.CliArgs(
             opts=opts,
             log_level=log_level,
             production=False,
             asyncio_debug=asyncio_debug,
+            watch=watch,
         )
-        _setup_logging(
-            args.log_level, args.production
-        )  # setup logger for reloader process
-        logger.debug("starting development mode", extra={"cli_args": args})
-        run_process("./", target=_run_worker_blocking, args=(args,))
+
+        if watch:
+            from .watcher import WatchServer
+
+            setup_logging(log_level, args.production)
+
+            main_file = pathlib.Path(sys.argv[0]).parent
+            server = WatchServer(run_worker, main_file, args, watch_plugins=True)
+            server.run()
+        else:
+            run_worker(args)
 
     cli()
 
 
-def _run_worker_blocking(args: CliArgs) -> None:
+def run_worker(args: protocol.CliArgs) -> None:
     class Shutdown(SystemExit):
         pass
 
-    _setup_logging(args.log_level, args.production)
+    setup_logging(args.log_level, args.production)
 
     loop = asyncio.get_event_loop()
     worker = Worker(args.opts, loop=loop)
@@ -125,10 +138,17 @@ def _run_worker_blocking(args: CliArgs) -> None:
     ) -> None:
         try:
             await worker.run()
-        except Exception as e:
-            logger.exception("worker failed", exc_info=e)
-        finally:
-            await worker.aclose()
+        except Exception:
+            logger.exception("worker failed")
+
+    watch_client = None
+    if args.watch:
+        from .watcher import WatchClient
+
+        assert args.cch is not None
+
+        watch_client = WatchClient(worker, args.cch, loop=loop)
+        watch_client.start()
 
     main_task = loop.create_task(_worker_run(worker))
     try:
@@ -136,8 +156,10 @@ def _run_worker_blocking(args: CliArgs) -> None:
     except (Shutdown, KeyboardInterrupt):
         pass
 
-    main_task.cancel()
-    loop.run_until_complete(main_task)
+    loop.run_until_complete(worker.aclose())
+
+    if watch_client:
+        loop.run_until_complete(watch_client.aclose())
 
     tasks = asyncio.all_tasks(loop)
     for task in tasks:
@@ -146,54 +168,3 @@ def _run_worker_blocking(args: CliArgs) -> None:
     loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
     loop.run_until_complete(loop.shutdown_asyncgens())
     loop.close()
-
-
-class ExtraLogFormatter(logging.Formatter):
-    def __init__(self, formatter):
-        super().__init__()
-        self._formatter = formatter
-
-    def format(self, record):
-        # less hacky solution?
-        dummy = logging.LogRecord("", 0, "", 0, None, None, None)
-        extra_txt = "\t "
-        for k, v in record.__dict__.items():
-            if k not in dummy.__dict__:
-                extra_txt += " {}={}".format(k, str(v).replace("\n", " "))
-        message = self._formatter.format(record)
-        return message + extra_txt
-
-
-def _setup_logging(log_level: str, production: bool = True) -> None:
-    h = logging.StreamHandler()
-
-    if production:
-        ## production mode, json logs
-        from pythonjsonlogger import jsonlogger
-
-        class CustomJsonFormatter(jsonlogger.JsonFormatter):
-            def add_fields(self, log_record, record, message_dict):
-                super().add_fields(log_record, record, message_dict)
-                log_record.pop("taskName")
-                log_record["level"] = record.levelname
-
-        formatter = CustomJsonFormatter("%(asctime)s %(level)s %(name)s %(message)s")
-        h.setFormatter(formatter)
-    else:
-        ## dev mode, colored logs & show all extra
-        import colorlog
-
-        h.setFormatter(
-            ExtraLogFormatter(
-                colorlog.ColoredFormatter(
-                    "%(asctime)s %(log_color)s%(levelname)-4s %(bold_white)s %(name)s %(reset)s %(message)s",
-                    log_colors={
-                        **colorlog.default_log_colors,
-                        "DEBUG": "blue",
-                    },
-                )
-            )
-        )
-
-    logging.root.addHandler(h)
-    logging.root.setLevel(log_level)

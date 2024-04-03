@@ -7,10 +7,10 @@ from typing import Callable
 
 from livekit.protocol import agent
 
-from .. import aio
+from .. import aio, apipe
 from ..log import logger
 from ..utils import time_ms
-from . import apipe, consts, protocol
+from . import consts, protocol
 from .job_main import _run_job
 
 
@@ -31,7 +31,9 @@ class JobProcess:
         self._process = multiprocessing.Process(
             target=_run_job, args=args, daemon=True
         )  # daemon=True to avoid unresponsive process in production
-        self._pipe = apipe.AsyncPipe(pch, loop=self._loop)
+        self._pipe = apipe.AsyncPipe(
+            pch, loop=self._loop, messages=protocol.IPC_MESSAGES
+        )
         self._close_future = asyncio.Future()
 
     async def run(self) -> None:
@@ -101,25 +103,35 @@ class JobProcess:
                     break
 
         def _join_process():
-            self._process.join()
+            try:
+                self._process.join()
+            except Exception as e:
+                logger.error(
+                    "error joining job process",
+                    exc_info=e,
+                    extra=self.logging_extra(),
+                )
+
             self._loop.call_soon_threadsafe(self._close_future.set_result, None)
 
         join_t = threading.Thread(target=_join_process, daemon=True)
         join_t.start()
         await self._close_future
 
-        logger.debug("job process closed", extra=self.logging_extra())
+        logger.info("job process closed", extra=self.logging_extra())
 
     def _sig_kill(self) -> None:
         if not self._process.is_alive():
             return
 
+        logger.info("killing job process", extra=self.logging_extra())
         if sys.platform == "win32":
             self._process.terminate()
         else:
             self._process.kill()
 
     async def aclose(self) -> None:
+        logger.info("closing job process", extra=self.logging_extra())
         await self._pipe.write(protocol.ShutdownRequest())
         await self._close_future
         self._pipe.close()

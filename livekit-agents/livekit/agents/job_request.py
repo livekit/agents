@@ -42,13 +42,13 @@ class AcceptData:
     name: str
     identity: str
     metadata: str
-    assignment_tx: aio.ChanSender[BaseException | None]
 
 
 @define(kw_only=True)
 class AvailRes:
     avail: bool
     data: AcceptData | None = None
+    assignment_tx: aio.ChanSender[BaseException | None] | None = None
 
 
 class JobRequest:
@@ -113,9 +113,10 @@ class JobRequest:
             name=name,
             identity=identity,
             metadata=metadata,
-            assignment_tx=assign_tx,
         )
-        await self._answer_tx.send(AvailRes(avail=True, data=data))
+        await self._answer_tx.send(
+            AvailRes(avail=True, data=data, assignment_tx=assign_tx)
+        )
 
         # wait for the server to accept the assignment
         # this will raise a TimeoutError if the server does not respond

@@ -1,6 +1,7 @@
 import asyncio
-from asyncio.base_events import _format_handle  # type: ignore
 import time
+from asyncio.base_events import _format_handle  # type: ignore
+
 from ..log import logger
 
 
