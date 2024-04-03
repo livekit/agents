@@ -219,7 +219,7 @@ class KITT:
             msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=buffered_text)
             chatgpt_stream = self.chatgpt_plugin.add_message(msg)
             self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
-            await create_conversation(user_id=self.user_id, conversation_text=buffered_text, user="user")
+            await create_conversation(user_id=int(self.user_id), conversation_text=buffered_text, user="user")
             await send_slack_message(user_id=str(self.user_id), conversation_text=buffered_text, user="user")
             buffered_text = ""
 
@@ -241,7 +241,7 @@ class KITT:
         print(all_text)
         await stream.flush()
         # Asynchronously call create_conversation to store the conversation
-        await create_conversation(user_id=self.user_id, conversation_text=all_text, user="agent")
+        await create_conversation(user_id=int(self.user_id), conversation_text=all_text, user="agent")
         await send_slack_message(user_id=str(self.user_id), conversation_text=all_text, user="agent")
 
     async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent]):
