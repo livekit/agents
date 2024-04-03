@@ -56,8 +56,8 @@ PROMPT =    """You are Tori, a friendly voice assistant for elderly.
 # Modify the intro_text_stream function
 async def intro_text_stream(phone_number: str, first_name, language, intro_message):
     
-    greeting_es = "¡Hola{}! Soy Tori, tu asistente de voz. Siéntete libre de preguntarme cualquier cosa. {}"
-    greeting_en = "Hello{}! I am Tori, your friendly voice assistant. Feel free to ask me anything. {}"
+    greeting_es = "¡Hola{}! Soy Tori, tu asistente y compañero. Estoy aquí para traerte alegría, despertar recuerdos y... mantenerte conectado con el mundo que te rodea. Ya sean historias, juegos o charlas, estoy aquí para alegrar tu día. ¿Cómo estás hoy? {}"
+    greeting_en = "Hello{} -- I am Tori, your friendly companion. I'm here to bring joy, spark memories, and ... keep you connected with the world around you. Whether it's stories, games, or chats, I'm here to brighten your day. Let's begin our journey ... How are you today? {}"
     
     name_part = f" {first_name}" if first_name else ""
     intro_message_part = f" {intro_message}" if intro_message else ""
