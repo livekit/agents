@@ -239,10 +239,10 @@ class KITT:
         # buffer up the entire response from ChatGPT before sending a chat message
         await self.chat.send_message(all_text)
         print(all_text)
-        await stream.flush()
         # Asynchronously call create_conversation to store the conversation
         await create_conversation(user_id=int(self.user_id), conversation_text=all_text, user="agent")
         await send_slack_message(user_id=str(self.user_id), conversation_text=all_text, user="agent")
+        await stream.flush()
 
     async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent]):
         async for e in tts_stream:
