@@ -118,7 +118,7 @@ class KITT:
             self.language = user_details.get('language')
             self.system_prompt = user_details.get('system_prompt')
             self.intro_message = user_details.get('intro_message')
-            self.user_id = user_details.get('id')
+            self.user_id = user_details.get('user_id')
             print("USER DETAILS: ", user_details)
             print("USER ID: ", self.user_id)
         else:
