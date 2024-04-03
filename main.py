@@ -118,13 +118,13 @@ class KITT:
             self.language = user_details.get('language')
             self.system_prompt = user_details.get('system_prompt')
             self.intro_message = user_details.get('intro_message')
-            self.user_id = user_details.get('id')
+            self.user_id = str(user_details.get('id'))
         else:
             self.first_name = None
             self.language = 'es'
             self.system_prompt = None
             self.intro_message = None
-            self.user_id = 0
+            self.user_id = "0"
 
         # plugins
         self.chatgpt_plugin = ChatGPTPlugin(
