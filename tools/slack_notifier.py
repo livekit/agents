@@ -30,7 +30,7 @@ async def send_slack_message(user_id: str, user: str, conversation_text: str):
                 text=f"User ID: {user_id}\nUser: {user}\nMessage: {conversation_text}"
             )
             # Store the thread timestamp using the user_id as the key in Supabase
-            await store_slack_thread_id(user_id, response['ts'])
+            await store_slack_thread_id(user_id, str(response['ts']))
     except Exception as e:
         print(f"Failed to send message to Slack: {e}")
 
