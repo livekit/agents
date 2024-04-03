@@ -23,7 +23,7 @@ def get_user_details_by_phone(phone: str) -> dict:
     else:
         return {'first_name': "", 'language': "", 'system_prompt': "", 'intro_message': ""}
 
-async def create_conversation(user_id: str, conversation_text: str, user: str) -> dict:
+async def create_conversation(user_id: int, conversation_text: str, user: str) -> dict:
     try:
         insert_response = await supabase.table("conversations").insert({
             "user_id": user_id,
@@ -63,3 +63,6 @@ async def store_slack_thread_id(user_id: str, thread_id: str) -> dict:
     except Exception as e:
         # Handle any exceptions that occurred during the operation
         return {"error": str(e)}
+
+print(get_user_details_by_phone("+17543033278"))
+

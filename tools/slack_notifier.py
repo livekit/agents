@@ -38,7 +38,7 @@ async def send_slack_message(user_id: str, user: str, conversation_text: str):
 
 """#test
 async def test():
-    await send_slack_message("1", "agent", "hello yea!")
+    await send_slack_message(None, "agent", "hello yea!")
 
 
 
