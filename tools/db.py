@@ -18,7 +18,7 @@ def get_user_details_by_phone(phone: str) -> dict:
             'language': data.data[0]['language'],
             'system_prompt': data.data[0]['system_prompt'],
             'intro_message': data.data[0]['intro_message'],
-            'user_id': data.data[0]['user_id']
+            'user_id': data.data[0]['id']
         }
     else:
         return {'first_name': "", 'language': "", 'system_prompt': "", 'intro_message': ""}
