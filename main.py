@@ -120,6 +120,7 @@ class KITT:
             self.intro_message = user_details.get('intro_message')
             self.user_id = user_details.get('id')
             print("USER DETAILS: ", user_details)
+            print("USER ID: ", self.user_id)
         else:
             self.first_name = None
             self.language = 'es'
