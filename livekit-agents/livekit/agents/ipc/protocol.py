@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import io
 import pickle
-from typing import Callable, ClassVar, Protocol
+from typing import Callable, ClassVar
 
-from attr import define
+from attrs import define
 from livekit.protocol import agent
 
 
@@ -15,58 +15,6 @@ class JobMainArgs:
     token: str
     target: Callable
     asyncio_debug: bool
-
-
-class ProcessPipeReader(Protocol):
-    def recv_bytes(self, maxlength: int | None = None) -> bytes:
-        ...
-
-    def close(self) -> None:
-        ...
-
-
-class ProcessPipeWriter(Protocol):
-    def send_bytes(
-        self,
-        buf: bytes | bytearray | memoryview,
-        offset: int = 0,
-        size: int | None = None,
-    ):
-        ...
-
-    def close(self) -> None:
-        ...
-
-
-class ProcessPipe(ProcessPipeReader, ProcessPipeWriter, Protocol):
-    ...
-
-
-class Message(Protocol):
-    MSG_ID: ClassVar[int]
-
-    def write(self, b: io.BytesIO) -> None:
-        ...
-
-    def read(self, b: io.BytesIO) -> None:
-        ...
-
-
-@staticmethod
-def read_msg(p: ProcessPipeReader) -> "Message":
-    b = io.BytesIO(p.recv_bytes())
-    msg_id = int.from_bytes(b.read(4))
-    msg = MESSAGES[msg_id]()
-    msg.read(b)
-    return msg
-
-
-@staticmethod
-def write_msg(p: ProcessPipeWriter, msg: "Message") -> None:
-    b = io.BytesIO()
-    b.write(msg.MSG_ID.to_bytes(4))
-    msg.write(b)
-    p.send_bytes(b.getvalue())
 
 
 @define(kw_only=True)
@@ -184,7 +132,7 @@ class UserExit:
         pass
 
 
-MESSAGES = {
+IPC_MESSAGES = {
     StartJobRequest.MSG_ID: StartJobRequest,
     StartJobResponse.MSG_ID: StartJobResponse,
     Log.MSG_ID: Log,

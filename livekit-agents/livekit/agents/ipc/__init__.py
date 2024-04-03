@@ -1,5 +1,4 @@
-from .job_process import JobProcess
 from . import protocol
-from . import apipe
+from .job_process import JobProcess
 
-__all__ = ["JobProcess", "protocol", "apipe"]
+__all__ = ["JobProcess", "protocol"]

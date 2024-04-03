@@ -1,7 +1,7 @@
 import asyncio
-from ..log import logger
 from typing import AsyncIterable
 
+from ..log import logger
 from ..tokenize import SentenceStream, SentenceTokenizer
 from .tts import (
     TTS,

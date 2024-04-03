@@ -20,10 +20,10 @@ import os
 from typing import (
     Callable,
     Coroutine,
+    List,
 )
 from urllib.parse import urlparse
 
-import io
 import aiohttp
 import psutil
 from attr import define
@@ -31,7 +31,7 @@ from livekit import api
 from livekit.protocol import agent, models
 
 from . import aio, consts, http_server, ipc
-from .job_request import AgentEntry, AvailRes, JobRequest
+from .job_request import AgentEntry, AvailRes, JobRequest, AcceptData
 from .log import logger
 from .version import __version__
 
@@ -68,6 +68,12 @@ class WorkerOptions:
     port: int = 8081
 
 
+@define(kw_only=True)
+class ActiveJob:
+    job: agent.Job
+    accept_data: AcceptData
+
+
 class Worker:
     def __init__(
         self,
@@ -86,7 +92,7 @@ class Worker:
         self._closed = False
         self._tasks = set()
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
-        self._processes = dict[str, ipc.JobProcess]()
+        self._processes = dict[str, tuple[ipc.JobProcess, ActiveJob]]()
         self._close_future = asyncio.Future()
 
         self._chan = aio.Chan[agent.WorkerMessage](32, loop=self._loop)
@@ -95,22 +101,9 @@ class Worker:
             opts.host, opts.port, loop=self._loop
         )
 
-    def _update_opts(
-        self,
-        ws_url: str,
-        api_key: str,
-        api_secret: str,
-    ):
-        if ws_url:
-            self._opts.ws_url = ws_url
-
-        if api_key:
-            self._opts.api_key = api_key
-
-        if api_secret:
-            self._opts.api_secret = api_secret
-
     async def run(self):
+        logger.info("starting worker", extra={"version": __version__})
+
         if not self._opts.ws_url:
             raise ValueError("ws_url is required, or set LIVEKIT_URL env var")
 
@@ -149,6 +142,9 @@ class Worker:
 
                     await self._run_ws(ws)
                 except Exception as e:
+                    if self._closed:
+                        break
+
                     if retry_count >= self._opts.max_retry:
                         raise Exception(
                             f"failed to connect to livekit-server after {retry_count} attempts: {e}"
@@ -165,27 +161,36 @@ class Worker:
         async def _http_server():
             await self._http_server.run()
 
-        try:
-            await asyncio.gather(_worker_ws(), _http_server())
-        except asyncio.CancelledError:
-            pass
-        finally:
-            self._close_future.set_result(None)
+        await asyncio.gather(_worker_ws(), _http_server())
+        self._close_future.set_result(None)
 
     @property
     def id(self) -> str:
         return self._id
+
+    @property
+    def active_jobs(self) -> list[ActiveJob]:
+        return [active_job for (_, active_job) in self._processes.values()]
 
     async def aclose(self) -> None:
         if self._closed:
             return
 
         logger.info("shutting down worker", extra={"id": self.id})
+
+        # shutdown processes before closing the connection to the lkserver
+        close_co = []
+        for proc, _ in self._processes.values():
+            close_co.append(proc.aclose())
+
+        await asyncio.gather(*close_co, return_exceptions=True)
+
+        await self._http_server.aclose()
+        assert self._session is not None
+        await self._session.close()
+
         self._closed = True
         self._chan.close()
-        if self._session:
-            await self._session.close()
-        await self._http_server.aclose()
         await self._close_future
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse):
@@ -264,9 +269,32 @@ class Worker:
 
         await asyncio.gather(send_task(), recv_task(), load_monitor_task())
 
-    def _start_process(self, job: agent.Job, url: str, token: str, entry: AgentEntry):
-        proc = ipc.JobProcess(job, url, token, entry)
-        self._processes[job.id] = proc
+    def _reload_jobs(self, jobs: list[ActiveJob]):
+        for aj in jobs:
+            logger.info("reloading job", extra={"job": aj.job})
+            # reloading jobs doesn't work on third-party workers
+            # so it is ok to use the ws_url from the local worker
+            # (also create a token with the worker api key)
+            url = self._opts.ws_url
+
+            jwt = (
+                api.AccessToken(self._opts.api_key, self._opts.api_secret)
+                .with_grants(
+                    api.VideoGrants(agent=True, room=aj.job.room.name, room_join=True)
+                )
+                .with_name(aj.accept_data.name)
+                .with_metadata(aj.accept_data.metadata)
+                .with_identity(aj.accept_data.identity)
+                .to_jwt()
+            )
+
+            self._start_process(aj.job, url, jwt, aj.accept_data)
+
+    def _start_process(
+        self, job: agent.Job, url: str, token: str, accept_data: AcceptData
+    ):
+        proc = ipc.JobProcess(job, url, token, accept_data.entry)
+        self._processes[job.id] = (proc, ActiveJob(job=job, accept_data=accept_data))
 
         async def _run_proc():
             try:
@@ -286,7 +314,7 @@ class Worker:
     def _handle_register(self, reg: agent.RegisterWorkerResponse):
         self._id = reg.worker_id
         logger.info(
-            f"registered worker",
+            "registered worker",
             extra={"id": reg.worker_id, "server_info": reg.server_info},
         )
 
@@ -327,6 +355,7 @@ class Worker:
                 return
 
             assert av.data is not None
+            assert av.assignment_tx is not None
             msg.availability.job_id = req.id
             msg.availability.participant_identity = av.data.identity
             msg.availability.participant_name = av.data.name
@@ -340,13 +369,13 @@ class Worker:
             # wait for server assignment
             try:
                 await asyncio.wait_for(wait_assignment, consts.ASSIGNMENT_TIMEOUT)
-                await av.data.assignment_tx.send(None)
+                await av.assignment_tx.send(None)
             except asyncio.TimeoutError as e:
                 logger.warning(
                     f"assignment for job {req.id} timed out",
                     extra={"req": req},
                 )
-                await av.data.assignment_tx.send(e)
+                await av.assignment_tx.send(e)
                 return
             finally:
                 await user_task
@@ -357,7 +386,7 @@ class Worker:
             if not url:
                 url = self._opts.ws_url
 
-            self._start_process(asgn.job, url, asgn.token, av.data.entry)
+            self._start_process(asgn.job, url, asgn.token, av.data)
 
         task = self._loop.create_task(_wait_response())
         self._tasks.add(task)

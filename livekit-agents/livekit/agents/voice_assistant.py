@@ -1,16 +1,15 @@
 import asyncio
 import contextlib
-from typing import Literal, Optional
 
-from attrs import define, evolve
+from attrs import evolve
 from livekit import rtc
-from .log import logger
 
 from . import aio
 from . import llm as allm
 from . import stt as astt
 from . import tts as atts
 from . import vad as avad
+from .log import logger
 
 
 class VoiceAssistant:

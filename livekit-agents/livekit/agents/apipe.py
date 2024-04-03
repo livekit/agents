@@ -2,8 +2,7 @@ import asyncio
 import queue
 import threading
 
-from .. import aio
-from . import protocol
+from . import aio, ipc_enc
 
 
 # TODO(theomonnom): More efficient implementation without additional threads
@@ -11,10 +10,14 @@ class AsyncPipe:
     """Wraps a ProcessPipe to provide async I/O"""
 
     def __init__(
-        self, pipe: protocol.ProcessPipe, loop: asyncio.AbstractEventLoop
+        self,
+        pipe: ipc_enc.ProcessPipe,
+        loop: asyncio.AbstractEventLoop,
+        messages: dict[int, type[ipc_enc.Message]],
     ) -> None:
         self._loop = loop
         self._p = pipe
+        self._messages = messages
 
         self._read_ch = aio.Chan(32, loop=self._loop)
         self._write_q = queue.Queue(32)
@@ -28,7 +31,7 @@ class AsyncPipe:
     def _read_thread(self) -> None:
         while not self._exit_ev.is_set():
             try:
-                msg = protocol.read_msg(self._p)
+                msg = ipc_enc.read_msg(self._p, self._messages)
 
                 def _put_msg(msg):
                     _ = asyncio.ensure_future(self._read_ch.send(msg))
@@ -43,22 +46,22 @@ class AsyncPipe:
         while not self._exit_ev.is_set():
             try:
                 msg = self._write_q.get()
-                protocol.write_msg(self._p, msg)
+                ipc_enc.write_msg(self._p, msg)
             except (OSError, BrokenPipeError):
                 break
 
         self._loop.call_soon_threadsafe(self.close)
 
-    async def read(self) -> protocol.Message:
+    async def read(self) -> ipc_enc.Message:
         return await self._read_ch.recv()
 
-    async def write(self, msg: protocol.Message) -> None:
+    async def write(self, msg: ipc_enc.Message) -> None:
         await asyncio.to_thread(self._write_q.put, msg)
 
     def __aiter__(self) -> "AsyncPipe":
         return self
 
-    async def __anext__(self) -> protocol.Message:
+    async def __anext__(self) -> ipc_enc.Message:
         return await self.read()
 
     def close(self) -> None:

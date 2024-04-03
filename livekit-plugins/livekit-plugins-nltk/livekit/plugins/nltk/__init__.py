@@ -30,7 +30,7 @@ import nltk  # type: ignore
 
 class NltkPlugin(Plugin):
     def __init__(self):
-        super().__init__(__name__, __version__)
+        super().__init__(__name__, __version__, __package__)
 
     def download_files(self):
         try:
