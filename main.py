@@ -159,7 +159,7 @@ class KITT:
         # anything in the beginning
         await asyncio.sleep(1)
 
-        await self.process_chatgpt_result(intro_text_stream(self.phone_number, self.first_name, self.language))
+        await self.process_chatgpt_result(intro_text_stream(self.phone_number, self.first_name, self.language, self.intro_message))
         self.update_state()
 
     def on_chat_received(self, message: rtc.ChatMessage):
