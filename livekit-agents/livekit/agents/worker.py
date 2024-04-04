@@ -134,7 +134,7 @@ class Worker:
                     if scheme.startswith("http"):
                         scheme = scheme.replace("http", "ws")
                     agent_url = (
-                        f"{scheme}://{parse.netloc}/{parse.path.rstrip("/")}/agent"
+                        f"{scheme}://{parse.netloc}/{parse.path.rstrip('/')}/agent"
                     )
 
                     ws = await self._session.ws_connect(agent_url, headers=headers)
