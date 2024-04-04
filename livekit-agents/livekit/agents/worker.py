@@ -20,7 +20,6 @@ import os
 from typing import (
     Callable,
     Coroutine,
-    List,
 )
 from urllib.parse import urlparse
 
@@ -31,7 +30,7 @@ from livekit import api
 from livekit.protocol import agent, models
 
 from . import aio, consts, http_server, ipc
-from .job_request import AgentEntry, AvailRes, JobRequest, AcceptData
+from .job_request import AcceptData, AvailRes, JobRequest
 from .log import logger
 from .version import __version__
 

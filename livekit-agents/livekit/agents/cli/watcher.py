@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
-from importlib.metadata import Distribution
-
-import threading
 import asyncio
 import contextlib
+import json
 import multiprocessing
 import pathlib
+import threading
+from importlib.metadata import Distribution
 from typing import Any, Callable, Set
 
 import watchfiles
