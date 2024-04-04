@@ -132,7 +132,7 @@ class KITT:
             detect_language=False
         )
         self.tts_plugin = TTS(
-            model_id="eleven_multilingual_v2" if self.language == 'es' else "eleven_turbo_v2",
+            model_id="eleven_multilingual_v1" if self.language == 'es' else "eleven_turbo_v2",
             sample_rate=ELEVEN_TTS_SAMPLE_RATE,
             voice=CARLOTA_VOICE_ES if self.language == 'es' else CARLOTA_VOICE
         )

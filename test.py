@@ -42,7 +42,7 @@ async def text_chunker(chunks):
         yield buffer + " "
 
 
-async def stream(audio_stream, buffer_size=1024 * 12):  # Increase buffer_size as needed
+async def stream(audio_stream, buffer_size=1024 * 128):  # Increase buffer_size as needed
     """Stream audio data using mpv player with increased buffer size."""
     if not is_installed("mpv"):
         raise ValueError(
