@@ -1,18 +1,11 @@
 import logging
-import asyncio
-from livekit.agents import (
-    JobRequest,
-    JobContext,
-    Worker,
-    cli,
-    VoiceAssistant,
-    WorkerOptions,
-)
 
-from livekit.plugins import silero
-from livekit.plugins import deepgram
-from livekit.plugins import elevenlabs
-from livekit.plugins import openai
+from livekit.agents import (
+    JobContext,
+    JobRequest,
+    WorkerOptions,
+    cli,
+)
 
 
 async def entrypoint(job: JobContext):
