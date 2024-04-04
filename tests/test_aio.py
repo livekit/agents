@@ -73,7 +73,7 @@ async def test_select_timeout():
 async def test_interval():
     interval = aio.interval(0.1)
 
-    loop = asyncio.get_event_loop()
+    _ = asyncio.get_event_loop()
     async for i in interval:
         if i == 3:
             break

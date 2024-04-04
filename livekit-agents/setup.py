@@ -53,6 +53,7 @@ setuptools.setup(
         "livekit-protocol>=0.3.2",
         "protobuf>=3",
         "types-protobuf>=4,<5",
+        "python-json-logger>=2,<3",
     ],
     extras_require={
         "codecs": ["av>=11.0.0"],

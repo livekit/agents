@@ -6,7 +6,6 @@ from collections import deque
 from collections.abc import AsyncIterator
 from typing import (
     Any,
-    AsyncIterator,
     Awaitable,
     Iterable,
     Union,

@@ -15,7 +15,7 @@ class Plugin(ABC):
         cls.registered_plugins.append(plugin)
 
     @abstractmethod
-    async def download_files(self) -> None:
+    def download_files(self) -> None:
         pass
 
     @property

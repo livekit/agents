@@ -1,15 +1,17 @@
+import asyncio
 import functools
 import pathlib
-import asyncio
 import signal
-import click
 import sys
 
-from . import protocol
-from .log import setup_logging
+import click
+
 from .. import aio
 from ..log import logger
+from ..plugin import Plugin
 from ..worker import Worker, WorkerOptions
+from . import protocol
+from .log import setup_logging
 
 
 def run_app(opts: WorkerOptions) -> None:
@@ -105,6 +107,13 @@ def run_app(opts: WorkerOptions) -> None:
             server.run()
         else:
             run_worker(args)
+
+    @cli.command(help="Download plugin dependency files (i.e. model weights)")
+    def download_files() -> None:
+        for plugin in Plugin.registered_plugins:
+            logger.info(f"Downloading files for {plugin}")
+            plugin.download_files()
+            logger.info(f"Finished Downloading files for {plugin}")
 
     cli()
 

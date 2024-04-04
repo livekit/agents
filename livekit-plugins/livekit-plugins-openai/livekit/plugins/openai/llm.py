@@ -3,6 +3,7 @@ import enum
 import functools
 import inspect
 import json
+from typing import Any, Dict, MutableSet
 
 from attrs import define
 from livekit.agents import llm
@@ -27,7 +28,7 @@ class LLM(llm.LLM):
     ) -> None:
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient()
-        self._running_fncs = set()
+        self._running_fncs: MutableSet[asyncio.Task] = set()
 
     async def chat(
         self,
@@ -56,7 +57,7 @@ class LLMStream(llm.LLMStream):
         super().__init__()
         self._oai_stream = oai_stream
         self._fnc_ctx = fnc_ctx
-        self._running_fncs = set()
+        self._running_fncs: MutableSet[asyncio.Task] = set()
 
     def __aiter__(self) -> "LLMStream":
         return self
@@ -210,7 +211,7 @@ def to_openai_tools(fnc_ctx: llm.FunctionContext) -> list:
     for fnc in fnc_ctx.ai_functions.values():
         plist = {}
         for arg_name, arg in fnc.args.items():
-            p = {}
+            p: Dict[str, Any] = {}
             if arg.desc:
                 p["description"] = arg.desc
 
