@@ -75,9 +75,9 @@ class AsyncHTTP2Connection(AsyncConnectionInterface):
 
         # Connection terminated events are stored as state since
         # we need to handle them for all streams.
-        self._connection_terminated: typing.Optional[
-            h2.events.ConnectionTerminated
-        ] = None
+        self._connection_terminated: typing.Optional[h2.events.ConnectionTerminated] = (
+            None
+        )
 
         self._read_exception: typing.Optional[Exception] = None
         self._write_exception: typing.Optional[Exception] = None

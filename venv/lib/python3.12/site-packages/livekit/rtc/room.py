@@ -16,15 +16,16 @@ import asyncio
 import ctypes
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Literal
-from ._ffi_client import FfiHandle, FfiClient
+from typing import Dict, Literal, Optional
+
+from ._event_emitter import EventEmitter
+from ._ffi_client import FfiClient, FfiHandle
 from ._proto import ffi_pb2 as proto_ffi
 from ._proto import participant_pb2 as proto_participant
 from ._proto import room_pb2 as proto_room
 from ._proto.room_pb2 import ConnectionState
 from ._proto.track_pb2 import TrackKind
 from ._utils import BroadcastQueue
-from ._event_emitter import EventEmitter
 from .e2ee import E2EEManager, E2EEOptions
 from .participant import LocalParticipant, Participant, RemoteParticipant
 from .track import RemoteAudioTrack, RemoteVideoTrack
@@ -80,9 +81,9 @@ class RoomOptions:
 class DataPacket:
     data: bytes
     kind: proto_room.DataPacketKind.ValueType
-    participant: Optional[
-        RemoteParticipant
-    ] = None  # None when the data has been sent by a server SDK
+    participant: Optional[RemoteParticipant] = (
+        None  # None when the data has been sent by a server SDK
+    )
     topic: Optional[str] = None
 
 

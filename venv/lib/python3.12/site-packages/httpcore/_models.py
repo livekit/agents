@@ -339,7 +339,7 @@ class Request:
             url: The request URL, either as a `URL` instance, or as a string or bytes.
                 For example: `"https://www.example.com".`
             headers: The HTTP request headers.
-            content: The content of the response body.
+            content: The content of the request body.
             extensions: A dictionary of optional extra information included on
                 the request. Possible keys include `"timeout"`, and `"trace"`.
         """

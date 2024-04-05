@@ -1,1 +1,1 @@
-""" Used by importlib.resources and setuptools """
+"""Used by importlib.resources and setuptools"""

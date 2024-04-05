@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+import typing_extensions
 from typing import Iterable, Optional, overload
 from functools import partial
 from typing_extensions import Literal
@@ -19,6 +21,7 @@ from .steps import (
 )
 from ....._types import NOT_GIVEN, Body, Query, Headers, NotGiven
 from ....._utils import (
+    is_given,
     required_args,
     maybe_transform,
     async_maybe_transform,
@@ -76,6 +79,7 @@ class Runs(SyncAPIResource):
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
         stream: Optional[Literal[False]] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
         # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -114,6 +118,10 @@ class Runs(SyncAPIResource):
               events, terminating when the Run enters a terminal state with a `data: [DONE]`
               message.
 
+          temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
+              make the output more random, while lower values like 0.2 will make it more
+              focused and deterministic.
+
           tools: Override the tools the assistant can use for this run. This is useful for
               modifying the behavior on a per-run basis.
 
@@ -138,6 +146,7 @@ class Runs(SyncAPIResource):
         instructions: Optional[str] | NotGiven = NOT_GIVEN,
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
         # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -176,6 +185,10 @@ class Runs(SyncAPIResource):
               model associated with the assistant. If not, the model associated with the
               assistant will be used.
 
+          temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
+              make the output more random, while lower values like 0.2 will make it more
+              focused and deterministic.
+
           tools: Override the tools the assistant can use for this run. This is useful for
               modifying the behavior on a per-run basis.
 
@@ -200,6 +213,7 @@ class Runs(SyncAPIResource):
         instructions: Optional[str] | NotGiven = NOT_GIVEN,
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
         # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -238,6 +252,10 @@ class Runs(SyncAPIResource):
               model associated with the assistant. If not, the model associated with the
               assistant will be used.
 
+          temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
+              make the output more random, while lower values like 0.2 will make it more
+              focused and deterministic.
+
           tools: Override the tools the assistant can use for this run. This is useful for
               modifying the behavior on a per-run basis.
 
@@ -262,6 +280,7 @@ class Runs(SyncAPIResource):
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
         stream: Optional[Literal[False]] | Literal[True] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
         # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -283,6 +302,7 @@ class Runs(SyncAPIResource):
                     "metadata": metadata,
                     "model": model,
                     "stream": stream,
+                    "temperature": temperature,
                     "tools": tools,
                 },
                 run_create_params.RunCreateParams,
@@ -480,7 +500,58 @@ class Runs(SyncAPIResource):
             cast_to=Run,
         )
 
+    def create_and_poll(
+        self,
+        *,
+        assistant_id: str,
+        additional_instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        metadata: Optional[object] | NotGiven = NOT_GIVEN,
+        model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
+        tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
+        poll_interval_ms: int | NotGiven = NOT_GIVEN,
+        thread_id: str,
+        # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+        # The extra values given here take precedence over values defined on the client or passed to this method.
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+    ) -> Run:
+        """
+        A helper to create a run an poll for a terminal state. More information on Run
+        lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
+        """
+        run = self.create(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            temperature=temperature,
+            # We assume we are not streaming when polling
+            stream=False,
+            tools=tools,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+        )
+        return self.poll(
+            run.id,
+            thread_id=thread_id,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            poll_interval_ms=poll_interval_ms,
+            timeout=timeout,
+        )
+
     @overload
+    @typing_extensions.deprecated("use `stream` instead")
     def create_and_stream(
         self,
         *,
@@ -489,6 +560,7 @@ class Runs(SyncAPIResource):
         instructions: Optional[str] | NotGiven = NOT_GIVEN,
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         thread_id: str,
         # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
@@ -502,6 +574,7 @@ class Runs(SyncAPIResource):
         ...
 
     @overload
+    @typing_extensions.deprecated("use `stream` instead")
     def create_and_stream(
         self,
         *,
@@ -510,6 +583,7 @@ class Runs(SyncAPIResource):
         instructions: Optional[str] | NotGiven = NOT_GIVEN,
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         thread_id: str,
         event_handler: AssistantEventHandlerT,
@@ -523,6 +597,7 @@ class Runs(SyncAPIResource):
         """Create a Run stream"""
         ...
 
+    @typing_extensions.deprecated("use `stream` instead")
     def create_and_stream(
         self,
         *,
@@ -531,6 +606,7 @@ class Runs(SyncAPIResource):
         instructions: Optional[str] | NotGiven = NOT_GIVEN,
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         thread_id: str,
         event_handler: AssistantEventHandlerT | None = None,
@@ -561,6 +637,151 @@ class Runs(SyncAPIResource):
                     "instructions": instructions,
                     "metadata": metadata,
                     "model": model,
+                    "temperature": temperature,
+                    "stream": True,
+                    "tools": tools,
+                },
+                run_create_params.RunCreateParams,
+            ),
+            options=make_request_options(
+                extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body, timeout=timeout
+            ),
+            cast_to=Run,
+            stream=True,
+            stream_cls=Stream[AssistantStreamEvent],
+        )
+        return AssistantStreamManager(make_request, event_handler=event_handler or AssistantEventHandler())
+
+    def poll(
+        self,
+        run_id: str,
+        thread_id: str,
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+        poll_interval_ms: int | NotGiven = NOT_GIVEN,
+    ) -> Run:
+        """
+        A helper to poll a run status until it reaches a terminal state. More
+        information on Run lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
+        """
+        extra_headers = {"X-Stainless-Poll-Helper": "true", **(extra_headers or {})}
+
+        if is_given(poll_interval_ms):
+            extra_headers["X-Stainless-Custom-Poll-Interval"] = str(poll_interval_ms)
+
+        terminal_states = {"requires_action", "cancelled", "completed", "failed", "expired"}
+        while True:
+            response = self.with_raw_response.retrieve(
+                thread_id=thread_id,
+                run_id=run_id,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                extra_query=extra_query,
+                timeout=timeout,
+            )
+
+            run = response.parse()
+            # Return if we reached a terminal state
+            if run.status in terminal_states:
+                return run
+
+            if not is_given(poll_interval_ms):
+                from_header = response.headers.get("openai-poll-after-ms")
+                if from_header is not None:
+                    poll_interval_ms = int(from_header)
+                else:
+                    poll_interval_ms = 1000
+
+            time.sleep(poll_interval_ms / 1000)
+
+    @overload
+    def stream(
+        self,
+        *,
+        assistant_id: str,
+        additional_instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        metadata: Optional[object] | NotGiven = NOT_GIVEN,
+        model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
+        tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
+        thread_id: str,
+        # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+        # The extra values given here take precedence over values defined on the client or passed to this method.
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+    ) -> AssistantStreamManager[AssistantEventHandler]:
+        """Create a Run stream"""
+        ...
+
+    @overload
+    def stream(
+        self,
+        *,
+        assistant_id: str,
+        additional_instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        metadata: Optional[object] | NotGiven = NOT_GIVEN,
+        model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
+        tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
+        thread_id: str,
+        event_handler: AssistantEventHandlerT,
+        # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+        # The extra values given here take precedence over values defined on the client or passed to this method.
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+    ) -> AssistantStreamManager[AssistantEventHandlerT]:
+        """Create a Run stream"""
+        ...
+
+    def stream(
+        self,
+        *,
+        assistant_id: str,
+        additional_instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        metadata: Optional[object] | NotGiven = NOT_GIVEN,
+        model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
+        tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
+        thread_id: str,
+        event_handler: AssistantEventHandlerT | None = None,
+        # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+        # The extra values given here take precedence over values defined on the client or passed to this method.
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+    ) -> AssistantStreamManager[AssistantEventHandler] | AssistantStreamManager[AssistantEventHandlerT]:
+        """Create a Run stream"""
+        if not thread_id:
+            raise ValueError(f"Expected a non-empty value for `thread_id` but received {thread_id!r}")
+
+        extra_headers = {
+            "OpenAI-Beta": "assistants=v1",
+            "X-Stainless-Stream-Helper": "threads.runs.create_and_stream",
+            "X-Stainless-Custom-Event-Handler": "true" if event_handler else "false",
+            **(extra_headers or {}),
+        }
+        make_request = partial(
+            self._post,
+            f"/threads/{thread_id}/runs",
+            body=maybe_transform(
+                {
+                    "assistant_id": assistant_id,
+                    "additional_instructions": additional_instructions,
+                    "instructions": instructions,
+                    "metadata": metadata,
+                    "model": model,
+                    "temperature": temperature,
                     "stream": True,
                     "tools": tools,
                 },
@@ -726,6 +947,45 @@ class Runs(SyncAPIResource):
             stream_cls=Stream[AssistantStreamEvent],
         )
 
+    def submit_tool_outputs_and_poll(
+        self,
+        *,
+        tool_outputs: Iterable[run_submit_tool_outputs_params.ToolOutput],
+        run_id: str,
+        thread_id: str,
+        poll_interval_ms: int | NotGiven = NOT_GIVEN,
+        # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+        # The extra values given here take precedence over values defined on the client or passed to this method.
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+    ) -> Run:
+        """
+        A helper to submit a tool output to a run and poll for a terminal run state.
+        More information on Run lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
+        """
+        run = self.submit_tool_outputs(
+            run_id=run_id,
+            thread_id=thread_id,
+            tool_outputs=tool_outputs,
+            stream=False,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+        )
+        return self.poll(
+            run_id=run.id,
+            thread_id=thread_id,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            poll_interval_ms=poll_interval_ms,
+        )
+
     @overload
     def submit_tool_outputs_stream(
         self,
@@ -742,7 +1002,8 @@ class Runs(SyncAPIResource):
     ) -> AssistantStreamManager[AssistantEventHandler]:
         """
         Submit the tool outputs from a previous run and stream the run to a terminal
-        state.
+        state. More information on Run lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
         """
         ...
 
@@ -763,7 +1024,8 @@ class Runs(SyncAPIResource):
     ) -> AssistantStreamManager[AssistantEventHandlerT]:
         """
         Submit the tool outputs from a previous run and stream the run to a terminal
-        state.
+        state. More information on Run lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
         """
         ...
 
@@ -783,7 +1045,8 @@ class Runs(SyncAPIResource):
     ) -> AssistantStreamManager[AssistantEventHandler] | AssistantStreamManager[AssistantEventHandlerT]:
         """
         Submit the tool outputs from a previous run and stream the run to a terminal
-        state.
+        state. More information on Run lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
         """
         if not run_id:
             raise ValueError(f"Expected a non-empty value for `run_id` but received {run_id!r}")
@@ -841,6 +1104,7 @@ class AsyncRuns(AsyncAPIResource):
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
         stream: Optional[Literal[False]] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
         # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -879,6 +1143,10 @@ class AsyncRuns(AsyncAPIResource):
               events, terminating when the Run enters a terminal state with a `data: [DONE]`
               message.
 
+          temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
+              make the output more random, while lower values like 0.2 will make it more
+              focused and deterministic.
+
           tools: Override the tools the assistant can use for this run. This is useful for
               modifying the behavior on a per-run basis.
 
@@ -903,6 +1171,7 @@ class AsyncRuns(AsyncAPIResource):
         instructions: Optional[str] | NotGiven = NOT_GIVEN,
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
         # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -941,6 +1210,10 @@ class AsyncRuns(AsyncAPIResource):
               model associated with the assistant. If not, the model associated with the
               assistant will be used.
 
+          temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
+              make the output more random, while lower values like 0.2 will make it more
+              focused and deterministic.
+
           tools: Override the tools the assistant can use for this run. This is useful for
               modifying the behavior on a per-run basis.
 
@@ -965,6 +1238,7 @@ class AsyncRuns(AsyncAPIResource):
         instructions: Optional[str] | NotGiven = NOT_GIVEN,
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
         # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -1003,6 +1277,10 @@ class AsyncRuns(AsyncAPIResource):
               model associated with the assistant. If not, the model associated with the
               assistant will be used.
 
+          temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
+              make the output more random, while lower values like 0.2 will make it more
+              focused and deterministic.
+
           tools: Override the tools the assistant can use for this run. This is useful for
               modifying the behavior on a per-run basis.
 
@@ -1027,6 +1305,7 @@ class AsyncRuns(AsyncAPIResource):
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
         stream: Optional[Literal[False]] | Literal[True] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
         # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -1048,6 +1327,7 @@ class AsyncRuns(AsyncAPIResource):
                     "metadata": metadata,
                     "model": model,
                     "stream": stream,
+                    "temperature": temperature,
                     "tools": tools,
                 },
                 run_create_params.RunCreateParams,
@@ -1245,7 +1525,58 @@ class AsyncRuns(AsyncAPIResource):
             cast_to=Run,
         )
 
+    async def create_and_poll(
+        self,
+        *,
+        assistant_id: str,
+        additional_instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        metadata: Optional[object] | NotGiven = NOT_GIVEN,
+        model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
+        tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
+        poll_interval_ms: int | NotGiven = NOT_GIVEN,
+        thread_id: str,
+        # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+        # The extra values given here take precedence over values defined on the client or passed to this method.
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+    ) -> Run:
+        """
+        A helper to create a run an poll for a terminal state. More information on Run
+        lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
+        """
+        run = await self.create(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            temperature=temperature,
+            # We assume we are not streaming when polling
+            stream=False,
+            tools=tools,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+        )
+        return await self.poll(
+            run.id,
+            thread_id=thread_id,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            poll_interval_ms=poll_interval_ms,
+            timeout=timeout,
+        )
+
     @overload
+    @typing_extensions.deprecated("use `stream` instead")
     def create_and_stream(
         self,
         *,
@@ -1254,6 +1585,7 @@ class AsyncRuns(AsyncAPIResource):
         instructions: Optional[str] | NotGiven = NOT_GIVEN,
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         thread_id: str,
         # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
@@ -1267,6 +1599,7 @@ class AsyncRuns(AsyncAPIResource):
         ...
 
     @overload
+    @typing_extensions.deprecated("use `stream` instead")
     def create_and_stream(
         self,
         *,
@@ -1275,6 +1608,7 @@ class AsyncRuns(AsyncAPIResource):
         instructions: Optional[str] | NotGiven = NOT_GIVEN,
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         thread_id: str,
         event_handler: AsyncAssistantEventHandlerT,
@@ -1288,6 +1622,7 @@ class AsyncRuns(AsyncAPIResource):
         """Create a Run stream"""
         ...
 
+    @typing_extensions.deprecated("use `stream` instead")
     def create_and_stream(
         self,
         *,
@@ -1296,6 +1631,7 @@ class AsyncRuns(AsyncAPIResource):
         instructions: Optional[str] | NotGiven = NOT_GIVEN,
         metadata: Optional[object] | NotGiven = NOT_GIVEN,
         model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
         tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
         thread_id: str,
         event_handler: AsyncAssistantEventHandlerT | None = None,
@@ -1328,6 +1664,153 @@ class AsyncRuns(AsyncAPIResource):
                     "instructions": instructions,
                     "metadata": metadata,
                     "model": model,
+                    "temperature": temperature,
+                    "stream": True,
+                    "tools": tools,
+                },
+                run_create_params.RunCreateParams,
+            ),
+            options=make_request_options(
+                extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body, timeout=timeout
+            ),
+            cast_to=Run,
+            stream=True,
+            stream_cls=AsyncStream[AssistantStreamEvent],
+        )
+        return AsyncAssistantStreamManager(request, event_handler=event_handler or AsyncAssistantEventHandler())
+
+    async def poll(
+        self,
+        run_id: str,
+        thread_id: str,
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+        poll_interval_ms: int | NotGiven = NOT_GIVEN,
+    ) -> Run:
+        """
+        A helper to poll a run status until it reaches a terminal state. More
+        information on Run lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
+        """
+        extra_headers = {"X-Stainless-Poll-Helper": "true", **(extra_headers or {})}
+
+        if is_given(poll_interval_ms):
+            extra_headers["X-Stainless-Custom-Poll-Interval"] = str(poll_interval_ms)
+
+        terminal_states = {"requires_action", "cancelled", "completed", "failed", "expired"}
+        while True:
+            response = await self.with_raw_response.retrieve(
+                thread_id=thread_id,
+                run_id=run_id,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                extra_query=extra_query,
+                timeout=timeout,
+            )
+
+            run = response.parse()
+            # Return if we reached a terminal state
+            if run.status in terminal_states:
+                return run
+
+            if not is_given(poll_interval_ms):
+                from_header = response.headers.get("openai-poll-after-ms")
+                if from_header is not None:
+                    poll_interval_ms = int(from_header)
+                else:
+                    poll_interval_ms = 1000
+
+            time.sleep(poll_interval_ms / 1000)
+
+    @overload
+    def stream(
+        self,
+        *,
+        assistant_id: str,
+        additional_instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        metadata: Optional[object] | NotGiven = NOT_GIVEN,
+        model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
+        tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
+        thread_id: str,
+        # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+        # The extra values given here take precedence over values defined on the client or passed to this method.
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+    ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
+        """Create a Run stream"""
+        ...
+
+    @overload
+    def stream(
+        self,
+        *,
+        assistant_id: str,
+        additional_instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        metadata: Optional[object] | NotGiven = NOT_GIVEN,
+        model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
+        tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
+        thread_id: str,
+        event_handler: AsyncAssistantEventHandlerT,
+        # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+        # The extra values given here take precedence over values defined on the client or passed to this method.
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+    ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandlerT]:
+        """Create a Run stream"""
+        ...
+
+    def stream(
+        self,
+        *,
+        assistant_id: str,
+        additional_instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        instructions: Optional[str] | NotGiven = NOT_GIVEN,
+        metadata: Optional[object] | NotGiven = NOT_GIVEN,
+        model: Optional[str] | NotGiven = NOT_GIVEN,
+        temperature: Optional[float] | NotGiven = NOT_GIVEN,
+        tools: Optional[Iterable[AssistantToolParam]] | NotGiven = NOT_GIVEN,
+        thread_id: str,
+        event_handler: AsyncAssistantEventHandlerT | None = None,
+        # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+        # The extra values given here take precedence over values defined on the client or passed to this method.
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+    ) -> (
+        AsyncAssistantStreamManager[AsyncAssistantEventHandler]
+        | AsyncAssistantStreamManager[AsyncAssistantEventHandlerT]
+    ):
+        """Create a Run stream"""
+        if not thread_id:
+            raise ValueError(f"Expected a non-empty value for `thread_id` but received {thread_id!r}")
+
+        extra_headers = {
+            "OpenAI-Beta": "assistants=v1",
+            "X-Stainless-Stream-Helper": "threads.runs.create_and_stream",
+            "X-Stainless-Custom-Event-Handler": "true" if event_handler else "false",
+            **(extra_headers or {}),
+        }
+        request = self._post(
+            f"/threads/{thread_id}/runs",
+            body=maybe_transform(
+                {
+                    "assistant_id": assistant_id,
+                    "additional_instructions": additional_instructions,
+                    "instructions": instructions,
+                    "metadata": metadata,
+                    "model": model,
+                    "temperature": temperature,
                     "stream": True,
                     "tools": tools,
                 },
@@ -1493,6 +1976,45 @@ class AsyncRuns(AsyncAPIResource):
             stream_cls=AsyncStream[AssistantStreamEvent],
         )
 
+    async def submit_tool_outputs_and_poll(
+        self,
+        *,
+        tool_outputs: Iterable[run_submit_tool_outputs_params.ToolOutput],
+        run_id: str,
+        thread_id: str,
+        poll_interval_ms: int | NotGiven = NOT_GIVEN,
+        # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+        # The extra values given here take precedence over values defined on the client or passed to this method.
+        extra_headers: Headers | None = None,
+        extra_query: Query | None = None,
+        extra_body: Body | None = None,
+        timeout: float | httpx.Timeout | None | NotGiven = NOT_GIVEN,
+    ) -> Run:
+        """
+        A helper to submit a tool output to a run and poll for a terminal run state.
+        More information on Run lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
+        """
+        run = await self.submit_tool_outputs(
+            run_id=run_id,
+            thread_id=thread_id,
+            tool_outputs=tool_outputs,
+            stream=False,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+        )
+        return await self.poll(
+            run_id=run.id,
+            thread_id=thread_id,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            poll_interval_ms=poll_interval_ms,
+        )
+
     @overload
     def submit_tool_outputs_stream(
         self,
@@ -1509,7 +2031,8 @@ class AsyncRuns(AsyncAPIResource):
     ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
         """
         Submit the tool outputs from a previous run and stream the run to a terminal
-        state.
+        state. More information on Run lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
         """
         ...
 
@@ -1530,7 +2053,8 @@ class AsyncRuns(AsyncAPIResource):
     ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandlerT]:
         """
         Submit the tool outputs from a previous run and stream the run to a terminal
-        state.
+        state. More information on Run lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
         """
         ...
 
@@ -1553,7 +2077,8 @@ class AsyncRuns(AsyncAPIResource):
     ):
         """
         Submit the tool outputs from a previous run and stream the run to a terminal
-        state.
+        state. More information on Run lifecycles can be found here:
+        https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
         """
         if not run_id:
             raise ValueError(f"Expected a non-empty value for `run_id` but received {run_id!r}")

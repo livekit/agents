@@ -27,6 +27,7 @@ class AnyIOStream(AsyncNetworkStream):
             TimeoutError: ReadTimeout,
             anyio.BrokenResourceError: ReadError,
             anyio.ClosedResourceError: ReadError,
+            anyio.EndOfStream: ReadError,
         }
         with map_exceptions(exc_map):
             with anyio.fail_after(timeout):
@@ -62,6 +63,7 @@ class AnyIOStream(AsyncNetworkStream):
         exc_map = {
             TimeoutError: ConnectTimeout,
             anyio.BrokenResourceError: ConnectError,
+            anyio.EndOfStream: ConnectError,
         }
         with map_exceptions(exc_map):
             try:

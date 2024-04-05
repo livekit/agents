@@ -12,58 +12,56 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LiveKit RTC SDK
-"""
+"""LiveKit RTC SDK"""
 
+from ._proto import stats_pb2 as stats
+from ._proto.e2ee_pb2 import EncryptionState, EncryptionType
 from ._proto.room_pb2 import (
     ConnectionQuality,
     ConnectionState,
-    DataPacketKind,
-    TrackPublishOptions,
-    IceTransportType,
     ContinualGatheringPolicy,
+    DataPacketKind,
     IceServer,
+    IceTransportType,
+    TrackPublishOptions,
 )
-from ._proto.e2ee_pb2 import EncryptionType, EncryptionState
 from ._proto.track_pb2 import StreamState, TrackKind, TrackSource
 from ._proto.video_frame_pb2 import VideoBufferType, VideoRotation
-from ._proto import stats_pb2 as stats
 from .audio_frame import AudioFrame
 from .audio_source import AudioSource
-from .audio_stream import AudioStream, AudioFrameEvent
-from .participant import LocalParticipant, Participant, RemoteParticipant
-from .room import ConnectError, Room, RoomOptions, RtcConfiguration, DataPacket
-from .track import (
-    LocalAudioTrack,
-    LocalVideoTrack,
-    RemoteAudioTrack,
-    RemoteVideoTrack,
-    Track,
-    LocalTrack,
-    RemoteTrack,
-    AudioTrack,
-    VideoTrack,
-)
+from .audio_stream import AudioFrameEvent, AudioStream
+from .chat import ChatManager, ChatMessage
 from .e2ee import (
     E2EEManager,
     E2EEOptions,
-    KeyProviderOptions,
-    KeyProvider,
     FrameCryptor,
+    KeyProvider,
+    KeyProviderOptions,
+)
+from .participant import LocalParticipant, Participant, RemoteParticipant
+from .room import ConnectError, DataPacket, Room, RoomOptions, RtcConfiguration
+from .track import (
+    AudioTrack,
+    LocalAudioTrack,
+    LocalTrack,
+    LocalVideoTrack,
+    RemoteAudioTrack,
+    RemoteTrack,
+    RemoteVideoTrack,
+    Track,
+    VideoTrack,
 )
 from .track_publication import (
     LocalTrackPublication,
     RemoteTrackPublication,
     TrackPublication,
 )
+from .version import __version__
 from .video_frame import (
     VideoFrame,
 )
 from .video_source import VideoSource
-from .video_stream import VideoStream, VideoFrameEvent
-from .chat import ChatManager, ChatMessage
-
-from .version import __version__
+from .video_stream import VideoFrameEvent, VideoStream
 
 __all__ = [
     "ConnectionQuality",
