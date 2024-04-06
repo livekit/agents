@@ -52,7 +52,7 @@ setuptools.setup(
         "click~=8.1.0",
         "livekit>=0.9.0",
         "livekit-api>=0.4.1",
-        "livekit-protocol>=0.3.0",
+        "livekit-protocol~=0.3.0",
         "websockets>=12,<13",
     ],
     extras_require={
