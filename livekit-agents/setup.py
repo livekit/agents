@@ -50,7 +50,7 @@ setuptools.setup(
         "click~=8.1.0",
         "livekit>=0.9.2",
         "livekit-api>=0.4.2",
-        "livekit-protocol>=0.3.2",
+        "livekit-protocol>=0.4.0",
         "protobuf>=3",
         "types-protobuf>=4,<5",
         "python-json-logger>=2,<3",
