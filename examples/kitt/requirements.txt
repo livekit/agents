@@ -1,3 +1,4 @@
-../../livekit-agents
+../../livekit-agents[codecs]
 ../../livekit-plugins/livekit-plugins-deepgram
 ../../livekit-plugins/livekit-plugins-elevenlabs
+../../livekit-plugins/livekit-plugins-openai
