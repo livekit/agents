@@ -1,0 +1,3 @@
+../../livekit-agents
+../../livekit-plugins/livekit-plugins-deepgram
+../../livekit-plugins/livekit-plugins-elevenlabs
