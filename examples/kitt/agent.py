@@ -52,10 +52,15 @@ async def entrypoint(job: JobContext):
     def on_chat_message(message: rtc.ChatMessage):
         print("Got chat message: ", message)
 
-    # IMPORTANT: Subscribe to audio tracks immediately. If you don't,
-    # you are introducing a race condition where the track_publication
-    # already exists before you subscribe to it and therefore the track_subscribed
-    # event will never be fired.
+    for participant in job.room.participants.values():
+        for track_pub in participant.tracks.values():
+            if track_pub.kind != rtc.TrackKind.KIND_AUDIO:
+                continue
+            if track_pub.track is not None:
+                audio_stream_future.set_result(rtc.AudioStream(track_pub.track))
+            else:
+                track_pub.set_subscribed(True)
+
     job.room.on("track_subscribed", on_track_subscribed)
     chat_manager.on_message(on_chat_message)
 
@@ -128,10 +133,10 @@ async def entrypoint(job: JobContext):
                     # and the agent's speech to the chat.
 
                     if not committed:
-                        # committed_messages += [
-                        #     ChatMessage(role=ChatRole.USER, text=working_text),
-                        #     ChatMessage(role=ChatRole.ASSISTANT, text=event.audio.text),
-                        # ]
+                        committed_messages += [
+                            ChatMessage(role=ChatRole.USER, text=working_text),
+                            ChatMessage(role=ChatRole.ASSISTANT, text=event.audio.text),
+                        ]
                         committed = True
                         working_text = ""
                     await source.capture_frame(event.audio.data)
