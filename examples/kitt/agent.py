@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import List
 
 import dotenv
@@ -66,7 +67,6 @@ async def entrypoint(job: JobContext):
     audio_stream = await audio_stream_future
 
     async def audio_stream_task():
-        print("Starting audio stream")
         async for audio_frame_event in audio_stream:
             # Ignore user input while the agent is speaking
             if agent_speaking:
@@ -76,6 +76,7 @@ async def entrypoint(job: JobContext):
     async def stt_stream_task():
         nonlocal working_text, latest_llm_stream, latest_tts_stream
         async for stt_event in stt_stream:
+            print("Got STT event:", stt_event)
             # We eagerly try to run inference to keep the latency as low as possible.
             # If we get a new transcript, we update the working text, cancel in-flight inference,
             # and run new inference.
@@ -85,7 +86,7 @@ async def entrypoint(job: JobContext):
                 if delta == "":
                     continue
                 working_text += delta
-                print("Working text: ", working_text)
+                print("Working text:", working_text)
                 working_message = ChatMessage(role=ChatRole.USER, text=working_text)
                 chat_context = agents.llm.ChatContext(
                     messages=committed_messages + [working_message]
@@ -107,35 +108,36 @@ async def entrypoint(job: JobContext):
                 break
             await tts_stream_queue.put(latest_tts_stream)
             async for chunk in llm_stream:
-                print("Got chunk: ", chunk)
+                print("Got chunk:", chunk)
                 content = chunk.choices[0].delta.content
                 latest_tts_stream.push_text(content)
             await latest_tts_stream.flush()
 
     async def tts_stream_task():
-        nonlocal agent_speaking, working_text
+        nonlocal agent_speaking, working_text, committed_messages
         while True:
             tts_stream = await tts_stream_queue.get()
             if tts_stream is None:
                 break
             agent_speaking = True
-            committed_message = False
+            committed = False
             async for event in tts_stream:
                 if event.type == agents.tts.SynthesisEventType.AUDIO:
+                    print("Got audio from 11labs")
                     # As soon as the agent speaks, we commit the working text
                     # and the agent's speech to the chat.
 
-                    if not committed_message:
-                        committed_messages.append(
-                            ChatMessage(role=ChatRole.USER, text=working_text),
-                            ChatMessage(role=ChatRole.ASSISTANT, text=event.audio.text),
-                        )
-                        committed_message = True
+                    if not committed:
+                        # committed_messages += [
+                        #     ChatMessage(role=ChatRole.USER, text=working_text),
+                        #     ChatMessage(role=ChatRole.ASSISTANT, text=event.audio.text),
+                        # ]
+                        committed = True
                         working_text = ""
                     await source.capture_frame(event.audio.data)
                 elif event.type == agents.tts.SynthesisEventType.FINISHED:
                     break
-            tts_stream.aclose()
+            await tts_stream.aclose()
             agent_speaking = False
 
     async def end_session_task():
@@ -169,6 +171,8 @@ async def entrypoint(job: JobContext):
             print("Exception: ", exc)
     except Exception as e:
         print("Exception: ", e)
+
+    print("NEIL got here")
 
 
 async def request_fnc(req: JobRequest) -> None:
