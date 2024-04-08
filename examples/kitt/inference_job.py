@@ -17,7 +17,6 @@ class InferenceJob:
         chat_history: ChatContext,
         on_agent_response: Callable[[str, bool], None],
         on_agent_speaking: Callable[[bool], None],
-        cancellable: bool = True,
         force_text_response: str | None = None,
     ):
         self._id = uuid.uuid4()
@@ -36,6 +35,11 @@ class InferenceJob:
         self._on_agent_speaking = on_agent_speaking
         self._done_future = asyncio.Future()
         self._cancelled = False
+        self._force_text_response = force_text_response
+
+    @property
+    def id(self):
+        return self._id
 
     @property
     def transcription(self):
@@ -62,9 +66,11 @@ class InferenceJob:
             self._on_agent_response(self.current_response, value)
 
     async def acancel(self):
+        logging.info("Cancelling inference job")
         self._cancelled = True
         self._run_task.cancel()
         await self._done_future
+        logging.info("Cancelled inference job")
 
     @property
     def speaking(self):
@@ -72,6 +78,8 @@ class InferenceJob:
 
     @speaking.setter
     def speaking(self, value: bool):
+        if value == self._speaking:
+            return
         self._speaking = value
         if not self._cancelled:
             self._on_agent_speaking(value)
@@ -87,7 +95,6 @@ class InferenceJob:
                 asyncio.shield(self._audio_capture_task()),
             )
         except asyncio.CancelledError:
-            print("NEIL cancelling")
             # Flush audio packets
             while True:
                 try:
@@ -95,11 +102,15 @@ class InferenceJob:
                 except asyncio.QueueEmpty:
                     break
             self._output_queue.put_nowait(None)
-            print("NEIL cancelled run")
         except Exception as e:
-            print("NEIL exception in run", e)
+            logging.exception("Exception in inference %s", e)
 
     async def _llm_task(self):
+        if self._force_text_response:
+            self._tts_stream.push_text(self._force_text_response)
+            await self._tts_stream.flush()
+            return
+
         chat_context = ChatContext(
             messages=self._chat_history
             + [ChatMessage(role=ChatRole.USER, text=self.transcription)]

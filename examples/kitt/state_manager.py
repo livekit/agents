@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from typing import List
 
 from livekit import agents, rtc
@@ -9,7 +10,7 @@ from livekit.agents.llm import ChatMessage, ChatRole
 class StateManager:
     """Helper class to update the UI for the Agent Playground."""
 
-    def __init__(self, room: rtc.Room):
+    def __init__(self, room: rtc.Room, prompt: str):
         self._room = room
         self._agent_speaking = False
         self._agent_thinking = False
@@ -17,7 +18,7 @@ class StateManager:
         self._current_response = ""
 
         self._chat_history: List[agents.llm.ChatMessage] = [
-            ChatMessage(role=ChatRole.SYSTEM, text="You are a friendly assistant.")
+            ChatMessage(role=ChatRole.SYSTEM, text=prompt)
         ]
 
     @property
@@ -43,9 +44,21 @@ class StateManager:
         return self._chat_history
 
     def commit_user_transcription(self, transcription: str):
+        logging.info("Committing user transcription: %s", transcription)
+        asyncio.create_task(
+            self._room.local_participant.publish_data(
+                json.dumps({"transcription": transcription})
+            )
+        )
         self._chat_history.append(ChatMessage(role=ChatRole.USER, text=transcription))
 
     def commit_agent_response(self, response: str):
+        logging.info("Committing agent response: %s", response)
+        asyncio.create_task(
+            self._room.local_participant.publish_data(
+                json.dumps({"message": response}), topic="lk-chat-topic"
+            )
+        )
         self._chat_history.append(ChatMessage(role=ChatRole.ASSISTANT, text=response))
 
     def _update_state(self):

@@ -15,6 +15,16 @@ from state_manager import StateManager
 
 dotenv.load_dotenv()
 
+PROMPT = "You are KITT, a friendly voice assistant powered by LiveKit.  \
+          Conversation should be personable, and be sure to ask follow up questions. \
+          If your response is a question, please append a question mark symbol to the end of it.\
+          Don't respond with more than a few sentences."
+INTRO = "Hello, I am KITT, a friendly voice assistant powered by LiveKit Agents. \
+        You can find my source code in the top right of this screen if you're curious how I work. \
+        Feel free to ask me anything — I'm here to help! Just start talking or type in the chat."
+SIP_INTRO = "Hello, I am KITT, a friendly voice assistant powered by LiveKit Agents. \
+             Feel free to ask me anything — I'm here to help! Just start talking."
+
 
 async def entrypoint(job: JobContext):
     # LiveKit Entities
@@ -28,7 +38,7 @@ async def entrypoint(job: JobContext):
     stt_stream = stt.stream()
 
     # Agent state
-    state = StateManager(job.room)
+    state = StateManager(job.room, PROMPT)
     latest_inference: InferenceJob | None = None
     current_transcription = ""
 
@@ -89,7 +99,7 @@ async def entrypoint(job: JobContext):
             latest_inference = None
             state.agent_speaking = False
 
-    async def start_new_inference():
+    async def start_new_inference(force_text: str | None = None):
         nonlocal latest_inference
         if latest_inference:
             await latest_inference.acancel()
@@ -101,6 +111,7 @@ async def entrypoint(job: JobContext):
             transcription=current_transcription,
             audio_source=source,
             chat_history=state.chat_history,
+            force_text_response=force_text,
             on_agent_response=lambda response, finished: on_inference_agent_response(
                 job, response, finished
             ),
@@ -129,6 +140,9 @@ async def entrypoint(job: JobContext):
                 await start_new_inference()
 
     try:
+        sip = job.room.name.startswith("sip")
+        intro_text = SIP_INTRO if sip else INTRO
+        await start_new_inference(force_text=intro_text)
         async with asyncio.TaskGroup() as tg:
             tg.create_task(audio_stream_task())
             tg.create_task(stt_stream_task())
