@@ -134,7 +134,7 @@ class KITT:
             model="gpt-4-1106-preview"
         )
         self.stt_plugin = STT(
-            min_silence_duration=400,
+            min_silence_duration=500,
             language=self.language,
             detect_language=False
         )

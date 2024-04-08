@@ -1,13 +1,15 @@
-import logging
 import asyncio
+import logging
+from typing import AsyncIterable
+
+from ..tokenize import SentenceStream, SentenceTokenizer
 from .tts import (
     TTS,
-    SynthesizeStream,
     SynthesisEvent,
     SynthesisEventType,
     SynthesizedAudio,
+    SynthesizeStream,
 )
-from ..tokenize import SentenceTokenizer, SentenceStream
 
 
 class StreamAdapterWrapper(SynthesizeStream):
@@ -23,7 +25,7 @@ class StreamAdapterWrapper(SynthesizeStream):
 
         def log_exception(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():
-                logging.error(f"google speech task failed: {task.exception()}")
+                logging.error(f"speech task failed: {task.exception()}")
 
         self._main_task.add_done_callback(log_exception)
 
@@ -66,8 +68,8 @@ class StreamAdapter(TTS):
         self._tts = tts
         self._tokenizer = tokenizer
 
-    async def synthesize(self, *, text: str) -> SynthesizedAudio:
-        return await self._tts.synthesize(text=text)
+    def synthesize(self, *, text: str) -> AsyncIterable[SynthesizedAudio]:
+        return self._tts.synthesize(text=text)
 
     def stream(self) -> SynthesizeStream:
         return StreamAdapterWrapper(self._tts, self._tokenizer.stream())
