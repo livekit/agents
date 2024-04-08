@@ -1,10 +1,8 @@
 import asyncio
 import json
-import logging
-from enum import Enum
-from typing import List
 
 import dotenv
+from inference_job import InferenceJob
 from livekit import agents, rtc
 from livekit.agents import (
     JobContext,
@@ -12,41 +10,27 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
-from livekit.agents.llm import ChatMessage, ChatRole, LLMStream
 from livekit.plugins.deepgram import STT
-from livekit.plugins.elevenlabs import TTS
-from livekit.plugins.openai import LLM
+from state_manager import StateManager
 
 dotenv.load_dotenv()
-
-AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 
 
 async def entrypoint(job: JobContext):
     # LiveKit Entities
-    chat_manager = rtc.ChatManager(job.room)
     source = rtc.AudioSource(24000, 1)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
 
     # Plugins
-    tts = TTS(model_id="eleven_turbo_v2")
-    llm = LLM()
     stt = STT()
     stt_stream = stt.stream()
 
-    # State
-    committed_messages: List[agents.llm.ChatMessage] = [
-        ChatMessage(role=ChatRole.SYSTEM, text="You are a friendly assistant.")
-    ]
-    llm_stream_queue = asyncio.Queue[LLMStream]()
-    latest_llm_stream: LLMStream = None
-    tts_stream_queue = asyncio.Queue[agents.tts.SynthesizeStream]()
-    latest_tts_stream = tts.stream()
-    working_text = ""
-    agent_speaking = False
-    agent_thinking = False
+    # Agent state
+    state = StateManager(job.room)
+    latest_inference: InferenceJob | None = None
+    current_transcription = ""
 
     audio_stream_future = asyncio.Future[rtc.AudioStream]()
 
@@ -55,13 +39,17 @@ async def entrypoint(job: JobContext):
             audio_stream_future.set_result(rtc.AudioStream(track))
 
     def on_data(dp: rtc.DataPacket):
-        nonlocal working_text, latest_llm_stream, latest_tts_stream
+        nonlocal current_transcription
+        print("Data received: ", dp)
+        # Ignore if the agent is speaking
+        if state.agent_speaking:
+            return
         if dp.topic != "lk-chat-topic":
             return
         payload = json.loads(dp.data)
         message = payload["message"]
-        working_text = message
-        asyncio.create_task(run_llm_inference())
+        current_transcription = message
+        asyncio.create_task(start_new_inference())
 
     for participant in job.room.participants.values():
         for track_pub in participant.tracks.values():
@@ -82,43 +70,52 @@ async def entrypoint(job: JobContext):
     # Wait for user audio
     audio_stream = await audio_stream_future
 
-    def update_state():
-        state = "listening"
-        if agent_speaking:
-            state = "speaking"
-        elif agent_thinking:
-            state = "thinking"
-        asyncio.create_task(
-            job.room.local_participant.update_metadata(
-                json.dumps({"agent_state": state})
-            )
-        )
+    def on_inference_agent_response(
+        inference: InferenceJob, response: str, finished: bool
+    ):
+        if finished:
+            state.agent_thinking = False
+            state.commit_agent_response(inference.current_response)
 
-    async def run_llm_inference():
-        nonlocal working_text, latest_llm_stream, latest_tts_stream
-        working_message = ChatMessage(role=ChatRole.USER, text=working_text)
-        chat_context = agents.llm.ChatContext(
-            messages=committed_messages + [working_message]
+    def on_inference_agent_speaking(inference: InferenceJob, speaking: bool):
+        nonlocal current_transcription, latest_inference
+        # If the inference speaks, commit the current transcription,
+        # to the chat history and reset the current transcription.
+        if speaking:
+            state.agent_speaking = True
+            state.commit_user_transcription(inference.transcription)
+            current_transcription = ""
+        else:
+            latest_inference = None
+            state.agent_speaking = False
+
+    async def start_new_inference():
+        nonlocal latest_inference
+        if latest_inference:
+            await latest_inference.acancel()
+            state.agent_speaking = False
+            state.agent_thinking = False
+
+        state.agent_thinking = True
+        job = InferenceJob(
+            transcription=current_transcription,
+            audio_source=source,
+            chat_history=state.chat_history,
+            on_agent_response=lambda response, finished: on_inference_agent_response(
+                job, response, finished
+            ),
+            on_agent_speaking=lambda response: on_inference_agent_speaking(
+                job, response
+            ),
         )
-        # Cancel exisiting LLM inference
-        if latest_llm_stream is not None:
-            await latest_llm_stream.aclose(wait=False)
-        latest_llm_stream = await llm.chat(history=chat_context)
-        # Cancel existing tts inference
-        await latest_tts_stream.aclose(wait=False)
-        # Pre-warm the tts
-        latest_tts_stream = tts.stream()
-        await llm_stream_queue.put(latest_llm_stream)
+        latest_inference = job
 
     async def audio_stream_task():
         async for audio_frame_event in audio_stream:
-            # Ignore user input while the agent is speaking
-            if agent_speaking:
-                continue
             stt_stream.push_frame(audio_frame_event.frame)
 
     async def stt_stream_task():
-        nonlocal working_text, latest_llm_stream, latest_tts_stream
+        nonlocal current_transcription
         async for stt_event in stt_stream:
             # We eagerly try to run inference to keep the latency as low as possible.
             # If we get a new transcript, we update the working text, cancel in-flight inference,
@@ -128,80 +125,13 @@ async def entrypoint(job: JobContext):
                 # Do nothing
                 if delta == "":
                     continue
-                working_text += delta
-                await run_llm_inference()
+                current_transcription += delta
+                await start_new_inference()
 
-    async def chat_stream_task():
-        nonlocal agent_thinking, latest_tts_stream
-        while True:
-            llm_stream = await llm_stream_queue.get()
-            if llm_stream is None:
-                break
-            await tts_stream_queue.put(latest_tts_stream)
-            agent_thinking = True
-            update_state()
-            async for chunk in llm_stream:
-                content = chunk.choices[0].delta.content
-                latest_tts_stream.push_text(content)
-            agent_thinking = False
-            update_state()
-            await latest_tts_stream.flush()
-
-    async def tts_stream_task():
-        nonlocal agent_speaking, working_text, committed_messages
-        while True:
-            tts_stream = await tts_stream_queue.get()
-            if tts_stream is None:
-                break
-            committed = False
-            agent_speaking = True
-            update_state()
-            async for event in tts_stream:
-                if event.type == agents.tts.SynthesisEventType.AUDIO:
-                    # As soon as the agent speaks, we commit the working text
-                    # and the agent's speech to the chat.
-
-                    if not committed:
-                        committed_messages += [
-                            ChatMessage(role=ChatRole.USER, text=working_text),
-                            ChatMessage(role=ChatRole.ASSISTANT, text=event.audio.text),
-                        ]
-                        committed = True
-                        working_text = ""
-                    await source.capture_frame(event.audio.data)
-                elif event.type == agents.tts.SynthesisEventType.FINISHED:
-                    break
-            await tts_stream.aclose()
-            agent_speaking = False
-            update_state()
-
-    async def end_session_task():
-        # Flush llm_queue
-        await asyncio.sleep(120)
-        await audio_stream.aclose()
-        await stt_stream.aclose(wait=False)
-        while True:
-            try:
-                llm_stream_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                llm_stream_queue.put_nowait(None)
-                break
-
-        while True:
-            try:
-                tts_stream_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                tts_stream_queue.put_nowait(None)
-                break
-
-    update_state()
     try:
         async with asyncio.TaskGroup() as tg:
             tg.create_task(audio_stream_task())
             tg.create_task(stt_stream_task())
-            tg.create_task(chat_stream_task())
-            tg.create_task(tts_stream_task())
-            tg.create_task(end_session_task())
     except BaseExceptionGroup as e:
         for exc in e.exceptions:
             print("Exception: ", exc)
