@@ -54,7 +54,7 @@ setuptools.setup(
         "numpy >= 1.24.0",
         "openai >= 1.0.0",
         "audioread >= 3, < 4",
-        "opencv-python >= 4, < 5",
+        "opencv-python-headless >= 4, < 5",
         "requests >= 2, < 3",
     ],
     package_data={},
