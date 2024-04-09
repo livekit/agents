@@ -134,9 +134,10 @@ class KITT:
             model="gpt-4-1106-preview"
         )
         self.stt_plugin = STT(
-            min_silence_duration=500,
+            min_silence_duration=600,
             language=self.language,
-            detect_language=False
+            detect_language=False,
+            model="nova-2-general" if self.language != 'en' else "nova-2-phonecall"
         )
         self.tts_plugin = TTS(
             model_id="eleven_multilingual_v1" if self.language == 'es' else "eleven_turbo_v2",
@@ -199,10 +200,12 @@ class KITT:
     async def process_stt_stream(self, stream):
         buffered_text = ""
         async for event in stream:
+            print("EVENT: ", event)
             if event.alternatives[0].text == "":
                 continue
             if event.is_final:
                 buffered_text = " ".join([buffered_text, event.alternatives[0].text])
+                print("BUFFERED TEXT: ", buffered_text)
 
             if not event.end_of_speech:
                 continue
