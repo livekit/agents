@@ -5,20 +5,27 @@ import pickle
 from os import environ
 
 from livekit import api, rtc
-from livekit.agents import WorkerOptions, ipc
+from livekit.agents.apipe import AsyncPipe
+from livekit.agents.ipc.protocol import (
+    IPC_MESSAGES,
+    Log,
+    StartJobRequest,
+    StartJobResponse,
+)
+from livekit.agents.worker import WorkerOptions
 from livekit.protocol import agent
 
 TEST_STR = "the people who are crazy enough to think they can change the world are the ones who do"
 
 
-def _process_protocol_target(cch: ipc.protocol.ProcessPipe):
+def _process_protocol_target(cch):
     loop = asyncio.get_event_loop()
-    cpipe = ipc.apipe.AsyncPipe(cch, loop)
+    cpipe = AsyncPipe(cch, loop, messages=IPC_MESSAGES)
 
     async def _run():
-        assert await cpipe.read() == ipc.protocol.StartJobRequest(job=agent.Job())
-        await cpipe.write(ipc.protocol.StartJobResponse(exc=None))
-        await cpipe.write(ipc.protocol.Log(level=logging.INFO, message=TEST_STR))
+        assert await cpipe.read() == StartJobRequest(job=agent.Job())
+        await cpipe.write(StartJobResponse(exc=None))
+        await cpipe.write(Log(level=logging.INFO, message=TEST_STR))
 
     loop.run_until_complete(_run())
     cpipe.close()
@@ -28,15 +35,13 @@ def test_protocol():
     loop = asyncio.get_event_loop()
     pch, cch = multiprocessing.Pipe(duplex=True)
     proc = multiprocessing.Process(target=_process_protocol_target, args=(cch,))
-    ppipe = ipc.apipe.AsyncPipe(pch, loop=loop)
+    ppipe = AsyncPipe(pch, loop=loop, messages=IPC_MESSAGES)
     proc.start()
 
     async def _run():
-        await ppipe.write(ipc.protocol.StartJobRequest(job=agent.Job()))
-        assert await ppipe.read() == ipc.protocol.StartJobResponse(exc=None)
-        assert await ppipe.read() == ipc.protocol.Log(
-            level=logging.INFO, message=TEST_STR
-        )
+        await ppipe.write(StartJobRequest(job=agent.Job()))
+        assert await ppipe.read() == StartJobResponse(exc=None)
+        assert await ppipe.read() == Log(level=logging.INFO, message=TEST_STR)
 
     loop.run_until_complete(_run())
     ppipe.close()

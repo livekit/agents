@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from . import aio, codecs, ipc, llm, stt, tokenize, tts, vad
-from .ipc_enc import ProcessPipe
 from .job_context import JobContext
 from .job_request import AutoDisconnect, AutoSubscribe, JobRequest
 from .plugin import Plugin
@@ -31,7 +30,6 @@ __all__ = [
     "AutoDisconnect",
     "JobContext",
     "Plugin",
-    "ProcessPipe",
     "ipc",
     "codecs",
     "stt",
