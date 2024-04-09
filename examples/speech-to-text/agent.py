@@ -26,7 +26,6 @@ async def entrypoint(job: JobContext):
         pub: rtc.TrackPublication,
         rp: rtc.RemoteParticipant,
     ):
-        logging.info("NEILLLL subscribed to track %s", track.sid)
         asyncio.create_task(process_track(track))
 
     job.room.on("track_subscribed", on_track_subscribed)

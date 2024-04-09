@@ -37,7 +37,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = None,
     ) -> "LLMStream":
-        tools = to_openai_tools(fnc_ctx) if fnc_ctx else []
+        tools = to_openai_tools(fnc_ctx) if fnc_ctx else openai.NOT_GIVEN
         cmp = await self._client.chat.completions.create(
             messages=to_openai_ctx(history),
             model=self._opts.model,
@@ -206,7 +206,7 @@ def to_openai_ctx(chat_ctx: llm.ChatContext) -> list:
     ]
 
 
-def to_openai_tools(fnc_ctx: llm.FunctionContext) -> list:
+def to_openai_tools(fnc_ctx: llm.FunctionContext):
     tools = []
     for fnc in fnc_ctx.ai_functions.values():
         plist = {}

@@ -133,7 +133,7 @@ class TTS(tts.TTS):
 
     def stream(
         self,
-    ) -> tts.SynthesizeStream:
+    ) -> "SynthesizeStream":
         return SynthesizeStream(self._session, self._config)
 
 

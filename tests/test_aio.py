@@ -66,8 +66,8 @@ async def test_select_timeout():
 
     selectable = [sleep1, sleep2]
     sel = aio.select(selectable)
-    assert (await anext(sel)).sel == sleep1
-    assert (await anext(sel)).sel == sleep2
+    assert (await anext(sel)).selected == sleep1
+    assert (await anext(sel)).selected == sleep2
 
 
 async def test_interval():
