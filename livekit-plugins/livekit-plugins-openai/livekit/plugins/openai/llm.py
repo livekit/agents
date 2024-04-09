@@ -206,7 +206,7 @@ def to_openai_ctx(chat_ctx: llm.ChatContext) -> list:
     ]
 
 
-def to_openai_tools(fnc_ctx: llm.FunctionContext) -> list:
+def to_openai_tools(fnc_ctx: llm.FunctionContext):
     tools = []
     for fnc in fnc_ctx.ai_functions.values():
         plist = {}

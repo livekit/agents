@@ -51,7 +51,6 @@ setuptools.setup(
         "livekit >= 0.9.2",
         "livekit-agents >= 0.3.0",
         "openai >= 1.0.0",
-        "opencv-python >= 4, < 5",
         "requests >= 2, < 3",
     ],
     package_data={
