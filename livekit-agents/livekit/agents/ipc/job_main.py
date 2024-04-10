@@ -37,7 +37,7 @@ async def _start(
     close_tx, close_rx = aio.channel()  # used by the JobContext to signal shutdown
 
     auto_subscribe = args.auto_subscribe
-    opts = rtc.RoomOptions()
+    opts = rtc.RoomOptions(auto_subscribe=True)
     if auto_subscribe != AutoSubscribe.SUBSCRIBE_ALL:
         opts.auto_subscribe = False
 
