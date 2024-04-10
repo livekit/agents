@@ -54,6 +54,9 @@ setuptools.setup(
         "protobuf>=3",
         "types-protobuf>=4,<5",
         "python-json-logger>=2,<3",
+        "attrs>=23.0,<24.0",
+        "watchfiles>=0.21,<0.22",
+        "colorlog>=6,<7",
     ],
     extras_require={
         "codecs": ["av>=11.0.0"],
