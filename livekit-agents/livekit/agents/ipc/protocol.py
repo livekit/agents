@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import io
 import pickle
-from typing import Callable, ClassVar
+from typing import ClassVar
 
 from attrs import define
-from livekit.agents.job_request import AutoSubscribe
 from livekit.protocol import agent
+
+from ..job_request import AcceptData
 
 
 @define
@@ -14,8 +15,7 @@ class JobMainArgs:
     job_id: str
     url: str
     token: str
-    target: Callable
-    auto_subscribe: AutoSubscribe
+    accept_data: AcceptData
     asyncio_debug: bool
 
 

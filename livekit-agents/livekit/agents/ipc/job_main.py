@@ -6,10 +6,10 @@ import logging
 import os
 
 from livekit import rtc
-from livekit.agents.job_request import AutoSubscribe
 
 from .. import aio, apipe, ipc_enc
 from ..job_context import JobContext
+from ..job_request import AutoSubscribe
 from ..utils import time_ms
 from . import protocol
 
@@ -36,7 +36,7 @@ async def _start(
 ) -> None:
     close_tx, close_rx = aio.channel()  # used by the JobContext to signal shutdown
 
-    auto_subscribe = args.auto_subscribe
+    auto_subscribe = args.accept_data.auto_subscribe
     opts = rtc.RoomOptions(auto_subscribe=True)
     if auto_subscribe != AutoSubscribe.SUBSCRIBE_ALL:
         opts.auto_subscribe = False
@@ -71,7 +71,7 @@ async def _start(
                 start_req.job,
                 room,
             )
-            usertask = asyncio.create_task(args.target(ctx))
+            usertask = asyncio.create_task(args.accept_data.target(ctx))
 
     async with contextlib.aclosing(aio.select([pipe, cnt, close_rx])) as select:
         while True:
