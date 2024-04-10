@@ -38,9 +38,8 @@ async def _start(
 
     auto_subscribe = args.auto_subscribe
     opts = rtc.RoomOptions()
-    if auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL:
-        opts.auto_subscribe = True
-    else:
+    if auto_subscribe != AutoSubscribe.SUBSCRIBE_ALL:
+        opts.auto_subscribe = False
 
         def on_track_published(pub: rtc.RemoteTrackPublication, *_):
             if (
@@ -56,7 +55,7 @@ async def _start(
 
         room.on("track_published", on_track_published)
 
-    cnt = room.connect(args.url, args.token)
+    cnt = room.connect(args.url, args.token, options=opts)
     start_req: protocol.StartJobRequest | None = None
     usertask: asyncio.Task | None = None
     shutting_down = False
