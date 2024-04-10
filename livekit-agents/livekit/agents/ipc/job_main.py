@@ -11,6 +11,7 @@ from .. import aio, apipe, ipc_enc
 from ..job_context import JobContext
 from ..utils import time_ms
 from . import protocol
+from livekit.agents.job_request import AutoSubscribe
 
 
 class LogHandler(logging.Handler):
@@ -34,6 +35,26 @@ async def _start(
     pipe: apipe.AsyncPipe, args: protocol.JobMainArgs, room: rtc.Room
 ) -> None:
     close_tx, close_rx = aio.channel()  # used by the JobContext to signal shutdown
+
+    auto_subscribe = args.auto_subscribe
+    opts = rtc.RoomOptions()
+    if auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL:
+        opts.auto_subscribe = True
+    else:
+
+        def on_track_published(pub: rtc.RemoteTrackPublication, *_):
+            if (
+                pub.kind == rtc.TrackKind.KIND_AUDIO
+                and auto_subscribe == AutoSubscribe.AUDIO_ONLY
+            ):
+                pub.set_subscribed(True)
+            elif (
+                pub.kind == rtc.TrackKind.KIND_VIDEO
+                and auto_subscribe == AutoSubscribe.VIDEO_ONLY
+            ):
+                pub.set_subscribed(True)
+
+        room.on("track_published", on_track_published)
 
     cnt = room.connect(args.url, args.token)
     start_req: protocol.StartJobRequest | None = None

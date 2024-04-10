@@ -5,6 +5,7 @@ import pickle
 from typing import Callable, ClassVar
 
 from attrs import define
+from livekit.agents.job_request import AutoSubscribe
 from livekit.protocol import agent
 
 
@@ -14,6 +15,7 @@ class JobMainArgs:
     url: str
     token: str
     target: Callable
+    auto_subscribe: AutoSubscribe
     asyncio_debug: bool
 
 
