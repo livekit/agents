@@ -3,12 +3,11 @@ import contextlib
 import multiprocessing
 import sys
 import threading
-from typing import Callable
 
 from livekit.protocol import agent
 
 from .. import aio, apipe
-from ..job_request import AcceptData, AutoSubscribe
+from ..job_request import AcceptData
 from ..log import logger
 from ..utils import time_ms
 from . import consts, protocol
