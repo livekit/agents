@@ -16,7 +16,7 @@ class HttpServer:
         self._port = port
         self._app = web.Application(loop=self._loop)
         self._app.add_routes([web.get("/", health_check)])
-        self._close_future = asyncio.Future()
+        self._close_future = asyncio.Future(loop=self._loop)
 
     async def run(self) -> None:
         self._runner = web.AppRunner(self._app)
