@@ -53,7 +53,8 @@ async def _start(
             ):
                 pub.set_subscribed(True)
 
-        room.on("track_published", on_track_published)
+        if auto_subscribe != AutoSubscribe.SUBSCRIBE_NONE:
+            room.on("track_published", on_track_published)
 
     cnt = room.connect(args.url, args.token, options=opts)
     start_req: protocol.StartJobRequest | None = None
