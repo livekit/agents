@@ -6,12 +6,12 @@ import logging
 import os
 
 from livekit import rtc
+from livekit.agents.job_request import AutoSubscribe
 
 from .. import aio, apipe, ipc_enc
 from ..job_context import JobContext
 from ..utils import time_ms
 from . import protocol
-from livekit.agents.job_request import AutoSubscribe
 
 
 class LogHandler(logging.Handler):
