@@ -13,6 +13,13 @@
 # limitations under the License.
 
 from . import aio, codecs, ipc, llm, stt, tokenize, tts, vad
+from .apipe import AsyncPipe
+from .ipc.protocol import (
+    IPC_MESSAGES,
+    Log,
+    StartJobRequest,
+    StartJobResponse,
+)
 from .job_context import JobContext
 from .job_request import AutoDisconnect, AutoSubscribe, JobRequest
 from .plugin import Plugin

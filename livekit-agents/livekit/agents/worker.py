@@ -92,7 +92,7 @@ class Worker:
         self._tasks = set()
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
         self._processes = dict[str, tuple[ipc.JobProcess, ActiveJob]]()
-        self._close_future = asyncio.Future()
+        self._close_future = asyncio.Future(loop=self._loop)
 
         self._chan = aio.Chan[agent.WorkerMessage](32, loop=self._loop)
         # We use the same event loop as the worker (so the health checks are more accurate)
