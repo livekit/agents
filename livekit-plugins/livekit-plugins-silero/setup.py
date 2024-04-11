@@ -54,6 +54,7 @@ setuptools.setup(
         "torch >= 2, < 3",
         "torchaudio >= 2",
         "numpy >= 1, < 2",
+        "onnxruntime~=1.17.0",
     ],
     package_data={"livekit.plugins.silero": ["files/silero_vad.jit"]},
     project_urls={
