@@ -33,4 +33,4 @@ RUN python -m pip install -r requirements.txt
 USER appuser
 
 # Run the application.
-CMD python kitt.py start
+CMD python agent.py start
