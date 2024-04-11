@@ -57,6 +57,7 @@ setuptools.setup(
         "attrs~=23.0",
         "watchfiles~=0.21",
         "colorlog~=6.0",
+        "psutil~=5.9",
     ],
     extras_require={
         "codecs": ["av>=11.0.0"],
