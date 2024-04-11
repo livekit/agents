@@ -1,1 +1,1 @@
-livekit-agents~=0.5
+livekit-agents~=0.5.dev0
