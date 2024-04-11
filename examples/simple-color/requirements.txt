@@ -1,4 +1,1 @@
-# This requirements.txt file references local packages
-# in order to maintain a consistent consistency with
-# the rest of the repo. 
-../../livekit-agents
+livekit-agents~=0.5

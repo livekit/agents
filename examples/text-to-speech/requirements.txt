@@ -1,5 +1,2 @@
-# This requirements.txt file references local packages
-# in order to maintain a consistent consistency with
-# the rest of the repo. 
-../../livekit-agents[codecs]
-../../livekit-plugins/livekit-plugins-openai
+livekit-agents[codecs]~=0.5
+livekit-plugins-openai~=0.3

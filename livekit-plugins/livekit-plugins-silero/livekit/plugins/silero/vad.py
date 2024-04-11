@@ -27,7 +27,7 @@ from livekit import agents, rtc
 
 class VAD(agents.vad.VAD):
     def __init__(
-        self, *, model_path: Optional[str] = None, use_onnx: bool = False
+        self, *, model_path: Optional[str] = None, use_onnx: bool = True
     ) -> None:
         if model_path:
             model = torch.jit.load(model_path)

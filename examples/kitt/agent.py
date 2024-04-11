@@ -63,12 +63,11 @@ async def entrypoint(job: JobContext):
 
     for participant in job.room.participants.values():
         for track_pub in participant.tracks.values():
-            if track_pub.kind != rtc.TrackKind.KIND_AUDIO:
+            # This track is not yet subscribed, when it is subscribed it will
+            # call the on_track_subscribed callback
+            if track_pub.track is None:
                 continue
-            if track_pub.track is not None:
-                audio_stream_future.set_result(rtc.AudioStream(track_pub.track))
-            else:
-                track_pub.set_subscribed(True)
+            audio_stream_future.set_result(rtc.AudioStream(track_pub.track))
 
     job.room.on("track_subscribed", on_track_subscribed)
     job.room.on("data_received", on_data)

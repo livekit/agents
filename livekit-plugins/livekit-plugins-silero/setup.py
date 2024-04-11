@@ -49,11 +49,12 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.8.0",
     install_requires=[
-        "livekit >= 0.9.2",
-        "livekit-agents >= 0.4.0",
+        "livekit ~= 0.9",
+        "livekit-agents~=0.5",
         "torch >= 2, < 3",
         "torchaudio >= 2",
         "numpy >= 1, < 2",
+        "onnxruntime~=1.17.0",
     ],
     package_data={"livekit.plugins.silero": ["files/silero_vad.jit"]},
     project_urls={
