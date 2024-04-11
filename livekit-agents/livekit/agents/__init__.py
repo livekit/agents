@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import aio, codecs, ipc, llm, stt, tokenize, tts, vad
+from . import aio, codecs, ipc, llm, stt, tokenize, tts, utils, vad
 from .apipe import AsyncPipe  # noqa
 from .ipc.protocol import IPC_MESSAGES, Log, StartJobRequest, StartJobResponse  # noqa
 from .job_context import JobContext
@@ -36,6 +36,7 @@ __all__ = [
     "codecs",
     "stt",
     "vad",
+    "utils",
     "tts",
     "aio",
     "tokenize",

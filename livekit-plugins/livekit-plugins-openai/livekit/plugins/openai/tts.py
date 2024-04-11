@@ -47,22 +47,25 @@ class TTS(tts.TTS):
         self._model = model
         self._voice = voice
 
-    async def synthesize(
+    def synthesize(
         self,
         text: str,
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         decoder = codecs.Mp3StreamDecoder()
 
-        async with self._session.post(
-            OPENAI_ENPOINT,
-            json={
-                "input": text,
-                "model": self._model,
-                "voice": self._voice,
-                "response_format": "mp3",
-            },
-        ) as resp:
-            async for data in resp.content.iter_chunked(4096):
-                frames = decoder.decode_chunk(data)
-                for frame in frames:
-                    yield tts.SynthesizedAudio(text=text, data=frame)
+        async def generator():
+            async with self._session.post(
+                OPENAI_ENPOINT,
+                json={
+                    "input": text,
+                    "model": self._model,
+                    "voice": self._voice,
+                    "response_format": "mp3",
+                },
+            ) as resp:
+                async for data in resp.content.iter_chunked(4096):
+                    frames = decoder.decode_chunk(data)
+                    for frame in frames:
+                        yield tts.SynthesizedAudio(text=text, data=frame)
+
+        return generator()
