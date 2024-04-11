@@ -347,6 +347,7 @@ class Worker:
 
             av: AvailRes = await answer_rx.recv()  # wait for user answer
             msg = agent.WorkerMessage()
+            msg.availability.job_id = req.id
             msg.availability.available = av.avail
 
             if not av.avail:
@@ -355,7 +356,6 @@ class Worker:
 
             assert av.data is not None
             assert av.assignment_tx is not None
-            msg.availability.job_id = req.id
             msg.availability.participant_identity = av.data.identity
             msg.availability.participant_name = av.data.name
             msg.availability.participant_metadata = av.data.metadata
