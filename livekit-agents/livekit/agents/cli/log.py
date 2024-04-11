@@ -27,7 +27,8 @@ def setup_logging(log_level: str, production: bool = True) -> None:
         class CustomJsonFormatter(jsonlogger.JsonFormatter):
             def add_fields(self, log_record, record, message_dict):
                 super().add_fields(log_record, record, message_dict)
-                log_record.pop("taskName")
+                if "taskName" in log_record:
+                    log_record.pop("taskName")
                 log_record["level"] = record.levelname
 
         f = CustomJsonFormatter("%(asctime)s %(level)s %(name)s %(message)s")
