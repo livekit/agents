@@ -28,7 +28,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: install packages
         run: |
-          pip3 install pytest pytest-asyncio './livekit-agents[codecs]' psutil
+          pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
           for dir in livekit-plugins/*; do
             pip3 install $dir
           done
@@ -44,4 +44,4 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: google.json
         run: |
           echo $GOOGLE_CREDENTIALS_JSON > google.json
-          pytest --asyncio-mode=auto .
+          pytest --asyncio-mode=auto --timeout=60 .
