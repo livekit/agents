@@ -103,33 +103,36 @@ class TTS(tts.TTS):
             data = await resp.json()
             return dict_to_voices_list(data)
 
-    async def synthesize(
+    def synthesize(
         self,
         text: str,
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         voice = self._config.voice
 
-        async with self._session.post(
-            f"{self._config.base_url}/text-to-speech/{voice.id}?output_format=pcm_44100",
-            headers={AUTHORIZATION_HEADER: self._config.api_key},
-            json=dict(
-                text=text,
-                model_id=self._config.model_id,
-                voice_settings=dataclasses.asdict(voice.settings)
-                if voice.settings
-                else None,
-            ),
-        ) as resp:
-            data = await resp.read()
-            yield tts.SynthesizedAudio(
-                text=text,
-                data=rtc.AudioFrame(
-                    data=data,
-                    sample_rate=44100,
-                    num_channels=1,
-                    samples_per_channel=len(data) // 2,  # 16-bit
+        async def generator():
+            async with self._session.post(
+                f"{self._config.base_url}/text-to-speech/{voice.id}?output_format=pcm_44100",
+                headers={AUTHORIZATION_HEADER: self._config.api_key},
+                json=dict(
+                    text=text,
+                    model_id=self._config.model_id,
+                    voice_settings=dataclasses.asdict(voice.settings)
+                    if voice.settings
+                    else None,
                 ),
-            )
+            ) as resp:
+                data = await resp.read()
+                yield tts.SynthesizedAudio(
+                    text=text,
+                    data=rtc.AudioFrame(
+                        data=data,
+                        sample_rate=44100,
+                        num_channels=1,
+                        samples_per_channel=len(data) // 2,  # 16-bit
+                    ),
+                )
+
+        return generator()
 
     def stream(
         self,
