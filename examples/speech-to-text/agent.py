@@ -41,7 +41,9 @@ async def entrypoint(job: JobContext):
             if track_pub.track is None:
                 continue
 
-            tasks.append(asyncio.create_task(process_track(rtc.AudioStream(track))))
+            tasks.append(
+                asyncio.create_task(process_track(rtc.AudioStream(track_pub.track)))
+            )
 
 
 async def request_fnc(req: JobRequest) -> None:
