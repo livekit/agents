@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import uuid
-from typing import Callable
+from typing import Callable, List
 
 from livekit import agents, rtc
 from livekit.agents.llm import ChatContext, ChatMessage, ChatRole
@@ -14,7 +14,7 @@ class InferenceJob:
         self,
         transcription: str,
         audio_source: rtc.AudioSource,
-        chat_history: ChatContext,
+        chat_history: List[ChatMessage],
         on_agent_response: Callable[[str, bool], None],
         on_agent_speaking: Callable[[bool], None],
         force_text_response: str | None = None,
@@ -28,7 +28,7 @@ class InferenceJob:
         self._tts_stream = self._tts.stream()
         self._llm = LLM()
         self._run_task = asyncio.create_task(self._run())
-        self._output_queue = asyncio.Queue[rtc.AudioFrame]()
+        self._output_queue = asyncio.Queue[rtc.AudioFrame | None]()
         self._speaking = False
         self._finished_generating = False
         self._on_agent_response = on_agent_response
@@ -127,7 +127,9 @@ class InferenceJob:
     async def _tts_task(self):
         async for event in self._tts_stream:
             if event.type == agents.tts.SynthesisEventType.AUDIO:
-                await self._output_queue.put(event.audio.data)
+                await self._output_queue.put(
+                    event.audio.data if event.audio else event.audio
+                )
             elif event.type == agents.tts.SynthesisEventType.FINISHED:
                 break
         await self._output_queue.put(None)

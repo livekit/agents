@@ -56,6 +56,19 @@ async def _start(
         if auto_subscribe != AutoSubscribe.SUBSCRIBE_NONE:
             room.on("track_published", on_track_published)
 
+            for participant in room.participants.values():
+                for track_pub in participant.tracks.values():
+                    if (
+                        track_pub.kind == rtc.TrackKind.KIND_AUDIO
+                        and auto_subscribe == AutoSubscribe.AUDIO_ONLY
+                    ):
+                        track_pub.set_subscribed(True)
+                    elif (
+                        track_pub.kind == rtc.TrackKind.KIND_VIDEO
+                        and auto_subscribe == AutoSubscribe.VIDEO_ONLY
+                    ):
+                        track_pub.set_subscribed(True)
+
     cnt = room.connect(args.url, args.token, options=opts)
     start_req: protocol.StartJobRequest | None = None
     usertask: asyncio.Task | None = None
@@ -72,7 +85,7 @@ async def _start(
                 start_req.job,
                 room,
             )
-            usertask = asyncio.create_task(args.accept_data.target(ctx))
+            usertask = asyncio.create_task(args.accept_data.entry(ctx))
 
     async with contextlib.aclosing(aio.select([pipe, cnt, close_rx])) as select:
         while True:
