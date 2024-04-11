@@ -1,7 +1,6 @@
 import asyncio
 import json
 
-import dotenv
 from inference_job import InferenceJob
 from livekit import agents, rtc
 from livekit.agents import (
@@ -12,8 +11,6 @@ from livekit.agents import (
 )
 from livekit.plugins.deepgram import STT
 from state_manager import StateManager
-
-dotenv.load_dotenv()
 
 PROMPT = "You are KITT, a friendly voice assistant powered by LiveKit.  \
           Conversation should be personable, and be sure to ask follow up questions. \
