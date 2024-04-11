@@ -56,7 +56,7 @@ setuptools.setup(
         "python-json-logger~=2.0",
         "attrs~=23.0",
         "watchfiles~=0.21",
-        "colorlog~=6",
+        "colorlog~=6.0",
     ],
     extras_require={
         "codecs": ["av>=11.0.0"],
