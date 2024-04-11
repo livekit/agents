@@ -35,11 +35,12 @@ from .log import logger
 from .version import __version__
 
 JobRequestFnc = Callable[[JobRequest], Coroutine]
-LoadFnc = Callable[[ipc.JobProcess | None], float]
+LoadFnc = Callable[[], float]
 
 
-def cpu_load_fnc(_: ipc.JobProcess | None = None) -> float:
-    return psutil.cpu_percent()
+def cpu_load_fnc() -> float:
+    [m1, m5, m15] = [x / psutil.cpu_count() for x in psutil.getloadavg()]
+    return m1
 
 
 @define(kw_only=True)
@@ -56,6 +57,7 @@ class WorkerPermissions:
 class WorkerOptions:
     request_fnc: JobRequestFnc
     load_fnc: LoadFnc = cpu_load_fnc
+    load_threshold: float = 0.8
     namespace: str = "default"
     permissions: WorkerPermissions = WorkerPermissions()
     worker_type: agent.JobType = agent.JobType.JT_ROOM
@@ -117,6 +119,8 @@ class Worker:
         self._session = aiohttp.ClientSession()
 
         async def _worker_ws():
+            assert self._session is not None
+
             retry_count = 0
             while not self._closed:
                 try:
@@ -214,12 +218,38 @@ class Worker:
 
         async def load_monitor_task():
             interval = aio.interval(consts.LOAD_INTERVAL)
+            registered = True
             while True:
                 await interval.tick()
-                load = self._opts.load_fnc(None)
-                msg = agent.WorkerMessage(
-                    update_worker=agent.UpdateWorkerStatus(load=load)
+                load = self._opts.load_fnc()
+                is_full = load >= self._opts.load_threshold
+                should_register = not is_full
+
+                update = agent.UpdateWorkerStatus(
+                    load=load,
+                    status=(
+                        agent.WorkerStatus.WS_FULL
+                        if is_full
+                        else agent.WorkerStatus.WS_AVAILABLE
+                    ),
                 )
+
+                if should_register != registered:
+                    registered = should_register
+
+                    extra = {"load": load, "threshold": self._opts.load_threshold}
+                    if is_full:
+                        logger.info(
+                            "worker is at full capacity, marking as unavailable",
+                            extra=extra,
+                        )
+                    else:
+                        logger.info(
+                            "worker is below capacity, marking as available",
+                            extra=extra,
+                        )
+
+                msg = agent.WorkerMessage(update_worker=update)
                 try:
                     self._chan.send_nowait(msg)
                 except aio.ChanClosed:
