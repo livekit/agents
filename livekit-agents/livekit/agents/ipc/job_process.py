@@ -3,11 +3,11 @@ import contextlib
 import multiprocessing
 import sys
 import threading
-from typing import Callable
 
 from livekit.protocol import agent
 
 from .. import aio, apipe
+from ..job_request import AcceptData
 from ..log import logger
 from ..utils import time_ms
 from . import consts, protocol
@@ -20,14 +20,17 @@ class JobProcess:
         job: agent.Job,
         url: str,
         token: str,
-        target: Callable,  # must be serializable by pickle
+        accept_data: AcceptData,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._job = job
         pch, cch = multiprocessing.Pipe(duplex=True)
         asyncio_debug = self._loop.get_debug()
-        args = (cch, protocol.JobMainArgs(job.id, url, token, target, asyncio_debug))
+        args = (
+            cch,
+            protocol.JobMainArgs(job.id, url, token, accept_data, asyncio_debug),
+        )
         self._process = multiprocessing.Process(
             target=_run_job, args=args, daemon=True
         )  # daemon=True to avoid unresponsive process in production

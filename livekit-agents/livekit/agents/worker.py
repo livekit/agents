@@ -292,7 +292,7 @@ class Worker:
     def _start_process(
         self, job: agent.Job, url: str, token: str, accept_data: AcceptData
     ):
-        proc = ipc.JobProcess(job, url, token, accept_data.entry)
+        proc = ipc.JobProcess(job, url, token, accept_data)
         self._processes[job.id] = (proc, ActiveJob(job=job, accept_data=accept_data))
 
         async def _run_proc():

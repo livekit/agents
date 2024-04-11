@@ -9,6 +9,7 @@ from livekit import rtc
 
 from .. import aio, apipe, ipc_enc
 from ..job_context import JobContext
+from ..job_request import AutoSubscribe
 from ..utils import time_ms
 from . import protocol
 
@@ -35,7 +36,27 @@ async def _start(
 ) -> None:
     close_tx, close_rx = aio.channel()  # used by the JobContext to signal shutdown
 
-    cnt = room.connect(args.url, args.token)
+    auto_subscribe = args.accept_data.auto_subscribe
+    opts = rtc.RoomOptions(auto_subscribe=True)
+    if auto_subscribe != AutoSubscribe.SUBSCRIBE_ALL:
+        opts.auto_subscribe = False
+
+        def on_track_published(pub: rtc.RemoteTrackPublication, *_):
+            if (
+                pub.kind == rtc.TrackKind.KIND_AUDIO
+                and auto_subscribe == AutoSubscribe.AUDIO_ONLY
+            ):
+                pub.set_subscribed(True)
+            elif (
+                pub.kind == rtc.TrackKind.KIND_VIDEO
+                and auto_subscribe == AutoSubscribe.VIDEO_ONLY
+            ):
+                pub.set_subscribed(True)
+
+        if auto_subscribe != AutoSubscribe.SUBSCRIBE_NONE:
+            room.on("track_published", on_track_published)
+
+    cnt = room.connect(args.url, args.token, options=opts)
     start_req: protocol.StartJobRequest | None = None
     usertask: asyncio.Task | None = None
     shutting_down = False
@@ -51,7 +72,7 @@ async def _start(
                 start_req.job,
                 room,
             )
-            usertask = asyncio.create_task(args.target(ctx))
+            usertask = asyncio.create_task(args.accept_data.target(ctx))
 
     async with contextlib.aclosing(aio.select([pipe, cnt, close_rx])) as select:
         while True:
