@@ -225,17 +225,17 @@ class Worker:
                 is_full = load >= self._opts.load_threshold
                 should_register = not is_full
 
-                updateargs: dict = {
-                    "load": load,
-                }
-
-                if should_register != registered:
-                    registered = should_register
-                    updateargs["status"] = (
+                update = agent.UpdateWorkerStatus(
+                    load=load,
+                    status=(
                         agent.WorkerStatus.WS_FULL
                         if is_full
                         else agent.WorkerStatus.WS_AVAILABLE
-                    )
+                    ),
+                )
+
+                if should_register != registered:
+                    registered = should_register
 
                     extra = {"load": load, "threshold": self._opts.load_threshold}
                     if is_full:
@@ -249,9 +249,7 @@ class Worker:
                             extra=extra,
                         )
 
-                msg = agent.WorkerMessage(
-                    update_worker=agent.UpdateWorkerStatus(**updateargs)
-                )
+                msg = agent.WorkerMessage(update_worker=update)
                 try:
                     self._chan.send_nowait(msg)
                 except aio.ChanClosed:
