@@ -35,19 +35,10 @@ Agents integrates seamlessly with [LiveKit server](https://github.com/livekit/li
 
 ## Examples
 
-### KITT
-
-An voice assistant using DeepGram STT, GPT-4, and ElevenLabs TTS
-
-- [Demo](https://kitt.livekit.io)
-- [Source Code](https://github.com/livekit/agents/tree/main/examples/kitt)
-
-### Object Detection
-
-Real-time object detection using DirectAI
-
-- [Demo](https://directai-demo.livekit.io)
-- [Source Code](https://github.com/livekit/agents/tree/main/examples/detection)
+- [KITT](https://github.com/livekit/agents/tree/main/examples/kitt): An voice assistant with STT, LLM, and TTS. [Demo](https://kitt.livekit.io)
+- [Video publishing](https://github.com/livekit/agents/tree/main/examples/simple-color): A demonstration of publishing RGB frames to a LiveKit Room
+- [STT](https://github.com/livekit/agents/tree/main/examples/speech-to-text): An agent that transcribes a participant's audio into text
+- [TTS](https://github.com/livekit/agents/tree/main/examples/text-to-speech): An agent that publishes synthesized speech to a LiveKit Room
 
 ## Installation
 
@@ -68,9 +59,7 @@ The following plugins are available today:
 | Plugin                                                                             | Features                        |
 | ---------------------------------------------------------------------------------- | ------------------------------- |
 | [livekit-plugins-deepgram](https://pypi.org/project/livekit-plugins-deepgram/)     | STT                             |
-| [livekit-plugins-directai](https://pypi.org/project/livekit-plugins-directai/)     | Vision, object detection        |
 | [livekit-plugins-elevenlabs](https://pypi.org/project/livekit-plugins-elevenlabs/) | TTS                             |
-| [livekit-plugins-fal](https://pypi.org/project/livekit-plugins-fal/)               | Image generation                |
 | [livekit-plugins-google](https://pypi.org/project/livekit-plugins-google/)         | STT                             |
 | [livekit-plugins-nltk](https://pypi.org/project/livekit-plugins-nltk/)             | Utilities for working with text |
 | [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-openai/)         | Dalle 3, STT, TTS               |

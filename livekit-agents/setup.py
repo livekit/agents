@@ -16,8 +16,6 @@ import os
 import pathlib
 
 import setuptools
-import setuptools.command.build_py
-
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
@@ -50,15 +48,23 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "click~=8.1.0",
-        "livekit>=0.9.0",
-        "livekit-api>=0.4.1",
-        "livekit-protocol~=0.3.0",
-        "websockets>=12,<13",
+        "livekit~=0.9",
+        "livekit-api~=0.4",
+        "livekit-protocol~=0.4",
+        "protobuf>=3",
+        "types-protobuf>=4,<5",
+        "python-json-logger~=2.0",
+        "attrs~=23.0",
+        "watchfiles~=0.21",
+        "colorlog~=6.0",
+        "psutil~=5.9",
     ],
     extras_require={
-        "codecs": ["pyav>=12.0.2"],
+        "codecs": ["av>=11.0.0"],
     },
-    package_data={},
+    package_data={
+        "livekit.agents": ["py.typed"],
+    },
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

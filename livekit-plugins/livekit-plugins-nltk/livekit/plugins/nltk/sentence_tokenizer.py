@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import dataclasses
 import logging
@@ -6,7 +8,7 @@ from typing import List, Optional
 
 from livekit import agents
 
-import nltk
+import nltk  # type: ignore
 
 # nltk is using the punkt tokenizer
 # https://www.nltk.org/_modules/nltk/tokenize/punkt.html
@@ -79,10 +81,10 @@ class SentenceStream(agents.tokenize.SentenceStream):
         self._language = language
         self._context_len = context_len
         self._min_sentence_len = min_sentence_len
-        self._event_queue = asyncio.Queue()
+        self._event_queue = asyncio.Queue[agents.tokenize.SegmentedSentence | None]()
         self._closed = False
 
-        self._incomplete_sentences = []  # <= min_sentence_len
+        self._incomplete_sentences: List[str] = []  # <= min_sentence_len
         self._buffer = ""
 
     def push_text(self, text: str) -> None:

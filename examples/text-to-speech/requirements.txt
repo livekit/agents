@@ -1,0 +1,2 @@
+livekit-agents[codecs]~=0.5.dev0
+livekit-plugins-openai~=0.3.dev0

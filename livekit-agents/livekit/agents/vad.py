@@ -1,26 +1,27 @@
 from abc import ABC, abstractmethod
-from typing import List
 from dataclasses import dataclass, field
-from livekit import rtc
 from enum import Enum
+from typing import List
+
+from livekit import rtc
 
 
 class VADEventType(Enum):
-    START_SPEAKING = 1
+    START_OF_SPEECH = 1
     SPEAKING = 2
-    END_SPEAKING = 3
+    END_OF_SPEECH = 3
 
 
 @dataclass
 class VADEvent:
-    # type of the event
     type: VADEventType
-    # index of the samples of the event (when the event was fired)
+    """type of the event"""
     samples_index: int
-    # duration of the speech in seconds (only for END_SPEAKING event)
+    """index of the samples of the event (when the event was fired)"""
     duration: float = 0.0
-    # list of audio frames of the speech
+    """duration of the speech in seconds (only for END_SPEAKING event)"""
     speech: List[rtc.AudioFrame] = field(default_factory=list)
+    """list of audio frames of the speech"""
 
 
 class VAD(ABC):
@@ -62,11 +63,7 @@ class VADStream(ABC):
         pass
 
     @abstractmethod
-    async def flush(self) -> None:
-        pass
-
-    @abstractmethod
-    async def aclose(self) -> None:
+    async def aclose(self, *, wait: bool = True) -> None:
         pass
 
     @abstractmethod

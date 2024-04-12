@@ -1,15 +1,20 @@
-import contextlib
+from __future__ import annotations
+
 import asyncio
+import contextlib
 import logging
-from typing import Optional
-from ..vad import VADStream, VADEventType
-from ..utils import merge_frames, AudioBuffer
+
+from livekit import rtc
+from livekit.agents import stt
+
+from ..log import logger
+from ..utils import AudioBuffer, merge_frames
+from ..vad import VADEventType, VADStream
 from .stt import (
     STT,
-    SpeechStream,
     SpeechEvent,
+    SpeechStream,
 )
-from livekit import rtc
 
 
 class StreamAdapter(STT):
@@ -19,10 +24,10 @@ class StreamAdapter(STT):
         vad_stream: VADStream,
     ) -> None:
         super().__init__(streaming_supported=True)
-        self._vad_stream = vad_stream
+        self._vad = vad_stream
         self._stt = stt
 
-    async def recognize(self, *, buffer: AudioBuffer, language: Optional[str] = None):
+    async def recognize(self, *, buffer: AudioBuffer, language: str | None = None):
         return await self._stt.recognize(
             buffer=buffer,
             language=language,
@@ -31,10 +36,10 @@ class StreamAdapter(STT):
     def stream(
         self,
         *,
-        language: Optional[str] = None,
+        language: str | None = None,
     ) -> SpeechStream:
         return StreamAdapterWrapper(
-            self._vad_stream,
+            self._vad,
             self._stt,
             language=language,
         )
@@ -49,9 +54,9 @@ class StreamAdapterWrapper(SpeechStream):
         **kwargs,
     ) -> None:
         super().__init__()
-        self._vad_stream = vad_stream
+        self._vad = vad_stream
         self._stt = stt
-        self._event_queue = asyncio.Queue[SpeechEvent]()
+        self._event_queue = asyncio.Queue[SpeechEvent | None]()
         self._closed = False
         self._args = args
         self._kwargs = kwargs
@@ -60,41 +65,50 @@ class StreamAdapterWrapper(SpeechStream):
 
         def log_exception(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():
-                logging.error(f"stream adapter task failed: {task.exception()}")
+                logger.error(f"stream adapter task failed: {task.exception()}")
 
         self._main_task.add_done_callback(log_exception)
 
     async def _run(self) -> None:
-        # listen to vad events and send to stt on END_SPEAKING
         try:
-            async for event in self._vad_stream:
-                if event.type != VADEventType.END_SPEAKING:
-                    continue
+            async for event in self._vad:
+                if event.type == VADEventType.START_OF_SPEECH:
+                    start_event = SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    self._event_queue.put_nowait(start_event)
+                elif event.type == VADEventType.END_OF_SPEECH:
+                    merged_frames = merge_frames(event.speech)
+                    event = await self._stt.recognize(
+                        buffer=merged_frames, *self._args, **self._kwargs
+                    )
+                    self._event_queue.put_nowait(event)
 
-                merged_frames = merge_frames(event.speech)
-                event = await self._stt.recognize(
-                    buffer=merged_frames, *self._args, **self._kwargs
-                )
-                self._event_queue.put_nowait(event)
-        except asyncio.CancelledError:
-            pass
-
-        self._closed = True
+                    end_event = SpeechEvent(
+                        type=stt.SpeechEventType.END_OF_SPEECH,
+                        alternatives=[event.alternatives[0]],
+                    )
+                    self._event_queue.put_nowait(end_event)
+        except Exception as e:
+            logging.exception(f"stream adapter failed: {e}")
+        finally:
+            self._event_queue.put_nowait(None)
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
-        self._vad_stream.push_frame(frame)
+        if self._closed:
+            raise ValueError("cannot push frame to closed stream")
 
-    async def aclose(self) -> None:
-        await self._vad_stream.aclose()
-        self._main_task.cancel()
+        self._vad.push_frame(frame)
+
+    async def aclose(self, *, wait: bool = True) -> None:
+        self._closed = True
+        if not wait:
+            self._main_task.cancel()
+
+        await self._vad.aclose(wait=wait)
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
 
-    async def flush(self) -> None:
-        await self._vad_stream.flush()
-
     async def __anext__(self) -> SpeechEvent:
-        if self._closed and self._event_queue.empty():
+        evt = await self._event_queue.get()
+        if evt is None:
             raise StopAsyncIteration
-
-        return await self._event_queue.get()
+        return evt

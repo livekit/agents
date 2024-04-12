@@ -1,7 +1,7 @@
 import asyncio
-import logging
 from typing import AsyncIterable
 
+from ..log import logger
 from ..tokenize import SentenceStream, SentenceTokenizer
 from .tts import (
     TTS,
@@ -25,7 +25,7 @@ class StreamAdapterWrapper(SynthesizeStream):
 
         def log_exception(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():
-                logging.error(f"speech task failed: {task.exception()}")
+                logger.error(f"speech task failed: {task.exception()}")
 
         self._main_task.add_done_callback(log_exception)
 
@@ -35,7 +35,13 @@ class StreamAdapterWrapper(SynthesizeStream):
                 sentence = await self._sentence_stream.__anext__()
                 audio = await self._tts.synthesize(text=sentence.text)
                 self._event_queue.put_nowait(
+                    SynthesisEvent(type=SynthesisEventType.STARTED)
+                )
+                self._event_queue.put_nowait(
                     SynthesisEvent(type=SynthesisEventType.AUDIO, audio=audio)
+                )
+                self._event_queue.put_nowait(
+                    SynthesisEvent(type=SynthesisEventType.FINISHED)
                 )
             except asyncio.CancelledError:
                 break
@@ -54,12 +60,15 @@ class StreamAdapterWrapper(SynthesizeStream):
             await self._main_task
         except asyncio.CancelledError:
             pass
+        finally:
+            self._event_queue.put_nowait(None)
 
     async def __anext__(self) -> SynthesisEvent:
-        if self._closed and self._event_queue.empty():
+        item = await self._event_queue.get()
+        if item is None:
             raise StopAsyncIteration
 
-        return await self._event_queue.get()
+        return item
 
 
 class StreamAdapter(TTS):

@@ -1,0 +1,2 @@
+livekit-agents~=0.5.dev0
+livekit-plugins-deepgram~=0.3.dev0

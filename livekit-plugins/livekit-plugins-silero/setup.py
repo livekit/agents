@@ -18,7 +18,6 @@ import pathlib
 import setuptools
 import setuptools.command.build_py
 
-
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
 with open(os.path.join(here, "livekit", "plugins", "silero", "version.py"), "r") as f:
@@ -50,11 +49,12 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.8.0",
     install_requires=[
-        "livekit >= 0.9.0",
-        "livekit-agents >= 0.4.0",
+        "livekit ~= 0.9",
+        "livekit-agents~=0.5.dev0",
         "torch >= 2, < 3",
         "torchaudio >= 2",
         "numpy >= 1, < 2",
+        "onnxruntime~=1.17.0",
     ],
     package_data={"livekit.plugins.silero": ["files/silero_vad.jit"]},
     project_urls={

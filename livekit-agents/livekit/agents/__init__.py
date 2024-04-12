@@ -12,42 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .version import __version__
-
-from .worker import (
-    Worker,
-    JobCancelledError,
-    AssignmentTimeoutError,
-    JobType,
-    run_app,
-)
-from .plugin import Plugin
-from .utils import AudioBuffer, merge_frames, AsyncIterableQueue
-from .job_request import AutoSubscribe, AutoDisconnect, JobRequest
+from . import aio, codecs, ipc, llm, stt, tokenize, tts, utils, vad
+from .apipe import AsyncPipe  # noqa
+from .ipc.protocol import IPC_MESSAGES, Log, StartJobRequest, StartJobResponse  # noqa
 from .job_context import JobContext
-
-from . import stt
-from . import vad
-from . import tts
-from . import tokenize
+from .job_request import AutoDisconnect, AutoSubscribe, JobRequest
+from .plugin import Plugin
+from .version import __version__
+from .voice_assistant import VoiceAssistant
+from .worker import Worker, WorkerOptions
 
 __all__ = [
     "__version__",
+    "VoiceAssistant",
     "Worker",
+    "WorkerOptions",
     "JobRequest",
     "AutoSubscribe",
     "AutoDisconnect",
     "JobContext",
-    "JobCancelledError",
-    "AssignmentTimeoutError",
     "Plugin",
-    "run_app",
-    "JobType",
-    "AudioBuffer",
-    "merge_frames",
-    "AsyncIterableQueue",
+    "ipc",
+    "codecs",
     "stt",
     "vad",
+    "utils",
     "tts",
+    "aio",
     "tokenize",
+    "llm",
 ]
