@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 from enum import Enum
-from typing import Callable, List
+from typing import List
 
 from attr import define
 from livekit import agents, rtc

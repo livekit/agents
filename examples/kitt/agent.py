@@ -72,11 +72,11 @@ async def entrypoint(job: JobContext):
     job.room.on("track_subscribed", on_track_subscribed)
     job.room.on("data_received", on_data)
 
-    # Publish agent mic
-    await job.room.local_participant.publish_track(track, options)
-
     # Wait for user audio
     audio_stream = await audio_stream_future
+
+    # Publish agent mic after waiting for user audio (simple way to avoid subscribing to self)
+    await job.room.local_participant.publish_track(track, options)
 
     async def start_new_inference(force_text: str | None = None):
         nonlocal current_transcription
@@ -88,17 +88,33 @@ async def entrypoint(job: JobContext):
             chat_history=state.chat_history,
             force_text_response=force_text,
         )
+
         try:
+            agent_done_thinking = False
+            agent_has_spoken = False
+            comitted_agent = False
+
+            def commit_agent_text_if_needed():
+                nonlocal agent_has_spoken, agent_done_thinking, comitted_agent
+                if agent_done_thinking and agent_has_spoken and not comitted_agent:
+                    comitted_agent = True
+                    state.commit_agent_response(job.current_response)
+
             async for e in job:
                 # Allow cancellation
                 if e.type == EventType.AGENT_RESPONSE:
                     if e.finished_generating:
                         state.agent_thinking = False
-                        state.commit_agent_response(job.current_response)
+                        agent_done_thinking = True
+                        commit_agent_text_if_needed()
                 elif e.type == EventType.AGENT_SPEAKING:
                     state.agent_speaking = e.speaking
                     if e.speaking:
-                        state.commit_user_transcription(job.transcription)
+                        agent_has_spoken = True
+                        # Only commit user text for real transcriptions
+                        if not force_text:
+                            state.commit_user_transcription(job.transcription)
+                        commit_agent_text_if_needed()
                         current_transcription = ""
         except asyncio.CancelledError:
             await job.acancel()
