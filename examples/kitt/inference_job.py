@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import uuid
-from typing import Callable, List
+from enum import Enum
+from typing import List
 
+from attr import define
 from livekit import agents, rtc
 from livekit.agents.llm import ChatContext, ChatMessage, ChatRole
 from livekit.plugins.elevenlabs import TTS
@@ -15,8 +19,6 @@ class InferenceJob:
         transcription: str,
         audio_source: rtc.AudioSource,
         chat_history: List[ChatMessage],
-        on_agent_response: Callable[[str, bool], None],
-        on_agent_speaking: Callable[[bool], None],
         force_text_response: str | None = None,
     ):
         self._id = uuid.uuid4()
@@ -31,8 +33,7 @@ class InferenceJob:
         self._output_queue = asyncio.Queue[rtc.AudioFrame | None]()
         self._speaking = False
         self._finished_generating = False
-        self._on_agent_response = on_agent_response
-        self._on_agent_speaking = on_agent_speaking
+        self._event_queue = asyncio.Queue[Event | None]()
         self._done_future = asyncio.Future()
         self._cancelled = False
         self._force_text_response = force_text_response
@@ -53,7 +54,13 @@ class InferenceJob:
     def current_response(self, value: str):
         self._current_response = value
         if not self._cancelled:
-            self._on_agent_response(value, self._finished_generating)
+            self._event_queue.put_nowait(
+                Event(
+                    type=EventType.AGENT_RESPONSE,
+                    finished_generating=self.finished_generating,
+                    speaking=self.speaking,
+                )
+            )
 
     @property
     def finished_generating(self):
@@ -63,7 +70,13 @@ class InferenceJob:
     def finished_generating(self, value: bool):
         self._finished_generating = value
         if not self._cancelled:
-            self._on_agent_response(self.current_response, value)
+            self._event_queue.put_nowait(
+                Event(
+                    finished_generating=value,
+                    type=EventType.AGENT_RESPONSE,
+                    speaking=self.speaking,
+                )
+            )
 
     async def acancel(self):
         logging.info("Cancelling inference job")
@@ -82,7 +95,13 @@ class InferenceJob:
             return
         self._speaking = value
         if not self._cancelled:
-            self._on_agent_speaking(value)
+            self._event_queue.put_nowait(
+                Event(
+                    speaking=value,
+                    type=EventType.AGENT_SPEAKING,
+                    finished_generating=self.finished_generating,
+                )
+            )
 
     async def _run(self):
         logging.info(
@@ -108,6 +127,8 @@ class InferenceJob:
     async def _llm_task(self):
         if self._force_text_response:
             self._tts_stream.push_text(self._force_text_response)
+            self.current_response = self._force_text_response
+            self.finished_generating = True
             await self._tts_stream.flush()
             return
 
@@ -132,15 +153,37 @@ class InferenceJob:
                 )
             elif event.type == agents.tts.SynthesisEventType.FINISHED:
                 break
-        await self._output_queue.put(None)
+        self._output_queue.put_nowait(None)
 
     async def _audio_capture_task(self):
         while True:
             audio_frame = await self._output_queue.get()
             if audio_frame is None:
+                self._event_queue.put_nowait(None)
                 break
             self.speaking = True
             await self._audio_source.capture_frame(audio_frame)
         self.speaking = False
         self._done_future.set_result(True)
         await self._tts_stream.aclose()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        e = await self._event_queue.get()
+        if e is None:
+            raise StopAsyncIteration
+        return e
+
+
+class EventType(Enum):
+    AGENT_RESPONSE = 1
+    AGENT_SPEAKING = 2
+
+
+@define(kw_only=True)
+class Event:
+    type: EventType
+    speaking: bool
+    finished_generating: bool

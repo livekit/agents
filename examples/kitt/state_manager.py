@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import List
 
 from livekit import agents, rtc
@@ -47,7 +48,13 @@ class StateManager:
         logging.info("Committing user transcription: %s", transcription)
         asyncio.create_task(
             self._room.local_participant.publish_data(
-                json.dumps({"transcription": transcription})
+                json.dumps(
+                    {
+                        "text": transcription,
+                        "timestamp": int(datetime.now().timestamp() * 1000),
+                    },
+                ),
+                topic="transcription",
             )
         )
         self._chat_history.append(ChatMessage(role=ChatRole.USER, text=transcription))
@@ -56,7 +63,13 @@ class StateManager:
         logging.info("Committing agent response: %s", response)
         asyncio.create_task(
             self._room.local_participant.publish_data(
-                json.dumps({"message": response}), topic="lk-chat-topic"
+                json.dumps(
+                    {
+                        "message": response,
+                        "timestamp": int(datetime.now().timestamp() * 1000),
+                    }
+                ),
+                topic="lk-chat-topic",
             )
         )
         self._chat_history.append(ChatMessage(role=ChatRole.ASSISTANT, text=response))
