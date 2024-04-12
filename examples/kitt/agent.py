@@ -1,7 +1,8 @@
 import asyncio
 import json
 
-from inference_job import InferenceJob
+from dotenv import load_dotenv
+from inference_job import EventType, InferenceJob
 from livekit import agents, rtc
 from livekit.agents import (
     JobContext,
@@ -11,6 +12,8 @@ from livekit.agents import (
 )
 from livekit.plugins.deepgram import STT
 from state_manager import StateManager
+
+load_dotenv()
 
 PROMPT = "You are KITT, a friendly voice assistant powered by LiveKit.  \
           Conversation should be personable, and be sure to ask follow up questions. \
@@ -36,7 +39,7 @@ async def entrypoint(job: JobContext):
 
     # Agent state
     state = StateManager(job.room, PROMPT)
-    latest_inference: InferenceJob | None = None
+    inference_task: asyncio.Task | None = None
     current_transcription = ""
 
     audio_stream_future = asyncio.Future[rtc.AudioStream]()
@@ -70,37 +73,13 @@ async def entrypoint(job: JobContext):
     job.room.on("data_received", on_data)
 
     # Publish agent mic
-
     await job.room.local_participant.publish_track(track, options)
 
     # Wait for user audio
     audio_stream = await audio_stream_future
 
-    def on_inference_agent_response(
-        inference: InferenceJob, response: str, finished: bool
-    ):
-        if finished:
-            state.agent_thinking = False
-            state.commit_agent_response(inference.current_response)
-
-    def on_inference_agent_speaking(inference: InferenceJob, speaking: bool):
-        nonlocal current_transcription, latest_inference
-        # If the inference speaks, commit the current transcription,
-        # to the chat history and reset the current transcription.
-        if speaking:
-            state.agent_speaking = True
-            state.commit_user_transcription(inference.transcription)
-            current_transcription = ""
-        else:
-            latest_inference = None
-            state.agent_speaking = False
-
     async def start_new_inference(force_text: str | None = None):
-        nonlocal latest_inference
-        if latest_inference:
-            await latest_inference.acancel()
-            state.agent_speaking = False
-            state.agent_thinking = False
+        nonlocal current_transcription
 
         state.agent_thinking = True
         job = InferenceJob(
@@ -108,21 +87,28 @@ async def entrypoint(job: JobContext):
             audio_source=source,
             chat_history=state.chat_history,
             force_text_response=force_text,
-            on_agent_response=lambda response, finished: on_inference_agent_response(
-                job, response, finished
-            ),
-            on_agent_speaking=lambda response: on_inference_agent_speaking(
-                job, response
-            ),
         )
-        latest_inference = job
+        try:
+            async for e in job:
+                # Allow cancellation
+                if e.type == EventType.AGENT_RESPONSE:
+                    if e.finished_generating:
+                        state.agent_thinking = False
+                        state.commit_agent_response(job.current_response)
+                elif e.type == EventType.AGENT_SPEAKING:
+                    state.agent_speaking = e.speaking
+                    if e.speaking:
+                        state.commit_user_transcription(job.transcription)
+                        current_transcription = ""
+        except asyncio.CancelledError:
+            await job.acancel()
 
     async def audio_stream_task():
         async for audio_frame_event in audio_stream:
             stt_stream.push_frame(audio_frame_event.frame)
 
     async def stt_stream_task():
-        nonlocal current_transcription
+        nonlocal current_transcription, inference_task
         async for stt_event in stt_stream:
             # We eagerly try to run inference to keep the latency as low as possible.
             # If we get a new transcript, we update the working text, cancel in-flight inference,
@@ -132,13 +118,18 @@ async def entrypoint(job: JobContext):
                 # Do nothing
                 if delta == "":
                     continue
-                current_transcription += delta
-                await start_new_inference()
+                current_transcription += " " + delta
+                # Cancel in-flight inference
+                if inference_task:
+                    inference_task.cancel()
+                    await inference_task
+                # Start new inference
+                inference_task = asyncio.create_task(start_new_inference())
 
     try:
         sip = job.room.name.startswith("sip")
         intro_text = SIP_INTRO if sip else INTRO
-        await start_new_inference(force_text=intro_text)
+        inference_task = asyncio.create_task(start_new_inference(force_text=intro_text))
         async with asyncio.TaskGroup() as tg:
             tg.create_task(audio_stream_task())
             tg.create_task(stt_stream_task())
