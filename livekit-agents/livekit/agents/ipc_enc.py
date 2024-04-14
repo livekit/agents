@@ -33,7 +33,7 @@ class Message(Protocol):
 @staticmethod
 def read_msg(p: ProcessPipeReader, messages: dict[int, Type[Message]]) -> "Message":
     b = io.BytesIO(p.recv_bytes())
-    msg_id = int.from_bytes(b.read(4))
+    msg_id = int.from_bytes(b.read(4), "big")
     msg = messages[msg_id]()
     msg.read(b)
     return msg
@@ -42,6 +42,6 @@ def read_msg(p: ProcessPipeReader, messages: dict[int, Type[Message]]) -> "Messa
 @staticmethod
 def write_msg(p: ProcessPipeWriter, msg: "Message") -> None:
     b = io.BytesIO()
-    b.write(msg.MSG_ID.to_bytes(4))
+    b.write(msg.MSG_ID.to_bytes(4, "big"))
     msg.write(b)
     p.send_bytes(b.getvalue())

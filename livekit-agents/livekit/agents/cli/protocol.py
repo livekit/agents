@@ -38,22 +38,22 @@ class ActiveJobsResponse:
     jobs: list[ActiveJob] = Factory(list)
 
     def write(self, b: io.BytesIO) -> None:
-        b.write(len(self.jobs).to_bytes(4))
+        b.write(len(self.jobs).to_bytes(4, "big"))
         for aj in self.jobs:
             job_s = aj.job.SerializeToString()
-            b.write(len(job_s).to_bytes(4))
+            b.write(len(job_s).to_bytes(4, "big"))
             b.write(job_s)
             accept_s = pickle.dumps(aj.accept_data)
-            b.write(len(accept_s).to_bytes(4))
+            b.write(len(accept_s).to_bytes(4, "big"))
             b.write(accept_s)
 
     def read(self, b: io.BytesIO) -> None:
-        job_count = int.from_bytes(b.read(4))
+        job_count = int.from_bytes(b.read(4), "big")
         for _ in range(job_count):
-            job_len = int.from_bytes(b.read(4))
+            job_len = int.from_bytes(b.read(4), "big")
             job = agent.Job()
             job.ParseFromString(b.read(job_len))
-            accept_len = int.from_bytes(b.read(4))
+            accept_len = int.from_bytes(b.read(4), "big")
             accept_data = pickle.loads(b.read(accept_len))
             self.jobs.append(ActiveJob(job=job, accept_data=accept_data))
 
@@ -75,22 +75,22 @@ class ReloadJobsResponse:
     jobs: list[ActiveJob] = Factory(list)
 
     def write(self, b: io.BytesIO) -> None:
-        b.write(len(self.jobs).to_bytes(4))
+        b.write(len(self.jobs).to_bytes(4, "big"))
         for aj in self.jobs:
             job_s = aj.job.SerializeToString()
-            b.write(len(job_s).to_bytes(4))
+            b.write(len(job_s).to_bytes(4, "big"))
             b.write(job_s)
             accept_s = pickle.dumps(aj.accept_data)
-            b.write(len(accept_s).to_bytes(4))
+            b.write(len(accept_s).to_bytes(4, "big"))
             b.write(accept_s)
 
     def read(self, b: io.BytesIO) -> None:
-        job_count = int.from_bytes(b.read(4))
+        job_count = int.from_bytes(b.read(4), "big")
         for _ in range(job_count):
-            job_len = int.from_bytes(b.read(4))
+            job_len = int.from_bytes(b.read(4), "big")
             job = agent.Job()
             job.ParseFromString(b.read(job_len))
-            accept_len = int.from_bytes(b.read(4))
+            accept_len = int.from_bytes(b.read(4), "big")
             accept_data = pickle.loads(b.read(accept_len))
             self.jobs.append(ActiveJob(job=job, accept_data=accept_data))
 

@@ -26,11 +26,11 @@ class StartJobRequest:
 
     def write(self, b: io.BytesIO) -> None:
         job_s = self.job.SerializeToString()
-        b.write(len(job_s).to_bytes(4))
+        b.write(len(job_s).to_bytes(4, "big"))
         b.write(job_s)
 
     def read(self, b: io.BytesIO) -> None:
-        job_len = int.from_bytes(b.read(4))
+        job_len = int.from_bytes(b.read(4), "big")
         self.job = agent.Job()
         self.job.ParseFromString(b.read(job_len))
 
@@ -45,11 +45,11 @@ class StartJobResponse:
             b.write(bytes(4))
         else:
             exc_s = pickle.dumps(self.exc)
-            b.write(len(exc_s).to_bytes(4))
+            b.write(len(exc_s).to_bytes(4, "big"))
             b.write(pickle.dumps(self.exc))
 
     def read(self, b: io.BytesIO) -> None:
-        exc_len = int.from_bytes(b.read(4))
+        exc_len = int.from_bytes(b.read(4), "big")
         if exc_len == 0:
             self.exc = None
         else:
@@ -63,14 +63,14 @@ class Log:
     message: str = ""
 
     def write(self, b: io.BytesIO) -> None:
-        b.write(self.level.to_bytes(4))
+        b.write(self.level.to_bytes(4, "big"))
         message_s = self.message.encode()
-        b.write(len(message_s).to_bytes(4))
+        b.write(len(message_s).to_bytes(4, "big"))
         b.write(message_s)
 
     def read(self, b: io.BytesIO) -> None:
-        self.level = int.from_bytes(b.read(4))
-        message_len = int.from_bytes(b.read(4))
+        self.level = int.from_bytes(b.read(4), "big")
+        message_len = int.from_bytes(b.read(4), "big")
         self.message = b.read(message_len).decode()
 
 
@@ -80,10 +80,10 @@ class Ping:
     timestamp: int = 0
 
     def write(self, b: io.BytesIO) -> None:
-        b.write(self.timestamp.to_bytes(8))
+        b.write(self.timestamp.to_bytes(8, "big"))
 
     def read(self, b: io.BytesIO) -> None:
-        self.timestamp = int.from_bytes(b.read(8))
+        self.timestamp = int.from_bytes(b.read(8), "big")
 
 
 @define(kw_only=True)
@@ -93,12 +93,12 @@ class Pong:
     timestamp: int = 0
 
     def write(self, b: io.BytesIO) -> None:
-        b.write(self.last_timestamp.to_bytes(8))
-        b.write(self.timestamp.to_bytes(8))
+        b.write(self.last_timestamp.to_bytes(8, "big"))
+        b.write(self.timestamp.to_bytes(8, "big"))
 
     def read(self, b: io.BytesIO) -> None:
-        self.last_timestamp = int.from_bytes(b.read(8))
-        self.timestamp = int.from_bytes(b.read(8))
+        self.last_timestamp = int.from_bytes(b.read(8), "big")
+        self.timestamp = int.from_bytes(b.read(8), "big")
 
 
 @define(kw_only=True)
