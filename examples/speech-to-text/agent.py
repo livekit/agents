@@ -10,6 +10,10 @@ from livekit.agents import (
 )
 from livekit.plugins.deepgram import STT
 
+import dotenv
+
+dotenv.load_dotenv()
+
 
 async def entrypoint(job: JobContext):
     logging.info("starting tts example agent")
@@ -23,7 +27,7 @@ async def entrypoint(job: JobContext):
             stt_stream.push_frame(audio_frame_event.frame)
         await stt_task
 
-    async def process_stt(stt_stream: agents.stt.STTStream):
+    async def process_stt(stt_stream: agents.stt.SpeechStream):
         async for stt_event in stt_stream:
             if stt_event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
                 logging.info("Got transcript: %s", stt_event.alternatives[0].text)
