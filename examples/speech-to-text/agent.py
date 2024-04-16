@@ -23,7 +23,7 @@ async def entrypoint(job: JobContext):
             stt_stream.push_frame(audio_frame_event.frame)
         await stt_task
 
-    async def process_stt(stt_stream: agents.stt.STTStream):
+    async def process_stt(stt_stream: agents.stt.SpeechStream):
         async for stt_event in stt_stream:
             if stt_event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
                 logging.info("Got transcript: %s", stt_event.alternatives[0].text)
