@@ -24,7 +24,7 @@ class LogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            msg = record.getMessage()
+            msg = self.format(record)
             if record.exc_info:
                 type, value, tb = record.exc_info
                 msg += "\n" + "".join(traceback.format_exception(type, value, tb))
