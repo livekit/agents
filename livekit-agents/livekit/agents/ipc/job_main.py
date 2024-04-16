@@ -24,7 +24,7 @@ class LogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            msg = super(LogHandler, self).format(record)
+            msg = super().format(record)
             if record.exc_info:
                 type, value, tb = record.exc_info
                 msg += "\n" + "".join(traceback.format_exception(type, value, tb))
@@ -33,7 +33,9 @@ class LogHandler(logging.Handler):
                 protocol.Log(level=record.levelno, message=msg),
             )
         except Exception as e:
-            print(f"failed to write log: {e}")
+            print(
+                f"failed to write log, for file '{record.filename}:{record.lineno}', exception '{e}'"
+            )
 
 
 async def _start(
