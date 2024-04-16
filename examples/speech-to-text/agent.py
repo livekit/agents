@@ -10,10 +10,6 @@ from livekit.agents import (
 )
 from livekit.plugins.deepgram import STT
 
-import dotenv
-
-dotenv.load_dotenv()
-
 
 async def entrypoint(job: JobContext):
     logging.info("starting tts example agent")
