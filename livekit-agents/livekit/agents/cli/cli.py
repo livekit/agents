@@ -142,9 +142,7 @@ def run_worker(args: protocol.CliArgs) -> None:
         # TODO(theomonnom): add_signal_handler is not implemented on win
         pass
 
-    async def _worker_run(
-        worker: Worker,
-    ) -> None:
+    async def _worker_run(worker: Worker) -> None:
         try:
             await worker.run()
         except Exception:

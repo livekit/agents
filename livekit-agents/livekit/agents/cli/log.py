@@ -37,6 +37,11 @@ def setup_logging(log_level: str, production: bool = True) -> None:
         ## dev mode, colored logs & show all extra
         import colorlog
 
+        watch_logger = logging.getLogger("watchfiles.main")
+        watch_logger.setLevel(log_level)
+        if watch_logger.level == logging.DEBUG:  # watchfiles in DEBUG mode is too noisy
+            watch_logger.level = logging.INFO
+
         f = ExtraLogFormatter(
             colorlog.ColoredFormatter(
                 "%(asctime)s %(log_color)s%(levelname)-4s %(bold_white)s %(name)s %(reset)s %(message)s",

@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncIterable
+from typing import AsyncIterable, AsyncIterator
 
 from livekit import rtc
 
@@ -49,7 +49,7 @@ class SynthesizeStream(ABC):
         self.push_text(None)
 
     @abstractmethod
-    async def aclose(self, wait: bool = True) -> None:
+    async def aclose(self, *, wait: bool = True) -> None:
         """
         Close the stream, if wait is True, it will wait for the TTS to
         finish synthesizing the audio, otherwise it will close ths stream immediately

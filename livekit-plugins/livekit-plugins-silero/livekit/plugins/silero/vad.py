@@ -16,19 +16,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 from collections import deque
+import time
 from typing import List, Optional
+from .log import logger
 
 import numpy as np
 import torch
-from livekit import agents, rtc
+from livekit import rtc
+from livekit import agents
+
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 class VAD(agents.vad.VAD):
-    def __init__(
-        self, *, model_path: Optional[str] = None, use_onnx: bool = True
-    ) -> None:
+    def __init__(self, *, model_path: str | None = None, use_onnx: bool = True) -> None:
         if model_path:
             model = torch.jit.load(model_path)
             model.eval()
@@ -43,12 +46,12 @@ class VAD(agents.vad.VAD):
     def stream(
         self,
         *,
-        min_speaking_duration: float = 0.5,
-        min_silence_duration: float = 0.5,
+        min_speaking_duration: float = 0.16,
+        min_silence_duration: float = 1.3,
         padding_duration: float = 0.1,
         sample_rate: int = 16000,
         max_buffered_speech: float = 45.0,
-        threshold: float = 0.5,
+        threshold: float = 0.2,
     ) -> "VADStream":
         return VADStream(
             self._model,
@@ -93,6 +96,7 @@ class VADStream(agents.vad.VADStream):
         self._waiting_start = False
         self._waiting_end = False
         self._current_sample = 0
+        self._filter = agents.utils.ExpFilter(0.86)
         self._min_speaking_samples = min_speaking_duration * sample_rate
         self._min_silence_samples = min_silence_duration * sample_rate
         self._padding_duration_samples = padding_duration * sample_rate
@@ -102,12 +106,6 @@ class VADStream(agents.vad.VADStream):
         self._original_frames: deque[rtc.AudioFrame] = deque()
         self._buffered_frames: List[rtc.AudioFrame] = []
         self._main_task = asyncio.create_task(self._run())
-
-        def log_exception(task: asyncio.Task) -> None:
-            if not task.cancelled() and task.exception():
-                logging.error(f"silero vad task failed: {task.exception()}")
-
-        self._main_task.add_done_callback(log_exception)
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
@@ -151,6 +149,9 @@ class VADStream(agents.vad.VADStream):
                         break
 
                     await asyncio.shield(self._run_inference())
+
+        except Exception:
+            logger.exception(f"silero stream failed")
         finally:
             self._event_queue.put_nowait(None)
 
@@ -169,13 +170,33 @@ class VADStream(agents.vad.VADStream):
         tensor = tensor.to(torch.float32) / 32768.0
 
         # run inference
-        speech_prob = await asyncio.to_thread(
+        start_time = time.time()
+        raw_prob = await asyncio.to_thread(
             lambda: self._model(tensor, self._sample_rate).item()
         )
-        self._dispatch_event(speech_prob, original_frames)
+        probability = self._filter.apply(1.0, raw_prob)
+        inference_duration = time.time() - start_time
+
+        # inference done
+        event = agents.vad.VADEvent(
+            type=agents.vad.VADEventType.INFERENCE_DONE,
+            samples_index=self._current_sample,
+            probability=probability,
+            raw_inference_prob=raw_prob,
+            inference_duration=inference_duration,
+        )
+        self._event_queue.put_nowait(event)
+
+        self._dispatch_event(original_frames, probability, raw_prob, inference_duration)
         self._current_sample += merged_frame.samples_per_channel
 
-    def _dispatch_event(self, speech_prob: int, original_frames: List[rtc.AudioFrame]):
+    def _dispatch_event(
+        self,
+        original_frames: List[rtc.AudioFrame],
+        probability: float,
+        raw_inference_prob: float,
+        inference_duration: float,
+    ):
         """
         Dispatches a VAD event based on the speech probability and the options
         Args:
@@ -204,14 +225,14 @@ class VADStream(agents.vad.VADStream):
         )
         if len(self._buffered_frames) > max_buffer_len:
             # if unaware of this, may be hard to debug, so logging seems ok here
-            logging.warning(
+            logger.warning(
                 f"VAD buffer overflow, dropping {len(self._buffered_frames) - max_buffer_len} frames"
             )
             self._buffered_frames = self._buffered_frames[
                 len(self._buffered_frames) - max_buffer_len :
             ]
 
-        if speech_prob >= self._threshold:
+        if probability >= self._threshold:
             # speaking, wait for min_speaking_duration to trigger START_OF_SPEECH
             self._waiting_end = False
             if not self._waiting_start and not self._speaking:
@@ -223,34 +244,31 @@ class VADStream(agents.vad.VADStream):
             ):
                 self._waiting_start = False
                 self._speaking = True
+
+                # since we're waiting for the min_spaking_duration to trigger START_OF_SPEECH,
+                # put the speech that were used to trigger the start here
                 event = agents.vad.VADEvent(
                     type=agents.vad.VADEventType.START_OF_SPEECH,
                     samples_index=self._start_speech,
+                    frames=self._buffered_frames[padding_count:],
+                    speaking=True,
                 )
                 self._event_queue.put_nowait(event)
 
-                # since we're waiting for the min_spaking_duration to trigger START_OF_SPEECH,
-                # the SPEAKING data is missing the first few frames, trigger it here
-                # TODO(theomonnom): Maybe it is better to put the data inside the START_OF_SPEECH event?
-                event = agents.vad.VADEvent(
-                    type=agents.vad.VADEventType.SPEAKING,
-                    samples_index=self._start_speech,
-                    speech=self._buffered_frames[padding_count:],
-                )
+        # we don't check the speech_prob here
+        event = agents.vad.VADEvent(
+            type=agents.vad.VADEventType.INFERENCE_DONE,
+            samples_index=self._current_sample,
+            frames=original_frames,
+            probability=probability,
+            raw_inference_prob=raw_inference_prob,
+            inference_duration=inference_duration,
+            speaking=self._speaking,
+        )
+        self._event_queue.put_nowait(event)
 
-                return
-
-        if self._speaking:
-            # we don't check the speech_prob here
-            event = agents.vad.VADEvent(
-                type=agents.vad.VADEventType.SPEAKING,
-                samples_index=self._current_sample,
-                speech=original_frames,
-            )
-            self._event_queue.put_nowait(event)
-
-        if speech_prob < self._threshold:
-            # stopped speaking, wait for min_silence_duration to trigger END_OF_SPEECH,
+        if probability < self._threshold:
+            # stopped speaking, s for min_silence_duration to trigger END_OF_SPEECH,
             self._waiting_start = False
             if not self._waiting_end and self._speaking:
                 self._waiting_end = True
@@ -267,7 +285,8 @@ class VADStream(agents.vad.VADStream):
                     samples_index=self._end_speech,
                     duration=(self._current_sample - self._start_speech)
                     / self._sample_rate,
-                    speech=self._buffered_frames,
+                    frames=self._buffered_frames,
+                    speaking=False,
                 )
                 self._event_queue.put_nowait(event)
 

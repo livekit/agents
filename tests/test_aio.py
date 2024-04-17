@@ -30,6 +30,7 @@ async def test_select():
         i = 0
         while True:
             yield f"agen-{i}"
+            raise StopAsyncIteration
             await asyncio.sleep(0.1)
             i += 1
             if i == 5:
@@ -53,8 +54,12 @@ async def test_select():
 
     asyncio.create_task(mark_future())
 
-    selectable = [agen(), coro(), task, future]
-    sel = aio.select(selectable)
+    sel = aio.select([agen(), coro(), task, future])
+    async with contextlib.aclosing(sel) as select:
+        async for _ in select:
+            pass
+
+    sel = aio.select([agen(), coro()])
     async with contextlib.aclosing(sel) as select:
         async for _ in select:
             pass

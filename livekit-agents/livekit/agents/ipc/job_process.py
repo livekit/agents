@@ -1,6 +1,6 @@
 import asyncio
 import contextlib
-import multiprocessing
+import multiprocessing as mp
 import sys
 import threading
 
@@ -25,15 +25,13 @@ class JobProcess:
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._job = job
-        pch, cch = multiprocessing.Pipe(duplex=True)
+        pch, cch = mp.Pipe(duplex=True)
         asyncio_debug = self._loop.get_debug()
         args = (
             cch,
             protocol.JobMainArgs(job.id, url, token, accept_data, asyncio_debug),
         )
-        self._process = multiprocessing.Process(
-            target=_run_job, args=args, daemon=True
-        )  # daemon=True to avoid unresponsive process in production
+        self._process = mp.Process(target=_run_job, args=args)
         self._pipe = apipe.AsyncPipe(
             pch, loop=self._loop, messages=protocol.IPC_MESSAGES
         )
