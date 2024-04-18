@@ -46,7 +46,7 @@ class VAD(agents.vad.VAD):
     def stream(
         self,
         *,
-        min_speaking_duration: float = 0.16,
+        min_speaking_duration: float = 0.12,
         min_silence_duration: float = 1.3,
         padding_duration: float = 0.1,
         sample_rate: int = 16000,
@@ -96,7 +96,7 @@ class VADStream(agents.vad.VADStream):
         self._waiting_start = False
         self._waiting_end = False
         self._current_sample = 0
-        self._filter = agents.utils.ExpFilter(0.86)
+        self._filter = agents.utils.ExpFilter(0.8)
         self._min_speaking_samples = min_speaking_duration * sample_rate
         self._min_silence_samples = min_silence_duration * sample_rate
         self._padding_duration_samples = padding_duration * sample_rate

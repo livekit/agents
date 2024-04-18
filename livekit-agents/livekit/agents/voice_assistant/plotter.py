@@ -10,8 +10,12 @@ from .. import ipc_enc
 from typing import ClassVar, Literal, Tuple
 
 PlotType = Literal["vad_raw", "vad_smoothed", "vad_dur", "raw_t_vol", "vol"]
-EventType = Literal["user_started_speaking", "user_stopped_speaking"]
-MAX_DATA_POINTS = 500
+EventType = Literal[
+    "user_started_speaking",
+    "user_stopped_speaking",
+    "agent_started_speaking",
+    "agent_stopped_speaking",
+]
 
 
 @define(kw_only=True)
@@ -69,15 +73,24 @@ def _draw_plot(reader: ipc_enc.ProcessPipeReader):
 
     fig, (pv, sp) = plt.subplots(2, sharex="all")
 
+    # not really accurate
+    max_vad_points = 500
+    max_vol_points = 1000
+
     def _draw_cb(sp, pv):
+        nonlocal max_vol_points, max_vad_points
         while reader.poll():
             msg = ipc_enc.read_msg(reader, PLT_MESSAGES)
             if isinstance(msg, PlotMessage):
                 data = plot_data.setdefault(msg.which, ([], []))
                 data[0].append(msg.x)
                 data[1].append(msg.y)
-                data[0][:] = data[0][-MAX_DATA_POINTS:]
-                data[1][:] = data[1][-MAX_DATA_POINTS:]
+
+                max_points = (
+                    max_vad_points if msg.which.startswith("vad") else max_vol_points
+                )
+                data[0][:] = data[0][-max_points:]
+                data[1][:] = data[1][-max_points:]
 
         vad_raw = plot_data.setdefault("vad_raw", ([], []))
         vad_smoothed = plot_data.get("vad_smoothed", ([], []))

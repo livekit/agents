@@ -319,7 +319,6 @@ class SpeechStream(stt.SpeechStream):
             return
 
         if len(self._final_events) == 0:
-            logging.warning("received end of speech without any final transcription")
             return
 
         self._speaking = False
@@ -375,24 +374,27 @@ class SpeechStream(stt.SpeechStream):
             # If, for some reason, we didn't get a SpeechStarted event but we got
             # a transcript with text, we should start speaking. It's rare but has
             # been observed.
-            if not self._speaking and len(alts) and alts[0].text.strip() != "":
-                self._speaking = True
-                start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                self._event_queue.put_nowait(start_event)
+            if len(alts) > 0 and alts[0].text:
+                if not self._speaking:
+                    self._speaking = True
+                    start_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.START_OF_SPEECH
+                    )
+                    self._event_queue.put_nowait(start_event)
 
-            if is_final_transcript:
-                final_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=alts,
-                )
-                self._final_events.append(final_event)
-                self._event_queue.put_nowait(final_event)
-            else:
-                interim_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=alts,
-                )
-                self._event_queue.put_nowait(interim_event)
+                if is_final_transcript:
+                    final_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        alternatives=alts,
+                    )
+                    self._final_events.append(final_event)
+                    self._event_queue.put_nowait(final_event)
+                else:
+                    interim_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                        alternatives=alts,
+                    )
+                    self._event_queue.put_nowait(interim_event)
 
             # if we receive an endpoint, only end the speech if
             # we either had a SpeechStarted event or we have a seen
