@@ -65,7 +65,9 @@ class SynthesizeStream(ABC):
 
 
 class TTS(ABC):
-    def __init__(self, *, streaming_supported: bool, sample_rate: int, num_channels: int) -> None:
+    def __init__(
+        self, *, streaming_supported: bool, sample_rate: int, num_channels: int
+    ) -> None:
         self._streaming_supported = streaming_supported
         self._sample_rate = sample_rate
         self._num_channels = num_channels

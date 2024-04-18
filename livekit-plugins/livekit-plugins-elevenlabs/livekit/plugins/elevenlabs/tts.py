@@ -79,7 +79,9 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         latency: int = 3,
     ) -> None:
-        super().__init__(streaming_supported=True)
+        super().__init__(
+            streaming_supported=True, sample_rate=sample_rate, num_channels=1
+        )
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
         if not api_key:
             raise ValueError("ELEVEN_API_KEY must be set")
