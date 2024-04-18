@@ -92,14 +92,19 @@ class VoiceAssistant:
         self._fnc_ctx, self._ctx = fnc_ctx, allm.ChatContext()
         self._speaking, self._user_speaking = False, False
         self._plotter = plotter.AssistantPlotter(self._loop)
-        self._closed = False
 
         self._audio_source, self._audio_stream = None, None
-        self._ready = False
+        self._closed, self._started, self._ready = False, False, False
+        self._lock = asyncio.Lock()
+
+        # tasks
+        self._launch_task: asyncio.Task | None = None
+        self._recognize_task: asyncio.Task | None = None
+        self._update_task: asyncio.Task | None = None
+        self._play_task: asyncio.Task | None = None
 
         # synthesis states
         self._cur_speech: _SpeechData | None = None
-        self._play_task: asyncio.Task | None = None
         self._user_speaking, self._agent_speaking = False, False
 
         self._target_volume = self._opts.base_volume
@@ -113,7 +118,7 @@ class VoiceAssistant:
 
     @property
     def started(self) -> bool:
-        return self._room is not None
+        return self._started
 
     async def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str
@@ -127,6 +132,7 @@ class VoiceAssistant:
         if self.started:
             raise ValueError("voice assistant is already started")
 
+        self._started = True
         self._room = room
         if isinstance(participant, rtc.RemoteParticipant):
             self._participant_identity = participant.identity
@@ -202,8 +208,27 @@ class VoiceAssistant:
         if self._opts.plotting:
             self._plotter.start()
 
-        self._recognize_task = asyncio.create_task(self._recognize_loop())
-        self._update_task = asyncio.create_task(self._update_loop())
+        self._launch_task = asyncio.create_task(self._launch())
+
+    async def _launch(self):
+        assert self._ready
+
+        async with self._lock:
+            if self._closed:
+                return
+
+            self._audio_source = rtc.AudioSource(
+                self._tts.sample_rate, self._tts.num_channels
+            )
+            track = rtc.LocalAudioTrack.create_audio_track(
+                "assistant_voice", self._audio_source
+            )
+
+            options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+            self._pub = await self._room.local_participant.publish_track(track, options)
+
+            self._recognize_task = asyncio.create_task(self._recognize_loop())
+            self._update_task = asyncio.create_task(self._update_loop())
 
     async def aclose(self, wait: bool = True) -> None:
         if not self.started:
@@ -217,17 +242,31 @@ class VoiceAssistant:
         if self._opts.plotting:
             self._plotter.terminate()
 
-        self._recognize_task.cancel()
-        if not wait:
-            self._update_task.cancel()
-            if self._play_task is not None:
-                self._play_task.cancel()
+        async with self._lock:
+            with contextlib.suppress(asyncio.CancelledError):
+                if self._launch_task is not None:
+                    self._launch_task.cancel()
+                    await self._launch_task
 
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._recognize_task
-            await self._update_task
-            if self._play_task is not None:
-                await self._play_task
+            if self._recognize_task is not None:
+                self._recognize_task.cancel()
+
+            if not wait:
+                if self._update_task is not None:
+                    self._update_task.cancel()
+
+                if self._play_task is not None:
+                    self._play_task.cancel()
+
+            with contextlib.suppress(asyncio.CancelledError):
+                if self._update_task is not None:
+                    await self._update_task
+
+                if self._recognize_task is not None:
+                    await self._recognize_task
+
+                if self._play_task is not None:
+                    await self._play_task
 
     async def say(
         self,
@@ -250,22 +289,13 @@ class VoiceAssistant:
         """Recognize speech from the audio stream and do voice activity detection"""
         assert self._audio_stream is not None
 
-        self._audio_source = rtc.AudioSource(
-            self._tts.sample_rate, self._tts.num_channels
-        )
-        track = rtc.LocalAudioTrack.create_audio_track(
-            "assistant_voice", self._audio_source
-        )
-
-        options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-        self._pub = await self._room.local_participant.publish_track(track, options)
-
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
 
         select = aio.select([self._audio_stream, vad_stream, stt_stream])
         try:
-            async for s in select:
+            while True:
+                s = await select()
                 if s.selected is self._audio_stream:
                     audio_event: rtc.AudioFrameEvent = s.result()
                     stt_stream.push_frame(audio_event.frame)
@@ -287,6 +317,7 @@ class VoiceAssistant:
         finally:
             await stt_stream.aclose(wait=False)
             await vad_stream.aclose(wait=False)
+            await select.aclose()
 
     async def _update_loop(self):
         """Update the volume every 10ms based on the speech probability"""
