@@ -149,7 +149,7 @@ class SpeechStream(stt.SpeechStream):
         self,
         config: STTOptions,
         api_key: str,
-        sample_rate: int = 44000,
+        sample_rate: int = 48000,
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
