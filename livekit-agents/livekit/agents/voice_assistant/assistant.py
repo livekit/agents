@@ -40,6 +40,7 @@ class _AssistantOptions:
     debug: bool
     allow_interruptions: bool
     int_speech_duration: float
+    int_min_words: int
     base_volume: float
 
 
@@ -75,6 +76,7 @@ class VoiceAssistant:
         allow_interruptions: bool = True,
         interrupt_volume: float = 0.05,
         interrupt_speech_duration: float = 1.5,
+        interrupt_min_words: int = 4,  # avoid interrupting for things like "Mmmhh, OK, I see"
         base_volume: float = 1.0,
         debug: bool = False,
         plotting: bool = False,
@@ -86,6 +88,7 @@ class VoiceAssistant:
             debug=debug,
             allow_interruptions=allow_interruptions,
             int_speech_duration=interrupt_speech_duration,
+            int_min_words=interrupt_min_words,
             base_volume=base_volume,
         )
         self._vad, self._tts, self._llm, self._stt = vad, tts, llm, stt
@@ -106,11 +109,14 @@ class VoiceAssistant:
         # synthesis states
         self._cur_speech: _SpeechData | None = None
         self._user_speaking, self._agent_speaking = False, False
+        self._user_speaking_start, self._user_speaking_end = None, None
 
         self._target_volume = self._opts.base_volume
         self._vol_filter = utils.ExpFilter(0.9, max_val=self._opts.base_volume)
         self._vol_filter.apply(1.0, self._opts.base_volume)
         self._speech_prob = 0.0
+
+        self._transcripted_text = ""
 
     @property
     def chat_context(self) -> allm.ChatContext:
@@ -120,9 +126,7 @@ class VoiceAssistant:
     def started(self) -> bool:
         return self._started
 
-    async def start(
-        self, room: rtc.Room, participant: rtc.RemoteParticipant | str
-    ) -> None:
+    def start(self, room: rtc.Room, participant: rtc.RemoteParticipant | str) -> None:
         """Start the voice assistant in a room
 
         Args:
@@ -130,7 +134,8 @@ class VoiceAssistant:
             participant: the participant to listen to, can either be a participant or a participant identity
         """
         if self.started:
-            raise ValueError("voice assistant is already started")
+            logger.warning("voice assistant already started")
+            return
 
         self._started = True
         self._room = room
@@ -172,7 +177,7 @@ class VoiceAssistant:
 
         if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
             audio_stream = rtc.AudioStream(track)
-            self._mark_ready()
+            self._mark_ready(audio_stream)
 
     def _on_track_unsubscribed(
         self,
@@ -189,21 +194,24 @@ class VoiceAssistant:
     def _mark_dirty(self):
         """Called when the AudioStream isn't valid anymore (microphone unsubscribed or participant
         disconnected)"""
-        assert self._audio_stream is not None
         if not self._ready:
             return
 
+        self._log_debug("marking assistant as dirty")
         self._ready = False
-        self._recognize_task.cancel()
 
-    def _mark_ready(self):
+        if self._recognize_task is not None:
+            self._recognize_task.cancel()
+
+    def _mark_ready(self, audio_stream: rtc.AudioStream):
         """We have everything we need to start the voice assistant (audio sources & audio
         streams)"""
-        assert self._audio_stream is not None
-
         if self._ready:
-            raise ValueError("voice assistant is already ready")
+            return
 
+        self._log_debug("marking assistant as ready")
+
+        self._audio_stream = audio_stream
         self._ready = True
         if self._opts.plotting:
             self._plotter.start()
@@ -211,24 +219,21 @@ class VoiceAssistant:
         self._launch_task = asyncio.create_task(self._launch())
 
     async def _launch(self):
-        assert self._ready
-
         async with self._lock:
-            if self._closed:
+            if self._closed or not self._ready:
                 return
 
+            self._log_debug("assistant - launching")
             self._audio_source = rtc.AudioSource(
                 self._tts.sample_rate, self._tts.num_channels
             )
-            track = rtc.LocalAudioTrack.create_audio_track(
-                "assistant_voice", self._audio_source
-            )
-
-            options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-            self._pub = await self._room.local_participant.publish_track(track, options)
 
             self._recognize_task = asyncio.create_task(self._recognize_loop())
             self._update_task = asyncio.create_task(self._update_loop())
+
+            track = rtc.LocalAudioTrack.create_audio_track("voice", self._audio_source)
+            options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+            self._pub = await self._room.local_participant.publish_track(track, options)
 
     async def aclose(self, wait: bool = True) -> None:
         if not self.started:
@@ -273,7 +278,11 @@ class VoiceAssistant:
         source: str | allm.LLMStream | AsyncIterable[str],
         allow_interruptions: bool = True,
         add_to_ctx: bool = True,
+        enqueue: bool = False,
     ) -> None:
+        if not self._ready and not enqueue:
+            return
+
         val_ch = aio.Chan[None]()
         data = _SpeechData(
             source=source,
@@ -339,8 +348,33 @@ class VoiceAssistant:
 
             await asyncio.sleep(0.01)
 
+    def _interrupt_if_needed(self):
+        """Check whether the current speech should be interrupted"""
+        if (
+            not self._cur_speech
+            or not self._opts.allow_interruptions
+            or self._cur_speech.interrupted
+        ):
+            return
+
+        if (
+            self._user_speaking_start is not None
+            and (time.time() - self._user_speaking_start)
+            < self._opts.int_speech_duration
+        ):
+            return
+
+        txt = self._transcripted_text.strip().split()
+        if len(txt) < self._opts.int_min_words:
+            return
+
+        self._log_debug("assistant - interrupting speech")
+        self._cur_speech.interrupted = True
+
     def _recv_final_transcript(self, ev: astt.SpeechEvent):
+        """If no transcript is received, the speech is never validated"""
         self._log_debug(f"assistant - received transcript {ev.alternatives[0].text}")
+        self._transcripted_text += ev.alternatives[0].text
 
     def _transcript_finished(self, ev: astt.SpeechEvent):
         # validate playout
@@ -356,11 +390,14 @@ class VoiceAssistant:
         self._log_debug("assistant - user started speaking")
         self._plotter.plot_event("user_started_speaking")
         self._user_speaking = True
+        self._user_speaking_start = time.time()
 
     def _user_stopped_speaking(self, speech_duration: float):
         self._log_debug(f"assistant - user stopped speaking {speech_duration:.2f}s")
         self._plotter.plot_event("user_started_speaking")
         self._user_speaking = False
+        self._user_speaking_start = None
+        self._user_speaking_end = time.time()
 
     def _agent_started_speaking(self):
         self._log_debug("assistant - agent started speaking")

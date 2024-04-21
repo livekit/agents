@@ -64,14 +64,17 @@ PLT_MESSAGES: dict = {
 
 
 def _draw_plot(reader: ipc_enc.ProcessPipeReader):
+    import matplotlib as mpl
     import matplotlib.pyplot as plt
 
     plt.style.use("ggplot")
+    mpl.rcParams["toolbar"] = "None"
 
     plot_data: dict[str, Tuple[list[float], list[float]]] = {}
     reader = reader
 
     fig, (pv, sp) = plt.subplots(2, sharex="all")
+    fig.canvas.manager.set_window_title("Voice Assistant")  # type: ignore
 
     # not really accurate
     max_vad_points = 500
@@ -132,6 +135,9 @@ class AssistantPlotter:
         self._started = False
 
     def start(self):
+        if self._started:
+            return
+
         self._started = True
         self._start_time = time.time()
         pch, cch = mp.Pipe()

@@ -46,7 +46,7 @@ class VAD(agents.vad.VAD):
     def stream(
         self,
         *,
-        min_speaking_duration: float = 0.12,
+        min_speaking_duration: float = 0.2,
         min_silence_duration: float = 1.3,
         padding_duration: float = 0.1,
         sample_rate: int = 16000,
@@ -224,10 +224,6 @@ class VADStream(agents.vad.VADStream):
             int(self._min_speaking_samples // samples_10ms),
         )
         if len(self._buffered_frames) > max_buffer_len:
-            # if unaware of this, may be hard to debug, so logging seems ok here
-            logger.warning(
-                f"VAD buffer overflow, dropping {len(self._buffered_frames) - max_buffer_len} frames"
-            )
             self._buffered_frames = self._buffered_frames[
                 len(self._buffered_frames) - max_buffer_len :
             ]
@@ -283,7 +279,7 @@ class VADStream(agents.vad.VADStream):
                 event = agents.vad.VADEvent(
                     type=agents.vad.VADEventType.END_OF_SPEECH,
                     samples_index=self._end_speech,
-                    duration=(self._current_sample - self._start_speech)
+                    duration=(self._end_speech - self._start_speech)
                     / self._sample_rate,
                     frames=self._buffered_frames,
                     speaking=False,
