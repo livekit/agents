@@ -3,10 +3,11 @@ set(CMAKE_CONFIGURATION_TYPES Debug Release)
 
 project(livekit-cef)
 set_property(GLOBAL PROPERTY OS_FOLDERS ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON) # useful for clangd as the language server
 
-# TODO(theomonnom): I don't think we want to enable sandbox for now, it add complexity
-set(USE_SANDBOX OFF)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON) # useful for clangd as the language server
+set(USE_SANDBOX OFF) # TODO(theomonnom): I don't think we want to enable sandbox
+                     # for now, it add complexity
 
 # Specify the CEF distribution version.
 if(NOT DEFINED CEF_VERSION)
@@ -43,7 +44,8 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # Download and extract the CEF binary distribution (executes DownloadCEF.cmake).
 include(DownloadCEF)
-DownloadCEF("${CEF_PLATFORM}" "${CEF_VERSION}" "${CMAKE_SOURCE_DIR}/third_party/cef")
+downloadcef("${CEF_PLATFORM}" "${CEF_VERSION}"
+            "${CMAKE_SOURCE_DIR}/third_party/cef")
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CEF_ROOT}/cmake")
 
 # Load the CEF configuration (executes FindCEF.cmake).
@@ -58,5 +60,4 @@ message(STATUS "Using Python: ${PYTHON_EXECUTABLE}")
 add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 add_subdirectory(src)
 
-
-PRINT_CEF_CONFIG()
+print_cef_config()

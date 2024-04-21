@@ -1,7 +1,7 @@
-set(LKCEF_SRCS app.cpp app.hpp utils.cpp utils.hpp)
+set(LKCEF_SRCS app.cpp app.hpp utils.cpp utils.hpp handler.hpp handler.cpp)
 set(LKCEF_SRCS_LINUX main_linux.cpp)
-set(LKCEF_SRCS_MAC main_mac.mm)
-set(LKCEF_SRCS_WINDOWS main_win.cpp)
+set(LKCEF_SRCS_MAC main_mac.mm handler_mac.mm app_mac.mm)
+set(LKCEF_SRCS_WINDOWS main_win.cpp )
 append_platform_sources(LKCEF_SRCS)
 source_group(lkcef FILES ${LKCEF_SRCS})
 
@@ -11,6 +11,9 @@ set(LKCEF_HELPER_SRCS_MAC helper_main_mac.mm)
 set(LKCEF_HELPER_SRCS_WINDOWS helper_main_win.cpp)
 append_platform_sources(LKCEF_HELPER_SRCS)
 source_group(lkcef FILES ${LKCEF_HELPER_SRCS})
+
+set(LKCEF_PYTHON_SRCS agents_python.hpp
+               agents_python.cpp)
 
 if(OS_LINUX OR OS_WINDOWS)
   # Logical target used to link the libcef library on Linux and Windows. On
@@ -63,10 +66,12 @@ if(OS_MAC)
   set(LKCEF_APP "${CEF_TARGET_OUT_DIR}/lkcef_app.app")
 
   # library target.
-  add_library(lkcef SHARED ${LKCEF_SRCS})
-  set_executable_target_properties(lkcef)
+  add_library(lkcef STATIC ${LKCEF_SRCS})
+  set_library_target_properties(lkcef)
   add_dependencies(lkcef libcef_dll_wrapper)
   target_link_libraries(lkcef libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+
+
 
   add_custom_command(
     TARGET lkcef
@@ -76,11 +81,9 @@ if(OS_MAC)
       ${CMAKE_COMMAND} -E copy_directory
       "${CEF_BINARY_DIR}/Chromium Embedded Framework.framework"
       "${LKCEF_APP}/Contents/Frameworks/Chromium Embedded Framework.framework"
-    # Copy the library into the main app bindle.
-    #COMMAND
-    #  ${CMAKE_COMMAND} -E copy_if_different
-    #  "${CEF_TARGET_OUT_DIR}/liblkcef.dylib"
-    #  "${LKCEF_APP}/Contents/MacOS/liblkcef.dylib"
+    # Copy the library into the main app bindle. COMMAND ${CMAKE_COMMAND} -E
+    # copy_if_different "${CEF_TARGET_OUT_DIR}/liblkcef.dylib"
+    # "${LKCEF_APP}/Contents/MacOS/liblkcef.dylib"
     VERBATIM)
 
   # Create the multiple Helper app bundle targets.
@@ -139,13 +142,15 @@ if(OS_WINDOWS)
   add_executable(lkcef_helper WIN32 ${LKCEF_HELPER_SRCS})
   set_executable_target_properties(lkcef_helper)
   add_dependencies(lkcef_helper libcef_dll_wrapper)
-  target_link_libraries(lkcef_helper libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+  target_link_libraries(lkcef_helper libcef_lib libcef_dll_wrapper
+                        ${CEF_STANDARD_LIBS})
 
   # library target.
   add_library(lkcef SHARED ${LKCEF_SRCS})
   set_library_target_properties(lkcef)
   add_dependencies(lkcef libcef_dll_wrapper lkcef_helper)
-  target_link_libraries(lkcef libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+  target_link_libraries(lkcef libcef_lib libcef_dll_wrapper
+                        ${CEF_STANDARD_LIBS})
 
   # Add the custom manifest files to the DLL and helper EXE.
   add_windows_manifest("${CMAKE_CURRENT_SOURCE_DIR}" "lkcef" "dll")
@@ -157,3 +162,17 @@ if(OS_WINDOWS)
   copy_files("lkcef" "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}"
              "${CEF_TARGET_OUT_DIR}")
 endif()
+
+
+# TODO(theomonnom): should be pretty similar for NodeJS
+pybind11_add_module(lkcef_python ${LKCEF_PYTHON_SRCS})
+
+set_target_properties(lkcef_python PROPERTIES INSTALL_RPATH "$ORIGIN")
+set_target_properties(lkcef_python PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
+
+target_include_directories(lkcef_python PRIVATE ${CEF_INCLUDE_PATH})
+target_link_libraries(lkcef_python PUBLIC lkcef)
+target_link_libraries(lkcef_python PUBLIC libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+
+
+
