@@ -9,7 +9,7 @@ from livekit.agents import (
 
 
 async def entrypoint(job: JobContext):
-    logging.info("sdtarting voice assistant...")
+    logging.info("starting voice assistant...")
 
     # blablabla
 
