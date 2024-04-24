@@ -92,6 +92,7 @@ class Worker:
         self._session = None
         self._closed = False
         self._tasks = set()
+        self._draining = False
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
         self._processes = dict[str, tuple[ipc.JobProcess, ActiveJob]]()
         self._close_future = asyncio.Future(loop=self._loop)
@@ -176,10 +177,32 @@ class Worker:
         return [active_job for (_, active_job) in self._processes.values()]
 
     async def drain(self, timeout: int | None = None) -> None:
-        # exit the queue
-        # wait for all jobs to finish
+        if self._draining:
+            return
 
-        pass
+        logger.info("draining worker", extra={"id": self.id, "timeout": timeout})
+        self._draining = True
+
+        # exit the queue
+        update = agent.UpdateWorkerStatus(
+            status=(agent.WorkerStatus.WS_FULL),
+        )
+        msg = agent.WorkerMessage(update_worker=update)
+        try:
+            self._chan.send_nowait(msg)
+        except aio.ChanClosed:
+            return
+
+        # wait for all jobs to finish with a final timeout
+        async def _join_jobs():
+            for proc, _ in self._processes.values():
+                await proc.join()
+
+        if timeout:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(_join_jobs(), timeout)
+        else:
+            await _join_jobs()
 
     async def aclose(self) -> None:
         if self._closed:
@@ -229,7 +252,7 @@ class Worker:
                 await interval.tick()
                 load = self._opts.load_fnc()
                 is_full = load >= self._opts.load_threshold
-                should_register = not is_full
+                should_register = not is_full and not self._draining
 
                 update = agent.UpdateWorkerStatus(
                     load=load,

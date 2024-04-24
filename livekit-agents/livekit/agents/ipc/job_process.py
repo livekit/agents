@@ -109,6 +109,10 @@ class JobProcess:
                     )
                     break
 
+        await self.join()
+        logger.info("job process closed", extra=self.logging_extra())
+
+    async def join(self) -> None:
         def _join_process():
             try:
                 self._process.join()
@@ -121,11 +125,9 @@ class JobProcess:
 
             self._loop.call_soon_threadsafe(self._close_future.set_result, None)
 
+        # TODO: Don't use a thread?
         join_t = threading.Thread(target=_join_process, daemon=True)
         join_t.start()
-        await self._close_future
-
-        logger.info("job process closed", extra=self.logging_extra())
 
     def _sig_kill(self) -> None:
         if not self._process.is_alive():

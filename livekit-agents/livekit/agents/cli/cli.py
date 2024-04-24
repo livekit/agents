@@ -53,7 +53,14 @@ def run_app(opts: WorkerOptions) -> None:
         help="Start the worker in production mode. Use a json logger by default."
     )
     @shared_args
-    def start(log_level: str, url: str, api_key: str, api_secret: str) -> None:
+    @click.option(
+        "--drain-timeout",
+        default=60,
+        help="Time in seconds to wait for jobs to finish before shutting down",
+    )
+    def start(
+        log_level: str, url: str, api_key: str, api_secret: str, drain_timeout: int
+    ) -> None:
         opts.ws_url = url or opts.ws_url
         opts.api_key = api_key or opts.api_key
         opts.api_secret = api_secret or opts.api_secret
@@ -63,6 +70,7 @@ def run_app(opts: WorkerOptions) -> None:
             production=True,
             asyncio_debug=False,
             watch=False,
+            drain_timeout=drain_timeout,
         )
         run_worker(args)
 
@@ -95,6 +103,7 @@ def run_app(opts: WorkerOptions) -> None:
             production=False,
             asyncio_debug=asyncio_debug,
             watch=watch,
+            drain_timeout=0,
         )
 
         if watch:
@@ -163,6 +172,7 @@ def run_worker(args: protocol.CliArgs) -> None:
     except (Shutdown, KeyboardInterrupt):
         pass
 
+    loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
     loop.run_until_complete(worker.aclose())
 
     if watch_client:
