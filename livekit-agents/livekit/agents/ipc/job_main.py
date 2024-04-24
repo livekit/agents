@@ -29,6 +29,10 @@ class LogHandler(logging.Handler):
             except TypeError:
                 msg = record.msg.format(*record.args)
 
+            if record.exc_info:
+                type, value, tb = record.exc_info
+                msg += "\n" + "".join(traceback.format_exception(type, value, tb))
+
             ipc_enc.write_msg(
                 self._writer,
                 protocol.Log(
