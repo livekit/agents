@@ -39,8 +39,7 @@ LoadFnc = Callable[[], float]
 
 
 def cpu_load_fnc() -> float:
-    [m1, m5, m15] = [x / psutil.cpu_count() for x in psutil.getloadavg()]
-    return m1
+    return psutil.cpu_percent() / 100
 
 
 @define(kw_only=True)
@@ -53,7 +52,7 @@ class WorkerPermissions:
 
 
 # NOTE: this object must be pickle-able
-@define(kw_only=True)
+@define
 class WorkerOptions:
     request_fnc: JobRequestFnc
     load_fnc: LoadFnc = cpu_load_fnc
@@ -174,6 +173,12 @@ class Worker:
     @property
     def active_jobs(self) -> list[ActiveJob]:
         return [active_job for (_, active_job) in self._processes.values()]
+
+    async def drain(self, timeout: int | None = None) -> None:
+        # exit the queue
+        # wait for all jobs to finish
+
+        pass
 
     async def aclose(self) -> None:
         if self._closed:
@@ -301,6 +306,7 @@ class Worker:
     def _reload_jobs(self, jobs: list[ActiveJob]):
         for aj in jobs:
             logger.info("reloading job", extra={"job": aj.job})
+
             # reloading jobs doesn't work on third-party workers
             # so it is ok to use the ws_url from the local worker
             # (also create a token with the worker api key)

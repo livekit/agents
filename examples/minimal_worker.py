@@ -1,17 +1,12 @@
 import logging
 
-from livekit.agents import (
-    JobContext,
-    JobRequest,
-    WorkerOptions,
-    cli,
-)
+from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
 
 
-async def entrypoint(job: JobContext):
-    logging.info("starting voice assistant...")
+async def entrypoint(ctx: JobContext):
+    logging.info("starting entrypoint")
 
-    # blablabla
+    # Add your agent logic here!
 
 
 async def request_fnc(req: JobRequest) -> None:
@@ -20,4 +15,4 @@ async def request_fnc(req: JobRequest) -> None:
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(request_fnc=request_fnc))
+    cli.run_app(WorkerOptions(request_fnc))

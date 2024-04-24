@@ -69,6 +69,7 @@ class WatchServer:
             *paths,
             target=self._worker_runner,
             args=(self._args,),
+            watch_filter=watchfiles.filters.PythonFilter(),
             callback=self._on_reload,
         )
 
@@ -133,6 +134,7 @@ class WatchClient:
                     jobs = self._worker.active_jobs
                     await self.send(protocol.ActiveJobsResponse(jobs=jobs))
                 elif isinstance(msg, protocol.ReloadJobsResponse):
+                    # TODO(theomonnom): This doesn't wait for the worker to be ready/connected
                     self._worker._reload_jobs(msg.jobs)
                     await self.send(protocol.Reloaded())
 

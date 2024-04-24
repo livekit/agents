@@ -49,7 +49,7 @@ class SynthesizeStream(ABC):
         self.push_text(None)
 
     @abstractmethod
-    async def aclose(self, wait: bool = True) -> None:
+    async def aclose(self, *, wait: bool = True) -> None:
         """
         Close the stream, if wait is True, it will wait for the TTS to
         finish synthesizing the audio, otherwise it will close ths stream immediately
@@ -65,8 +65,20 @@ class SynthesizeStream(ABC):
 
 
 class TTS(ABC):
-    def __init__(self, *, streaming_supported: bool) -> None:
+    def __init__(
+        self, *, streaming_supported: bool, sample_rate: int, num_channels: int
+    ) -> None:
         self._streaming_supported = streaming_supported
+        self._sample_rate = sample_rate
+        self._num_channels = num_channels
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    @property
+    def num_channels(self) -> int:
+        return self._num_channels
 
     @abstractmethod
     def synthesize(self, text: str) -> AsyncIterable[SynthesizedAudio]:

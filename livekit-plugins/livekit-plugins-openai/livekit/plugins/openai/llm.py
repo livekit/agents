@@ -37,14 +37,17 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = None,
     ) -> "LLMStream":
-        tools = to_openai_tools(fnc_ctx) if fnc_ctx else openai.NOT_GIVEN
+        opts = dict()
+        if fnc_ctx:
+            opts["tools"] = to_openai_tools(fnc_ctx)
+
         cmp = await self._client.chat.completions.create(
             messages=to_openai_ctx(history),
             model=self._opts.model,
             n=n,
-            tools=tools,
             temperature=temperature,
             stream=True,
+            **opts,
         )
 
         return LLMStream(cmp, fnc_ctx)

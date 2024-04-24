@@ -29,7 +29,11 @@ class TTS(tts.TTS):
     def __init__(
         self, model: TTSModels, voice: TTSVoices, api_key: Optional[str] = None
     ) -> None:
-        super().__init__(streaming_supported=False)
+        super().__init__(
+            streaming_supported=False,
+            sample_rate=OPENAI_TTS_SAMPLE_RATE,
+            num_channels=OPENAI_TTS_CHANNELS,
+        )
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY must be set")

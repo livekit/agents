@@ -106,13 +106,11 @@ class SelectLoop:
                             selected=g.gen, index=ogi, exc=None, value=v
                         )
                     )
-                except StopAsyncIteration:
-                    self._gens.pop(self._gens.index(g))
-                    self._og.pop(ogi)
-
-                    if self._done():
-                        raise StopAsyncIteration
                 except Exception as e:
+                    if isinstance(e, StopAsyncIteration):
+                        self._gens.pop(self._gens.index(g))
+                        self._og.pop(ogi)
+
                     self._q.append(
                         __class__.Completed(
                             selected=g.gen, index=ogi, exc=e, value=None
