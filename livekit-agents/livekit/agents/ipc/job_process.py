@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import logging
 import multiprocessing as mp
 import sys
 import threading
@@ -85,7 +86,9 @@ class JobProcess:
                 if isinstance(res, protocol.StartJobResponse):
                     start_res = res
                 if isinstance(res, protocol.Log):
-                    logger.log(res.level, res.message, extra=self.logging_extra())
+                    logging.getLogger(res.logger_name).log(
+                        res.level, res.message, extra=self.logging_extra()
+                    )
                 if isinstance(res, protocol.Pong):
                     delay = time_ms() - res.timestamp
                     if delay > consts.HIGH_PING_THRESHOLD * 1000:

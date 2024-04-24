@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-import logging
 from dataclasses import dataclass
 from typing import Any, AsyncIterable, Dict, List
 
@@ -29,6 +28,7 @@ from google.auth import credentials  # type: ignore
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
 
+from .log import logger
 from .models import SpeechLanguages, SpeechModels
 
 LgType = SpeechLanguages | str
@@ -105,7 +105,7 @@ class STT(stt.STT):
             config.languages = [config.languages]
         elif not config.detect_language:
             if len(config.languages) > 1:
-                logging.warning(
+                logger.warning(
                     "multiple languages provided, but language detection is disabled"
                 )
             config.languages = [config.languages[0]]
@@ -208,7 +208,7 @@ class SpeechStream(stt.SpeechStream):
 
         def log_exception(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():
-                logging.error(f"google stt task failed: {task.exception()}")
+                logger.error(f"google stt task failed: {task.exception()}")
 
         self._main_task.add_done_callback(log_exception)
 
@@ -256,7 +256,7 @@ class SpeechStream(stt.SpeechStream):
                                     audio=frame.data.tobytes(),
                                 )
                         except Exception as e:
-                            logging.error(
+                            logger.error(
                                 f"an error occurred while streaming inputs: {e}"
                             )
 
@@ -269,7 +269,7 @@ class SpeechStream(stt.SpeechStream):
                     await self._run_stream(stream)
                 except Exception as e:
                     if retry_count >= max_retry:
-                        logging.error(
+                        logger.error(
                             f"failed to connect to google stt after {max_retry} tries",
                             exc_info=e,
                         )
@@ -277,7 +277,7 @@ class SpeechStream(stt.SpeechStream):
 
                     retry_delay = min(retry_count * 2, 10)  # max 10s
                     retry_count += 1
-                    logging.warning(
+                    logger.warning(
                         f"google stt connection failed, retrying in {retry_delay}s",
                         exc_info=e,
                     )

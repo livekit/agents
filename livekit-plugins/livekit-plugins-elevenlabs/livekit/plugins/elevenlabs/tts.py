@@ -17,7 +17,6 @@ import base64
 import contextlib
 import dataclasses
 import json
-import logging
 import os
 from dataclasses import dataclass
 from typing import AsyncIterable, List
@@ -26,6 +25,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import aio, tts
 
+from .log import logger
 from .models import TTSModels
 
 
@@ -135,7 +135,7 @@ class TTS(tts.TTS):
                         ),
                     )
             except Exception as e:
-                logging.error(f"failed to synthesize: {e}")
+                logger.error(f"failed to synthesize: {e}")
 
         return generator()
 
@@ -265,7 +265,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 except Exception:
                     if retry_count >= max_retry:
-                        logging.exception(
+                        logger.exception(
                             f"failed to connect to 11labs after {max_retry} retries"
                         )
                         break
@@ -273,13 +273,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                     retry_delay = min(retry_count * 5, 5)  # max 5s
                     retry_count += 1
 
-                    logging.warning(
+                    logger.warning(
                         f"failed to connect to 11labs, retrying in {retry_delay}s"
                     )
                     await asyncio.sleep(retry_delay)
 
         except Exception:
-            logging.exception("11labs task failed")
+            logger.exception("11labs task failed")
         finally:
             with contextlib.suppress(asyncio.CancelledError):
                 if ws_task is not None:
@@ -338,7 +338,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     raise Exception("11labs connection closed unexpectedly")
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logging.warning("unexpected 11labs message type %s", msg.type)
+                    logger.warning("unexpected 11labs message type %s", msg.type)
                     continue
 
                 try:
@@ -360,12 +360,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     elif data.get("isFinal"):
                         return
                 except Exception:
-                    logging.exception("failed to process 11labs message")
+                    logger.exception("failed to process 11labs message")
 
         try:
             await asyncio.gather(send_task(), recv_task())
         except Exception:
-            logging.exception("11labs connection failed")
+            logger.exception("11labs connection failed")
         finally:
             self._event_queue.put_nowait(
                 tts.SynthesisEvent(type=tts.SynthesisEventType.FINISHED)
