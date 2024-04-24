@@ -13,8 +13,8 @@
 # limitations under the License.
 
 from __future__ import annotations
-from attrs import define
 
+from attrs import define
 from livekit import rtc
 from livekit.protocol import agent
 
