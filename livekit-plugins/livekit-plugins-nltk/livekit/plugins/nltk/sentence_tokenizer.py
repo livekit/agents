@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
 from livekit import agents
+from .log import logger
 
 import nltk  # type: ignore
 
@@ -89,7 +89,7 @@ class SentenceStream(agents.tokenize.SentenceStream):
 
     def push_text(self, text: str) -> None:
         if self._closed:
-            logging.error("Cannot push text to closed stream")
+            logger.error("Cannot push text to closed stream")
             return
 
         for char in text:

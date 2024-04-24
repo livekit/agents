@@ -21,26 +21,22 @@ def setup_logging(log_level: str, production: bool = True) -> None:
     h = logging.StreamHandler()
 
     if production:
-        ## production mode, json logs
+        # production mode, json logs
         from pythonjsonlogger import jsonlogger
 
         class CustomJsonFormatter(jsonlogger.JsonFormatter):
             def add_fields(self, log_record, record, message_dict):
                 super().add_fields(log_record, record, message_dict)
-                if "taskName" in log_record:
-                    log_record.pop("taskName")
                 log_record["level"] = record.levelname
 
         f = CustomJsonFormatter("%(asctime)s %(level)s %(name)s %(message)s")
         h.setFormatter(f)
     else:
-        ## dev mode, colored logs & show all extra
+        # dev mode, colored logs & show all extra
         import colorlog
 
         watch_logger = logging.getLogger("watchfiles.main")
-        watch_logger.setLevel(log_level)
-        if watch_logger.level == logging.DEBUG:  # watchfiles in DEBUG mode is too noisy
-            watch_logger.level = logging.INFO
+        watch_logger.level = logging.WARN
 
         f = ExtraLogFormatter(
             colorlog.ColoredFormatter(
