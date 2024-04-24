@@ -1,9 +1,9 @@
 import asyncio
 import contextlib
+import logging
 import multiprocessing as mp
 import sys
 import threading
-import logging
 
 from livekit.protocol import agent
 

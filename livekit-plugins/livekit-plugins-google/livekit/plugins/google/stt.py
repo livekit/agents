@@ -28,8 +28,8 @@ from google.auth import credentials  # type: ignore
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
 
-from .models import SpeechLanguages, SpeechModels
 from .log import logger
+from .models import SpeechLanguages, SpeechModels
 
 LgType = SpeechLanguages | str
 LanguageCode = LgType | List[LgType]

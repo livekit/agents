@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import io
-import pickle
 from typing import ClassVar
 
 from attrs import define
 from livekit.protocol import agent
 
-from ..job_request import AcceptData
 from .. import ipc_enc
+from ..job_request import AcceptData
 
 
 @define

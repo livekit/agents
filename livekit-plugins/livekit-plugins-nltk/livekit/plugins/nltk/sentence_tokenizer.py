@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from livekit import agents
-from .log import logger
 
 import nltk  # type: ignore
+
+from .log import logger
 
 # nltk is using the punkt tokenizer
 # https://www.nltk.org/_modules/nltk/tokenize/punkt.html

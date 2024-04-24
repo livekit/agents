@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import traceback
 
 from livekit import rtc
@@ -11,9 +10,9 @@ from livekit import rtc
 from .. import aio, apipe, ipc_enc
 from ..job_context import JobContext
 from ..job_request import AutoSubscribe
+from ..log import logger
 from ..utils import time_ms
 from . import protocol
-from ..log import logger
 
 
 class LogHandler(logging.Handler):
@@ -150,7 +149,6 @@ def _run_job(cch: ipc_enc.ProcessPipe, args: protocol.JobMainArgs) -> None:
     logging.root.addHandler(LogHandler(cch))
 
     # current process pid
-    pid = os.getpid()
     logger.debug(
         "process started",
         extra={"url": args.url},

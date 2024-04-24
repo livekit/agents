@@ -307,7 +307,7 @@ class SpeechStream(stt.SpeechStream):
                     data = json.loads(msg.data)
                     self._process_stream_event(data)
                 except Exception:
-                    logger.exception(f"failed to process deepgram message")
+                    logger.exception("failed to process deepgram message")
 
         await asyncio.gather(send_task(), recv_task(), keepalive_task())
 

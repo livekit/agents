@@ -104,8 +104,8 @@ def _read_double(b: io.BytesIO) -> float:
     return struct.unpack("d", b.read(8))[0]
 
 
-def _write_long(b: io.BytesIO, l: int) -> None:
-    b.write(l.to_bytes(8, "big"))
+def _write_long(b: io.BytesIO, long: int) -> None:
+    b.write(long.to_bytes(8, "big"))
 
 
 def _read_long(b: io.BytesIO) -> int:
