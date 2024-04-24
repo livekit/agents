@@ -55,7 +55,7 @@ def run_app(opts: WorkerOptions) -> None:
     @shared_args
     @click.option(
         "--drain-timeout",
-        default=0,
+        default=60,
         help="Time in seconds to wait for jobs to finish before shutting down",
     )
     def start(
