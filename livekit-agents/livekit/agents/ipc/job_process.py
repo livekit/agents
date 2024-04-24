@@ -103,7 +103,10 @@ class JobProcess:
                 if isinstance(res, protocol.UserExit) or isinstance(
                     res, protocol.ShutdownResponse
                 ):
-                    logger.info("job exiting", extra=self.logging_extra())
+                    logger.info(
+                        "job exiting",
+                        extra={"exit": res, **self.logging_extra()},
+                    )
                     break
 
         def _join_process():

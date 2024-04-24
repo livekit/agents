@@ -113,12 +113,13 @@ class ShutdownResponse:
 @define(kw_only=True)
 class UserExit:
     MSG_ID: ClassVar[int] = 7
+    reason: str = ""
 
     def write(self, b: io.BytesIO) -> None:
-        pass
+        ipc_enc._write_string(b, self.reason)
 
     def read(self, b: io.BytesIO) -> None:
-        pass
+        self.reason = ipc_enc._read_string(b)
 
 
 IPC_MESSAGES = {
