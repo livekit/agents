@@ -92,6 +92,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
+        super().__init__()
         self._loop = loop or asyncio.get_event_loop()
         self._opts = _AssistantOptions(
             plotting=plotting,
