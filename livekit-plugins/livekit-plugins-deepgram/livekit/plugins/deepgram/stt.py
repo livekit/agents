@@ -18,7 +18,6 @@ import asyncio
 import dataclasses
 import io
 import json
-import logging
 import os
 import wave
 from contextlib import suppress
@@ -31,6 +30,7 @@ from livekit import rtc
 from livekit.agents import stt
 from livekit.agents.utils import AudioBuffer, merge_frames
 
+from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
 
 
@@ -226,7 +226,7 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     # Something went wrong, retry the connection
                     if retry_count >= max_retry:
-                        logging.exception(
+                        logger.exception(
                             f"failed to connect to deepgram after {max_retry} tries"
                         )
                         break
@@ -234,12 +234,12 @@ class SpeechStream(stt.SpeechStream):
                     retry_delay = min(retry_count * 2, 10)  # max 10s
                     retry_count += 1  # increment after calculating the delay, the first retry should happen directly
 
-                    logging.warning(
+                    logger.warning(
                         f"deepgram connection failed, retrying in {retry_delay}s"
                     )
                     await asyncio.sleep(retry_delay)
         except Exception:
-            logging.exception("deepgram task failed")
+            logger.exception("deepgram task failed")
         finally:
             self._event_queue.put_nowait(None)
 
@@ -299,21 +299,21 @@ class SpeechStream(stt.SpeechStream):
                     )  # this will trigger a reconnection, see the _run loop
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logging.warning("unexpected deepgram message type %s", msg.type)
+                    logger.warning("unexpected deepgram message type %s", msg.type)
                     continue
 
                 try:
                     # received a message from deepgram
                     data = json.loads(msg.data)
                     self._process_stream_event(data)
-                except Exception as e:
-                    logging.error(f"failed to process deepgram message: {e}")
+                except Exception:
+                    logger.exception("failed to process deepgram message")
 
         await asyncio.gather(send_task(), recv_task(), keepalive_task())
 
     def _end_speech(self) -> None:
         if not self._speaking:
-            logging.warning(
+            logger.warning(
                 "trying to commit final events without being in the speaking state"
             )
             return
@@ -326,9 +326,10 @@ class SpeechStream(stt.SpeechStream):
         # combine all final transcripts since the start of the speech
         sentence = ""
         confidence = 0.0
-        for alt in self._final_events:
-            sentence += f"{alt.alternatives[0].text.strip()} "
-            confidence += alt.alternatives[0].confidence
+        for f in self._final_events:
+            alt = f.alternatives[0]
+            sentence += f"{alt.text.strip()} "
+            confidence += alt.confidence
 
         sentence = sentence.rstrip()
         confidence /= len(self._final_events)  # avg. of confidence
@@ -404,7 +405,7 @@ class SpeechStream(stt.SpeechStream):
         elif data["type"] == "Metadata":
             pass
         else:
-            logging.warning("received unexpected message from deepgram %s", data)
+            logger.warning("received unexpected message from deepgram %s", data)
 
     async def __anext__(self) -> stt.SpeechEvent:
         evt = await self._event_queue.get()

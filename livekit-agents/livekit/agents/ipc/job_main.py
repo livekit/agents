@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import traceback
 
 from livekit import rtc
@@ -11,6 +10,7 @@ from livekit import rtc
 from .. import aio, apipe, ipc_enc
 from ..job_context import JobContext
 from ..job_request import AutoSubscribe
+from ..log import logger
 from ..utils import time_ms
 from . import protocol
 
@@ -24,18 +24,23 @@ class LogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            msg = super().format(record)
+            try:
+                msg = record.getMessage()
+            except TypeError:
+                msg = record.msg.format(*record.args)
+
             if record.exc_info:
                 type, value, tb = record.exc_info
                 msg += "\n" + "".join(traceback.format_exception(type, value, tb))
+
             ipc_enc.write_msg(
                 self._writer,
-                protocol.Log(level=record.levelno, message=msg),
+                protocol.Log(
+                    level=record.levelno, logger_name=record.name, message=msg
+                ),
             )
         except Exception as e:
-            print(
-                f"failed to write log, for file '{record.filename}:{record.lineno}', exception '{e}'"
-            )
+            print(f"failed to log {record.filename}:{record.lineno}, exception '{e}'")
 
 
 async def _start(
@@ -54,8 +59,13 @@ async def _start(
     async def _start_if_valid():
         nonlocal usertask
         if start_req and room.isconnected():
+            if auto_subscribe == AutoSubscribe.SUBSCRIBE_NONE:
+                return
 
-            def on_track_published(pub: rtc.RemoteTrackPublication, *_):
+            @room.on("track_published")
+            def on_track_published(
+                pub: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+            ):
                 if (
                     pub.kind == rtc.TrackKind.KIND_AUDIO
                     and auto_subscribe == AutoSubscribe.AUDIO_ONLY
@@ -67,37 +77,40 @@ async def _start(
                 ):
                     pub.set_subscribed(True)
 
-            if auto_subscribe != AutoSubscribe.SUBSCRIBE_NONE:
-                room.on("track_published", on_track_published)
+            for participant in room.participants.values():
+                for track_pub in participant.tracks.values():
+                    if (
+                        track_pub.kind == rtc.TrackKind.KIND_AUDIO
+                        and auto_subscribe == AutoSubscribe.AUDIO_ONLY
+                    ):
+                        track_pub.set_subscribed(True)
+                    elif (
+                        track_pub.kind == rtc.TrackKind.KIND_VIDEO
+                        and auto_subscribe == AutoSubscribe.VIDEO_ONLY
+                    ):
+                        track_pub.set_subscribed(True)
 
-                for participant in room.participants.values():
-                    for track_pub in participant.tracks.values():
-                        if (
-                            track_pub.kind == rtc.TrackKind.KIND_AUDIO
-                            and auto_subscribe == AutoSubscribe.AUDIO_ONLY
-                        ):
-                            track_pub.set_subscribed(True)
-                        elif (
-                            track_pub.kind == rtc.TrackKind.KIND_VIDEO
-                            and auto_subscribe == AutoSubscribe.VIDEO_ONLY
-                        ):
-                            track_pub.set_subscribed(True)
             # start the job
-            await pipe.write(protocol.StartJobResponse())
-
-            ctx = JobContext(
-                close_tx,
-                start_req.job,
-                room,
-            )
+            ctx = JobContext(close_tx, start_req.job, room)
             usertask = asyncio.create_task(args.accept_data.entry(ctx))
+
+            def log_exception(t: asyncio.Task) -> None:
+                if not t.cancelled() and t.exception():
+                    logger.error(
+                        f"unhandled exception in the job entry {args.accept_data.entry}",
+                        exc_info=t.exception(),
+                    )
+
+            usertask.add_done_callback(log_exception)
+            await pipe.write(protocol.StartJobResponse())
 
     async with contextlib.aclosing(aio.select([pipe, cnt, close_rx])) as select:
         while True:
             s = await select()
             if s.selected is cnt:
                 if s.exc:
-                    await pipe.write(protocol.StartJobResponse(exc=s.exc))
+                    error = "".join(traceback.format_exception_only(type(s.exc), s.exc))
+                    await pipe.write(protocol.StartJobResponse(error=error))
                     break  # failed to connect, break and exit the process
                 await _start_if_valid()
 
@@ -118,11 +131,12 @@ async def _start(
                     protocol.Pong(last_timestamp=last_timestamp, timestamp=time_ms())
                 )
 
-    logging.debug("disconnecting from room")
+    logger.debug("disconnecting from room")
     await room.disconnect()
 
-    if usertask is not None:
-        with contextlib.suppress(asyncio.CancelledError):
+    with contextlib.suppress(Exception):
+        # exceptions are already logged inside the done_callback
+        if usertask is not None:
             await usertask  # type: ignore
 
     if shutting_down:
@@ -139,9 +153,9 @@ def _run_job(cch: ipc_enc.ProcessPipe, args: protocol.JobMainArgs) -> None:
     logging.root.addHandler(LogHandler(cch))
 
     # current process pid
-    pid = os.getpid()
-    logging.debug(
-        "process started", extra={"job_id": args.job_id, "url": args.url, "pid": pid}
+    logger.debug(
+        "process started",
+        extra={"url": args.url},
     )
 
     pipe = apipe.AsyncPipe(cch, loop, protocol.IPC_MESSAGES)
