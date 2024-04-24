@@ -14,10 +14,16 @@
 
 from __future__ import annotations
 
+from attrs import define
 from livekit import rtc
 from livekit.protocol import agent
 
 from . import aio
+
+
+@define(kw_only=True)
+class _ShutdownInfo:
+    reason: str = ""
 
 
 class JobContext:
@@ -26,7 +32,7 @@ class JobContext:
 
     def __init__(
         self,
-        close_tx: aio.ChanSender[None],
+        close_tx: aio.ChanSender[_ShutdownInfo],
         job: agent.Job,
         room: rtc.Room,
         publisher: rtc.RemoteParticipant | None = None,
@@ -56,5 +62,5 @@ class JobContext:
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
 
-    def shutdown(self) -> None:
-        self._close_tx.close()
+    def shutdown(self, reason: str = "") -> None:
+        self._close_tx.send_nowait(_ShutdownInfo(reason=reason))

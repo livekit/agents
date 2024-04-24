@@ -8,7 +8,7 @@ import traceback
 from livekit import rtc
 
 from .. import aio, apipe, ipc_enc
-from ..job_context import JobContext
+from ..job_context import JobContext, _ShutdownInfo
 from ..job_request import AutoSubscribe
 from ..log import logger
 from ..utils import time_ms
@@ -58,51 +58,57 @@ async def _start(
 
     async def _start_if_valid():
         nonlocal usertask
-        if start_req and room.isconnected():
-            if auto_subscribe == AutoSubscribe.SUBSCRIBE_NONE:
-                return
 
-            @room.on("track_published")
-            def on_track_published(
-                pub: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+        if not start_req or not room.isconnected():
+            return
+
+        if auto_subscribe == AutoSubscribe.SUBSCRIBE_NONE:
+            return
+
+        @room.on("track_published")
+        def on_track_published(
+            pub: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+        ):
+            if (
+                pub.kind == rtc.TrackKind.KIND_AUDIO
+                and auto_subscribe == AutoSubscribe.AUDIO_ONLY
             ):
+                pub.set_subscribed(True)
+            elif (
+                pub.kind == rtc.TrackKind.KIND_VIDEO
+                and auto_subscribe == AutoSubscribe.VIDEO_ONLY
+            ):
+                pub.set_subscribed(True)
+
+        for participant in room.participants.values():
+            for track_pub in participant.tracks.values():
                 if (
-                    pub.kind == rtc.TrackKind.KIND_AUDIO
+                    track_pub.kind == rtc.TrackKind.KIND_AUDIO
                     and auto_subscribe == AutoSubscribe.AUDIO_ONLY
                 ):
-                    pub.set_subscribed(True)
+                    track_pub.set_subscribed(True)
                 elif (
-                    pub.kind == rtc.TrackKind.KIND_VIDEO
+                    track_pub.kind == rtc.TrackKind.KIND_VIDEO
                     and auto_subscribe == AutoSubscribe.VIDEO_ONLY
                 ):
-                    pub.set_subscribed(True)
+                    track_pub.set_subscribed(True)
 
-            for participant in room.participants.values():
-                for track_pub in participant.tracks.values():
-                    if (
-                        track_pub.kind == rtc.TrackKind.KIND_AUDIO
-                        and auto_subscribe == AutoSubscribe.AUDIO_ONLY
-                    ):
-                        track_pub.set_subscribed(True)
-                    elif (
-                        track_pub.kind == rtc.TrackKind.KIND_VIDEO
-                        and auto_subscribe == AutoSubscribe.VIDEO_ONLY
-                    ):
-                        track_pub.set_subscribed(True)
+        ctx = JobContext(close_tx, start_req.job, room)
+        usertask = asyncio.create_task(args.accept_data.entry(ctx))
 
-            # start the job
-            ctx = JobContext(close_tx, start_req.job, room)
-            usertask = asyncio.create_task(args.accept_data.entry(ctx))
+        def log_exception(t: asyncio.Task) -> None:
+            if not t.cancelled() and t.exception():
+                logger.error(
+                    f"unhandled exception in the job entry {args.accept_data.entry}",
+                    exc_info=t.exception(),
+                )
 
-            def log_exception(t: asyncio.Task) -> None:
-                if not t.cancelled() and t.exception():
-                    logger.error(
-                        f"unhandled exception in the job entry {args.accept_data.entry}",
-                        exc_info=t.exception(),
-                    )
+        usertask.add_done_callback(log_exception)
+        await pipe.write(protocol.StartJobResponse())
 
-            usertask.add_done_callback(log_exception)
-            await pipe.write(protocol.StartJobResponse())
+    @room.on("disconnected")
+    def on_disconnected():
+        close_tx.send_nowait(_ShutdownInfo(reason="room disconnected"))
 
     async with contextlib.aclosing(aio.select([pipe, cnt, close_rx])) as select:
         while True:
@@ -115,7 +121,7 @@ async def _start(
                 await _start_if_valid()
 
             if s.selected is close_rx:
-                await pipe.write(protocol.UserExit())
+                await pipe.write(protocol.UserExit(reason=s.value.reason))
                 break
 
             msg = s.result()
