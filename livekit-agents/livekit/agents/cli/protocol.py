@@ -18,6 +18,7 @@ class CliArgs:
     production: bool
     asyncio_debug: bool
     watch: bool
+    drain_timeout: int
     cch: ipc_enc.ProcessPipe | None = None  # None when watch is disabled
 
 
