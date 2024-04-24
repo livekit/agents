@@ -1,13 +1,13 @@
-import multiprocessing as mp
 import asyncio
+import io
+import multiprocessing as mp
 import struct
 import time
-from .. import apipe
-import io
+from typing import ClassVar, Literal, Tuple
+
 from attrs import define
 
-from .. import ipc_enc
-from typing import ClassVar, Literal, Tuple
+from .. import apipe, ipc_enc
 
 PlotType = Literal["vad_raw", "vad_smoothed", "vad_dur", "raw_t_vol", "vol"]
 EventType = Literal[

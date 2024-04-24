@@ -20,11 +20,11 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, AsyncIterable, Dict, List, Optional
+from typing import AsyncIterable, List
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import tts, aio
+from livekit.agents import aio, tts
 
 from .models import TTSModels
 
@@ -157,7 +157,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = opts
         self._session = session
 
-        self._queue = asyncio.Queue[str]()
+        self._queue = asyncio.Queue[str | None]()
         self._event_queue = asyncio.Queue[tts.SynthesisEvent | None]()
         self._closed = False
         self._text = ""
@@ -207,8 +207,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._text = self._text[last_split + 1 :]
 
     async def aclose(self, *, wait: bool = True) -> None:
-        self._closed = True
         self._flush_if_needed()
+        self._queue.put_nowait(None)
+        self._closed = True
 
         if not wait:
             self._main_task.cancel()
@@ -231,10 +232,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         data_tx: aio.ChanSender[str] | None = None
 
         try:
-            while not self._closed:
+            while True:
                 ws_connected = ws is not None and not ws.closed
                 try:
                     data = await self._queue.get()
+
+                    if data is None:
+                        if ws_task is not None:
+                            await ws_task
+                        break
 
                     if not ws_connected:
                         if data == SynthesizeStream._STREAM_EOS:
@@ -277,6 +283,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             with contextlib.suppress(asyncio.CancelledError):
                 if ws_task is not None:
+                    ws_task.cancel()
                     await ws_task
 
             self._event_queue.put_nowait(None)
@@ -353,7 +360,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     elif data.get("isFinal"):
                         return
                 except Exception:
-                    logging.exception(f"failed to process 11labs message")
+                    logging.exception("failed to process 11labs message")
 
         try:
             await asyncio.gather(send_task(), recv_task())

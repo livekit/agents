@@ -16,18 +16,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections import deque
 import time
-from typing import List, Optional
-from .log import logger
+from collections import deque
+from typing import List
 
 import numpy as np
 import torch
-from livekit import rtc
-from livekit import agents
+from livekit import agents, rtc
 
-import matplotlib.pyplot as plt
-import numpy as np
+from .log import logger
 
 
 class VAD(agents.vad.VAD):
@@ -47,7 +44,7 @@ class VAD(agents.vad.VAD):
         self,
         *,
         min_speaking_duration: float = 0.2,
-        min_silence_duration: float = 1.3,
+        min_silence_duration: float = 0.8,
         padding_duration: float = 0.1,
         sample_rate: int = 16000,
         max_buffered_speech: float = 45.0,
@@ -151,7 +148,7 @@ class VADStream(agents.vad.VADStream):
                     await asyncio.shield(self._run_inference())
 
         except Exception:
-            logger.exception(f"silero stream failed")
+            logger.exception("silero stream failed")
         finally:
             self._event_queue.put_nowait(None)
 

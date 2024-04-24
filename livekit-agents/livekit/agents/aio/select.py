@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 from collections import deque
 from collections.abc import AsyncIterator
-import logging
 from typing import (
     Any,
     Awaitable,

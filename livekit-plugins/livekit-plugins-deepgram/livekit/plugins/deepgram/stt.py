@@ -56,7 +56,7 @@ class STT(stt.STT):
         smart_format: bool = True,
         model: DeepgramModels = "nova-2-general",
         api_key: str | None = None,
-        min_silence_duration: int = 100,  # 100ms for a RTC app seems like a strong default
+        min_silence_duration: int = 0,  # 100ms for a RTC app seems like a strong default
     ) -> None:
         super().__init__(streaming_supported=True)
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
@@ -223,7 +223,7 @@ class SpeechStream(stt.SpeechStream):
                     retry_count = 0  # connected successfully, reset the retry_count
 
                     await self._run_ws(ws)
-                except Exception as e:
+                except Exception:
                     # Something went wrong, retry the connection
                     if retry_count >= max_retry:
                         logging.exception(
