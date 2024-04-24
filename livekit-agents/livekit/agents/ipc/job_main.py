@@ -24,17 +24,18 @@ class LogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            msg = record.getMessage()
+            msg = super().format(record)
             if record.exc_info:
                 type, value, tb = record.exc_info
                 msg += "\n" + "".join(traceback.format_exception(type, value, tb))
-
             ipc_enc.write_msg(
                 self._writer,
                 protocol.Log(level=record.levelno, message=msg),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(
+                f"failed to write log, for file '{record.filename}:{record.lineno}', exception '{e}'"
+            )
 
 
 async def _start(
@@ -121,7 +122,6 @@ async def _start(
     await room.disconnect()
 
     if usertask is not None:
-        usertask.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await usertask  # type: ignore
 

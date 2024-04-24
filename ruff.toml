@@ -3,4 +3,5 @@ indent-width = 4
 
 target-version = "py310"
 
+[lint]
 extend-select = ["I"]
