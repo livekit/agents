@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from livekit import rtc
@@ -20,6 +21,8 @@ async def entrypoint(ctx: JobContext):
         assistant.start(ctx.room, participant)
         break
 
+
+    await asyncio.sleep(3)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
 
