@@ -53,44 +53,45 @@ async def _start(
 
     async def _start_if_valid():
         nonlocal usertask
-        if start_req and room.isconnected():
+        if not start_req or not room.isconnected():
+            return
 
-            def on_track_published(pub: rtc.RemoteTrackPublication, *_):
-                if (
-                    pub.kind == rtc.TrackKind.KIND_AUDIO
-                    and auto_subscribe == AutoSubscribe.AUDIO_ONLY
-                ):
-                    pub.set_subscribed(True)
-                elif (
-                    pub.kind == rtc.TrackKind.KIND_VIDEO
-                    and auto_subscribe == AutoSubscribe.VIDEO_ONLY
-                ):
-                    pub.set_subscribed(True)
+        def on_track_published(pub: rtc.RemoteTrackPublication, *_):
+            if (
+                pub.kind == rtc.TrackKind.KIND_AUDIO
+                and auto_subscribe == AutoSubscribe.AUDIO_ONLY
+            ):
+                pub.set_subscribed(True)
+            elif (
+                pub.kind == rtc.TrackKind.KIND_VIDEO
+                and auto_subscribe == AutoSubscribe.VIDEO_ONLY
+            ):
+                pub.set_subscribed(True)
 
-            if auto_subscribe != AutoSubscribe.SUBSCRIBE_NONE:
-                room.on("track_published", on_track_published)
+        if auto_subscribe != AutoSubscribe.SUBSCRIBE_NONE:
+            room.on("track_published", on_track_published)
 
-                for participant in room.participants.values():
-                    for track_pub in participant.tracks.values():
-                        if (
-                            track_pub.kind == rtc.TrackKind.KIND_AUDIO
-                            and auto_subscribe == AutoSubscribe.AUDIO_ONLY
-                        ):
-                            track_pub.set_subscribed(True)
-                        elif (
-                            track_pub.kind == rtc.TrackKind.KIND_VIDEO
-                            and auto_subscribe == AutoSubscribe.VIDEO_ONLY
-                        ):
-                            track_pub.set_subscribed(True)
-            # start the job
-            await pipe.write(protocol.StartJobResponse())
+            for participant in room.participants.values():
+                for track_pub in participant.tracks.values():
+                    if (
+                        track_pub.kind == rtc.TrackKind.KIND_AUDIO
+                        and auto_subscribe == AutoSubscribe.AUDIO_ONLY
+                    ):
+                        track_pub.set_subscribed(True)
+                    elif (
+                        track_pub.kind == rtc.TrackKind.KIND_VIDEO
+                        and auto_subscribe == AutoSubscribe.VIDEO_ONLY
+                    ):
+                        track_pub.set_subscribed(True)
+        # start the job
+        await pipe.write(protocol.StartJobResponse())
 
-            ctx = JobContext(
-                close_tx,
-                start_req.job,
-                room,
-            )
-            usertask = asyncio.create_task(args.accept_data.entry(ctx))
+        ctx = JobContext(
+            close_tx,
+            start_req.job,
+            room,
+        )
+        usertask = asyncio.create_task(args.accept_data.entry(ctx))
 
     async with contextlib.aclosing(aio.select([pipe, cnt, close_rx])) as select:
         while True:
