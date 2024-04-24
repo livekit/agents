@@ -180,7 +180,7 @@ class Worker:
         if self._draining:
             return
 
-        logger.info("draining worker", extra={"id": self.id})
+        logger.info("draining worker", extra={"id": self.id, "timeout": timeout})
         self._draining = True
 
         # exit the queue
@@ -223,7 +223,7 @@ class Worker:
 
         self._closed = True
         self._chan.close()
-        await self._close_futuro
+        await self._close_future
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse):
         closing_ws = False
