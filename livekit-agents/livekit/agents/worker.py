@@ -39,8 +39,7 @@ LoadFnc = Callable[[], float]
 
 
 def cpu_load_fnc() -> float:
-    mem = psutil.virtual_memory()
-    return max(psutil.cpu_percent() / 100, mem.percent / 100)
+    return psutil.cpu_percent() / 100
 
 
 @define(kw_only=True)
