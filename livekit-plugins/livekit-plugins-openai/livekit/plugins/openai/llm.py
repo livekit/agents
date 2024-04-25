@@ -213,6 +213,7 @@ def to_openai_tools(fnc_ctx: llm.FunctionContext):
     tools = []
     for fnc in fnc_ctx.ai_functions.values():
         plist = {}
+        required = []
         for arg_name, arg in fnc.args.items():
             p: Dict[str, Any] = {}
             if arg.desc:
@@ -232,6 +233,9 @@ def to_openai_tools(fnc_ctx: llm.FunctionContext):
 
             plist[arg_name] = p
 
+            if arg.default is inspect.Parameter.empty:
+                required.append(arg_name)
+
         tools.append(
             {
                 "type": "function",
@@ -241,6 +245,7 @@ def to_openai_tools(fnc_ctx: llm.FunctionContext):
                     "parameters": {
                         "type": "object",
                         "properties": plist,
+                        "required": required,
                     },
                 },
             }
