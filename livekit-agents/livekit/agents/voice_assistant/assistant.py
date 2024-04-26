@@ -171,7 +171,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 if pub.subscribed:
                     self._on_track_subscribed(pub.track, pub, p)  # type: ignore
                 else:
-                    pub.set_subscribed(True)
+                    self._on_track_published(pub, p)
 
         self._room.on("track_published", self._on_track_published)
         self._room.on("track_subscribed", self._on_track_subscribed)
@@ -202,7 +202,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            pub.set_subscribed(True)
+            pass
+            # TODO: remove after Python SDK release
+            # pub.set_subscribed(True)
 
     def _on_track_subscribed(
         self,
