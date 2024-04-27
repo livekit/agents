@@ -5,3 +5,6 @@ target-version = "py310"
 
 [lint]
 extend-select = ["I"]
+
+[lint.pydocstyle]
+convention = "google"

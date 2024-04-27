@@ -175,11 +175,12 @@ class LLMStream(llm.LLMStream):
                 return
 
         logger.debug(f"calling function {name} with arguments {args}")
+        self._called_functions.append((name, args))
         func = functools.partial(fnc.fnc, **args)
         if asyncio.iscoroutinefunction(fnc.fnc):
-            task = asyncio.ensure_future(func())
+            task = asyncio.create_task(func())
         else:
-            task = asyncio.ensure_future(asyncio.to_thread(func))
+            task = asyncio.create_task(asyncio.to_thread(func))
 
         def _task_done(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():

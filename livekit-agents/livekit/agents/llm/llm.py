@@ -53,6 +53,15 @@ class LLM(abc.ABC):
 
 
 class LLMStream(abc.ABC):
+    def __init__(self) -> None:
+        # fnc_name, args..
+        self._called_functions: list[tuple[str, dict]] = []
+
+    @property
+    def called_functions(self) -> list[tuple[str, dict]]:
+        """List of called functions from this stream."""
+        return self._called_functions
+
     @abc.abstractmethod
     def __aiter__(self) -> "LLMStream": ...
 
