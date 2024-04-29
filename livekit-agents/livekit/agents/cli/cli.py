@@ -172,7 +172,9 @@ def run_worker(args: protocol.CliArgs) -> None:
     except (Shutdown, KeyboardInterrupt):
         pass
 
-    loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
+    if args.production:
+        loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
+
     loop.run_until_complete(worker.aclose())
 
     if watch_client:
