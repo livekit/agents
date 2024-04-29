@@ -11,7 +11,7 @@ from livekit.agents import (
     cli,
     llm,
 )
-from livekit.agents.voice_assistant import VoiceAssistant, AssistantContext
+from livekit.agents.voice_assistant import AssistantContext, VoiceAssistant
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 
