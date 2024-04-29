@@ -46,25 +46,28 @@ class _AssistantOptions:
     base_volume: float
 
 
-AssistantContextVar = contextvars.ContextVar("voice_assistant_contextvar")
+_ContextVar = contextvars.ContextVar("voice_assistant_contextvar")
 
 
 class AssistantContext:
     def __init__(self, assistant: "VoiceAssistant", llm_stream: allm.LLMStream) -> None:
         self._assistant = assistant
-        self._texts = []
         self._metadata = dict()
         self._llm_stream = llm_stream
+
+    @staticmethod
+    def get_current() -> "AssistantContext":
+        return _ContextVar.get()
 
     @property
     def assistant(self) -> "VoiceAssistant":
         return self._assistant
 
-    def store_text(self, text: str) -> None:
-        self._texts.append(text)
-
     def store_metadata(self, key: str, value: Any) -> None:
         self._metadata[key] = value
+
+    def get_metadata(self, key: str, default: Any = None) -> Any:
+        return self._metadata.get(key, default)
 
     def llm_stream(self) -> allm.LLMStream:
         return self._llm_stream
@@ -91,11 +94,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     def __init__(
         self,
+        *,
         vad: avad.VAD,
         stt: astt.STT,
         llm: allm.LLM,
         tts: atts.TTS,
-        *,
         fnc_ctx: allm.FunctionContext | None = None,
         allow_interruptions: bool = True,
         interrupt_volume: float = 0.05,
@@ -117,7 +120,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             base_volume=base_volume,
         )
         self._vad, self._tts, self._llm, self._stt = vad, tts, llm, stt
-        self._fnc_ctx, self._ctx = fnc_ctx, allm.ChatContext()
+        self._fnc_ctx, self._chat_ctx = fnc_ctx, allm.ChatContext()
         self._speaking, self._user_speaking = False, False
         self._plotter = plotter.AssistantPlotter(self._loop)
 
@@ -173,7 +176,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     @property
     def chat_context(self) -> allm.ChatContext:
-        return self._ctx
+        return self._chat_ctx
 
     @property
     def started(self) -> bool:
@@ -564,7 +567,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             answering_user_speech=text,
         )
 
-        messages = self._ctx.messages.copy()
+        messages = self._chat_ctx.messages.copy()
         user_msg = allm.ChatMessage(
             text=text,
             role=allm.ChatRole.USER,
@@ -634,8 +637,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 msg = allm.ChatMessage(
                     text=data.answering_user_speech, role=allm.ChatRole.USER
                 )
-                self._ctx.messages.append(msg)
-                self.emit("user_speech_committed", self._ctx, msg)
+                self._chat_ctx.messages.append(msg)
+                self.emit("user_speech_committed", self._chat_ctx, msg)
 
             await self._playout_task(po_rx)
 
@@ -645,11 +648,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             )
 
             if data.add_to_ctx:
-                self._ctx.messages.append(msg)
+                self._chat_ctx.messages.append(msg)
                 if data.interrupted:
-                    self.emit("agent_speech_interrupted", self._ctx, msg)
+                    self.emit("agent_speech_interrupted", self._chat_ctx, msg)
                 else:
-                    self.emit("agent_speech_committed", self._ctx, msg)
+                    self.emit("agent_speech_committed", self._chat_ctx, msg)
 
             self._log_debug(
                 "assistant - playout finished", extra={"interrupted": data.interrupted}
@@ -719,7 +722,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             if isinstance(data.source, allm.LLMStream):
                 # stream the LLM output to the TTS
                 assistant_ctx = AssistantContext(self, data.source)
-                token = AssistantContextVar.set(assistant_ctx)
+                token = _ContextVar.set(assistant_ctx)
                 async for chunk in data.source:
                     alt = chunk.choices[0].delta.content
                     if not alt:
@@ -736,7 +739,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 if len(data.source.called_functions) > 0:
                     self.emit("function_calls_done", assistant_ctx)
 
-                AssistantContextVar.reset(token)
+                _ContextVar.reset(token)
             else:
                 # user defined source, stream the text to the TTS
                 async for seg in data.source:

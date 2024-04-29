@@ -10,8 +10,8 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     llm,
-    voice_assistant,
 )
+from livekit.agents.voice_assistant import VoiceAssistant, AssistantContext
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 
@@ -29,27 +29,55 @@ class AssistantFnc(llm.FunctionContext):
         room: Annotated[Room, llm.TypeInfo(desc="The specific room")],
         status: bool,
     ):
-        print(f"Turning the lights in {room} {'on' if status else 'off'}")
+        ctx = AssistantContext.get_current()
+        key = "enabled_rooms" if status else "disabled_rooms"
+        li = ctx.get_metadata(key, [])
+        ctx.store_metadata(key, li)
 
     @llm.ai_callable(desc="User want the assistant to stop/pause speaking")
     def stop_speaking(self):
-        pass # do nothing
-
-
-    def calls_collected(self, ctx: voice_assistant.AssistantContext):
-        pass
+        pass  # do nothing
 
 
 async def entrypoint(ctx: JobContext):
-    fnc_ctx = AssistantFnc()
+    gpt = openai.LLM(model="gpt-4-turbo")
 
-    vad = silero.VAD()
-    stt = deepgram.STT()
-    llm = openai.LLM()
-    tts = elevenlabs.TTS()
-    assistant = voice_assistant.VoiceAssistant(
-        vad, stt, llm, tts, fnc_ctx=fnc_ctx, debug=True
+    assistant = VoiceAssistant(
+        vad=silero.VAD(),
+        stt=deepgram.STT(),
+        llm=gpt,
+        tts=elevenlabs.TTS(),
+        fnc_ctx=AssistantFnc(),
+        debug=True,
     )
+
+    @assistant.on("agent_speech_interrupted")
+    def _agent_speech_interrupted(chat_ctx: llm.ChatContext, msg: llm.ChatMessage):
+        msg.text += "... (user interrupted you)"
+
+    @assistant.on("function_calls_done")
+    def _function_calls_done(ctx: AssistantContext):
+        enabled_rooms = ctx.get_metadata("enabled_rooms", [])
+        disabled_rooms = ctx.get_metadata("disabled_rooms", [])
+
+        async def _handle_answer():
+            prompt = "You disabled the lights in the following rooms: " + ", ".join(
+                disabled_rooms
+            )
+            prompt += "\nYou enabled the lights in the following rooms: " + ", ".join(
+                enabled_rooms
+            )
+
+            messages = assistant.chat_context.messages.copy()
+            messages.append(llm.ChatMessage(role=llm.ChatRole.SYSTEM, text=prompt))
+            chat_ctx = llm.ChatContext(messages=messages)
+
+            gpt_stream = await gpt.chat(chat_ctx)
+            await assistant.say(gpt_stream)
+
+        asyncio.ensure_future(_handle_answer())
+
+    # start the assistant on the first participant found
 
     @ctx.room.on("participant_connected")
     def _on_participant_connected(participant: rtc.RemoteParticipant):
