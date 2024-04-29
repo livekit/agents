@@ -317,10 +317,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     text=data,
                     try_trigger_generation=False,
                 )
-                await ws.send_str(json.dumps(data_pkt))
-
                 if data == SynthesizeStream._STREAM_EOS:
                     closing_ws = True
+
+                await ws.send_str(json.dumps(data_pkt))
+
+                if closing_ws:
                     return
 
         async def recv_task():
@@ -341,26 +343,23 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected 11labs message type %s", msg.type)
                     continue
 
-                try:
-                    data: dict = json.loads(msg.data)
-                    if data.get("audio"):
-                        b64data = base64.b64decode(data["audio"])
-                        frame = rtc.AudioFrame(
-                            data=b64data,
-                            sample_rate=self._opts.sample_rate,
-                            num_channels=1,
-                            samples_per_channel=len(data) // 2,
+                data: dict = json.loads(msg.data)
+                if data.get("audio"):
+                    b64data = base64.b64decode(data["audio"])
+                    frame = rtc.AudioFrame(
+                        data=b64data,
+                        sample_rate=self._opts.sample_rate,
+                        num_channels=1,
+                        samples_per_channel=len(data) // 2,
+                    )
+                    self._event_queue.put_nowait(
+                        tts.SynthesisEvent(
+                            type=tts.SynthesisEventType.AUDIO,
+                            audio=tts.SynthesizedAudio(text="", data=frame),
                         )
-                        self._event_queue.put_nowait(
-                            tts.SynthesisEvent(
-                                type=tts.SynthesisEventType.AUDIO,
-                                audio=tts.SynthesizedAudio(text="", data=frame),
-                            )
-                        )
-                    elif data.get("isFinal"):
-                        return
-                except Exception:
-                    logger.exception("failed to process 11labs message")
+                    )
+                elif data.get("isFinal"):
+                    return
 
         try:
             await asyncio.gather(send_task(), recv_task())
