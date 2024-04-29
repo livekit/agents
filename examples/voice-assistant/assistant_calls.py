@@ -20,6 +20,7 @@ class Room(Enum):
     LIVING_ROOM = "living room"
     KITCHEN = "kitchen"
     BATHROOM = "bathroom"
+    OFFICE = "office"
 
 
 class AssistantFnc(llm.FunctionContext):
@@ -29,9 +30,11 @@ class AssistantFnc(llm.FunctionContext):
         room: Annotated[Room, llm.TypeInfo(desc="The specific room")],
         status: bool,
     ):
+        logging.info("toggle_light %s %s", room, status)
         ctx = AssistantContext.get_current()
         key = "enabled_rooms" if status else "disabled_rooms"
         li = ctx.get_metadata(key, [])
+        li.append(room)
         ctx.store_metadata(key, li)
 
     @llm.ai_callable(desc="User want the assistant to stop/pause speaking")
@@ -48,7 +51,6 @@ async def entrypoint(ctx: JobContext):
         llm=gpt,
         tts=elevenlabs.TTS(),
         fnc_ctx=AssistantFnc(),
-        debug=True,
     )
 
     @assistant.on("agent_speech_interrupted")
@@ -57,27 +59,31 @@ async def entrypoint(ctx: JobContext):
 
     @assistant.on("function_calls_done")
     def _function_calls_done(ctx: AssistantContext):
+        logging.info("function_calls_done %s", ctx)
         enabled_rooms = ctx.get_metadata("enabled_rooms", [])
         disabled_rooms = ctx.get_metadata("disabled_rooms", [])
 
         async def _handle_answer():
-            prompt = "You disabled the lights in the following rooms: " + ", ".join(
-                disabled_rooms
+            prompt = "Make a summary of the following actions you did:"
+            if enabled_rooms:
+                enabled_rooms_str = ", ".join(enabled_rooms)
+                prompt += f"\n - You enabled the lights in the following rooms: {enabled_rooms_str}"
+
+            if disabled_rooms:
+                disabled_rooms_str = ", ".join(disabled_rooms)
+                prompt += f"\n - You disabled the lights in the following rooms {disabled_rooms_str}"
+
+            chat_ctx = llm.ChatContext(
+                messages=[llm.ChatMessage(role=llm.ChatRole.SYSTEM, text=prompt)]
             )
-            prompt += "\nYou enabled the lights in the following rooms: " + ", ".join(
-                enabled_rooms
-            )
 
-            messages = assistant.chat_context.messages.copy()
-            messages.append(llm.ChatMessage(role=llm.ChatRole.SYSTEM, text=prompt))
-            chat_ctx = llm.ChatContext(messages=messages)
+            stream = await gpt.chat(chat_ctx)
+            await assistant.say(stream)
 
-            gpt_stream = await gpt.chat(chat_ctx)
-            await assistant.say(gpt_stream)
+        if enabled_rooms or disabled_rooms:
+            asyncio.ensure_future(_handle_answer())
 
-        asyncio.ensure_future(_handle_answer())
-
-    # start the assistant on the first participant found
+    # start the assistant with the first participant found inside the room
 
     @ctx.room.on("participant_connected")
     def _on_participant_connected(participant: rtc.RemoteParticipant):
