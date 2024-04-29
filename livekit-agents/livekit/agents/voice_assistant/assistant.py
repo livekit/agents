@@ -50,10 +50,11 @@ AssistantContextVar = contextvars.ContextVar("voice_assistant_contextvar")
 
 
 class AssistantContext:
-    def __init__(self, assistant: "VoiceAssistant") -> None:
+    def __init__(self, assistant: "VoiceAssistant", llm_stream: allm.LLMStream) -> None:
         self._assistant = assistant
         self._texts = []
         self._metadata = dict()
+        self._llm_stream = llm_stream
 
     @property
     def assistant(self) -> "VoiceAssistant":
@@ -65,6 +66,9 @@ class AssistantContext:
     def store_metadata(self, key: str, value: Any) -> None:
         self._metadata[key] = value
 
+    def llm_stream(self) -> allm.LLMStream:
+        return self._llm_stream
+
 
 EventTypes = Literal[
     "user_started_speaking",
@@ -74,6 +78,7 @@ EventTypes = Literal[
     "user_speech_committed",
     "agent_speech_committed",
     "agent_speech_interrupted",
+    "function_calls_collected",
     "function_calls_done",
     "will_synthesize_llm",
 ]
@@ -560,13 +565,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         )
 
         messages = self._ctx.messages.copy()
-        messages.append(allm.ChatMessage(text=text, role=allm.ChatRole.USER))
-        ctx = allm.ChatContext(messages=messages)
-
         user_msg = allm.ChatMessage(
             text=text,
             role=allm.ChatRole.USER,
         )
+        messages.append(user_msg)
+        ctx = allm.ChatContext(messages=messages)
 
         self.emit("will_synthesize_llm", ctx, user_msg)
 
@@ -714,7 +718,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         try:
             if isinstance(data.source, allm.LLMStream):
                 # stream the LLM output to the TTS
-                assistant_ctx = AssistantContext(self)
+                assistant_ctx = AssistantContext(self, data.source)
                 token = AssistantContextVar.set(assistant_ctx)
                 async for chunk in data.source:
                     alt = chunk.choices[0].delta.content
@@ -724,6 +728,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     tts_stream.push_text(alt)
 
                 tts_stream.mark_segment_end()
+                if len(data.source.called_functions) > 0:
+                    self.emit("function_calls_collected", assistant_ctx)
+
                 await data.source.aclose()
 
                 if len(data.source.called_functions) > 0:

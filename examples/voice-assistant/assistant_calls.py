@@ -30,6 +30,13 @@ class AssistantFnc(llm.FunctionContext):
         status: bool,
     ):
         print(f"Turning the lights in {room} {'on' if status else 'off'}")
+
+    @llm.ai_callable(desc="User want the assistant to stop/pause speaking")
+    def stop_speaking(self):
+        pass # do nothing
+
+
+    def calls_collected(self, ctx: voice_assistant.AssistantContext):
         pass
 
 
@@ -41,7 +48,7 @@ async def entrypoint(ctx: JobContext):
     llm = openai.LLM()
     tts = elevenlabs.TTS()
     assistant = voice_assistant.VoiceAssistant(
-        vad, stt, llm, tts, fnc_ctx=fnc_ctx, debug=True, plotting=True
+        vad, stt, llm, tts, fnc_ctx=fnc_ctx, debug=True
     )
 
     @ctx.room.on("participant_connected")
@@ -52,8 +59,8 @@ async def entrypoint(ctx: JobContext):
         assistant.start(ctx.room, participant)
         break
 
-    await asyncio.sleep(3)
-    await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
+    await asyncio.sleep(1)
+    await assistant.say("Hey, how can I help you today?")
 
 
 async def request_fnc(req: JobRequest) -> None:
