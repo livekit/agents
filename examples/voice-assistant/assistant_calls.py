@@ -53,6 +53,17 @@ async def entrypoint(ctx: JobContext):
         fnc_ctx=AssistantFnc(),
     )
 
+    @assistant.on("will_synthesize_llm")
+    def _will_synthesize_llm(chat_ctx: llm.ChatContext, user_msg: llm.ChatMessage):
+        # inject system prompt
+        chat_ctx.messages.insert(
+            0,
+            llm.ChatMessage(
+                role=llm.ChatRole.SYSTEM,
+                text="You are a voice assistant created by LiveKit. Your interface with users will be voice. You should use short and concise responses, and avoiding usage of unpronouncable punctuation.",
+            ),
+        )
+
     @assistant.on("agent_speech_interrupted")
     def _agent_speech_interrupted(chat_ctx: llm.ChatContext, msg: llm.ChatMessage):
         msg.text += "... (user interrupted you)"
