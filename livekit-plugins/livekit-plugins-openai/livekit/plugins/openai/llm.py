@@ -175,7 +175,9 @@ class LLMStream(llm.LLMStream):
                 return
 
         logger.debug(f"calling function {name} with arguments {args}")
-        self._called_functions.append((name, args))
+        self._called_functions.append(
+            llm.CalledFunction(fnc_name=name, fnc=fnc.fnc, args=args)
+        )
         func = functools.partial(fnc.fnc, **args)
         if asyncio.iscoroutinefunction(fnc.fnc):
             task = asyncio.create_task(func())
