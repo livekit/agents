@@ -88,7 +88,7 @@ EventTypes = Literal[
     "agent_speech_committed",
     "agent_speech_interrupted",
     "function_calls_collected",
-    "function_calls_done",
+    "function_calls_finished",
 ]
 
 
@@ -766,7 +766,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 await data.source.aclose()
 
                 if len(data.source.called_functions) > 0:
-                    self.emit("function_calls_done", assistant_ctx)
+                    self.emit("function_calls_finished", assistant_ctx)
 
                 _ContextVar.reset(token)
             else:

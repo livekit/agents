@@ -66,7 +66,7 @@ async def entrypoint(ctx: JobContext):
     def _agent_speech_interrupted(chat_ctx: llm.ChatContext, msg: llm.ChatMessage):
         msg.text += "... (user interrupted you)"
 
-    @assistant.on("function_calls_done")
+    @assistant.on("function_calls_finished")
     def _function_calls_done(ctx: AssistantContext):
         logging.info("function_calls_done %s", ctx)
         enabled_rooms = ctx.get_metadata("enabled_rooms", [])
