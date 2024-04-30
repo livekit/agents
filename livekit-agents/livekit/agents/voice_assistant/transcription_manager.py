@@ -1,68 +1,65 @@
 import asyncio
 import time
 from typing import List
+from uuid import uuid4
 
 from livekit import rtc
 
 
 class TranscriptionManager:
-    def __init__(self, room: rtc.Room, participant_identity: str):
-        self._participant_identity = participant_identity
+    def __init__(self, room: rtc.Room):
         self._segments: List[rtc.TranscriptionSegment] = []
-        self._track_sid = ""
         self._room = room
-        self._current_id = 1
 
-    def update_track_sid(self, track_sid: str) -> None:
-        self._track_sid = track_sid
+    def start_segment(
+        self, participant: str | rtc.Participant, language: str, track_id: str
+    ) -> "TranscriptionManagerSegmentHandle":
+        return TranscriptionManagerSegmentHandle(
+            room=self._room,
+            participant=participant,
+            track_id=track_id,
+            language=language,
+        )
 
-    def reset_transcription(self) -> None:
-        self._segments = []
 
-    def final_transcription(self, text: str, language: str = "english"):
-        if len(self._segments) and self._segments[-1].id == str(self._current_id):
-            self._segments[-1].end_time = time.time_ns()
-            self._segments[-1].final = True
-            self._segments[-1].text = text
+class TranscriptionManagerSegmentHandle:
+    def __init__(
+        self,
+        room: rtc.Room,
+        participant: str | rtc.Participant,
+        track_id: str,
+        language: str,
+    ):
+        self._id = str(uuid4())
+        self._room = room
+        self._language = language
+        self._track_id = track_id
+        if isinstance(participant, rtc.Participant):
+            self._participant_identity = participant.identity
         else:
-            self._segments.append(
-                rtc.TranscriptionSegment(
-                    id=str(self._current_id),
-                    text=text,
-                    start_time=time.time_ns(),
-                    end_time=time.time_ns(),
-                    final=True,
-                )
-            )
-        self._current_id += 1
-        self._publish(language)
+            self._participant_identity = participant
+        self._start_time = time.time_ns()
+        self._text = ""
 
-    def interim_transcription(self, text: str, language: str = "english"):
-        if len(self._segments) and self._segments[-1].id == str(self._current_id):
-            self._segments[-1].end_time = time.time_ns()
-            self._segments[-1].text = text
-        else:
-            self._segments.append(
-                rtc.TranscriptionSegment(
-                    id=str(self._current_id),
-                    text=text,
-                    start_time=time.time_ns(),
-                    end_time=time.time_ns(),
-                    final=False,
-                )
-            )
+    def update(self, text: str):
+        self._text = text
 
-        self._publish(language)
+    def commit(self):
+        segment = rtc.TranscriptionSegment(
+            id=self._id,
+            text=self._text,
+            start_time=self._start_time,
+            end_time=time.time_ns(),
+            final=True,
+        )
+        transcription = rtc.Transcription(
+            participant_identity=self._participant_identity,
+            track_id=self._track_id,
+            segments=[segment],
+            language=self._language,
+        )
 
-    def _publish(self, language):
-        async def do_publish():
-            await self._room.local_participant.publish_transcription(
-                rtc.Transcription(
-                    participant_identity=self._participant_identity,
-                    track_id=self._track_sid,
-                    segments=self._segments,
-                    language=language,
-                )
-            )
+        async def _publish():
+            await self._room.local_participant.publish_transcription(transcription)
 
-        asyncio.ensure_future(do_publish())
+        asyncio.ensure_future(_publish())

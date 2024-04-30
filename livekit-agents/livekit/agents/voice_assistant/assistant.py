@@ -14,7 +14,10 @@ from .. import tts as atts
 from .. import vad as avad
 from ..log import logger
 from . import plotter
-from .transcription_manager import TranscriptionManager
+from .transcription_manager import (
+    TranscriptionManager,
+    TranscriptionManagerSegmentHandle,
+)
 
 
 @define(kw_only=True)
@@ -156,10 +159,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._transcripted_text, self._interim_text = "", ""
         self._start_future = asyncio.Future()
 
-        # transcription managers
-        self._user_transcription_manager: TranscriptionManager | None = None
-        self._agent_transcription_manager: TranscriptionManager | None = None
-
     @override
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         """Register a callback for an event
@@ -198,17 +197,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             logger.warning("voice assistant already started")
             return
 
+        self._transcription_manager = TranscriptionManager(room=room)
         self._started = True
         self._room = room
         if isinstance(participant, rtc.RemoteParticipant):
             self._participant_identity = participant.identity
         else:
             self._participant_identity = participant
-
-        self._user_transcription_manager = TranscriptionManager(
-            room=room,
-            participant_identity=self._participant_identity,
-        )
 
         p = room.participants_by_identity.get(self._participant_identity)
         if p is not None:
@@ -334,10 +329,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         track = rtc.LocalAudioTrack.create_audio_track("voice", self._audio_source)
         options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         self._pub = await self._room.local_participant.publish_track(track, options)
-        self._agent_transcription_manager = TranscriptionManager(
-            room=self._room, participant_identity=self._room.local_participant.identity
-        )
-        self._agent_transcription_manager.update_track_sid(self._pub.sid)
         self._start_future.set_result(None)
 
     def _on_track_published(
@@ -359,8 +350,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            if self._user_transcription_manager:
-                self._user_transcription_manager.update_track_sid(track.sid)
             audio_stream = rtc.AudioStream(track)
             self._stream_ready(audio_stream)
 
@@ -403,9 +392,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     def _recv_final_transcript(self, ev: astt.SpeechEvent):
         text = ev.alternatives[0].text
-        if self._user_transcription_manager:
-            self._user_transcription_manager.final_transcription(text)
-            self._user_transcription_manager.reset_transcription()
         self._log_debug(f"assistant - received transcript {ev.alternatives[0].text}")
         self._transcripted_text += ev.alternatives[0].text
         self._interrupt_if_needed()
@@ -413,8 +399,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     def _recv_interim_transcript(self, ev: astt.SpeechEvent):
         text = ev.alternatives[0].text
-        if self._user_transcription_manager:
-            self._user_transcription_manager.interim_transcription(text)
         self._interim_text = text
         self._interrupt_if_needed()
 
@@ -462,6 +446,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
+        transcription_segment: TranscriptionManagerSegmentHandle | None = None
 
         select = aio.select([self._audio_stream, vad_stream, stt_stream])
         try:
@@ -485,9 +470,21 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     stt_event = s.result()
                     if stt_event.type == astt.SpeechEventType.FINAL_TRANSCRIPT:
                         self._recv_final_transcript(stt_event)
+                        if transcription_segment is None:
+                            transcription_segment = (
+                                self._transcription_manager.start_segment(
+                                    language=stt_event.alternatives[0].language,
+                                    participant=self._room.local_participant,
+                                    track_id=self._audio_stream._track.sid,
+                                )
+                            )
+                        transcription_segment.update(self._transcripted_text)
                     elif stt_event.type == astt.SpeechEventType.INTERIM_TRANSCRIPT:
                         self._recv_interim_transcript(stt_event)
                     elif stt_event.type == astt.SpeechEventType.END_OF_SPEECH:
+                        if transcription_segment:
+                            transcription_segment.commit()
+                            transcription_segment = None
                         self._transcript_finished(stt_event)
         except Exception:
             logger.exception("error in recognize loop")
@@ -708,11 +705,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             _first_frame = True
             async for audio in self._tts.synthesize(data.source):
                 if _first_frame:
-                    if self._agent_transcription_manager:
-                        self._agent_transcription_manager.final_transcription(
-                            data.collected_text
-                        )
-                        self._agent_transcription_manager.reset_transcription()
+                    segment = self._transcription_manager.start_segment(
+                        language="en",
+                        participant=self._room.local_participant,
+                        track_id="tts",
+                    )
+                    segment.update(data.source)
+                    segment.commit()
 
                     dt = time.time() - _start_time
                     _first_frame = False
