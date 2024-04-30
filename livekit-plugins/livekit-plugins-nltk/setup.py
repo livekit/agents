@@ -18,7 +18,6 @@ import pathlib
 import setuptools
 import setuptools.command.build_py
 
-
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
 with open(os.path.join(here, "livekit", "plugins", "nltk", "version.py"), "r") as f:
@@ -47,7 +46,14 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=["livekit >= 0.9.0", "nltk >= 3, < 4"],
+    install_requires=[
+        "livekit~=0.9",
+        "nltk >= 3, < 4",
+        "livekit-agents~=0.5.dev0",
+    ],
+    package_data={
+        "livekit.plugins.nltk": ["py.typed"],
+    },
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

@@ -34,4 +34,4 @@ The STT stream produces transcription results from the audio frames and when the
 
 ## How to deploy
 
-See the `Dockerfile` in the `agents/` dir for reference.
+This example provides a `Dockerfile`

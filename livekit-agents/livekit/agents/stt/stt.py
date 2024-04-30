@@ -1,8 +1,27 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import List
+
 from livekit import rtc
-from typing import Optional, List
-from dataclasses import dataclass
+
 from ..utils import AudioBuffer
+
+
+class SpeechEventType(Enum):
+    # indicate the start of speech
+    # if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT
+    START_OF_SPEECH = 0
+    # interim transcript, useful for real-time transcription
+    INTERIM_TRANSCRIPT = 1
+    # final transcript, emitted when the STT is confident enough that a certain
+    # portion of speech will not change
+    FINAL_TRANSCRIPT = 2
+    # indicate the end of speech, emitted when the user stops speaking
+    # the first alternative is a combination of all the previous FINAL_TRANSCRIPT events
+    END_OF_SPEECH = 3
 
 
 @dataclass
@@ -16,9 +35,8 @@ class SpeechData:
 
 @dataclass
 class SpeechEvent:
-    is_final: bool
-    alternatives: List[SpeechData]
-    end_of_speech: bool = False
+    type: SpeechEventType
+    alternatives: List[SpeechData] = field(default_factory=list)
 
 
 class STT(ABC):
@@ -34,17 +52,18 @@ class STT(ABC):
         self,
         *,
         buffer: AudioBuffer,
-        language: Optional[str] = None,
+        language: str | None = None,
     ) -> SpeechEvent:
         pass
 
     def stream(
         self,
         *,
-        language: Optional[str] = None,
+        language: str | None = None,
     ) -> "SpeechStream":
         raise NotImplementedError(
-            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
+            "streaming is not supported by this STT, please use \
+            a different STT or use a StreamAdapter"
         )
 
     @property
@@ -55,14 +74,18 @@ class STT(ABC):
 class SpeechStream(ABC):
     @abstractmethod
     def push_frame(self, frame: rtc.AudioFrame) -> None:
+        """
+        Push a frame to be recognized, it is recommended to push
+        frames as soon as they are available
+        """
         pass
 
     @abstractmethod
-    async def flush(self) -> None:
-        pass
-
-    @abstractmethod
-    async def aclose(self) -> None:
+    async def aclose(self, *, wait: bool = True) -> None:
+        """
+        Close the stream, if wait is True, it will wait for the STT to finish processing the
+        remaining frames, otherwise it will close the stream immediately
+        """
         pass
 
     @abstractmethod

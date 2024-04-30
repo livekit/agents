@@ -1,14 +1,13 @@
+from .stream_adapter import (
+    StreamAdapter,
+    StreamAdapterWrapper,
+)
 from .tts import (
     TTS,
     SynthesisEvent,
+    SynthesisEventType,
     SynthesizedAudio,
     SynthesizeStream,
-    SynthesisEventType,
-)
-
-from .stream_adapter import (
-    StreamAdapterWrapper,
-    StreamAdapter,
 )
 
 __all__ = [

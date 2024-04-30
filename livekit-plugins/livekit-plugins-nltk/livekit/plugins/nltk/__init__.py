@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from .sentence_tokenizer import SentenceTokenizer, SentenceStream
+from .sentence_tokenizer import SentenceStream, SentenceTokenizer
 from .version import __version__
 
 __all__ = [
@@ -24,12 +24,13 @@ __all__ = [
 
 
 from livekit.agents import Plugin
-import nltk
+
+import nltk  # type: ignore
 
 
 class NltkPlugin(Plugin):
     def __init__(self):
-        super().__init__(__name__, __version__)
+        super().__init__(__name__, __version__, __package__)
 
     def download_files(self):
         try:

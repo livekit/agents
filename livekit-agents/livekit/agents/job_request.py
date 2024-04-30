@@ -12,292 +12,118 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import asyncio
-import logging
-from typing import Callable, Coroutine, Optional, TYPE_CHECKING, Union
+from enum import Enum
+from typing import Callable, Coroutine
+
+from attr import define
+from livekit.protocol import agent, models
+
+from . import aio
+from .exceptions import AvailabilityAnsweredError
 from .job_context import JobContext
-from livekit import rtc, protocol, api
-from livekit.protocol import agent as proto_agent
+from .log import logger
 
-# TODO: refactor worker so we can avoid this circular import
-if TYPE_CHECKING:
-    from .worker import Worker
+AutoDisconnect = Enum("AutoDisconnect", ["ROOM_EMPTY", "PUBLISHER_LEFT", "NONE"])
+AutoSubscribe = Enum(
+    "AutoSubscribe", ["SUBSCRIBE_ALL", "SUBSCRIBE_NONE", "VIDEO_ONLY", "AUDIO_ONLY"]
+)
 
-AutoSubscribeCallback = Callable[[rtc.TrackPublication, rtc.RemoteParticipant], bool]
-AutoDisconnectCallback = Callable[[JobContext], bool]
 AgentEntry = Callable[[JobContext], Coroutine]
 
 
-class AutoSubscribe:
-    """Helper callbacks for common subscribe scenarios"""
-
-    @staticmethod
-    def SUBSCRIBE_ALL(
-        publication: rtc.TrackPublication, participant: rtc.RemoteParticipant
-    ) -> bool:
-        """Subscribe to all tracks automatically. This will also set the LiveKit room option
-        auto_subscribe to true as an optimization."""
-        return True
-
-    @staticmethod
-    def SUBSCRIBE_NONE(
-        publication: rtc.TrackPublication, participant: rtc.RemoteParticipant
-    ) -> bool:
-        """Don't subscribe to any tracks automatically"""
-        return False
-
-    @staticmethod
-    def VIDEO_ONLY(
-        publication: rtc.TrackPublication, participant: rtc.RemoteParticipant
-    ) -> bool:
-        """Subscribe to video tracks automatically"""
-        return publication.kind == rtc.TrackKind.KIND_VIDEO
-
-    @staticmethod
-    def AUDIO_ONLY(
-        publication: rtc.TrackPublication, participant: rtc.RemoteParticipant
-    ) -> bool:
-        """Subscribe to audio tracks automatically"""
-        return publication.kind == rtc.TrackKind.KIND_AUDIO
+@define(kw_only=True)
+class AcceptData:
+    entry: AgentEntry
+    auto_subscribe: AutoSubscribe
+    auto_disconnect: AutoDisconnect
+    name: str
+    identity: str
+    metadata: str
 
 
-class AutoDisconnect:
-    """Helper callbacks for common auto disconnect scenarios"""
-
-    @staticmethod
-    def ROOM_EMPTY(ctx: JobContext) -> bool:
-        if len(ctx.room.participants) == 0:
-            return True
-
-        if len(ctx.room.participants) > 1:
-            return False
-
-        for p in ctx.room.participants.values():
-            if p.identity == ctx.agent.identity:
-                return True
-
-        return False
-
-    @staticmethod
-    def PUBLISHER_LEFT(ctx: JobContext) -> bool:
-        if ctx.participant is None:
-            logging.error(
-                "Incorrect usage of PUBLISHER_LEFT, JobContext is tied to a Participant",
-                extra=ctx.logging_extra,
-            )
-            return False
-
-        return ctx.room.participants.get(ctx.participant.sid) is None
-
-    @staticmethod
-    def DEFAULT(ctx: JobContext):
-        """
-        Default shutdown options. If the agent is tied to a participant, it will shut down when that participant leaves.
-        If the agent is not tied to a participant, it will shut down when the agent is the only remaining participant.
-        """
-        if ctx.participant is not None:
-            return AutoDisconnect.PUBLISHER_LEFT(ctx)
-
-        return AutoDisconnect.ROOM_EMPTY(ctx)
+@define(kw_only=True)
+class AvailRes:
+    avail: bool
+    data: AcceptData | None = None
+    assignment_tx: aio.ChanSender[BaseException | None] | None = None
 
 
 class JobRequest:
-    """Represents a new job from the server, this worker can either accept or reject it."""
-
-    def __init__(
-        self,
-        worker: "Worker",
-        job_info: proto_agent.Job,
-        simulated: bool = False,
-    ) -> None:
-        self._worker = worker
-        self._info = job_info
-        self._room = rtc.Room()
-        self._answered = False
-        self._simulated = simulated
+    def __init__(self, job: agent.Job, answer_tx: aio.ChanSender[AvailRes]) -> None:
+        self._job = job
         self._lock = asyncio.Lock()
-        self._grace_period_disconnect_task: Optional[asyncio.Task] = None
+        self._answer_tx = answer_tx
+        self._answered = False
 
     @property
     def id(self) -> str:
-        return self._info.id
+        return self._job.id
 
     @property
-    def room(self) -> protocol.models.Room:
-        return self._info.room
+    def job(self) -> agent.Job:
+        return self._job
 
     @property
-    def publisher(self) -> Optional[protocol.models.ParticipantInfo]:
-        return self._info.participant
+    def room(self) -> models.Room:
+        return self._job.room
+
+    @property
+    def publisher(self) -> models.ParticipantInfo | None:
+        return self._job.participant
+
+    @property
+    def answered(self) -> bool:
+        return self._answered
 
     async def reject(self) -> None:
-        """Tell the server we cannot handle this job"""
         async with self._lock:
             if self._answered:
-                raise Exception("job already answered")
-
+                raise AvailabilityAnsweredError
             self._answered = True
-            if not self._simulated:
-                await self._worker._send_availability(self.id, False)
 
-        logging.info("rejected job %s", self.id)
+        await self._answer_tx.send(AvailRes(avail=False))
+        logger.info(f"rejected job {self.id}", extra={"job": self.job})
 
     async def accept(
         self,
-        agent: AgentEntry,
-        auto_subscribe: Union[
-            AutoSubscribeCallback, bool
-        ] = AutoSubscribe.SUBSCRIBE_NONE,
-        auto_disconnect: AutoDisconnectCallback = AutoDisconnect.DEFAULT,
-        disconnect_grace_period: float = 30,
-        grants: api.VideoGrants = api.VideoGrants(),
-        name: Optional[str] = None,
-        identity: Optional[str] = None,
-        metadata: Optional[str] = None,
+        entry: AgentEntry,
+        *,
+        auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
+        auto_disconnect: AutoDisconnect = AutoDisconnect.ROOM_EMPTY,
+        name: str = "",
+        identity: str = "",
+        metadata: str = "",
     ) -> None:
-        """Signal to the LiveKit Server that we can handle the job, and connect to the room.
-
-        Args:
-            agent:
-                Your agent entrypoint.
-
-            auto_subscribe:
-                Callback that is called when a track is published in the room. Return True to subscribe to the track.
-
-            auto_disconnect:
-                Callback that is called when the agent should disconnect from the room. Return True to disconnect.
-                The callback is called when:
-                - Initially once the agent has connected to the room
-                - A participant leaves the room
-
-            disconnect_grace_period:
-                Time in seconds to wait before disconnecting the agent after the
-                auto_disconnect callback returns True (signaling that the agent should disconnect).
-                The auto_disconnect callback will run again after this period to check if the agent should disconnect.
-                If the callback returns False, the agent will not disconnect.
-                Defaults to 30.
-
-            grants:
-                Additional grants to give to the agent participant in its token.
-                Defaults to None.
-
-            name:
-                Name of the agent participant. Defaults to "".
-
-            identity:
-                Identity of the agent participant. Defaults to "".
-
-            metadata:
-                Metadata of the agent participant. Defaults to "".
-        """
         async with self._lock:
             if self._answered:
-                raise Exception("job already answered")
-
+                raise AvailabilityAnsweredError
             self._answered = True
 
-            identity = identity or "agent-" + self.id
-            grants.room_join = True
-            grants.agent = True
-            grants.room = self.room.name
-            grants.can_update_own_metadata = True
+        if not identity:
+            identity = "agent-" + self.id
 
-            jwt = (
-                api.AccessToken(self._worker._api_key, self._worker._api_secret)
-                .with_identity(identity)
-                .with_grants(grants)
-                .with_metadata(metadata or "")
-                .with_name(name or "")
-                .to_jwt()
-            )
+        assign_tx, assign_rx = aio.channel(1)
+        data = AcceptData(
+            entry=entry,
+            auto_subscribe=auto_subscribe,
+            auto_disconnect=auto_disconnect,
+            name=name,
+            identity=identity,
+            metadata=metadata,
+        )
+        await self._answer_tx.send(
+            AvailRes(avail=True, data=data, assignment_tx=assign_tx)
+        )
 
-            # raise AssignmentTimeoutError if assignment times out
-            if not self._simulated:
-                _ = await self._worker._send_availability(self.id, True)
+        # wait for the server to accept the assignment
+        # this will raise a TimeoutError if the server does not respond
+        # or if an exception is raised
+        exc = await assign_rx.recv()
 
-            try:
-                options = rtc.RoomOptions(
-                    auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL
-                    or auto_subscribe is True
-                )
-                await self._room.connect(self._worker._rtc_url, jwt, options)
-            except rtc.ConnectError as e:
-                logging.exception(
-                    "failed to connect to the room, cancelling job %s",
-                    self.id,
-                    extra={
-                        "job_id": self.id,
-                        "room": self.room.name,
-                        "agent_identity": identity,
-                    },
-                )
-                await self._worker._send_job_status(
-                    self.id, proto_agent.JobStatus.JS_FAILED, str(e)
-                )
-                raise
+        if exc is not None:
+            raise exc
 
-            participant: Optional[rtc.Participant] = None
-            if self._info.participant:
-                participant = self._room.participants.get(self._info.participant.sid)
-
-            job_ctx = JobContext(
-                self.id,
-                self._worker,
-                self._room,
-                participant=participant,
-            )
-            job_ctx.create_task(agent(job_ctx))
-
-            async def disconnect_if_needed_after_grace_period():
-                await asyncio.sleep(disconnect_grace_period)
-                if auto_disconnect(job_ctx):
-                    await job_ctx.disconnect()
-
-            def disconnect_if_needed(*_):
-                if auto_disconnect(job_ctx):
-                    # If the auto_disconnect callback returns True, start the grace period.
-                    # If there is already a grace period task running, keep that one running
-                    # instead of starting a new one because we don't want to reset the timer.
-                    if self._grace_period_disconnect_task is None:
-                        self._grace_period_disconnect_task = asyncio.ensure_future(
-                            disconnect_if_needed_after_grace_period(),
-                            loop=self._worker._loop,
-                        )
-                else:
-                    # If, during the grace period, the auto_disconnect callback returns False,
-                    # cancel the grace period task
-                    if self._grace_period_disconnect_task:
-                        self._grace_period_disconnect_task.cancel()
-                        self._grace_period_disconnect_task = None
-
-            self._room.on("participant_disconnected", disconnect_if_needed)
-
-            async def job_validity():
-                # let time to the server to forward participant info
-                await asyncio.sleep(15)
-                disconnect_if_needed()
-
-            job_ctx.create_task(job_validity())
-
-            if auto_subscribe != AutoSubscribe.SUBSCRIBE_ALL and not isinstance(
-                auto_subscribe, bool
-            ):
-
-                @self._room.on("track_published")
-                def on_track_published(
-                    publication: rtc.RemoteTrackPublication,
-                    participant: rtc.RemoteParticipant,
-                ):
-                    if not auto_subscribe(publication, participant):
-                        return
-
-                    publication.set_subscribed(True)
-
-                for participant in self._room.participants.values():
-                    for publication in participant.tracks.values():
-                        if not auto_subscribe(publication, participant):
-                            continue
-
-                        publication.set_subscribed(True)
-
-        logging.info("accepted job %s", self.id, extra=job_ctx.logging_extra)
+        logger.info(f"accepted job {self.id}", extra={"job": self.job})
