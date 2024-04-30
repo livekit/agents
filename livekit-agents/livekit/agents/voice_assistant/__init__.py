@@ -1,3 +1,3 @@
-from .assistant import VoiceAssistant
+from .assistant import AssistantContext, VoiceAssistant
 
-__all__ = ["VoiceAssistant"]
+__all__ = ["VoiceAssistant", "AssistantContext"]

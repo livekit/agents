@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import contextvars
 import time
-from typing import Any, AsyncIterable, Literal
+from typing import Any, AsyncIterable, Callable, Literal, override
 
 from attrs import define
 from livekit import rtc
@@ -23,8 +23,12 @@ class _SpeechData:
     add_to_ctx: bool  # should this synthesis be added to the chat context
     val_ch: aio.Chan[None]  # validate the speech for playout
     validated: bool = False
-    user_speech: str | None = None
     interrupted: bool = False
+    collected_text: str = (
+        ""  # if the source is a stream, this will be the collected text
+    )
+
+    answering_user_speech: str | None = None  # the this speech is answering to
 
 
 def _validate_speech(data: _SpeechData):
@@ -42,24 +46,37 @@ class _AssistantOptions:
     base_volume: float
 
 
-CallContextVar = contextvars.ContextVar("voice_assistant_call_context")
+@define(kw_only=True, frozen=True)
+class _StartArgs:
+    room: rtc.Room
+    participant: rtc.RemoteParticipant | str | None
 
 
-class CallContext:
-    def __init__(self, assistant: "VoiceAssistant") -> None:
+_ContextVar = contextvars.ContextVar("voice_assistant_contextvar")
+
+
+class AssistantContext:
+    def __init__(self, assistant: "VoiceAssistant", llm_stream: allm.LLMStream) -> None:
         self._assistant = assistant
-        self._texts = []
         self._metadata = dict()
+        self._llm_stream = llm_stream
+
+    @staticmethod
+    def get_current() -> "AssistantContext":
+        return _ContextVar.get()
 
     @property
     def assistant(self) -> "VoiceAssistant":
         return self._assistant
 
-    def store_text(self, text: str) -> None:
-        self._texts.append(text)
-
     def store_metadata(self, key: str, value: Any) -> None:
         self._metadata[key] = value
+
+    def get_metadata(self, key: str, default: Any = None) -> Any:
+        return self._metadata.get(key, default)
+
+    def llm_stream(self) -> allm.LLMStream:
+        return self._llm_stream
 
 
 EventTypes = Literal[
@@ -67,6 +84,11 @@ EventTypes = Literal[
     "user_stopped_speaking",
     "agent_started_speaking",
     "agent_stopped_speaking",
+    "user_speech_committed",
+    "agent_speech_committed",
+    "agent_speech_interrupted",
+    "function_calls_collected",
+    "function_calls_finished",
 ]
 
 
@@ -77,11 +99,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     def __init__(
         self,
+        *,
         vad: avad.VAD,
         stt: astt.STT,
         llm: allm.LLM,
         tts: atts.TTS,
-        *,
+        chat_ctx: allm.ChatContext | None = None,
         fnc_ctx: allm.FunctionContext | None = None,
         allow_interruptions: bool = True,
         interrupt_volume: float = 0.05,
@@ -103,12 +126,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             base_volume=base_volume,
         )
         self._vad, self._tts, self._llm, self._stt = vad, tts, llm, stt
-        self._fnc_ctx, self._ctx = fnc_ctx, allm.ChatContext()
+        self._fnc_ctx = fnc_ctx
+        self._chat_ctx = chat_ctx or allm.ChatContext()
         self._speaking, self._user_speaking = False, False
         self._plotter = plotter.AssistantPlotter(self._loop)
 
         self._audio_source, self._audio_stream = None, None
         self._closed, self._started, self._ready = False, False, False
+        self._linked_participant = ""
 
         # tasks
         self._launch_task: asyncio.Task | None = None
@@ -138,161 +163,32 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._transcripted_text, self._interim_text = "", ""
         self._start_future = asyncio.Future()
 
+    @override
+    def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
+        """Register a callback for an event
+
+        Args:
+            event: the event to listen to (see EventTypes)
+                - user_started_speaking: the user started speaking
+                - user_stopped_speaking: the user stopped speaking
+                - agent_started_speaking: the agent started speaking
+                - agent_stopped_speaking: the agent stopped speaking
+                - user_speech_committed: the user speech was committed to the chat context
+                - agent_speech_committed: the agent speech was committed to the chat context
+                - agent_speech_interrupted: the agent speech was interrupted
+                - function_calls_completed: all function calls have been completed
+                - will_synthesize_llm: the assistant will synthesize the LLM output
+            callback: the callback to call when the event is emitted
+        """
+        return super().on(event, callback)
+
     @property
     def chat_context(self) -> allm.ChatContext:
-        return self._ctx
+        return self._chat_ctx
 
     @property
     def started(self) -> bool:
         return self._started
-
-    def start(self, room: rtc.Room, participant: rtc.RemoteParticipant | str) -> None:
-        """Start the voice assistant in a room
-
-        Args:
-            room: the room currently in use
-            participant: the participant to listen to, can either be a participant or a participant identity
-        """
-        if self.started:
-            logger.warning("voice assistant already started")
-            return
-
-        self._started = True
-        self._room = room
-        if isinstance(participant, rtc.RemoteParticipant):
-            self._participant_identity = participant.identity
-        else:
-            self._participant_identity = participant
-
-        p = room.participants_by_identity.get(self._participant_identity)
-        if p is not None:
-            # check if a track has already been published
-            for pub in p.tracks.values():
-                if pub.subscribed:
-                    self._on_track_subscribed(pub.track, pub, p)  # type: ignore
-                else:
-                    self._on_track_published(pub, p)
-
-        self._room.on("track_published", self._on_track_published)
-        self._room.on("track_subscribed", self._on_track_subscribed)
-        self._room.on("track_unsubscribed", self._on_track_unsubscribed)
-
-        self._launch_task = asyncio.create_task(self._launch())
-
-    async def _launch(self):
-        self._log_debug("assistant - launching")
-
-        if self._opts.plotting:
-            self._plotter.start()
-
-        self._audio_source = rtc.AudioSource(
-            self._tts.sample_rate, self._tts.num_channels
-        )
-        self._update_task = asyncio.create_task(self._update_loop())
-
-        track = rtc.LocalAudioTrack.create_audio_track("voice", self._audio_source)
-        options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-        self._pub = await self._room.local_participant.publish_track(track, options)
-        self._start_future.set_result(None)
-
-    def _on_track_published(
-        self, pub: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
-    ):
-        if participant.identity != self._participant_identity:
-            return
-
-        if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            pass
-            # TODO: remove after Python SDK release
-            # pub.set_subscribed(True)
-
-    def _on_track_subscribed(
-        self,
-        track: rtc.RemoteTrack,
-        pub: rtc.RemoteTrackPublication,
-        participant: rtc.RemoteParticipant,
-    ):
-        if participant.identity != self._participant_identity:
-            return
-
-        if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            audio_stream = rtc.AudioStream(track)
-            self._mark_ready(audio_stream)
-
-    def _on_track_unsubscribed(
-        self,
-        track: rtc.RemoteTrack,
-        pub: rtc.RemoteTrackPublication,
-        participant: rtc.RemoteParticipant,
-    ):
-        if participant.identity != self._participant_identity:
-            return
-
-        if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            self._mark_dirty()
-
-    def _mark_dirty(self):
-        """Called when the AudioStream isn't valid anymore (microphone unsubscribed or participant
-        disconnected)"""
-        if not self._ready:
-            logger.warning("assistant already marked as dirty")
-            return
-
-        self._log_debug("marking assistant as dirty")
-        self._ready = False
-
-        if self._recognize_task is not None:
-            self._recognize_task.cancel()
-
-    def _mark_ready(self, audio_stream: rtc.AudioStream):
-        """We have everything we need to start the voice assistant (audio sources & audio
-        streams)"""
-        if self._ready:
-            logger.warning("assistant already marked as ready")
-            return
-
-        self._log_debug("marking assistant as ready")
-        self._audio_stream = audio_stream
-        self._ready = True
-        self._recognize_task = asyncio.create_task(self._recognize_loop())
-
-    async def aclose(self, wait: bool = True) -> None:
-        if not self.started:
-            return
-
-        self._closed = True
-        self._start_future.cancel()
-        self._room.off("track_published", self._on_track_published)
-        self._room.off("track_subscribed", self._on_track_subscribed)
-        self._room.off("track_unsubscribed", self._on_track_unsubscribed)
-
-        if self._opts.plotting:
-            self._plotter.terminate()
-
-        with contextlib.suppress(asyncio.CancelledError):
-            if self._launch_task is not None:
-                self._launch_task.cancel()
-                await self._launch_task
-
-        if self._recognize_task is not None:
-            self._recognize_task.cancel()
-
-        if not wait:
-            if self._update_task is not None:
-                self._update_task.cancel()
-
-            if self._play_task is not None:
-                self._play_task.cancel()
-
-        with contextlib.suppress(asyncio.CancelledError):
-            if self._update_task is not None:
-                await self._update_task
-
-            if self._recognize_task is not None:
-                await self._recognize_task
-
-            if self._play_task is not None:
-                await self._play_task
 
     async def say(
         self,
@@ -325,6 +221,248 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         await self._start_speech(data, interrupt_current_if_possible=True)
         assert self._play_task is not None
         await self._play_task
+
+    def start(
+        self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
+    ) -> None:
+        """Start the voice assistant in a room
+
+        Args:
+            room: the room currently in use
+            participant: the participant to listen to, can either be a participant or a participant identity
+                If None, the first participant in the room will be used
+        """
+        if self.started:
+            logger.warning("voice assistant already started")
+            return
+
+        self._started = True
+        self._start_args = _StartArgs(room=room, participant=participant)
+
+        room.on("track_published", self._on_track_published)
+        room.on("track_subscribed", self._on_track_subscribed)
+        room.on("track_unsubscribed", self._on_track_unsubscribed)
+        room.on("participant_connected", self._on_participant_connected)
+
+        self._launch_task = asyncio.create_task(self._launch())
+
+    def _mark_dirty(self):
+        """Called when the AudioStream isn't valid anymore (microphone unsubscribed or participant
+        disconnected)"""
+        if not self._ready:
+            logger.warning("assistant already marked as dirty")
+            return
+
+        self._log_debug("marking assistant as dirty")
+        self._ready = False
+
+        if self._recognize_task is not None:
+            self._recognize_task.cancel()
+
+    def _mark_ready(self, audio_stream: rtc.AudioStream):
+        """We have everything we need to start the voice assistant (audio sources & audio
+        streams)"""
+        if self._ready:
+            logger.warning("assistant already marked as ready")
+            return
+
+        self._log_debug("marking assistant as ready")
+        self._audio_stream = audio_stream
+        self._ready = True
+        self._recognize_task = asyncio.create_task(self._recognize_loop())
+
+    async def aclose(self, wait: bool = True) -> None:
+        if not self.started:
+            return
+
+        self._closed = True
+        self._start_future.cancel()
+
+        self._start_args.room.off("track_published", self._on_track_published)
+        self._start_args.room.off("track_subscribed", self._on_track_subscribed)
+        self._start_args.room.off("track_unsubscribed", self._on_track_unsubscribed)
+        self._start_args.room.off(
+            "participant_connected", self._on_participant_connected
+        )
+
+        if self._opts.plotting:
+            self._plotter.terminate()
+
+        with contextlib.suppress(asyncio.CancelledError):
+            if self._launch_task is not None:
+                self._launch_task.cancel()
+                await self._launch_task
+
+        if self._recognize_task is not None:
+            self._recognize_task.cancel()
+
+        if not wait:
+            if self._update_task is not None:
+                self._update_task.cancel()
+
+            if self._play_task is not None:
+                self._play_task.cancel()
+
+        with contextlib.suppress(asyncio.CancelledError):
+            if self._update_task is not None:
+                await self._update_task
+
+            if self._recognize_task is not None:
+                await self._recognize_task
+
+            if self._play_task is not None:
+                await self._play_task
+
+    async def _launch(self):
+        self._log_debug("assistant - launching")
+
+        if self._opts.plotting:
+            self._plotter.start()
+
+        if self._start_args.participant is not None:
+            if isinstance(self._start_args.participant, rtc.RemoteParticipant):
+                self._link_participant(self._start_args.participant.identity)
+            else:
+                self._link_participant(self._start_args.participant)
+        else:
+            for participant in self._start_args.room.participants.values():
+                self._link_participant(participant.identity)
+                break
+
+        self._audio_source = rtc.AudioSource(
+            self._tts.sample_rate, self._tts.num_channels
+        )
+        self._update_task = asyncio.create_task(self._update_loop())
+
+        track = rtc.LocalAudioTrack.create_audio_track("voice", self._audio_source)
+        options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        self._pub = await self._start_args.room.local_participant.publish_track(
+            track, options
+        )
+        self._start_future.set_result(None)
+
+    def _link_participant(self, identity: str):
+        p = self._start_args.room.participants_by_identity.get(identity)
+        assert p is not None
+
+        for pub in p.tracks.values():
+            if pub.subscribed:
+                self._on_track_subscribed(pub.track, pub, p)  # type: ignore
+            else:
+                self._on_track_published(pub, p)
+
+        self._linked_participant = identity
+
+    def _on_participant_connected(self, participant: rtc.RemoteParticipant):
+        if not self._linked_participant:
+            self._link_participant(participant.identity)
+
+    def _on_track_published(
+        self, pub: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+    ):
+        if participant.identity != self._linked_participant:
+            return
+
+        if pub.source == rtc.TrackSource.SOURCE_MICROPHONE and not pub.subscribed:
+            pub.set_subscribed(True)
+
+    def _on_track_subscribed(
+        self,
+        track: rtc.RemoteTrack,
+        pub: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ):
+        if participant.identity != self._linked_participant:
+            return
+
+        if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
+            audio_stream = rtc.AudioStream(track)
+            self._stream_ready(audio_stream)
+
+    def _on_track_unsubscribed(
+        self,
+        track: rtc.RemoteTrack,
+        pub: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ):
+        if participant.identity != self._linked_participant:
+            return
+
+        if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
+            self._stream_dirty()
+
+    def _stream_dirty(self):
+        """Called when the AudioStream isn't valid anymore (microphone unsubscribed or participant
+        disconnected)"""
+        if not self._ready:
+            logger.warning("assistant already marked as dirty")
+            return
+
+        self._log_debug("marking assistant as dirty")
+        self._ready = False
+
+        if self._recognize_task is not None:
+            self._recognize_task.cancel()
+
+    def _stream_ready(self, audio_stream: rtc.AudioStream):
+        """We have everything we need to start the voice assistant (audio sources & audio
+        streams)"""
+        if self._ready:
+            logger.warning("assistant already marked as ready")
+            return
+
+        self._log_debug("marking assistant as ready")
+        self._audio_stream = audio_stream
+        self._ready = True
+        self._recognize_task = asyncio.create_task(self._recognize_loop())
+
+    def _recv_final_transcript(self, ev: astt.SpeechEvent):
+        self._log_debug(f"assistant - received transcript {ev.alternatives[0].text}")
+        self._transcripted_text += ev.alternatives[0].text
+        self._interrupt_if_needed()
+        self._maybe_answer(self._transcripted_text)
+
+    def _recv_interim_transcript(self, ev: astt.SpeechEvent):
+        self._interim_text = ev.alternatives[0].text
+        self._interrupt_if_needed()
+
+    def _transcript_finished(self, ev: astt.SpeechEvent):
+        self._log_debug("assistant - transcript finished")
+        self._transcripted_text = self._interim_text = ""
+        self._interrupt_if_needed()
+        self._validate_answer_if_needed()
+
+    def _did_vad_inference(self, ev: avad.VADEvent):
+        self._plotter.plot_value("vad_raw", ev.raw_inference_prob)
+        self._plotter.plot_value("vad_smoothed", ev.probability)
+        self._plotter.plot_value("vad_dur", ev.inference_duration * 1000)
+        self._speech_prob = ev.raw_inference_prob
+
+    def _user_started_speaking(self):
+        self._log_debug("assistant - user started speaking")
+        self._plotter.plot_event("user_started_speaking")
+        self._user_speaking = True
+        self.emit("user_started_speaking")
+
+    def _user_stopped_speaking(self, speech_duration: float):
+        self._log_debug(f"assistant - user stopped speaking {speech_duration:.2f}s")
+        self._plotter.plot_event("user_started_speaking")
+        self._interrupt_if_needed()
+        self._validate_answer_if_needed()
+        self._user_speaking = False
+        self.emit("user_stopped_speaking")
+
+    def _agent_started_speaking(self):
+        self._log_debug("assistant - agent started speaking")
+        self._plotter.plot_event("agent_started_speaking")
+        self._agent_speaking = True
+        self.emit("agent_started_speaking")
+
+    def _agent_stopped_speaking(self):
+        self._log_debug("assistant - agent stopped speaking")
+        self._plotter.plot_event("agent_stopped_speaking")
+        self._agent_speaking = False
+        self.emit("agent_stopped_speaking")
 
     async def _recognize_loop(self):
         """Recognize speech from the audio stream and do voice activity detection"""
@@ -398,54 +536,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             await asyncio.sleep(0.01)
 
-    def _recv_final_transcript(self, ev: astt.SpeechEvent):
-        self._log_debug(f"assistant - received transcript {ev.alternatives[0].text}")
-        self._transcripted_text += ev.alternatives[0].text
-        self._interrupt_if_needed()
-        self._maybe_answer(self._transcripted_text)
-
-    def _recv_interim_transcript(self, ev: astt.SpeechEvent):
-        self._interim_text = ev.alternatives[0].text
-        self._interrupt_if_needed()
-
-    def _transcript_finished(self, ev: astt.SpeechEvent):
-        self._log_debug("assistant - transcript finished")
-        self._transcripted_text = self._interim_text = ""
-        self._interrupt_if_needed()
-        self._validate_answer_if_needed()
-
-    def _did_vad_inference(self, ev: avad.VADEvent):
-        self._plotter.plot_value("vad_raw", ev.raw_inference_prob)
-        self._plotter.plot_value("vad_smoothed", ev.probability)
-        self._plotter.plot_value("vad_dur", ev.inference_duration * 1000)
-        self._speech_prob = ev.raw_inference_prob
-
-    def _user_started_speaking(self):
-        self._log_debug("assistant - user started speaking")
-        self._plotter.plot_event("user_started_speaking")
-        self._user_speaking = True
-        self.emit("user_started_speaking")
-
-    def _user_stopped_speaking(self, speech_duration: float):
-        self._log_debug(f"assistant - user stopped speaking {speech_duration:.2f}s")
-        self._plotter.plot_event("user_started_speaking")
-        self._interrupt_if_needed()
-        self._validate_answer_if_needed()
-        self._user_speaking = False
-        self.emit("user_stopped_speaking")
-
-    def _agent_started_speaking(self):
-        self._log_debug("assistant - agent started speaking")
-        self._plotter.plot_event("agent_started_speaking")
-        self._agent_speaking = True
-        self.emit("agent_started_speaking")
-
-    def _agent_stopped_speaking(self):
-        self._log_debug("assistant - agent stopped speaking")
-        self._plotter.plot_event("agent_stopped_speaking")
-        self._agent_speaking = False
-        self.emit("agent_stopped_speaking")
-
     def _interrupt_if_needed(self):
         """Check whether the current speech should be interrupted"""
         if (
@@ -460,11 +550,15 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         ):  # allow 10% of "noise"/false positives in the VAD?
             return
 
-        txt = self._transcripted_text.strip().split()
-        if len(txt) <= self._opts.int_min_words:
-            txt = self._interim_text.strip().split()
+        if self._opts.int_min_words != 0:
+            # some STT doesn't support streaming (e.g Whisper)
+            # so it doesn't make sense to wait for a certain amount of words
+            # before interrupting the speech
+            txt = self._transcripted_text.strip().split()
             if len(txt) <= self._opts.int_min_words:
-                return
+                txt = self._interim_text.strip().split()
+                if len(txt) <= self._opts.int_min_words:
+                    return
 
         if (
             self._playout_start_time is not None
@@ -492,34 +586,37 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ctx: allm.ChatContext, data: _SpeechData
         ) -> None:
             try:
-                llm_stream = await self._llm.chat(ctx, fnc_ctx=self._fnc_ctx)
-                data.source = llm_stream
+                data.source = await self._llm.chat(ctx, fnc_ctx=self._fnc_ctx)
                 await self._start_speech(data, interrupt_current_if_possible=False)
             except Exception:
                 logger.exception("error while answering")
 
-        if self._maybe_answer_task is not None:
-            self._maybe_answer_task.cancel()
-
-        data = _SpeechData(
+        self._answer_speech = _SpeechData(
             allow_interruptions=self._opts.allow_interruptions,
             add_to_ctx=True,
             val_ch=aio.Chan[None](),
+            answering_user_speech=text,
         )
-        self._answer_speech = data
 
-        msg = self._ctx.messages.copy()
-        msg.append(allm.ChatMessage(text=text, role=allm.ChatRole.USER))
-        ctx = allm.ChatContext(messages=msg)
+        messages = self._chat_ctx.messages.copy()
+        user_msg = allm.ChatMessage(
+            text=text,
+            role=allm.ChatRole.USER,
+        )
+        messages.append(user_msg)
+        ctx = allm.ChatContext(messages=messages)
 
-        t = asyncio.create_task(_answer_if_validated(ctx, data))
+        if self._maybe_answer_task is not None:
+            self._maybe_answer_task.cancel()
+
+        t = asyncio.create_task(_answer_if_validated(ctx, self._answer_speech))
         self._maybe_answer_task = t
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
 
     async def _start_speech(
         self, data: _SpeechData, *, interrupt_current_if_possible: bool
-    ):
+    ) -> None:
         if data.source is None:
             raise ValueError("source must be provided")
 
@@ -553,41 +650,38 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         # reset volume before starting a new speech
         self._vol_filter.reset()
         po_tx, po_rx = aio.channel()  # playout channel
-        tts_co = self._tts_task(data.source, po_tx)
-        _tts_task = asyncio.create_task(tts_co)
+        tts_co = self._synthesize_task(data, po_tx)
+        _synthesize_task = asyncio.create_task(tts_co)
 
         try:
             with contextlib.suppress(aio.ChanClosed):
-                _ = (
-                    await data.val_ch.recv()
-                )  # wait for speech validation before playout
+                await data.val_ch.recv()  # wait for speech validation before playout
 
-            self._log_debug("assistant - speech validated")
             # validated!
+            self._log_debug("assistant - speech validated")
             self._playing_speech = data
             self._playout_start_time = time.time()
-            await self._playout_task(po_rx)
-            if (
-                not data.interrupted
-                and data.add_to_ctx
-                and _tts_task.done()
-                and not _tts_task.cancelled()
-            ):
-                # add the played text to the chat context if it was not interrupted
-                # and the synthesis was successful
-                text = _tts_task.result()
 
-                if data.user_speech is not None:
-                    self._ctx.messages.append(
-                        allm.ChatMessage(text=data.user_speech, role=allm.ChatRole.USER)
-                    )
-
-                self._ctx.messages.append(
-                    allm.ChatMessage(
-                        text=text,
-                        role=allm.ChatRole.ASSISTANT,
-                    )
+            if data.answering_user_speech is not None:
+                msg = allm.ChatMessage(
+                    text=data.answering_user_speech, role=allm.ChatRole.USER
                 )
+                self._chat_ctx.messages.append(msg)
+                self.emit("user_speech_committed", self._chat_ctx, msg)
+
+            await self._playout_task(po_rx)
+
+            msg = allm.ChatMessage(
+                text=data.collected_text,
+                role=allm.ChatRole.ASSISTANT,
+            )
+
+            if data.add_to_ctx:
+                self._chat_ctx.messages.append(msg)
+                if data.interrupted:
+                    self.emit("agent_speech_interrupted", self._chat_ctx, msg)
+                else:
+                    self.emit("agent_speech_committed", self._chat_ctx, msg)
 
             self._log_debug(
                 "assistant - playout finished", extra={"interrupted": data.interrupted}
@@ -597,30 +691,28 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         finally:
             self._playing_speech = None
             with contextlib.suppress(asyncio.CancelledError):
-                _tts_task.cancel()
-                await _tts_task
+                _synthesize_task.cancel()
+                await _synthesize_task
 
             self._log_debug("assistant - maybe_play_speech finished")
 
-    async def _tts_task(
+    async def _synthesize_task(
         self,
-        source: str | allm.LLMStream | AsyncIterable[str],
+        data: _SpeechData,
         po_tx: aio.ChanSender[rtc.AudioFrame],
-    ) -> str:
-        """Synthesize speech from the source
-
-        Returns:
-            the completed text from the source
-        """
+    ) -> None:
+        """Synthesize speech from the source"""
+        assert data.source is not None
         self._log_debug("tts inference started")
 
-        if isinstance(source, str):
+        if isinstance(data.source, str):
             # No streaming is needed, use the TTS directly
             # This should be faster when the whole text is known in advance
             # (no buffering on the provider side)
+            data.collected_text = data.source
             _start_time = time.time()
             _first_frame = True
-            async for audio in self._tts.synthesize(source):
+            async for audio in self._tts.synthesize(data.source):
                 if _first_frame:
                     dt = time.time() - _start_time
                     _first_frame = False
@@ -630,7 +722,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             po_tx.close()
             self._log_debug("tts inference finished")
-            return source
+            return
 
         # otherwise, stream the text to the TTS..
         tts_stream = self._tts.stream()
@@ -655,24 +747,32 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     po_tx.send_nowait(event.audio.data)
 
         _forward_task = asyncio.create_task(_forward_stream())
-        text = ""
         try:
-            if isinstance(source, allm.LLMStream):
+            if isinstance(data.source, allm.LLMStream):
                 # stream the LLM output to the TTS
-                async for chunk in source:
+                assistant_ctx = AssistantContext(self, data.source)
+                token = _ContextVar.set(assistant_ctx)
+                async for chunk in data.source:
                     alt = chunk.choices[0].delta.content
                     if not alt:
                         continue
-                    text += alt
+                    data.collected_text += alt
                     tts_stream.push_text(alt)
 
                 tts_stream.mark_segment_end()
+                if len(data.source.called_functions) > 0:
+                    self.emit("function_calls_collected", assistant_ctx)
 
-                await source.aclose()
+                await data.source.aclose()
+
+                if len(data.source.called_functions) > 0:
+                    self.emit("function_calls_finished", assistant_ctx)
+
+                _ContextVar.reset(token)
             else:
                 # user defined source, stream the text to the TTS
-                async for seg in source:
-                    text += seg
+                async for seg in data.source:
+                    data.collected_text += seg
                     tts_stream.push_text(seg)
 
                 tts_stream.mark_segment_end()
@@ -687,8 +787,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 await _forward_task
 
             self._log_debug("tts inference finished")
-
-        return text
 
     async def _playout_task(
         self,
@@ -742,6 +840,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._agent_stopped_speaking()
 
-    def _log_debug(self, msg: str, **kwargs):
+    def _log_debug(self, msg: str, **kwargs) -> None:
         if self._opts.debug:
             logger.debug(msg, **kwargs)

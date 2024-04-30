@@ -5,7 +5,6 @@ import contextlib
 import logging
 
 from livekit import rtc
-from livekit.agents import stt
 
 from ..log import logger
 from ..utils import AudioBuffer, merge_frames
@@ -13,6 +12,7 @@ from ..vad import VADEventType, VADStream
 from .stt import (
     STT,
     SpeechEvent,
+    SpeechEventType,
     SpeechStream,
 )
 
@@ -26,6 +26,10 @@ class StreamAdapter(STT):
         super().__init__(streaming_supported=True)
         self._vad = vad_stream
         self._stt = stt
+
+    @property
+    def wrapped_stt(self) -> STT:
+        return self._stt
 
     async def recognize(self, *, buffer: AudioBuffer, language: str | None = None):
         return await self._stt.recognize(
@@ -73,17 +77,17 @@ class StreamAdapterWrapper(SpeechStream):
         try:
             async for event in self._vad:
                 if event.type == VADEventType.START_OF_SPEECH:
-                    start_event = SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    start_event = SpeechEvent(SpeechEventType.START_OF_SPEECH)
                     self._event_queue.put_nowait(start_event)
                 elif event.type == VADEventType.END_OF_SPEECH:
-                    merged_frames = merge_frames(event.speech)
+                    merged_frames = merge_frames(event.frames)
                     event = await self._stt.recognize(
                         buffer=merged_frames, *self._args, **self._kwargs
                     )
                     self._event_queue.put_nowait(event)
 
                     end_event = SpeechEvent(
-                        type=stt.SpeechEventType.END_OF_SPEECH,
+                        type=SpeechEventType.END_OF_SPEECH,
                         alternatives=[event.alternatives[0]],
                     )
                     self._event_queue.put_nowait(end_event)

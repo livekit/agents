@@ -8,6 +8,7 @@ from .function_context import (
 )
 from .llm import (
     LLM,
+    CalledFunction,
     ChatChunk,
     ChatContext,
     ChatMessage,
@@ -33,4 +34,5 @@ __all__ = [
     "AIFncArg",
     "AIFunction",
     "AIFncMetadata",
+    "CalledFunction",
 ]
