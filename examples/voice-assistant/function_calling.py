@@ -3,7 +3,6 @@ import logging
 from enum import Enum
 from typing import Annotated
 
-from livekit import rtc
 from livekit.agents import (
     JobContext,
     JobRequest,
@@ -45,24 +44,23 @@ class AssistantFnc(llm.FunctionContext):
 async def entrypoint(ctx: JobContext):
     gpt = openai.LLM(model="gpt-4-turbo")
 
+    initial_ctx = llm.ChatContext(
+        messages=[
+            llm.ChatMessage(
+                role=llm.ChatRole.SYSTEM,
+                text="You are a voice assistant created by LiveKit. Your interface with users will be voice. You should use short and concise responses, and avoiding usage of unpronouncable punctuation.",
+            )
+        ]
+    )
+
     assistant = VoiceAssistant(
         vad=silero.VAD(),
         stt=deepgram.STT(),
         llm=gpt,
         tts=elevenlabs.TTS(),
         fnc_ctx=AssistantFnc(),
+        chat_ctx=initial_ctx,
     )
-
-    @assistant.on("will_synthesize_llm")
-    def _will_synthesize_llm(chat_ctx: llm.ChatContext, user_msg: llm.ChatMessage):
-        # inject system prompt
-        chat_ctx.messages.insert(
-            0,
-            llm.ChatMessage(
-                role=llm.ChatRole.SYSTEM,
-                text="You are a voice assistant created by LiveKit. Your interface with users will be voice. You should use short and concise responses, and avoiding usage of unpronouncable punctuation.",
-            ),
-        )
 
     @assistant.on("agent_speech_interrupted")
     def _agent_speech_interrupted(chat_ctx: llm.ChatContext, msg: llm.ChatMessage):
@@ -94,17 +92,8 @@ async def entrypoint(ctx: JobContext):
         if enabled_rooms or disabled_rooms:
             asyncio.ensure_future(_handle_answer())
 
-    # start the assistant with the first participant found inside the room
-
-    @ctx.room.on("participant_connected")
-    def _on_participant_connected(participant: rtc.RemoteParticipant):
-        assistant.start(ctx.room, participant)
-
-    for participant in ctx.room.participants.values():
-        assistant.start(ctx.room, participant)
-        break
-
-    await asyncio.sleep(1)
+    assistant.start(ctx.room)
+    await asyncio.sleep(3)
     await assistant.say("Hey, how can I help you today?")
 
 

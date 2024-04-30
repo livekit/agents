@@ -46,6 +46,12 @@ class _AssistantOptions:
     base_volume: float
 
 
+@define(kw_only=True, frozen=True)
+class _StartArgs:
+    room: rtc.Room
+    participant: rtc.RemoteParticipant | str | None
+
+
 _ContextVar = contextvars.ContextVar("voice_assistant_contextvar")
 
 
@@ -83,7 +89,6 @@ EventTypes = Literal[
     "agent_speech_interrupted",
     "function_calls_collected",
     "function_calls_done",
-    "will_synthesize_llm",
 ]
 
 
@@ -99,6 +104,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         stt: astt.STT,
         llm: allm.LLM,
         tts: atts.TTS,
+        chat_ctx: allm.ChatContext | None = None,
         fnc_ctx: allm.FunctionContext | None = None,
         allow_interruptions: bool = True,
         interrupt_volume: float = 0.05,
@@ -120,12 +126,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             base_volume=base_volume,
         )
         self._vad, self._tts, self._llm, self._stt = vad, tts, llm, stt
-        self._fnc_ctx, self._chat_ctx = fnc_ctx, allm.ChatContext()
+        self._fnc_ctx = fnc_ctx
+        self._chat_ctx = chat_ctx or allm.ChatContext()
         self._speaking, self._user_speaking = False, False
         self._plotter = plotter.AssistantPlotter(self._loop)
 
         self._audio_source, self._audio_stream = None, None
         self._closed, self._started, self._ready = False, False, False
+        self._linked_participant = ""
 
         # tasks
         self._launch_task: asyncio.Task | None = None
@@ -182,39 +190,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     def started(self) -> bool:
         return self._started
 
-    def start(self, room: rtc.Room, participant: rtc.RemoteParticipant | str) -> None:
-        """Start the voice assistant in a room
-
-        Args:
-            room: the room currently in use
-            participant: the participant to listen to, can either be a participant or a participant identity
-        """
-        if self.started:
-            logger.warning("voice assistant already started")
-            return
-
-        self._started = True
-        self._room = room
-        if isinstance(participant, rtc.RemoteParticipant):
-            self._participant_identity = participant.identity
-        else:
-            self._participant_identity = participant
-
-        p = room.participants_by_identity.get(self._participant_identity)
-        if p is not None:
-            # check if a track has already been published
-            for pub in p.tracks.values():
-                if pub.subscribed:
-                    self._on_track_subscribed(pub.track, pub, p)  # type: ignore
-                else:
-                    self._on_track_published(pub, p)
-
-        self._room.on("track_published", self._on_track_published)
-        self._room.on("track_subscribed", self._on_track_subscribed)
-        self._room.on("track_unsubscribed", self._on_track_unsubscribed)
-
-        self._launch_task = asyncio.create_task(self._launch())
-
     async def say(
         self,
         source: str | allm.LLMStream | AsyncIterable[str],
@@ -247,6 +222,30 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         assert self._play_task is not None
         await self._play_task
 
+    def start(
+        self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
+    ) -> None:
+        """Start the voice assistant in a room
+
+        Args:
+            room: the room currently in use
+            participant: the participant to listen to, can either be a participant or a participant identity
+                If None, the first participant in the room will be used
+        """
+        if self.started:
+            logger.warning("voice assistant already started")
+            return
+
+        self._started = True
+        self._start_args = _StartArgs(room=room, participant=participant)
+
+        room.on("track_published", self._on_track_published)
+        room.on("track_subscribed", self._on_track_subscribed)
+        room.on("track_unsubscribed", self._on_track_unsubscribed)
+        room.on("participant_connected", self._on_participant_connected)
+
+        self._launch_task = asyncio.create_task(self._launch())
+
     def _mark_dirty(self):
         """Called when the AudioStream isn't valid anymore (microphone unsubscribed or participant
         disconnected)"""
@@ -278,9 +277,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._closed = True
         self._start_future.cancel()
-        self._room.off("track_published", self._on_track_published)
-        self._room.off("track_subscribed", self._on_track_subscribed)
-        self._room.off("track_unsubscribed", self._on_track_unsubscribed)
+
+        self._start_args.room.off("track_published", self._on_track_published)
+        self._start_args.room.off("track_subscribed", self._on_track_subscribed)
+        self._start_args.room.off("track_unsubscribed", self._on_track_unsubscribed)
+        self._start_args.room.off(
+            "participant_connected", self._on_participant_connected
+        )
 
         if self._opts.plotting:
             self._plotter.terminate()
@@ -316,6 +319,16 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if self._opts.plotting:
             self._plotter.start()
 
+        if self._start_args.participant is not None:
+            if isinstance(self._start_args.participant, rtc.RemoteParticipant):
+                self._link_participant(self._start_args.participant.identity)
+            else:
+                self._link_participant(self._start_args.participant)
+        else:
+            for participant in self._start_args.room.participants.values():
+                self._link_participant(participant.identity)
+                break
+
         self._audio_source = rtc.AudioSource(
             self._tts.sample_rate, self._tts.num_channels
         )
@@ -323,16 +336,34 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         track = rtc.LocalAudioTrack.create_audio_track("voice", self._audio_source)
         options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-        self._pub = await self._room.local_participant.publish_track(track, options)
+        self._pub = await self._start_args.room.local_participant.publish_track(
+            track, options
+        )
         self._start_future.set_result(None)
+
+    def _link_participant(self, identity: str):
+        p = self._start_args.room.participants_by_identity.get(identity)
+        assert p is not None
+
+        for pub in p.tracks.values():
+            if pub.subscribed:
+                self._on_track_subscribed(pub.track, pub, p)  # type: ignore
+            else:
+                self._on_track_published(pub, p)
+
+        self._linked_participant = identity
+
+    def _on_participant_connected(self, participant: rtc.RemoteParticipant):
+        if not self._linked_participant:
+            self._link_participant(participant.identity)
 
     def _on_track_published(
         self, pub: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
     ):
-        if participant.identity != self._participant_identity:
+        if participant.identity != self._linked_participant:
             return
 
-        if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
+        if pub.source == rtc.TrackSource.SOURCE_MICROPHONE and not pub.subscribed:
             pub.set_subscribed(True)
 
     def _on_track_subscribed(
@@ -341,7 +372,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         pub: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ):
-        if participant.identity != self._participant_identity:
+        if participant.identity != self._linked_participant:
             return
 
         if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
@@ -354,7 +385,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         pub: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ):
-        if participant.identity != self._participant_identity:
+        if participant.identity != self._linked_participant:
             return
 
         if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
@@ -574,8 +605,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         )
         messages.append(user_msg)
         ctx = allm.ChatContext(messages=messages)
-
-        self.emit("will_synthesize_llm", ctx, user_msg)
 
         if self._maybe_answer_task is not None:
             self._maybe_answer_task.cancel()
