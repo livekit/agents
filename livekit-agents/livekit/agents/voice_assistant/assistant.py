@@ -630,7 +630,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         """
         Start synthesis and playout the speech only if validated
         """
-        self._log_debug(f"assistant - maybe_play_speech {data}")
+        self._log_debug(f"assistant - play_speech_if_validated {data}")
         assert data.source is not None
 
         # reset volume before starting a new speech
@@ -680,7 +680,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 _synthesize_task.cancel()
                 await _synthesize_task
 
-            self._log_debug("assistant - maybe_play_speech finished")
+            self._log_debug("assistant - play_speech_if_validated finished")
 
     async def _synthesize_task(
         self,
@@ -700,14 +700,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             _first_frame = True
             async for audio in self._tts.synthesize(data.source):
                 if _first_frame:
-                    segment = self._transcription_manager.start_segment(
-                        language="en",
-                        participant=self._room.local_participant,
-                        track_id="tts",
-                    )
-                    segment.update(data.source)
-                    segment.commit()
-
                     dt = time.time() - _start_time
                     _first_frame = False
                     self._log_debug(f"assistant - tts first frame in {dt:.2f}s")
