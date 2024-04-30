@@ -1,9 +1,9 @@
 import asyncio
 import logging
 
-from livekit import rtc
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
 from livekit.agents.llm import (
+    ChatContext,
     ChatMessage,
     ChatRole,
 )
@@ -12,31 +12,23 @@ from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 
 async def entrypoint(ctx: JobContext):
-    vad = silero.VAD()
-    stt = deepgram.STT()
-    llm = openai.LLM()
-    tts = elevenlabs.TTS()
+    initial_ctx = ChatContext(
+        messages=[
+            ChatMessage(
+                role=ChatRole.SYSTEM,
+                text="You are a voice assistant created by LiveKit. Your interface with users will be voice. You should use short and concise responses, and avoiding usage of unpronouncable punctuation.",
+            )
+        ]
+    )
+
     assistant = VoiceAssistant(
-        vad=vad, stt=stt, llm=llm, tts=tts, debug=True, plotting=False
+        vad=silero.VAD(),
+        stt=deepgram.STT(),
+        llm=openai.LLM(),
+        tts=elevenlabs.TTS(),
+        chat_ctx=initial_ctx,
     )
-
-    # registering the callback in case the participant is not already here
-    @ctx.room.on("participant_connected")
-    def _on_participant_connected(participant: rtc.RemoteParticipant):
-        assistant.start(ctx.room, participant)
-
-    # start with the first participant that's already in the room
-    for participant in ctx.room.participants.values():
-        assistant.start(ctx.room, participant)
-        break
-
-    # set system prompt
-    assistant.chat_context.messages.append(
-        ChatMessage(
-            role=ChatRole.SYSTEM,
-            text="You are a voice assistant created by Live Kit. Your interface with users will be voice. You should use short and concise responses, and avoiding usage of unpronouncable punctuation.",
-        )
-    )
+    assistant.start(ctx.room)
 
     await asyncio.sleep(3)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
