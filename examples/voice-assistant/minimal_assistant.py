@@ -2,11 +2,12 @@ import asyncio
 import logging
 
 from livekit import rtc
-from livekit.agents import JobContext, JobRequest, VoiceAssistant, WorkerOptions, cli
+from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
 from livekit.agents.llm import (
     ChatMessage,
     ChatRole,
 )
+from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 
@@ -15,7 +16,9 @@ async def entrypoint(ctx: JobContext):
     stt = deepgram.STT()
     llm = openai.LLM()
     tts = elevenlabs.TTS()
-    assistant = VoiceAssistant(vad, stt, llm, tts, debug=True, plotting=False)
+    assistant = VoiceAssistant(
+        vad=vad, stt=stt, llm=llm, tts=tts, debug=True, plotting=False
+    )
 
     # registering the callback in case the participant is not already here
     @ctx.room.on("participant_connected")

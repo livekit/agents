@@ -14,6 +14,7 @@ from .. import tts as atts
 from .. import vad as avad
 from ..log import logger
 from . import plotter
+from .transcription_manager import TranscriptionManager
 
 
 @define(kw_only=True)
@@ -155,6 +156,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._transcripted_text, self._interim_text = "", ""
         self._start_future = asyncio.Future()
 
+        # transcription managers
+        self._user_transcription_manager: TranscriptionManager | None = None
+        self._agent_transcription_manager: TranscriptionManager | None = None
+
     @override
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         """Register a callback for an event
@@ -199,6 +204,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._participant_identity = participant.identity
         else:
             self._participant_identity = participant
+
+        self._user_transcription_manager = TranscriptionManager(
+            room=room,
+            participant_identity=self._participant_identity,
+        )
 
         p = room.participants_by_identity.get(self._participant_identity)
         if p is not None:
@@ -324,6 +334,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         track = rtc.LocalAudioTrack.create_audio_track("voice", self._audio_source)
         options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         self._pub = await self._room.local_participant.publish_track(track, options)
+        self._agent_transcription_manager = TranscriptionManager(
+            room=self._room, participant_identity=self._room.local_participant.identity
+        )
+        self._agent_transcription_manager.update_track_sid(self._pub.sid)
         self._start_future.set_result(None)
 
     def _on_track_published(
@@ -345,6 +359,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
+            if self._user_transcription_manager:
+                self._user_transcription_manager.update_track_sid(track.sid)
             audio_stream = rtc.AudioStream(track)
             self._stream_ready(audio_stream)
 
@@ -386,13 +402,20 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._recognize_task = asyncio.create_task(self._recognize_loop())
 
     def _recv_final_transcript(self, ev: astt.SpeechEvent):
+        text = ev.alternatives[0].text
+        if self._user_transcription_manager:
+            self._user_transcription_manager.final_transcription(text)
+            self._user_transcription_manager.reset_transcription()
         self._log_debug(f"assistant - received transcript {ev.alternatives[0].text}")
         self._transcripted_text += ev.alternatives[0].text
         self._interrupt_if_needed()
         self._maybe_answer(self._transcripted_text)
 
     def _recv_interim_transcript(self, ev: astt.SpeechEvent):
-        self._interim_text = ev.alternatives[0].text
+        text = ev.alternatives[0].text
+        if self._user_transcription_manager:
+            self._user_transcription_manager.interim_transcription(text)
+        self._interim_text = text
         self._interrupt_if_needed()
 
     def _transcript_finished(self, ev: astt.SpeechEvent):
@@ -685,6 +708,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             _first_frame = True
             async for audio in self._tts.synthesize(data.source):
                 if _first_frame:
+                    if self._agent_transcription_manager:
+                        self._agent_transcription_manager.final_transcription(
+                            data.collected_text
+                        )
+                        self._agent_transcription_manager.reset_transcription()
+
                     dt = time.time() - _start_time
                     _first_frame = False
                     self._log_debug(f"assistant - tts first frame in {dt:.2f}s")
