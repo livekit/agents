@@ -14,10 +14,6 @@ from .. import tts as atts
 from .. import vad as avad
 from ..log import logger
 from . import plotter
-from .transcription_manager import (
-    TranscriptionManager,
-    TranscriptionManagerSegmentHandle,
-)
 
 
 @define(kw_only=True)
@@ -197,7 +193,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             logger.warning("voice assistant already started")
             return
 
-        self._transcription_manager = TranscriptionManager(room=room)
+        self._transcription_manager = utils.TranscriptionManager(room=room)
         self._started = True
         self._room = room
         if isinstance(participant, rtc.RemoteParticipant):
@@ -391,7 +387,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._recognize_task = asyncio.create_task(self._recognize_loop())
 
     def _recv_final_transcript(self, ev: astt.SpeechEvent):
-        text = ev.alternatives[0].text
         self._log_debug(f"assistant - received transcript {ev.alternatives[0].text}")
         self._transcripted_text += ev.alternatives[0].text
         self._interrupt_if_needed()
@@ -446,7 +441,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
-        transcription_segment: TranscriptionManagerSegmentHandle | None = None
+        transcription_segment: utils.TranscriptionManagerSegmentHandle | None = None
 
         select = aio.select([self._audio_stream, vad_stream, stt_stream])
         try:
