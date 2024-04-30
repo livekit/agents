@@ -62,6 +62,23 @@ async def entrypoint(ctx: JobContext):
         chat_ctx=initial_ctx,
     )
 
+    async def _answer_light_toggling(enabled_rooms, disabled_rooms):
+        prompt = "Make a summary of the following actions you did:"
+        if enabled_rooms:
+            enabled_rooms_str = ", ".join(enabled_rooms)
+            prompt += f"\n - You enabled the lights in the following rooms: {enabled_rooms_str}"
+
+        if disabled_rooms:
+            disabled_rooms_str = ", ".join(disabled_rooms)
+            prompt += f"\n - You disabled the lights in the following rooms {disabled_rooms_str}"
+
+        chat_ctx = llm.ChatContext(
+            messages=[llm.ChatMessage(role=llm.ChatRole.SYSTEM, text=prompt)]
+        )
+
+        stream = await gpt.chat(chat_ctx)
+        await assistant.say(stream)
+
     @assistant.on("agent_speech_interrupted")
     def _agent_speech_interrupted(chat_ctx: llm.ChatContext, msg: llm.ChatMessage):
         msg.text += "... (user interrupted you)"
@@ -72,25 +89,9 @@ async def entrypoint(ctx: JobContext):
         enabled_rooms = ctx.get_metadata("enabled_rooms", [])
         disabled_rooms = ctx.get_metadata("disabled_rooms", [])
 
-        async def _handle_answer():
-            prompt = "Make a summary of the following actions you did:"
-            if enabled_rooms:
-                enabled_rooms_str = ", ".join(enabled_rooms)
-                prompt += f"\n - You enabled the lights in the following rooms: {enabled_rooms_str}"
-
-            if disabled_rooms:
-                disabled_rooms_str = ", ".join(disabled_rooms)
-                prompt += f"\n - You disabled the lights in the following rooms {disabled_rooms_str}"
-
-            chat_ctx = llm.ChatContext(
-                messages=[llm.ChatMessage(role=llm.ChatRole.SYSTEM, text=prompt)]
-            )
-
-            stream = await gpt.chat(chat_ctx)
-            await assistant.say(stream)
-
         if enabled_rooms or disabled_rooms:
-            asyncio.ensure_future(_handle_answer())
+            # if there was a change in the lights, summarize it and let the user know
+            asyncio.ensure_future(_answer_light_toggling(enabled_rooms, disabled_rooms))
 
     assistant.start(ctx.room)
     await asyncio.sleep(3)
