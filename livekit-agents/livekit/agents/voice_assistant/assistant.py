@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import contextvars
 import time
-from typing import Any, AsyncIterable, Callable, Literal, override
+from typing import Any, AsyncIterable, Callable, Literal
 
 from attrs import define
 from livekit import rtc
@@ -163,7 +163,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._transcripted_text, self._interim_text = "", ""
         self._start_future = asyncio.Future()
 
-    @override
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         """Register a callback for an event
 
