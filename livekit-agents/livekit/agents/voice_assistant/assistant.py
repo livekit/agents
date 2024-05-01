@@ -454,7 +454,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         select = aio.select([self._audio_stream, vad_stream, stt_stream])
         try:
-
             while True:
                 s = await select()
                 if s.selected is self._audio_stream:
