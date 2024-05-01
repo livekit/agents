@@ -352,7 +352,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            self._track_ready(track)  # type: ignore
+            self._user_track_ready(track)  # type: ignore
 
     def _on_track_unsubscribed(
         self,
@@ -699,6 +699,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             # This should be faster when the whole text is known in advance
             # (no buffering on the provider side)
             data.collected_text = data.source
+            txt_delta_tx.send_nowait(data.source)
+            txt_delta_tx.close()
             _start_time = time.time()
             _first_frame = True
             async for audio in self._tts.synthesize(data.source):
@@ -746,9 +748,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     if not alt:
                         continue
                     data.collected_text += alt
+                    txt_delta_tx.send_nowait(alt)
                     tts_stream.push_text(alt)
 
+                txt_delta_tx.close()
                 tts_stream.mark_segment_end()
+
                 if len(data.source.called_functions) > 0:
                     self.emit("function_calls_collected", assistant_ctx)
 
@@ -762,8 +767,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 # user defined source, stream the text to the TTS
                 async for seg in data.source:
                     data.collected_text += seg
+                    txt_delta_tx.send_nowait(seg)
                     tts_stream.push_text(seg)
 
+                txt_delta_tx.close()
                 tts_stream.mark_segment_end()
 
             await tts_stream.aclose()

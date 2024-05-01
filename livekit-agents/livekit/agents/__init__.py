@@ -19,11 +19,11 @@ from . import (
     llm,
     stt,
     tokenize,
+    transcription,
     tts,
     utils,
     vad,
     voice_assistant,
-    transcription,
 )
 from .apipe import AsyncPipe  # noqa
 from .ipc.protocol import IPC_MESSAGES, Log, StartJobRequest, StartJobResponse  # noqa

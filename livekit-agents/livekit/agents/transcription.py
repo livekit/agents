@@ -1,8 +1,7 @@
 import asyncio
 import contextlib
-import time
 import uuid
-from typing import List
+
 from livekit import rtc
 
 from . import stt
@@ -96,7 +95,7 @@ class STTSegmentsForwarder:
                 )
                 await self._room.local_participant.publish_transcription(transcription)
 
-        except Exception as e:
+        except Exception:
             logger.exception("error in stt transcription")
 
     def _rotate_id(self):
@@ -147,7 +146,7 @@ class SegmentsForwarder:
         participant_identity: str,
         track_id: str,
         language: str,
-        wps: float = 0.7,  # TODO(theomonnom): remove
+        wps: float = 0.3,  # TODO(theomonnom): remove
     ):
         self._room = room
         self._participant_identity = participant_identity
@@ -174,10 +173,9 @@ class SegmentsForwarder:
                     segments=[seg],
                     language=self._language,
                 )
-
                 await self._room.local_participant.publish_transcription(transcription)
                 await asyncio.sleep(self._wps)
-        except Exception as e:
+        except Exception:
             logger.exception("error in stt transcription")
 
     def _rotate_id(self):
