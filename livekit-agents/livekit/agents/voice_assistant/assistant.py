@@ -448,7 +448,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
-        tr_forwarder = self._tr_man.forward_stt_transcription(
+        stt_forwarder = self._tr_man.forward_stt_transcription(
             participant=self._linked_participant, track_id=self._user_track.sid
         )
 
@@ -472,7 +472,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
                 if s.selected is stt_stream:
                     stt_event = s.result()
-                    tr_forwarder.update(stt_event)
+                    stt_forwarder.update(stt_event)
                     if stt_event.type == astt.SpeechEventType.FINAL_TRANSCRIPT:
                         self._recv_final_transcript(stt_event)
                     elif stt_event.type == astt.SpeechEventType.INTERIM_TRANSCRIPT:
@@ -482,7 +482,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         except Exception:
             logger.exception("error in recognize loop")
         finally:
-            await tr_forwarder.aclose(wait=False)
+            await stt_forwarder.aclose(wait=False)
             await stt_stream.aclose(wait=False)
             await vad_stream.aclose(wait=False)
             await select.aclose()
@@ -627,13 +627,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         """
         Start synthesis and playout the speech only if validated
         """
-        self._log_debug(f"assistant - maybe_play_speech {data}")
+        self._log_debug(f"assistant - play_speech_if_validated {data}")
         assert data.source is not None
 
         # reset volume before starting a new speech
         self._vol_filter.reset()
         po_tx, po_rx = aio.channel()  # playout channel
-        tts_co = self._synthesize_task(data, po_tx)
+        txt_delta_tx, txt_delta_rx = aio.channel()  # txt delta
+        tts_co = self._synthesize_task(data, po_tx, txt_delta_tx)
         _synthesize_task = asyncio.create_task(tts_co)
 
         try:
@@ -652,7 +653,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self._chat_ctx.messages.append(msg)
                 self.emit("user_speech_committed", self._chat_ctx, msg)
 
-            await self._playout_task(po_rx)
+            await asyncio.gather(
+                self._playout_task(po_rx),
+                self._forward_transcription_task(txt_delta_rx),
+                return_exceptions=True,
+            )
 
             msg = allm.ChatMessage(
                 text=data.collected_text,
@@ -677,12 +682,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 _synthesize_task.cancel()
                 await _synthesize_task
 
-            self._log_debug("assistant - maybe_play_speech finished")
+            self._log_debug("assistant - play_speech_if_validated finished")
 
     async def _synthesize_task(
         self,
         data: _SpeechData,
         po_tx: aio.ChanSender[rtc.AudioFrame],
+        txt_delta_tx: aio.ChanSender[str],
     ) -> None:
         """Synthesize speech from the source"""
         assert data.source is not None
@@ -770,6 +776,18 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 await _forward_task
 
             self._log_debug("tts inference finished")
+
+    async def _forward_transcription_task(self, txt_delta_rx: aio.ChanReceiver[str]):
+        """Forward the synthesized speech of the assistant as a transcription"""
+        tr_forwarder = self._tr_man.forward_transcription(
+            participant=self._start_args.room.local_participant,
+            track_id=self._pub.sid,
+        )
+        async for txt in txt_delta_rx:
+            tr_forwarder.push_text(txt)
+
+        tr_forwarder.mark_segment_end()
+        await tr_forwarder.aclose()
 
     async def _playout_task(
         self,
