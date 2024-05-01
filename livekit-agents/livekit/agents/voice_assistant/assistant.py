@@ -7,6 +7,7 @@ from typing import Any, AsyncIterable, Callable, Literal, override
 from attrs import define
 from livekit import rtc
 
+from .. import transcription
 from .. import aio, utils
 from .. import llm as allm
 from .. import stt as astt
@@ -177,7 +178,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 - agent_speech_committed: the agent speech was committed to the chat context
                 - agent_speech_interrupted: the agent speech was interrupted
                 - function_calls_completed: all function calls have been completed
-                - will_synthesize_llm: the assistant will synthesize the LLM output
             callback: the callback to call when the event is emitted
         """
         return super().on(event, callback)
@@ -238,6 +238,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._started = True
         self._start_args = _StartArgs(room=room, participant=participant)
+        self._tr_man = transcription.TranscriptionManager(room)
 
         room.on("track_published", self._on_track_published)
         room.on("track_subscribed", self._on_track_subscribed)
@@ -245,31 +246,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         room.on("participant_connected", self._on_participant_connected)
 
         self._launch_task = asyncio.create_task(self._launch())
-
-    def _mark_dirty(self):
-        """Called when the AudioStream isn't valid anymore (microphone unsubscribed or participant
-        disconnected)"""
-        if not self._ready:
-            logger.warning("assistant already marked as dirty")
-            return
-
-        self._log_debug("marking assistant as dirty")
-        self._ready = False
-
-        if self._recognize_task is not None:
-            self._recognize_task.cancel()
-
-    def _mark_ready(self, audio_stream: rtc.AudioStream):
-        """We have everything we need to start the voice assistant (audio sources & audio
-        streams)"""
-        if self._ready:
-            logger.warning("assistant already marked as ready")
-            return
-
-        self._log_debug("marking assistant as ready")
-        self._audio_stream = audio_stream
-        self._ready = True
-        self._recognize_task = asyncio.create_task(self._recognize_loop())
 
     async def aclose(self, wait: bool = True) -> None:
         if not self.started:
@@ -376,8 +352,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            audio_stream = rtc.AudioStream(track)
-            self._stream_ready(audio_stream)
+            self._track_ready(track)  # type: ignore
 
     def _on_track_unsubscribed(
         self,
@@ -389,9 +364,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            self._stream_dirty()
+            self._user_track_dirty()
 
-    def _stream_dirty(self):
+    def _user_track_dirty(self):
         """Called when the AudioStream isn't valid anymore (microphone unsubscribed or participant
         disconnected)"""
         if not self._ready:
@@ -404,14 +379,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if self._recognize_task is not None:
             self._recognize_task.cancel()
 
-    def _stream_ready(self, audio_stream: rtc.AudioStream):
+    def _user_track_ready(self, user_track: rtc.AudioTrack):
         """We have everything we need to start the voice assistant (audio sources & audio
         streams)"""
         if self._ready:
             logger.warning("assistant already marked as ready")
             return
 
+        audio_stream = rtc.AudioStream(user_track)
+
         self._log_debug("marking assistant as ready")
+        self._user_track = user_track
         self._audio_stream = audio_stream
         self._ready = True
         self._recognize_task = asyncio.create_task(self._recognize_loop())
@@ -470,9 +448,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
+        tr_forwarder = self._tr_man.forward_stt_transcription(
+            participant=self._linked_participant, track_id=self._user_track.sid
+        )
 
         select = aio.select([self._audio_stream, vad_stream, stt_stream])
         try:
+
             while True:
                 s = await select()
                 if s.selected is self._audio_stream:
@@ -491,6 +473,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
                 if s.selected is stt_stream:
                     stt_event = s.result()
+                    tr_forwarder.update(stt_event)
                     if stt_event.type == astt.SpeechEventType.FINAL_TRANSCRIPT:
                         self._recv_final_transcript(stt_event)
                     elif stt_event.type == astt.SpeechEventType.INTERIM_TRANSCRIPT:
@@ -500,6 +483,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         except Exception:
             logger.exception("error in recognize loop")
         finally:
+            await tr_forwarder.aclose(wait=False)
             await stt_stream.aclose(wait=False)
             await vad_stream.aclose(wait=False)
             await select.aclose()
