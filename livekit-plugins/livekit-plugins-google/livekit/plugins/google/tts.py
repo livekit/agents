@@ -49,7 +49,9 @@ class TTS(tts.TTS):
         credentials_info: Optional[dict] = None,
         credentials_file: Optional[str] = None,
     ) -> None:
-        super().__init__(streaming_supported=False)
+        super().__init__(
+            streaming_supported=False, sample_rate=sample_rate, num_channels=1
+        )
 
         if credentials_info:
             self._client = (
@@ -96,7 +98,7 @@ class TTS(tts.TTS):
                 ),
             )
         self._config = config
-        self._creds = self._client.transport._credentials  # TODO: is this needed?
+        self._creds = self._client.transport._credentials
 
     async def synthesize(
         self,
