@@ -10,6 +10,7 @@ from livekit.agents import (
     cli,
 )
 from livekit.plugins.deepgram import STT
+from livekit.plugins.elevenlabs import TTS
 from state_manager import StateManager
 
 PROMPT = "You are KITT, a friendly voice assistant powered by LiveKit.  \
@@ -24,15 +25,16 @@ SIP_INTRO = "Hello, I am KITT, a friendly voice assistant powered by LiveKit Age
 
 
 async def entrypoint(job: JobContext):
+    # Plugins
+    stt = STT()
+    tts = TTS(model_id="eleven_turbo_v2")
+    stt_stream = stt.stream()
+
     # LiveKit Entities
-    source = rtc.AudioSource(24000, 1)
+    source = rtc.AudioSource(tts.sample_rate, tts.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
-
-    # Plugins
-    stt = STT()
-    stt_stream = stt.stream()
 
     # Agent state
     state = StateManager(job.room, PROMPT)
@@ -79,9 +81,11 @@ async def entrypoint(job: JobContext):
         nonlocal current_transcription
 
         state.agent_thinking = True
+        stream = tts.stream()
         job = InferenceJob(
             transcription=current_transcription,
             audio_source=source,
+            tts_stream=stream,
             chat_history=state.chat_history,
             force_text_response=force_text,
         )

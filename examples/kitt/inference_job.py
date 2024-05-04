@@ -9,7 +9,6 @@ from typing import List
 from attr import define
 from livekit import agents, rtc
 from livekit.agents.llm import ChatContext, ChatMessage, ChatRole
-from livekit.plugins.elevenlabs import TTS
 from livekit.plugins.openai import LLM
 
 
@@ -17,6 +16,7 @@ class InferenceJob:
     def __init__(
         self,
         transcription: str,
+        tts_stream: agents.tts.SynthesizeStream,
         audio_source: rtc.AudioSource,
         chat_history: List[ChatMessage],
         force_text_response: str | None = None,
@@ -26,8 +26,7 @@ class InferenceJob:
         self._transcription = transcription
         self._current_response = ""
         self._chat_history = chat_history
-        self._tts = TTS(model_id="eleven_turbo_v2")
-        self._tts_stream = self._tts.stream()
+        self._tts_stream = tts_stream
         self._llm = LLM()
         self._run_task = asyncio.create_task(self._run())
         self._output_queue = asyncio.Queue[rtc.AudioFrame | None]()
@@ -129,7 +128,7 @@ class InferenceJob:
             self._tts_stream.push_text(self._force_text_response)
             self.current_response = self._force_text_response
             self.finished_generating = True
-            await self._tts_stream.flush()
+            await self._tts_stream.aclose(wait=True)
             return
 
         chat_context = ChatContext(
@@ -143,17 +142,18 @@ class InferenceJob:
             self._tts_stream.push_text(delta)
             self.current_response += delta
         self.finished_generating = True
-        await self._tts_stream.flush()
+        await self._tts_stream.aclose(wait=True)
 
     async def _tts_task(self):
-        async for event in self._tts_stream:
-            if event.type == agents.tts.SynthesisEventType.AUDIO:
-                await self._output_queue.put(
-                    event.audio.data if event.audio else event.audio
-                )
-            elif event.type == agents.tts.SynthesisEventType.FINISHED:
-                break
-        self._output_queue.put_nowait(None)
+        while True:
+            async for event in self._tts_stream:
+                if event.type == agents.tts.SynthesisEventType.AUDIO:
+                    await self._output_queue.put(
+                        event.audio.data if event.audio else event.audio
+                    )
+                elif event.type == agents.tts.SynthesisEventType.FINISHED:
+                    break
+            self._output_queue.put_nowait(None)
 
     async def _audio_capture_task(self):
         while True:
@@ -165,7 +165,7 @@ class InferenceJob:
             await self._audio_source.capture_frame(audio_frame)
         self.speaking = False
         self._done_future.set_result(True)
-        await self._tts_stream.aclose()
+        await self._tts_stream.aclose(wait=True)
 
     def __aiter__(self):
         return self
