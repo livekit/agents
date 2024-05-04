@@ -12,17 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional, Union
+from typing import AsyncIterable, Optional, Union
+from dataclasses import dataclass
+
+from livekit import rtc
+from livekit.agents import codecs, tts
+
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import (
     SynthesizeSpeechResponse,
     SsmlVoiceGender,
 )
-from livekit import rtc
-from livekit.agents import tts
-from .models import AudioEncoding, Gender, SpeechLanguages
-from dataclasses import dataclass
 
+from .models import AudioEncoding, Gender, SpeechLanguages
+from .log import logger
 
 LgType = Union[SpeechLanguages, str]
 GenderType = Union[Gender, str]
@@ -79,16 +82,22 @@ class TTS(tts.TTS):
                 language_code=language,
                 ssml_gender=_gender,
             )
-            # Default audio to LINEAR16 (the encoding used in WAV files).
-            _audio_encoding = texttospeech.AudioEncoding.LINEAR16
-            if audio_encoding == "mp3":
+            # Support wav and mp3 only
+            if audio_encoding == "wav":
+                _audio_encoding = texttospeech.AudioEncoding.LINEAR16
+            elif audio_encoding == "mp3":
                 _audio_encoding = texttospeech.AudioEncoding.MP3
-            elif audio_encoding == "opus":
-                _audio_encoding = texttospeech.AudioEncoding.OGG_OPUS
-            elif audio_encoding == "mulaw":
-                _audio_encoding = texttospeech.AudioEncoding.MULAW
-            elif audio_encoding == "alaw":
-                _audio_encoding = texttospeech.AudioEncoding.ALAW
+            # elif audio_encoding == "opus":
+            #     _audio_encoding = texttospeech.AudioEncoding.OGG_OPUS
+            # elif audio_encoding == "mulaw":
+            #     _audio_encoding = texttospeech.AudioEncoding.MULAW
+            # elif audio_encoding == "alaw":
+            #     _audio_encoding = texttospeech.AudioEncoding.ALAW
+            else:
+                raise NotImplementedError(
+                    f"Audio encoding {audio_encoding} is not supported"
+                )
+
             config = TTSOptions(
                 voice=voice,
                 audio_config=texttospeech.AudioConfig(
@@ -98,28 +107,38 @@ class TTS(tts.TTS):
                 ),
             )
         self._config = config
-        self._creds = self._client.transport._credentials
+        self._audio_encoding = _audio_encoding
 
     async def synthesize(
         self,
         *,
         text: str,
-    ) -> tts.SynthesizedAudio:
-        # Perform the text-to-speech request on the text input with the selected
-        # voice parameters and audio file type
-        response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
-            input=texttospeech.SynthesisInput(text=text),
-            voice=self._config.voice,
-            audio_config=self._config.audio_config,
-        )
+    ) -> AsyncIterable[tts.SynthesizedAudio]:
+        try:
+            # Perform the text-to-speech request on the text input with the selected
+            # voice parameters and audio file type
+            response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
+                input=texttospeech.SynthesisInput(text=text),
+                voice=self._config.voice,
+                audio_config=self._config.audio_config,
+            )
 
-        data = response.audio_content
-        return tts.SynthesizedAudio(
-            text=text,
-            data=rtc.AudioFrame(
-                data=data,
-                sample_rate=self._config.audio_config.sample_rate_hertz,
-                num_channels=1,
-                samples_per_channel=len(data) // 2,  # 16-bit
-            ),
-        )
+            data = response.audio_content
+            if self._config.audio_config.audio_encoding == "mp3":
+                decoder = codecs.Mp3StreamDecoder()
+                frames = decoder.decode_chunk(data)
+                for frame in frames:
+                    yield tts.SynthesizedAudio(text=text, data=frame)
+            else:
+                yield tts.SynthesizedAudio(
+                    text=text,
+                    data=rtc.AudioFrame(
+                        data=data,
+                        sample_rate=self._config.audio_config.sample_rate_hertz,
+                        num_channels=1,
+                        samples_per_channel=len(data) // 2,  # 16-bit
+                    ),
+                )
+
+        except Exception as e:
+            logger.error(f"failed to synthesize: {e}")

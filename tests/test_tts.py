@@ -8,8 +8,12 @@ TEST_AUDIO_SYNTHESIZE = "the people who are crazy enough to think they can chang
 
 
 async def test_synthetize():
-    ttss = [elevenlabs.TTS(), openai.TTS(model="tts-1", voice="nova"), google.TTS()]
-    
+    ttss = [
+        elevenlabs.TTS(),
+        openai.TTS(model="tts-1", voice="nova"),
+        google.TTS(audio_encoding="mp3"),
+    ]
+
     async def synthetize(tts: agents.tts.TTS):
         frames = []
         async for frame in tts.synthesize(text=TEST_AUDIO_SYNTHESIZE):
