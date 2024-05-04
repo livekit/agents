@@ -107,7 +107,6 @@ class TTS(tts.TTS):
                 ),
             )
         self._config = config
-        self._audio_encoding = _audio_encoding
 
     async def synthesize(
         self,
