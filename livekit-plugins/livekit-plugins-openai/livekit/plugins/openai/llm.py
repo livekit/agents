@@ -23,7 +23,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "gpt-4-1106-preview",
+        model: str | ChatModels = "gpt-4-turbo",
         client: openai.AsyncClient | None = None,
     ) -> None:
         self._opts = LLMOptions(model=model)
@@ -175,11 +175,14 @@ class LLMStream(llm.LLMStream):
                 return
 
         logger.debug(f"calling function {name} with arguments {args}")
+        self._called_functions.append(
+            llm.CalledFunction(fnc_name=name, fnc=fnc.fnc, args=args)
+        )
         func = functools.partial(fnc.fnc, **args)
         if asyncio.iscoroutinefunction(fnc.fnc):
-            task = asyncio.ensure_future(func())
+            task = asyncio.create_task(func())
         else:
-            task = asyncio.ensure_future(asyncio.to_thread(func))
+            task = asyncio.create_task(asyncio.to_thread(func))
 
         def _task_done(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():

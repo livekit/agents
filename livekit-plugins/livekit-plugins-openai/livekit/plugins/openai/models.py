@@ -5,8 +5,12 @@ TTSModels = Literal["tts-1", "tts-1-hd"]
 TTSVoices = Literal["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
-    "gpt-4-1106-preview",
+    "gpt-4-turbo",
+    "gpt-4-turbo-2024-04-09",
+    "gpt-4-turbo-preview",
+    "gpt-4-0125-preview" "gpt-4-1106-preview",
     "gpt-4-vision-preview",
+    "gpt-4-1106-vision-preview",
     "gpt-4",
     "gpt-4-0314",
     "gpt-4-0613",

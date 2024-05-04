@@ -1,5 +1,6 @@
 import abc
 import enum
+from typing import Callable
 
 from attrs import define
 
@@ -52,7 +53,23 @@ class LLM(abc.ABC):
     ) -> "LLMStream": ...
 
 
+@define
+class CalledFunction:
+    fnc_name: str
+    fnc: Callable
+    args: dict
+
+
 class LLMStream(abc.ABC):
+    def __init__(self) -> None:
+        # fnc_name, args..
+        self._called_functions: list[CalledFunction] = []
+
+    @property
+    def called_functions(self) -> list[CalledFunction]:
+        """List of called functions from this stream."""
+        return self._called_functions
+
     @abc.abstractmethod
     def __aiter__(self) -> "LLMStream": ...
 
