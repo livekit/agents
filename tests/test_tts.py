@@ -1,7 +1,7 @@
 import asyncio
 
 from livekit import agents
-from livekit.plugins import elevenlabs, openai, google
+from livekit.plugins import elevenlabs, google, openai
 from utils import compare_word_counts
 
 TEST_AUDIO_SYNTHESIZE = "the people who are crazy enough to think they can change the world are the ones who do"

@@ -12,20 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import AsyncIterable, Optional, Union
 from dataclasses import dataclass
+from typing import AsyncIterable, Optional, Union
 
 from livekit import rtc
 from livekit.agents import codecs, tts
 
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import (
-    SynthesizeSpeechResponse,
     SsmlVoiceGender,
+    SynthesizeSpeechResponse,
 )
 
-from .models import AudioEncoding, Gender, SpeechLanguages
 from .log import logger
+from .models import AudioEncoding, Gender, SpeechLanguages
 
 LgType = Union[SpeechLanguages, str]
 GenderType = Union[Gender, str]
