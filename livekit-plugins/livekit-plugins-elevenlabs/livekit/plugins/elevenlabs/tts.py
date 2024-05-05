@@ -315,7 +315,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 data = await data_rx.recv()
                 data_pkt = dict(
                     text=data,
-                    try_trigger_generation=False,
+                    try_trigger_generation=True,
                 )
                 if data == SynthesizeStream._STREAM_EOS:
                     closing_ws = True
@@ -350,7 +350,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         data=b64data,
                         sample_rate=self._opts.sample_rate,
                         num_channels=1,
-                        samples_per_channel=len(data) // 2,
+                        samples_per_channel=len(b64data) // 2,
                     )
                     self._event_queue.put_nowait(
                         tts.SynthesisEvent(
