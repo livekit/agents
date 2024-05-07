@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG PYTHON_VERSION=3.11.6
-FROM python:${PYTHON_VERSION}-slim as base
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 as base
 
 # Prevents Python from writing pyc files.
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -28,18 +28,22 @@ RUN adduser \
 RUN apt-get update && \
     apt-get install -y \
     gcc \
+    python3 \
+    python3-pip \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
+
+FROM base
 
 # Copy the source code into the container.
 COPY . .
 
-RUN python -m pip install -r requirements.txt
+RUN python3 -m pip install -r requirements.txt
 
-RUN python minimal_assistant.py download-files
+RUN python3 minimal_assistant.py download-files
 
 # Switch to the non-privileged user to run the application.
 USER appuser
 
 # Run the application.
-CMD python minimal_assistant.py start
+CMD python3 minimal_assistant.py start
