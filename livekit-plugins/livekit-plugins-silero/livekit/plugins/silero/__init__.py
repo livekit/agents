@@ -26,11 +26,7 @@ class SileroPlugin(Plugin):
         super().__init__(__name__, __version__, __package__)
 
     def download_files(self):
-        _ = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
-            model="silero_vad",
-            use_onnx=True,
-        )
+        _ = torch.hub.load(repo_or_dir="snakers4/silero-vad", model="silero_vad")
 
 
 Plugin.register_plugin(SileroPlugin())
