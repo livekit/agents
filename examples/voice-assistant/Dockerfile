@@ -29,10 +29,6 @@ RUN apt-get update && \
     apt-get install -y \
     gcc \
     python3-dev \
-    git \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the source code into the container.
