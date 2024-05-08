@@ -70,3 +70,62 @@ async def test_streamed_sent_tokenizer():
 
         segmented = await stream.__anext__()
         assert segmented == EXPECTED_MIN_20[-1]
+
+
+WORDS_TEXT = (
+    "This is a test. Blabla another test! multiple consecutive spaces:     done"
+)
+WORDS_EXPECTED = [
+    "This",
+    "is",
+    "a",
+    "test",
+    "Blabla",
+    "another",
+    "test",
+    "multiple",
+    "consecutive",
+    "spaces",
+    "done",
+]
+
+
+def test_word_tokenizer():
+    tokenizers = [basic.WordTokenizer()]
+
+    for tok in tokenizers:
+        tokens = tok.tokenize(text=WORDS_TEXT)
+        for i, token in enumerate(WORDS_EXPECTED):
+            assert token == tokens[i]
+
+
+async def test_streamed_word_tokenizer():
+    # divide text by chunks of arbitrary length (1-4)
+    pattern = [1, 2, 4]
+    text = WORDS_TEXT
+    chunks = []
+    pattern_iter = iter(pattern * (len(text) // sum(pattern) + 1))
+
+    for chunk_size in pattern_iter:
+        if not text:
+            break
+        chunks.append(text[:chunk_size])
+        text = text[chunk_size:]
+
+    tokenizers = [
+        basic.WordTokenizer(),
+    ]
+
+    for tok in tokenizers:
+        stream = tok.stream()
+        for chunk in chunks:
+            stream.push_text(chunk)
+
+        for i in range(len(WORDS_EXPECTED) - 1):
+            segmented = await stream.__anext__()
+            assert segmented == WORDS_EXPECTED[i]
+
+        stream.mark_segment_end()
+
+        segmented = await stream.__anext__()
+        assert segmented == WORDS_EXPECTED[-1]

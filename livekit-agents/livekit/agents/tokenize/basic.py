@@ -1,7 +1,7 @@
 import functools
 from dataclasses import dataclass
 
-from . import _basic_hyphenator, _basic_sent, token_stream, tokenizer
+from . import _basic_hyphenator, _basic_sent, _basic_word, token_stream, tokenizer
 
 # Really naive implementation of SentenceTokenizer, WordTokenizer + hyphenate_word
 # The basic tokenizer is rule-based and only English is really tested
@@ -51,7 +51,20 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
 
 
 class WordTokenizer(tokenizer.WordTokenizer):
-    pass
+    def __init__(self, *, ignore_punctuation: bool = True) -> None:
+        self._ignore_punctuation = ignore_punctuation
+
+    def tokenize(self, *, text: str, language: str | None = None) -> list[str]:
+        return _basic_word.split_words(text)
+
+    def stream(self, *, language: str | None = None) -> tokenizer.WordStream:
+        return token_stream.BufferedTokenStream(
+            tokenizer=functools.partial(
+                _basic_word.split_words, ignore_punctuation=self._ignore_punctuation
+            ),
+            min_token_len=1,
+            ctx_len=1,  # ignore
+        )
 
 
 hyphenate_word = _basic_hyphenator.hyphenate_word

@@ -53,12 +53,12 @@ def split_sentences(text: str, min_sentence_len: int = 20) -> list[str]:
     new_sentences = []
     buff = ""
     for sentence in sentences:
-        buff += sentence + " "
-        if len(buff) - 1 >= min_sentence_len:
-            new_sentences.append(buff.rstrip())
+        buff += " " + sentence
+        if len(buff) > min_sentence_len:
+            new_sentences.append(buff[1:])
             buff = ""
 
     if buff:
-        new_sentences.append(buff.rstrip())
+        new_sentences.append(buff[1:])
 
     return new_sentences
