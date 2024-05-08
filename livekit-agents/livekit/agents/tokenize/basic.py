@@ -67,4 +67,5 @@ class WordTokenizer(tokenizer.WordTokenizer):
         )
 
 
-hyphenate_word = _basic_hyphenator.hyphenate_word
+def hyphenate_word(word: str) -> list[str]:
+    return _basic_hyphenator.hyphenate_word(word)

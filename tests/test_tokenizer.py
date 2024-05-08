@@ -129,3 +129,28 @@ async def test_streamed_word_tokenizer():
 
         segmented = await stream.__anext__()
         assert segmented == WORDS_EXPECTED[-1]
+
+
+HYPHENATOR_TEXT = [
+    "Segment",
+    "expected",
+    "communication",
+    "window",
+    "welcome",
+    "bedroom",
+]
+
+HYPHENATOR_EXPECTED = [
+    ["Seg", "ment"],
+    ["ex", "pect", "ed"],
+    ["com", "mu", "ni", "ca", "tion"],
+    ["win", "dow"],
+    ["wel", "come"],
+    ["bed", "room"],
+]
+
+
+def test_hyphenate_word():
+    for i, word in enumerate(HYPHENATOR_TEXT):
+        hyphenated = basic.hyphenate_word(word)
+        assert hyphenated == HYPHENATOR_EXPECTED[i]
