@@ -34,5 +34,13 @@ RUN apt-get update && \
 # Copy the source code into the container.
 COPY . .
 
+RUN python -m pip install --no-cache-dir -r requirements.txt
+RUN python -c "import torch; torch.hub.load(repo_or_dir='snakers4/silero-vad',model='silero_vad',onnx=True)"
+
+FROM builder
+
+# Switch to the non-privileged user to run the application.
+USER appuser
+
 # Run the application.
-CMD python -m pip install -r requirements.txt && python minimal_assistant.py download-files && python minimal_assistant.py start
+CMD python minimal_assistant.py start
