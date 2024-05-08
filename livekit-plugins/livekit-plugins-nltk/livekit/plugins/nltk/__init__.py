@@ -13,12 +13,11 @@
 # limitations under the License.
 
 
-from .sentence_tokenizer import SentenceStream, SentenceTokenizer
+from .sentence_tokenizer import SentenceTokenizer
 from .version import __version__
 
 __all__ = [
     "SentenceTokenizer",
-    "SentenceStream",
     "__version__",
 ]
 

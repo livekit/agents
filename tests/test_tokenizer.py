@@ -1,3 +1,4 @@
+from livekit.agents.tokenize import basic
 from livekit.plugins import nltk
 
 # Download the punkt tokenizer, will only download if not already present
@@ -27,10 +28,15 @@ EXPECTED_MIN_20 = [
 
 
 def test_sent_tokenizer():
-    sentence_tokenizer = nltk.SentenceTokenizer(min_sentence_len=20)
-    segmented = sentence_tokenizer.tokenize(text=TEXT)
-    for i, segment in enumerate(EXPECTED_MIN_20):
-        assert segment == segmented[i].text
+    tokenizers = [
+        nltk.SentenceTokenizer(min_sentence_len=20),
+        basic.SentenceTokenizer(min_sentence_len=20),
+    ]
+
+    for tok in tokenizers:
+        segmented = tok.tokenize(text=TEXT)
+        for i, segment in enumerate(EXPECTED_MIN_20):
+            assert segment == segmented[i]
 
 
 async def test_streamed_sent_tokenizer():
@@ -46,16 +52,21 @@ async def test_streamed_sent_tokenizer():
         chunks.append(text[:chunk_size])
         text = text[chunk_size:]
 
-    sentence_tokenizer = nltk.SentenceTokenizer()
-    stream = sentence_tokenizer.stream(language="english")
-    for chunk in chunks:
-        stream.push_text(chunk)
+    tokenizers = [
+        nltk.SentenceTokenizer(min_sentence_len=20),
+        basic.SentenceTokenizer(min_sentence_len=20),
+    ]
 
-    for i in range(len(EXPECTED_MIN_20) - 1):
+    for tok in tokenizers:
+        stream = tok.stream()
+        for chunk in chunks:
+            stream.push_text(chunk)
+
+        for i in range(len(EXPECTED_MIN_20) - 1):
+            segmented = await stream.__anext__()
+            assert segmented == EXPECTED_MIN_20[i]
+
+        stream.mark_segment_end()
+
         segmented = await stream.__anext__()
-        assert segmented.text == EXPECTED_MIN_20[i]
-
-    await stream.flush()
-
-    segmented = await stream.__anext__()
-    assert segmented.text == EXPECTED_MIN_20[-1]
+        assert segmented == EXPECTED_MIN_20[-1]
