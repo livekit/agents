@@ -47,23 +47,29 @@ class BufferedTokenStream(TokenStream):
                 self._event_queue.put_nowait(s)
                 self._incomplete_tokens = []
 
-            self._buffer = self._buffer[len(new_token) :].lstrip()
+            l = self._buffer.find(new_token) + len(new_token)
+            self._buffer = self._buffer[l:][1:]
 
     def mark_segment_end(self) -> None:
         self.push_text(None)
 
     def _flush(self) -> None:
         # try to segment the remaining data inside self._text_buffer
-        buff = " ".join(self._incomplete_tokens)
+        ibuff = " ".join(self._incomplete_tokens)
+        buff = ibuff
         tokens = self._tokenizer(self._buffer)
+        start = 0
         for t in tokens:
+            if not ibuff:
+                start = 1
+
             buff += " " + t
             if len(buff) >= self._min_token_len:
-                self._event_queue.put_nowait(buff)
+                self._event_queue.put_nowait(buff[start:])
                 buff = ""
 
         if buff:
-            self._event_queue.put_nowait(buff.lstrip())
+            self._event_queue.put_nowait(buff[start:])
 
     async def aclose(self, *, wait: bool = True) -> None:
         self._closed = True
