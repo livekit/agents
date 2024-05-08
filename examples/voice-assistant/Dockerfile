@@ -39,8 +39,5 @@ RUN python -c "import torch; torch.hub.load(repo_or_dir='snakers4/silero-vad',mo
 
 FROM builder
 
-# Switch to the non-privileged user to run the application.
-USER appuser
-
 # Run the application.
 CMD python minimal_assistant.py start
