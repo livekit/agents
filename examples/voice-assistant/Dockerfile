@@ -34,9 +34,9 @@ RUN apt-get update && \
 # Copy the source code into the container.
 COPY . .
 
-RUN python -m pip install -r requirements.txt
+# RUN python -m pip install -r requirements.txt
 
-RUN python -c "import torch; torch.hub.load(repo_or_dir='snakers4/silero-vad',model='silero_vad',onnx=True)"
+# RUN python -c "import torch; torch.hub.load(repo_or_dir='snakers4/silero-vad',model='silero_vad',onnx=True)"
 
 FROM builder
 
