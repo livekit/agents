@@ -47,8 +47,8 @@ class BufferedTokenStream(TokenStream):
                 self._event_queue.put_nowait(s)
                 self._incomplete_tokens = []
 
-            l = self._buffer.find(new_token) + len(new_token)
-            self._buffer = self._buffer[l:][1:]
+            real_len = self._buffer.find(new_token) + len(new_token)
+            self._buffer = self._buffer[real_len:][1:]
 
     def mark_segment_end(self) -> None:
         self.push_text(None)
