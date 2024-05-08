@@ -119,9 +119,11 @@ class TTS(tts.TTS):
                     json=dict(
                         text=text,
                         model_id=self._opts.model_id,
-                        voice_settings=dataclasses.asdict(voice.settings)
-                        if voice.settings
-                        else None,
+                        voice_settings=(
+                            dataclasses.asdict(voice.settings)
+                            if voice.settings
+                            else None
+                        ),
                     ),
                 ) as resp:
                     data = await resp.read()
