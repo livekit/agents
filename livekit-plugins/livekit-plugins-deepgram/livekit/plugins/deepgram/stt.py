@@ -149,7 +149,7 @@ class SpeechStream(stt.SpeechStream):
         self,
         opts: STTOptions,
         api_key: str,
-        sample_rate: int = 16000,
+        sample_rate: int = 48000,
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
@@ -276,6 +276,7 @@ class SpeechStream(stt.SpeechStream):
                     frame = data.remix_and_resample(
                         self._sample_rate, self._num_channels
                     )
+
                     await ws.send_bytes(frame.data.tobytes())
                 elif data == SpeechStream._CLOSE_MSG:
                     closing_ws = True

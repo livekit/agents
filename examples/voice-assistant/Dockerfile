@@ -24,13 +24,22 @@ RUN adduser \
     --uid "${UID}" \
     appuser
 
+# Install gcc and other build dependencies.
+RUN apt-get update && \
+    apt-get install -y \
+    gcc \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy the source code into the container.
 COPY . .
 
 RUN python -m pip install -r requirements.txt
 
+RUN python minimal_assistant.py download-files
+
 # Switch to the non-privileged user to run the application.
 USER appuser
 
 # Run the application.
-CMD python agent.py start
+CMD python minimal_assistant.py start

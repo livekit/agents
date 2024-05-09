@@ -1,3 +1,4 @@
+from livekit.agents.tokenize import basic
 from livekit.plugins import nltk
 
 # Download the punkt tokenizer, will only download if not already present
@@ -27,10 +28,15 @@ EXPECTED_MIN_20 = [
 
 
 def test_sent_tokenizer():
-    sentence_tokenizer = nltk.SentenceTokenizer(min_sentence_len=20)
-    segmented = sentence_tokenizer.tokenize(text=TEXT)
-    for i, segment in enumerate(EXPECTED_MIN_20):
-        assert segment == segmented[i].text
+    tokenizers = [
+        nltk.SentenceTokenizer(min_sentence_len=20),
+        basic.SentenceTokenizer(min_sentence_len=20),
+    ]
+
+    for tok in tokenizers:
+        segmented = tok.tokenize(text=TEXT)
+        for i, segment in enumerate(EXPECTED_MIN_20):
+            assert segment == segmented[i]
 
 
 async def test_streamed_sent_tokenizer():
@@ -46,16 +52,105 @@ async def test_streamed_sent_tokenizer():
         chunks.append(text[:chunk_size])
         text = text[chunk_size:]
 
-    sentence_tokenizer = nltk.SentenceTokenizer()
-    stream = sentence_tokenizer.stream(language="english")
-    for chunk in chunks:
-        stream.push_text(chunk)
+    tokenizers = [
+        nltk.SentenceTokenizer(min_sentence_len=20),
+        basic.SentenceTokenizer(min_sentence_len=20),
+    ]
 
-    for i in range(len(EXPECTED_MIN_20) - 1):
+    for tok in tokenizers:
+        stream = tok.stream()
+        for chunk in chunks:
+            stream.push_text(chunk)
+
+        for i in range(len(EXPECTED_MIN_20) - 1):
+            segmented = await stream.__anext__()
+            assert segmented == EXPECTED_MIN_20[i]
+
+        stream.mark_segment_end()
+
         segmented = await stream.__anext__()
-        assert segmented.text == EXPECTED_MIN_20[i]
+        assert segmented == EXPECTED_MIN_20[-1]
 
-    await stream.flush()
 
-    segmented = await stream.__anext__()
-    assert segmented.text == EXPECTED_MIN_20[-1]
+WORDS_TEXT = (
+    "This is a test. Blabla another test! multiple consecutive spaces:     done"
+)
+WORDS_EXPECTED = [
+    "This",
+    "is",
+    "a",
+    "test",
+    "Blabla",
+    "another",
+    "test",
+    "multiple",
+    "consecutive",
+    "spaces",
+    "done",
+]
+
+
+def test_word_tokenizer():
+    tokenizers = [basic.WordTokenizer()]
+
+    for tok in tokenizers:
+        tokens = tok.tokenize(text=WORDS_TEXT)
+        for i, token in enumerate(WORDS_EXPECTED):
+            assert token == tokens[i]
+
+
+async def test_streamed_word_tokenizer():
+    # divide text by chunks of arbitrary length (1-4)
+    pattern = [1, 2, 4]
+    text = WORDS_TEXT
+    chunks = []
+    pattern_iter = iter(pattern * (len(text) // sum(pattern) + 1))
+
+    for chunk_size in pattern_iter:
+        if not text:
+            break
+        chunks.append(text[:chunk_size])
+        text = text[chunk_size:]
+
+    tokenizers = [
+        basic.WordTokenizer(),
+    ]
+
+    for tok in tokenizers:
+        stream = tok.stream()
+        for chunk in chunks:
+            stream.push_text(chunk)
+
+        for i in range(len(WORDS_EXPECTED) - 1):
+            segmented = await stream.__anext__()
+            assert segmented == WORDS_EXPECTED[i]
+
+        stream.mark_segment_end()
+
+        segmented = await stream.__anext__()
+        assert segmented == WORDS_EXPECTED[-1]
+
+
+HYPHENATOR_TEXT = [
+    "Segment",
+    "expected",
+    "communication",
+    "window",
+    "welcome",
+    "bedroom",
+]
+
+HYPHENATOR_EXPECTED = [
+    ["Seg", "ment"],
+    ["ex", "pect", "ed"],
+    ["com", "mu", "ni", "ca", "tion"],
+    ["win", "dow"],
+    ["wel", "come"],
+    ["bed", "room"],
+]
+
+
+def test_hyphenate_word():
+    for i, word in enumerate(HYPHENATOR_TEXT):
+        hyphenated = basic.hyphenate_word(word)
+        assert hyphenated == HYPHENATOR_EXPECTED[i]

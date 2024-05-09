@@ -83,3 +83,7 @@ SpeechLanguages = Literal[
     "vi-VN",
     "da-DK",
 ]
+
+Gender = Literal["male", "female", "neutral"]
+
+AudioEncoding = Literal["wav", "mp3", "ogg", "mulaw", "alaw"]
