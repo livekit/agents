@@ -36,9 +36,11 @@ RUN apt-get update && \
 
 USER appuser
 
+COPY requirements.txt .
+RUN python -m pip install --user --no-cache-dir -r requirements.txt
+
 COPY . .
 
-RUN python -m pip install --no-cache-dir -r requirements.txt
 RUN python -c "import torch; torch.hub.load(repo_or_dir='snakers4/silero-vad',model='silero_vad',onnx=True)"
 # RUN python minimal_assistant.py download-files 
 
