@@ -18,14 +18,9 @@ RUN adduser \
     --gecos "" \
     --home "/home/appuser" \
     --shell "/sbin/nologin" \
-    --no-create-home \
     --uid "${UID}" \
     appuser
 
-WORKDIR /home/appuser
-
-# Give ownership of the /home/appuser directory to the appuser user.
-RUN command chown -R appuser:appuser /home/appuser
 
 # Install gcc and other build dependencies.
 RUN apt-get update && \
@@ -35,6 +30,8 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 USER appuser
+
+WORKDIR /home/appuser
 
 COPY requirements.txt .
 RUN python -m pip install --user --no-cache-dir -r requirements.txt
