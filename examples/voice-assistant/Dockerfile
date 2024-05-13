@@ -10,7 +10,22 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # the application crashes without emitting any logs due to buffering.
 ENV PYTHONUNBUFFERED=1
 
-WORKDIR /app
+# Create a non-privileged user that the app will run under.
+# See https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#user
+ARG UID=10001
+RUN adduser \
+    --disabled-password \
+    --gecos "" \
+    --home "/home/appuser" \
+    --shell "/sbin/nologin" \
+    --no-create-home \
+    --uid "${UID}" \
+    appuser
+
+WORKDIR /home/appuser
+
+# Give ownership of the /home/appuser directory to the appuser user.
+RUN command chown -R appuser:appuser /home/appuser
 
 # Install gcc and other build dependencies.
 RUN apt-get update && \
@@ -22,8 +37,11 @@ RUN apt-get update && \
 # Copy the source code into the container.
 COPY . .
 
+USER appuser
+
 RUN python -m pip install --no-cache-dir -r requirements.txt
-RUN python minimal_assistant.py download-files 
+RUN python -c "import torch; torch.hub.load(repo_or_dir='snakers4/silero-vad',model='silero_vad',onnx=True)"
+# RUN python minimal_assistant.py download-files 
 
 # Run the application.
 CMD python minimal_assistant.py start
