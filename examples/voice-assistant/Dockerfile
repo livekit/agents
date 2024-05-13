@@ -34,10 +34,9 @@ RUN apt-get update && \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the source code into the container.
-COPY . .
-
 USER appuser
+
+COPY . .
 
 RUN python -m pip install --no-cache-dir -r requirements.txt
 RUN python -c "import torch; torch.hub.load(repo_or_dir='snakers4/silero-vad',model='silero_vad',onnx=True)"
