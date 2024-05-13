@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG PYTHON_VERSION=3.11.6
-FROM python:${PYTHON_VERSION}-slim as builder 
+FROM python:${PYTHON_VERSION}-slim 
 
 # Prevents Python from writing pyc files.
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -11,18 +11,6 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
-
-# Create a non-privileged user that the app will run under.
-# See https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#user
-ARG UID=10001
-RUN adduser \
-    --disabled-password \
-    --gecos "" \
-    --home "/nonexistent" \
-    --shell "/sbin/nologin" \
-    --no-create-home \
-    --uid "${UID}" \
-    appuser
 
 # Install gcc and other build dependencies.
 RUN apt-get update && \
@@ -36,8 +24,6 @@ COPY . .
 
 RUN python -m pip install --no-cache-dir -r requirements.txt
 RUN python minimal_assistant.py download-files 
-
-FROM builder
 
 # Run the application.
 CMD python minimal_assistant.py start
