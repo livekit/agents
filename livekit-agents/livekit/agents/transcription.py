@@ -37,9 +37,11 @@ class TranscriptionManager:
         participant: rtc.Participant | str,
         language: str = "",
         track_id: str | None = None,
+        speed: float = 4.0,  # based on hypenation (avg wps is 2.5 in English, 4 may be a good default)
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
         sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
+        automatically_start: bool = True,
         word_separator: str = " ",
     ):
         identity = participant if isinstance(participant, str) else participant.identity
@@ -51,10 +53,12 @@ class TranscriptionManager:
             participant_identity=identity,
             track_id=track_id,
             language=language,
+            speed=speed,
             word_tokenizer=word_tokenizer,
             sentence_tokenizer=sentence_tokenizer,
             hyphenate_word=hyphenate_word,
             word_separator=word_separator,
+            automatically_start=automatically_start,
         )
 
     def _find_micro_track_id(self, identity: str) -> str:
@@ -164,17 +168,19 @@ class TTSSegmentsForwarder:
         participant_identity: str,
         track_id: str,
         language: str,
-        speed: float = 4.0,  # based on hypenation (avg wps is 2.5 in English, 4 may be a good default)
+        speed: float,
         word_tokenizer: tokenize.WordTokenizer,  # stream the words and avg the duration using hyphenation
         sentence_tokenizer: tokenize.SentenceTokenizer,  # split the transcription into multiple segments
         hyphenate_word: Callable[[str], list[str]],
         word_separator: str,
+        automatically_start: bool,
     ):
         self._room = room
         self._participant_identity = participant_identity
         self._track_id = track_id
         self._language = language
         self._word_separator = word_separator
+        self._automatically_start = automatically_start
 
         self._main_task = asyncio.create_task(self._run())
         self._audio_queue = asyncio.Queue[_TTSAudioSegmentData | None]()
@@ -185,6 +191,16 @@ class TTSSegmentsForwarder:
         self._hyphenate_word = hyphenate_word
 
         self._cur_seg = self._create_segment(speed)
+
+        self._start_future = asyncio.Future()
+        if automatically_start:
+            self._start_future.set_result(None)
+
+    def start(self):
+        try:
+            self._start_future.set_result(None)
+        except asyncio.InvalidStateError:
+            raise ValueError("TTS transcription already started")
 
     async def _run(self) -> None:
         # TODO(theomonnom): wait for start signal from the user + auto start
@@ -296,6 +312,7 @@ class TTSSegmentsForwarder:
         return seg
 
     async def aclose(self, *, wait: bool = True) -> None:
+        self._start_future.cancel()
         self._queue.put_nowait(None)
 
         if not wait:
