@@ -31,6 +31,9 @@ RUN apt-get update && \
 
 USER appuser
 
+RUN mkdir -p /home/appuser/.cache
+RUN chown -R appuser /home/appuser/.cache
+
 WORKDIR /home/appuser
 
 COPY requirements.txt .
