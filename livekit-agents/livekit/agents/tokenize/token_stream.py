@@ -1,7 +1,7 @@
 import asyncio
 from typing import Callable
 
-from .tokenizer import TokenStream, TokenEventType, TokenEvent
+from .tokenizer import TokenEvent, TokenStream
 
 
 class BufferedTokenStream(TokenStream):

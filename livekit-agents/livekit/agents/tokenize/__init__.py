@@ -3,9 +3,9 @@ from .token_stream import BufferedTokenStream
 from .tokenizer import (
     SentenceStream,
     SentenceTokenizer,
-    TokenStream,
     TokenEvent,
     TokenEventType,
+    TokenStream,
     WordStream,
     WordTokenizer,
 )
