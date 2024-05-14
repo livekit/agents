@@ -108,36 +108,39 @@ class TTS(tts.TTS):
             )
         self._config = config
 
-    async def synthesize(
+    def synthesize(
         self,
-        *,
         text: str,
     ) -> AsyncIterable[tts.SynthesizedAudio]:
-        try:
-            # Perform the text-to-speech request on the text input with the selected
-            # voice parameters and audio file type
-            response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
-                input=texttospeech.SynthesisInput(text=text),
-                voice=self._config.voice,
-                audio_config=self._config.audio_config,
-            )
-
-            data = response.audio_content
-            if self._config.audio_config.audio_encoding == "mp3":
-                decoder = codecs.Mp3StreamDecoder()
-                frames = decoder.decode_chunk(data)
-                for frame in frames:
-                    yield tts.SynthesizedAudio(text=text, data=frame)
-            else:
-                yield tts.SynthesizedAudio(
-                    text=text,
-                    data=rtc.AudioFrame(
-                        data=data,
-                        sample_rate=self._config.audio_config.sample_rate_hertz,
-                        num_channels=1,
-                        samples_per_channel=len(data) // 2,  # 16-bit
-                    ),
+        async def generator():
+            try:
+                # Perform the text-to-speech request on the text input with the selected
+                # voice parameters and audio file type
+                response: SynthesizeSpeechResponse = (
+                    await self._client.synthesize_speech(
+                        input=texttospeech.SynthesisInput(text=text),
+                        voice=self._config.voice,
+                        audio_config=self._config.audio_config,
+                    )
                 )
 
-        except Exception as e:
-            logger.error(f"failed to synthesize: {e}")
+                data = response.audio_content
+                if self._config.audio_config.audio_encoding == "mp3":
+                    decoder = codecs.Mp3StreamDecoder()
+                    frames = decoder.decode_chunk(data)
+                    for frame in frames:
+                        yield tts.SynthesizedAudio(text=text, data=frame)
+                else:
+                    yield tts.SynthesizedAudio(
+                        text=text,
+                        data=rtc.AudioFrame(
+                            data=data,
+                            sample_rate=self._config.audio_config.sample_rate_hertz,
+                            num_channels=1,
+                            samples_per_channel=len(data) // 2,  # 16-bit
+                        ),
+                    )
+            except Exception as e:
+                logger.error(f"failed to synthesize: {e}")
+
+        return generator()
