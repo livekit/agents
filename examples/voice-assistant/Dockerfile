@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG PYTHON_VERSION=3.11.6
-FROM python:${PYTHON_VERSION}-slim as base
+FROM python:${PYTHON_VERSION}-slim 
 
 # Prevents Python from writing pyc files.
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -10,19 +10,17 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # the application crashes without emitting any logs due to buffering.
 ENV PYTHONUNBUFFERED=1
 
-WORKDIR /app
-
 # Create a non-privileged user that the app will run under.
 # See https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#user
 ARG UID=10001
 RUN adduser \
     --disabled-password \
     --gecos "" \
-    --home "/nonexistent" \
+    --home "/home/appuser" \
     --shell "/sbin/nologin" \
-    --no-create-home \
     --uid "${UID}" \
     appuser
+
 
 # Install gcc and other build dependencies.
 RUN apt-get update && \
@@ -31,15 +29,19 @@ RUN apt-get update && \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the source code into the container.
+USER appuser
+
+RUN mkdir -p /home/appuser/.cache
+RUN chown -R appuser /home/appuser/.cache
+
+WORKDIR /home/appuser
+
+COPY requirements.txt .
+RUN python -m pip install --user --no-cache-dir -r requirements.txt
+
 COPY . .
 
-RUN python -m pip install -r requirements.txt
-
-RUN python minimal_assistant.py download-files
-
-# Switch to the non-privileged user to run the application.
-USER appuser
+RUN python minimal_assistant.py download-files 
 
 # Run the application.
 CMD python minimal_assistant.py start
