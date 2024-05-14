@@ -110,7 +110,6 @@ class TTS(tts.TTS):
 
     def synthesize(
         self,
-        *,
         text: str,
     ) -> AsyncIterable[tts.SynthesizedAudio]:
         async def generator():
