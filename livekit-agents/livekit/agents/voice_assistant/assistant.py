@@ -175,7 +175,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 - user_speech_committed: the user speech was committed to the chat context
                 - agent_speech_committed: the agent speech was committed to the chat context
                 - agent_speech_interrupted: the agent speech was interrupted
-                - function_calls_completed: all function calls have been completed
+                - function_calls_collected: all function calls have been completed
+                - function_calls_finished: all function calls have been completed
             callback: the callback to call when the event is emitted
         """
         return super().on(event, callback)
@@ -836,13 +837,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     data[si] = int(j * vol * 32768)
                     sample_idx += 1
 
-                frame = rtc.AudioFrame(
-                    data=data.tobytes(),
-                    sample_rate=buf.sample_rate,
-                    num_channels=buf.num_channels,
-                    samples_per_channel=rem,
+                await self._audio_source.capture_frame(
+                    rtc.AudioFrame(
+                        data=data.tobytes(),
+                        sample_rate=buf.sample_rate,
+                        num_channels=buf.num_channels,
+                        samples_per_channel=rem,
+                    )
                 )
-                await self._audio_source.capture_frame(frame)
 
         self._agent_stopped_speaking()
 
