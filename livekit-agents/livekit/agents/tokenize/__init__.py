@@ -4,6 +4,8 @@ from .tokenizer import (
     SentenceStream,
     SentenceTokenizer,
     TokenStream,
+    TokenEvent,
+    TokenEventType,
     WordStream,
     WordTokenizer,
 )
@@ -14,6 +16,8 @@ __all__ = [
     "WordTokenizer",
     "WordStream",
     "TokenStream",
+    "TokenEvent",
+    "TokenEventType",
     "BufferedTokenStream",
     "basic",
 ]

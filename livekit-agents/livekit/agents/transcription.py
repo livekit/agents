@@ -1,10 +1,13 @@
 import asyncio
+import time
 import contextlib
+from typing import Callable
 import uuid
 
+from attrs import define
 from livekit import rtc
 
-from . import stt
+from . import stt, tts, tokenize
 from .log import logger
 
 
@@ -29,22 +32,30 @@ class TranscriptionManager:
             track_id=track_id,
         )
 
-    def forward_transcription(
+    def forward_tts_transcription(
         self,
         *,
         participant: rtc.Participant | str,
         language: str = "",
         track_id: str | None = None,
+        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
+        sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
+        hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
+        word_separator: str = " ",
     ):
         identity = participant if isinstance(participant, str) else participant.identity
         if track_id is None:
             track_id = self._find_micro_track_id(identity)
 
-        return SegmentsForwarder(
+        return TTSSegmentsForwarder(
             room=self._room,
             participant_identity=identity,
             track_id=track_id,
             language=language,
+            word_tokenizer=word_tokenizer,
+            sentence_tokenizer=sentence_tokenizer,
+            hyphenate_word=hyphenate_word,
+            word_separator=word_separator,
         )
 
     def _find_micro_track_id(self, identity: str) -> str:
@@ -138,7 +149,15 @@ class STTSegmentsForwarder:
             await self._main_task
 
 
-class SegmentsForwarder:
+@define
+class _TTSAudioSegmentData:
+    sentence_stream: tokenize.SentenceStream
+    text: str
+    audio_duration: float
+    real_speed: float  # hps
+
+
+class TTSSegmentsForwarder:
     def __init__(
         self,
         *,
@@ -146,21 +165,50 @@ class SegmentsForwarder:
         participant_identity: str,
         track_id: str,
         language: str,
-        wps: float = 0.3,  # TODO(theomonnom): remove
+        speed: float = 4.0,  # based on hypenation (avg wps is 2.5 in English, 4 may be a good default)
+        word_tokenizer: tokenize.WordTokenizer,  # stream the words and avg the duration using hyphenation
+        sentence_tokenizer: tokenize.SentenceTokenizer,  # split the transcription into multiple segments
+        hyphenate_word: Callable[[str], list[str]],
+        word_separator: str,
     ):
         self._room = room
         self._participant_identity = participant_identity
         self._track_id = track_id
         self._language = language
-        self._queue = asyncio.Queue[rtc.TranscriptionSegment | None]()
+        self._word_separator = word_separator
+
         self._main_task = asyncio.create_task(self._run())
-        self._wps = wps
-        self._rotate_id()
+        self._audio_queue = asyncio.Queue[_TTSAudioSegmentData | None]()
+        self._queue = asyncio.Queue[rtc.TranscriptionSegment | None]()
 
-        self._interim_text = ""
-        self._text = ""
+        self._word_tokenizer = word_tokenizer
+        self._sentence_tokenizer = sentence_tokenizer
+        self._hyphenate_word = hyphenate_word
 
-    async def _run(self):
+        self._cur_seg = self._create_segment(speed)
+
+    async def _run(self) -> None:
+        # TODO(theomonnom): wait for start signal from the user + auto start
+
+        await asyncio.gather(
+            self._forward(), self._synchronize(), return_exceptions=True
+        )
+
+    async def _synchronize(self):
+        while True:
+            audio_seg = await self._audio_queue.get()
+            if audio_seg is None:
+                break
+
+            sentence_stream = audio_seg.sentence_stream
+
+            async for ev in sentence_stream:
+                if ev.type == tokenize.TokenEventType.FINISHED:
+                    break
+                elif ev.type == tokenize.TokenEventType.TOKEN:
+                    await self._sync_sentence(audio_seg, ev.token)
+
+    async def _forward(self):
         try:
             while True:
                 seg = await self._queue.get()
@@ -170,64 +218,85 @@ class SegmentsForwarder:
                 transcription = rtc.Transcription(
                     participant_identity=self._participant_identity,
                     track_id=self._track_id,
-                    segments=[seg],
+                    segments=[seg],  # no history for now
                     language=self._language,
                 )
                 await self._room.local_participant.publish_transcription(transcription)
-                await asyncio.sleep(self._wps)
+
         except Exception:
-            logger.exception("error in stt transcription")
+            logger.exception("error in tts transcription")
 
-    def _rotate_id(self):
-        self._current_id = _uuid()
+    async def _sync_sentence(self, audio_seg: _TTSAudioSegmentData, sentence: str):
+        words = self._word_tokenizer.tokenize(sentence)
+        seg_id = _uuid()
+        text = ""
 
-    def push_text(self, token: str):
-        # fmt: off
-        splitters = (".", ",", "?", "!", ";", ":", "—", "-", "(", ")", "[", "]", "}", " ")
-        # fmt: on
+        for word in words:
+            if text:
+                text += self._word_separator
+            text += word
 
-        self._text += token
+            hyphenes_count = len(self._hyphenate_word(word))
+            delay = 1 / audio_seg.real_speed * hyphenes_count
+            await asyncio.sleep(delay)  # TODO: Recover from delay gaps
 
-        while True:
-            last_split = -1
-            for i, c in enumerate(self._text):
-                if c in splitters:
-                    last_split = i
-                    break
-
-            if last_split == -1:
-                break
-
-            seg = self._text[: last_split + 1]
-            seg = seg.strip() + " "  # 11labs expects a space at the end
-            self._interim_text += seg
             self._queue.put_nowait(
                 rtc.TranscriptionSegment(
-                    id=self._current_id,
-                    text=self._interim_text,
+                    id=seg_id,
+                    text=text,
                     start_time=0,
                     end_time=0,
                     final=False,
                 )
             )
-            self._text = self._text[last_split + 1 :]
 
-    def mark_segment_end(self):
-        self._interim_text += self._text
         self._queue.put_nowait(
             rtc.TranscriptionSegment(
-                id=self._current_id,
-                text=self._interim_text,
+                id=seg_id,
+                text=sentence,
                 start_time=0,
                 end_time=0,
                 final=True,
             )
         )
-        self._rotate_id()
-        self._text = ""
-        self._interim_text = ""
 
-    async def aclose(self, *, wait=True) -> None:
+    def update(self, ev: tts.SynthesisEvent) -> None:
+        # multiple STARTED/FINISHED events, keep track of the current segment
+        audio_seg = self._cur_seg
+        if ev.type == tts.SynthesisEventType.STARTED:
+            audio_seg = self._cur_seg
+        elif ev.type == tts.SynthesisEventType.AUDIO:
+            assert ev.audio is not None
+            frame = ev.audio.data
+            audio_seg.audio_duration += frame.samples_per_channel / frame.sample_rate
+        elif ev.type == tts.SynthesisEventType.FINISHED:
+            # mark_segment_end should have been called before this event being triggered
+            speed = len(self._calc_hyphenes(audio_seg.text)) / audio_seg.audio_duration
+            audio_seg.real_speed = speed
+
+    def push_text(self, text: str | None) -> None:
+        self._cur_seg.sentence_stream.push_text(text)
+        if text is not None:
+            self._cur_seg.text += text
+        else:
+            # create new segment on "mark_segment_end"
+            self._cur_seg = self._create_segment(self._cur_seg.real_speed)
+
+    def mark_segment_end(self) -> None:
+        self.push_text(None)
+
+    def _create_segment(self, speed: float) -> _TTSAudioSegmentData:
+        seg = _TTSAudioSegmentData(
+            sentence_stream=self._sentence_tokenizer.stream(),
+            text="",
+            audio_duration=0.0,
+            real_speed=speed,
+        )
+
+        self._audio_queue.put_nowait(seg)
+        return seg
+
+    async def aclose(self, *, wait: bool = True) -> None:
         self._queue.put_nowait(None)
 
         if not wait:
@@ -235,3 +304,11 @@ class SegmentsForwarder:
 
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
+
+    def _calc_hyphenes(self, text: str) -> list[str]:
+        hyphenes = []
+        words = self._word_tokenizer.tokenize(text=text)
+        for word in words:
+            hyphenes.extend(self._hyphenate_word(word))
+
+        return hyphenes

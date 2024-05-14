@@ -1,7 +1,7 @@
 import asyncio
 from typing import Callable
 
-from .tokenizer import TokenStream
+from .tokenizer import TokenStream, TokenEventType, TokenEvent
 
 
 class BufferedTokenStream(TokenStream):
@@ -79,7 +79,7 @@ class BufferedTokenStream(TokenStream):
     def __aiter__(self) -> "BufferedTokenStream":
         return self
 
-    async def __anext__(self) -> str:
+    async def __anext__(self) -> TokenEvent:
         event = await self._event_queue.get()
         if event is None:
             raise StopAsyncIteration
