@@ -203,8 +203,7 @@ class TTSSegmentsForwarder:
             raise ValueError("TTS transcription already started")
 
     async def _run(self) -> None:
-        # TODO(theomonnom): wait for start signal from the user + auto start
-
+        await self._start_future
         await asyncio.gather(
             self._forward(), self._synchronize(), return_exceptions=True
         )
