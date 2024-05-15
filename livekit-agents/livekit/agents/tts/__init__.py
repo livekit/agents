@@ -8,6 +8,7 @@ from .tts import (
     SynthesisEventType,
     SynthesizedAudio,
     SynthesizeStream,
+    ChunkedStream,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "SynthesisEventType",
     "StreamAdapterWrapper",
     "StreamAdapter",
+    "ChunkedStream",
 ]

@@ -59,7 +59,7 @@ AUTHORIZATION_HEADER = "xi-api-key"
 
 
 @dataclass
-class TTSOptions:
+class _TTSOptions:
     api_key: str
     voice: Voice
     model_id: TTSModels
@@ -87,7 +87,7 @@ class TTS(tts.TTS):
             raise ValueError("ELEVEN_API_KEY must be set")
 
         self._session = aiohttp.ClientSession()
-        self._opts = TTSOptions(
+        self._opts = _TTSOptions(
             voice=voice,
             model_id=model_id,
             api_key=api_key,
@@ -107,44 +107,75 @@ class TTS(tts.TTS):
     def synthesize(
         self,
         text: str,
-    ) -> AsyncIterable[tts.SynthesizedAudio]:
-        voice = self._opts.voice
-        url = f"{self._opts.base_url}/text-to-speech/{voice.id}?output_format=pcm_{self._opts.sample_rate}"
-
-        async def generator():
-            try:
-                async with self._session.post(
-                    url,
-                    headers={AUTHORIZATION_HEADER: self._opts.api_key},
-                    json=dict(
-                        text=text,
-                        model_id=self._opts.model_id,
-                        voice_settings=(
-                            dataclasses.asdict(voice.settings)
-                            if voice.settings
-                            else None
-                        ),
-                    ),
-                ) as resp:
-                    data = await resp.read()
-                    yield tts.SynthesizedAudio(
-                        text=text,
-                        data=rtc.AudioFrame(
-                            data=data,
-                            sample_rate=self._opts.sample_rate,
-                            num_channels=1,
-                            samples_per_channel=len(data) // 2,  # 16-bit
-                        ),
-                    )
-            except Exception as e:
-                logger.error(f"failed to synthesize: {e}")
-
-        return generator()
+    ) -> "ChunkedStream":
+        return ChunkedStream(text, self._opts, self._session)
 
     def stream(
         self,
     ) -> "SynthesizeStream":
         return SynthesizeStream(self._session, self._opts)
+
+
+class ChunkedStream(tts.ChunkedStream):
+    def __init__(
+        self, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
+    ) -> None:
+        self._opts = opts
+        self._text = text
+        self._session = session
+        self._main_task: asyncio.Task | None = None
+        self._queue = asyncio.Queue[rtc.AudioFrame | None]()
+
+    def _synthesize_url(self) -> str:
+        voice = self._opts.voice
+        sample_rate = self._opts.sample_rate
+        url = f"{self._opts.base_url}/text-to-speech/{voice.id}?output_format=pcm_{sample_rate}"
+        return url
+
+    async def _run(self):
+        try:
+            async with self._session.post(
+                self._synthesize_url(),
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                json=dict(
+                    text=self._text,
+                    model_id=self._opts.model_id,
+                    voice_settings=(
+                        dataclasses.asdict(self._opts.voice.settings)
+                        if self._opts.voice.settings
+                        else None
+                    ),
+                ),
+            ) as resp:
+                data = await resp.read()
+                self._queue.put_nowait(
+                    rtc.AudioFrame(
+                        data=data,
+                        sample_rate=self._opts.sample_rate,
+                        num_channels=1,
+                        samples_per_channel=len(data) // 2,  # 16-bit
+                    )
+                )
+        finally:
+            self._queue.put_nowait(None)
+
+    async def __anext__(self) -> rtc.AudioFrame:
+        if not self._main_task:
+            self.main_task = asyncio.create_task(self._run())
+
+        frame = await self._queue.get()
+        if frame is None:
+            raise StopAsyncIteration
+
+        return frame
+
+    async def aclose(self) -> None:
+        if not self._main_task:
+            return
+
+        self._main_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._main_task
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -153,7 +184,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
         self,
         session: aiohttp.ClientSession,
-        opts: TTSOptions,
+        opts: _TTSOptions,
         max_retry: int = 32,
     ):
         self._opts = opts
