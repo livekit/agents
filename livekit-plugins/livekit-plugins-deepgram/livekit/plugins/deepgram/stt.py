@@ -273,9 +273,10 @@ class SpeechStream(stt.SpeechStream):
                 if isinstance(data, rtc.AudioFrame):
                     # TODO(theomonnom): The remix_and_resample method is low quality
                     # and should be replaced with a continuous resampling
-                    frame = data.remix_and_resample(
-                        self._sample_rate, self._num_channels
-                    )
+                    # frame = data.remix_and_resample(
+                    #     self._sample_rate, self._num_channels
+                    # )
+                    frame = data
 
                     await ws.send_bytes(frame.data.tobytes())
                 elif data == SpeechStream._CLOSE_MSG:
