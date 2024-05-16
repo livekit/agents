@@ -20,7 +20,6 @@ import os
 from dataclasses import dataclass
 
 import aiohttp
-from livekit import rtc
 from livekit.agents import codecs, tts
 
 from .models import TTSModels, TTSVoices
