@@ -26,7 +26,7 @@ class BufferedTokenStream(TokenStream):
         if self._closed:
             raise ValueError("cannot push text to closed stream")
 
-        if self._empty:
+        if self._new_segment:
             self._new_segment = False
             self._event_queue.put_nowait(TokenEvent(type=TokenEventType.STARTED))
 

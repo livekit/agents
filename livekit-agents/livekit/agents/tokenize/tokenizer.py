@@ -56,5 +56,8 @@ class WordTokenizer(ABC):
     def stream(self, *, language: str | None = None) -> "WordStream":
         pass
 
+    def format_words(self, words: list[str]) -> str:
+        return " ".join(words)
+
 
 class WordStream(TokenStream, Protocol): ...
