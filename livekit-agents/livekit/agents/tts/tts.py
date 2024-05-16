@@ -3,9 +3,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncIterable
+from typing import AsyncIterator
 
 from livekit import rtc
+
+from ..utils import misc
 
 
 @dataclass
@@ -29,6 +31,33 @@ class SynthesisEventType(Enum):
 class SynthesisEvent:
     type: SynthesisEventType
     audio: SynthesizedAudio | None = None
+
+
+class ChunkedStream(ABC):
+    """
+    Used by the non-streamed synthesize API, some providers support chunked http responses
+    """
+
+    async def collect(self) -> rtc.AudioFrame:
+        """
+        Utility method to collect every frame in a single call
+        """
+        frames = []
+        async for ev in self:
+            frames.append(ev.data)
+
+        return misc.merge_frames(frames)
+
+    @abstractmethod
+    async def __anext__(self) -> SynthesizedAudio: ...
+
+    @abstractmethod
+    async def aclose(self) -> None:
+        """close is automatically called if the stream is completely collected"""
+        ...
+
+    def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
+        return self
 
 
 class SynthesizeStream(ABC):
@@ -81,8 +110,7 @@ class TTS(ABC):
         return self._num_channels
 
     @abstractmethod
-    def synthesize(self, text: str) -> AsyncIterable[SynthesizedAudio]:
-        raise NotImplementedError("synthesize is not implemented")
+    def synthesize(self, text: str) -> ChunkedStream: ...
 
     def stream(self) -> SynthesizeStream:
         raise NotImplementedError(

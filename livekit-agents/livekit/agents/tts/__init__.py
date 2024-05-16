@@ -4,6 +4,7 @@ from .stream_adapter import (
 )
 from .tts import (
     TTS,
+    ChunkedStream,
     SynthesisEvent,
     SynthesisEventType,
     SynthesizedAudio,
@@ -18,4 +19,5 @@ __all__ = [
     "SynthesisEventType",
     "StreamAdapterWrapper",
     "StreamAdapter",
+    "ChunkedStream",
 ]
