@@ -183,8 +183,6 @@ class ChunkedStream(tts.ChunkedStream):
                             ),
                         )
                     )
-
-                resp.close()
         except:
             logger.exception("failed to synthesize")
         finally:
@@ -192,7 +190,7 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def __anext__(self) -> tts.SynthesizedAudio:
         if not self._main_task:
-            self.main_task = asyncio.create_task(self._run())
+            self._main_task = asyncio.create_task(self._run())
 
         frame = await self._queue.get()
         if frame is None:
