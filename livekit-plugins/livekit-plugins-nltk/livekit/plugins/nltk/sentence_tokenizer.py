@@ -42,7 +42,7 @@ class SentenceTokenizer(agents.tokenize.SentenceTokenizer):
             config.language = language
         return config
 
-    def tokenize(self, *, text: str, language: str | None = None) -> list[str]:
+    def tokenize(self, text: str, language: str | None = None) -> list[str]:
         config = self._sanitize_options(language=language)
         sentences = nltk.tokenize.sent_tokenize(text, config.language)
         new_sentences = []
