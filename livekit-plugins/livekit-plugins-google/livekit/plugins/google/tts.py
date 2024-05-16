@@ -12,9 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import AsyncIterable, Optional, Union
 
+import asyncio
+import contextlib
 from livekit import rtc
 from livekit.agents import codecs, tts
 
@@ -33,7 +37,7 @@ AudioEncodingType = Union[AudioEncoding, str]
 
 
 @dataclass
-class TTSOptions:
+class _TTSOptions:
     voice: texttospeech.VoiceSelectionParams
     audio_config: texttospeech.AudioConfig
 
@@ -41,7 +45,6 @@ class TTSOptions:
 class TTS(tts.TTS):
     def __init__(
         self,
-        config: Optional[TTSOptions] = None,
         *,
         language: LgType = "en-US",
         gender: GenderType = "neutral",
@@ -49,8 +52,8 @@ class TTS(tts.TTS):
         audio_encoding: AudioEncodingType = "wav",
         sample_rate: int = 24000,
         speaking_rate: float = 1.0,
-        credentials_info: Optional[dict] = None,
-        credentials_file: Optional[str] = None,
+        credentials_info: dict | None = None,
+        credentials_file: str | None = None,
     ) -> None:
         super().__init__(
             streaming_supported=False, sample_rate=sample_rate, num_channels=1
@@ -62,6 +65,7 @@ class TTS(tts.TTS):
                     credentials_info
                 )
             )
+
         elif credentials_file:
             self._client = (
                 texttospeech.TextToSpeechAsyncClient.from_service_account_file(
@@ -71,73 +75,96 @@ class TTS(tts.TTS):
         else:
             self._client = texttospeech.TextToSpeechAsyncClient()
 
-        if not config:
-            _gender = SsmlVoiceGender.NEUTRAL
-            if gender == "male":
-                _gender = SsmlVoiceGender.MALE
-            elif gender == "female":
-                _gender = SsmlVoiceGender.FEMALE
-            voice = texttospeech.VoiceSelectionParams(
-                name=voice_name,
-                language_code=language,
-                ssml_gender=_gender,
-            )
-            # Support wav and mp3 only
-            if audio_encoding == "wav":
-                _audio_encoding = texttospeech.AudioEncoding.LINEAR16
-            elif audio_encoding == "mp3":
-                _audio_encoding = texttospeech.AudioEncoding.MP3
-            # elif audio_encoding == "opus":
-            #     _audio_encoding = texttospeech.AudioEncoding.OGG_OPUS
-            # elif audio_encoding == "mulaw":
-            #     _audio_encoding = texttospeech.AudioEncoding.MULAW
-            # elif audio_encoding == "alaw":
-            #     _audio_encoding = texttospeech.AudioEncoding.ALAW
-            else:
-                raise NotImplementedError(
-                    f"Audio encoding {audio_encoding} is not supported"
-                )
+        ssml_gender = SsmlVoiceGender.NEUTRAL
+        if gender == "male":
+            ssml_gender = SsmlVoiceGender.MALE
+        elif gender == "female":
+            ssml_gender = SsmlVoiceGender.FEMALE
 
-            config = TTSOptions(
-                voice=voice,
-                audio_config=texttospeech.AudioConfig(
-                    audio_encoding=_audio_encoding,
-                    sample_rate_hertz=sample_rate,
-                    speaking_rate=speaking_rate,
-                ),
-            )
-        self._config = config
+        voice = texttospeech.VoiceSelectionParams(
+            name=voice_name,
+            language_code=language,
+            ssml_gender=ssml_gender,
+        )
 
-    async def synthesize(
+        if audio_encoding == "wav":
+            _audio_encoding = texttospeech.AudioEncoding.LINEAR16
+        elif audio_encoding == "mp3":
+            _audio_encoding = texttospeech.AudioEncoding.MP3
+        else:
+            raise NotImplementedError(
+                f"audio encoding {audio_encoding} is not supported"
+            )
+
+        self._opts = _TTSOptions(
+            voice=voice,
+            audio_config=texttospeech.AudioConfig(
+                audio_encoding=_audio_encoding,
+                sample_rate_hertz=sample_rate,
+                speaking_rate=speaking_rate,
+            ),
+        )
+
+    def synthesize(
         self,
-        *,
         text: str,
-    ) -> AsyncIterable[tts.SynthesizedAudio]:
+    ) -> "ChunkedStream":
+        return ChunkedStream(text, self._opts, self._client)
+
+
+class ChunkedStream(tts.ChunkedStream):
+    def __init__(
+        self, text: str, opts: _TTSOptions, client: texttospeech.TextToSpeechAsyncClient
+    ) -> None:
+        self._text = text
+        self._opts = opts
+        self._client = client
+        self._main_task: asyncio.Task | None = None
+        self._queue = asyncio.Queue[rtc.AudioFrame | None]()
+
+    async def _run(self) -> None:
         try:
-            # Perform the text-to-speech request on the text input with the selected
-            # voice parameters and audio file type
             response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
-                input=texttospeech.SynthesisInput(text=text),
-                voice=self._config.voice,
-                audio_config=self._config.audio_config,
+                input=texttospeech.SynthesisInput(text=self._text),
+                voice=self._opts.voice,
+                audio_config=self._opts.audio_config,
             )
 
             data = response.audio_content
-            if self._config.audio_config.audio_encoding == "mp3":
+            if self._opts.audio_config.audio_encoding == "mp3":
                 decoder = codecs.Mp3StreamDecoder()
                 frames = decoder.decode_chunk(data)
                 for frame in frames:
-                    yield tts.SynthesizedAudio(text=text, data=frame)
+                    self._queue.put_nowait(frame)
             else:
-                yield tts.SynthesizedAudio(
-                    text=text,
-                    data=rtc.AudioFrame(
+                self._queue.put_nowait(
+                    rtc.AudioFrame(
                         data=data,
-                        sample_rate=self._config.audio_config.sample_rate_hertz,
+                        sample_rate=self._opts.audio_config.sample_rate_hertz,
                         num_channels=1,
                         samples_per_channel=len(data) // 2,  # 16-bit
-                    ),
+                    )
                 )
 
         except Exception as e:
             logger.error(f"failed to synthesize: {e}")
+        finally:
+            self._queue.put_nowait(None)
+
+    async def __anext__(self) -> rtc.AudioFrame:
+        if not self._main_task:
+            self.main_task = asyncio.create_task(self._run())
+
+        frame = await self._queue.get()
+        if frame is None:
+            raise StopAsyncIteration
+
+        return frame
+
+    async def aclose(self) -> None:
+        if not self._main_task:
+            return
+
+        self._main_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._main_task
