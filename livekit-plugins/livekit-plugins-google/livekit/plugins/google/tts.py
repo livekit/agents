@@ -14,11 +14,12 @@
 
 
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import AsyncIterable, Optional, Union
 
 import asyncio
 import contextlib
+from dataclasses import dataclass
+from typing import Union
+
 from livekit import rtc
 from livekit.agents import codecs, tts
 
