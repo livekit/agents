@@ -149,12 +149,12 @@ class ChunkedStream(tts.ChunkedStream):
                     ),
                 ),
             ) as resp:
-                # avoid very small frame. chunk by 10ms 16bits 
-                bytes_per_frame = (self._opts.sample_rate // 100) * 2 
+                # avoid very small frame. chunk by 10ms 16bits
+                bytes_per_frame = (self._opts.sample_rate // 100) * 2
                 buf = bytearray()
                 async for data, _ in resp.content.iter_chunks():
                     buf.extend(data)
-                    
+
                     while len(buf) >= bytes_per_frame:
                         frame_data = buf[:bytes_per_frame]
                         buf = buf[bytes_per_frame:]

@@ -9,7 +9,6 @@ from livekit.agents import (
     cli,
 )
 from livekit.plugins import elevenlabs
-import aiohttp
 
 
 async def entrypoint(job: JobContext):
