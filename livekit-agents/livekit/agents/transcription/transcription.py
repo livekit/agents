@@ -40,14 +40,14 @@ class TranscriptionManager:
     ):
         """
         Forward TTS transcription to the users. This function tries to imitate the right timing of
-        speech with the synthesized text. The first estimation is based on the speed parameter. Omce
-        we have received all the audio of a specific text segment, we recalculate the speed using
-        the length of the text & audio.
+        speech with the synthesized text. The first estimation is based on the speed parameter. Once
+        we have received all the audio of a specific text segment, we recalculate the avg speech
+        speed using the length of the text & audio.
 
         The word_tokenizer is used to forward the transcription word by word.
-        The sentence_tokenizer is used to split the streamted text into mulitple transcription
+        The sentence_tokenizer is used to split the streamted text into multiple transcription
         segments.
-        hyphenate_word is used to
+        hyphenate_word is used to get a better approximation of how much time a word takes to say.
         """
         identity = participant if isinstance(participant, str) else participant.identity
         if track_id is None:
