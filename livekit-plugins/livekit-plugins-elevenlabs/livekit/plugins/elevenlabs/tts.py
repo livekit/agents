@@ -123,7 +123,7 @@ class ChunkedStream(tts.ChunkedStream):
     ) -> None:
         self._opts = opts
         self._text = text
-        self._session = aiohttp.ClientSession()
+        self._session = session
         self._main_task: asyncio.Task | None = None
         self._queue = asyncio.Queue[tts.SynthesizedAudio | None]()
 
@@ -183,6 +183,7 @@ class ChunkedStream(tts.ChunkedStream):
                             ),
                         )
                     )
+
         except:
             logger.exception("failed to synthesize")
         finally:
