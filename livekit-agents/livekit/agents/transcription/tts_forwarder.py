@@ -72,6 +72,7 @@ class TTSSegmentsForwarder:
         self._start_future = asyncio.Future()
 
     def validate(self) -> None:
+        """Validate must be called once we started to playout the audio to the user"""
         with contextlib.suppress(asyncio.InvalidStateError):
             self._start_future.set_result(None)
 
