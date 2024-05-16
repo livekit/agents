@@ -131,7 +131,7 @@ class ChunkedStream(tts.ChunkedStream):
         voice = self._opts.voice
         sample_rate = self._opts.sample_rate
         latency = self._opts.streaming_latency
-        url = f"{self._opts.base_url}/text-to-speech/{voice.id}?output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
+        url = f"{self._opts.base_url}/text-to-speech/{voice.id}/stream?output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
         return url
 
     async def _run(self):
