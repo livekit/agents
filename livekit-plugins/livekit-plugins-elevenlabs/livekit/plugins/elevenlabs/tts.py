@@ -184,7 +184,7 @@ class ChunkedStream(tts.ChunkedStream):
                         )
                     )
 
-        except:
+        except Exception:
             logger.exception("failed to synthesize")
         finally:
             self._queue.put_nowait(None)
