@@ -809,7 +809,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             )
 
         async for buf in po_rx:
-            if first_frame and self._opts.debug:
+            if first_frame:
                 self._agent_started_speaking()
                 tr_forwarder.validate()
                 first_frame = False
