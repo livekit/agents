@@ -65,7 +65,7 @@ class _TTSOptions:
     model_id: TTSModels
     base_url: str
     sample_rate: int
-    latency: int
+    streaming_latency: int
 
 
 class TTS(tts.TTS):
@@ -77,7 +77,8 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         base_url: str | None = None,
         sample_rate: int = 24000,
-        latency: int = 3,
+        streaming_latency: int = 3,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
             streaming_supported=True, sample_rate=sample_rate, num_channels=1
@@ -86,14 +87,14 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("ELEVEN_API_KEY must be set")
 
-        self._session = aiohttp.ClientSession()
+        self._session = session or aiohttp.ClientSession()
         self._opts = _TTSOptions(
             voice=voice,
             model_id=model_id,
             api_key=api_key,
             base_url=base_url or API_BASE_URL_V1,
             sample_rate=sample_rate,
-            latency=latency,
+            streaming_latency=streaming_latency,
         )
 
     async def list_voices(self) -> List[Voice]:
@@ -129,7 +130,8 @@ class ChunkedStream(tts.ChunkedStream):
     def _synthesize_url(self) -> str:
         voice = self._opts.voice
         sample_rate = self._opts.sample_rate
-        url = f"{self._opts.base_url}/text-to-speech/{voice.id}?output_format=pcm_{sample_rate}"
+        latency = self._opts.streaming_latency
+        url = f"{self._opts.base_url}/text-to-speech/{voice.id}/stream?output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
         return url
 
     async def _run(self):
@@ -147,24 +149,49 @@ class ChunkedStream(tts.ChunkedStream):
                     ),
                 ),
             ) as resp:
-                data = await resp.read()
-                self._queue.put_nowait(
-                    tts.SynthesizedAudio(
-                        text=self._text,
-                        data=rtc.AudioFrame(
-                            data=data,
-                            sample_rate=self._opts.sample_rate,
-                            num_channels=1,
-                            samples_per_channel=len(data) // 2,  # 16-bit
-                        ),
+                # avoid very small frames. chunk by 10ms 16bits
+                bytes_per_frame = (self._opts.sample_rate // 100) * 2
+                buf = bytearray()
+                async for data, _ in resp.content.iter_chunks():
+                    buf.extend(data)
+
+                    while len(buf) >= bytes_per_frame:
+                        frame_data = buf[:bytes_per_frame]
+                        buf = buf[bytes_per_frame:]
+
+                        self._queue.put_nowait(
+                            tts.SynthesizedAudio(
+                                text=self._text,
+                                data=rtc.AudioFrame(
+                                    data=frame_data,
+                                    sample_rate=self._opts.sample_rate,
+                                    num_channels=1,
+                                    samples_per_channel=len(frame_data) // 2,
+                                ),
+                            )
+                        )
+
+                if buf:
+                    self._queue.put_nowait(
+                        tts.SynthesizedAudio(
+                            text=self._text,
+                            data=rtc.AudioFrame(
+                                data=buf,
+                                sample_rate=self._opts.sample_rate,
+                                num_channels=1,
+                                samples_per_channel=len(buf) // 2,
+                            ),
+                        )
                     )
-                )
+
+        except Exception:
+            logger.exception("failed to synthesize")
         finally:
             self._queue.put_nowait(None)
 
     async def __anext__(self) -> tts.SynthesizedAudio:
         if not self._main_task:
-            self.main_task = asyncio.create_task(self._run())
+            self._main_task = asyncio.create_task(self._run())
 
         frame = await self._queue.get()
         if frame is None:
@@ -205,7 +232,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         voice_id = self._opts.voice.id
         model_id = self._opts.model_id
         sample_rate = self._opts.sample_rate
-        latency = self._opts.latency
+        latency = self._opts.streaming_latency
         return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
 
     def push_text(self, token: str | None) -> None:

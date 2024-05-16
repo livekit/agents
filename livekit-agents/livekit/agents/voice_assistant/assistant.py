@@ -194,14 +194,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         source: str | allm.LLMStream | AsyncIterable[str],
         allow_interruptions: bool = True,
         add_to_ctx: bool = True,
-        stream: bool = True,
+        force_stream: bool = False,  # force the usage of TTS stream
         enqueue: bool = True,
     ) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             if not self._started:
                 await self._start_future
 
-        if isinstance(source, str) and stream:
+        if isinstance(source, str) and force_stream:
             text = source
 
             async def _gen():
