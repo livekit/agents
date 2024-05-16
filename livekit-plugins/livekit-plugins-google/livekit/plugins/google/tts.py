@@ -50,7 +50,7 @@ class TTS(tts.TTS):
         language: LgType = "en-US",
         gender: GenderType = "neutral",
         voice_name: str = "",  # Not required
-        audio_encoding: AudioEncodingType = "wav",
+        audio_encoding: AudioEncodingType = "linear16",
         sample_rate: int = 24000,
         speaking_rate: float = 1.0,
         credentials_info: dict | None = None,
@@ -88,7 +88,7 @@ class TTS(tts.TTS):
             ssml_gender=ssml_gender,
         )
 
-        if audio_encoding == "wav":
+        if audio_encoding == "linear16" or audio_encoding == "wav":
             _audio_encoding = texttospeech.AudioEncoding.LINEAR16
         elif audio_encoding == "mp3":
             _audio_encoding = texttospeech.AudioEncoding.MP3
