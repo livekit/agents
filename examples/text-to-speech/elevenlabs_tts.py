@@ -13,7 +13,6 @@ import aiohttp
 
 
 async def entrypoint(job: JobContext):
-    sess= aiohttp.ClientSession()
     tts = elevenlabs.TTS(
         model_id="eleven_multilingual_v2",
     )
@@ -31,7 +30,7 @@ async def entrypoint(job: JobContext):
 
     await asyncio.sleep(5)
     logging.info('Saying "Au revoir."')
-    async for output in tts.synthesize("Bonjour, comment allez-vous?"):
+    async for output in tts.synthesize("Au revoir."):
         await source.capture_frame(output.data)
 
 
