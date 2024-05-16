@@ -43,20 +43,20 @@ class ChunkedStream(ABC):
         Utility method to collect every frame in a single call
         """
         frames = []
-        async for frame in self:
-            frames.append(frame)
+        async for ev in self:
+            frames.append(ev.data)
 
         return misc.merge_frames(frames)
 
     @abstractmethod
-    async def __anext__(self) -> rtc.AudioFrame: ...
+    async def __anext__(self) -> SynthesizedAudio: ...
 
     @abstractmethod
     async def aclose(self) -> None:
         """close is automatically called if the stream is completely collected"""
         ...
 
-    def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
+    def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
 
 

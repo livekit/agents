@@ -124,7 +124,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._text = text
         self._session = session
         self._main_task: asyncio.Task | None = None
-        self._queue = asyncio.Queue[rtc.AudioFrame | None]()
+        self._queue = asyncio.Queue[tts.SynthesizedAudio | None]()
 
     def _synthesize_url(self) -> str:
         voice = self._opts.voice
@@ -149,17 +149,20 @@ class ChunkedStream(tts.ChunkedStream):
             ) as resp:
                 data = await resp.read()
                 self._queue.put_nowait(
-                    rtc.AudioFrame(
-                        data=data,
-                        sample_rate=self._opts.sample_rate,
-                        num_channels=1,
-                        samples_per_channel=len(data) // 2,  # 16-bit
+                    tts.SynthesizedAudio(
+                        text=self._text,
+                        data=rtc.AudioFrame(
+                            data=data,
+                            sample_rate=self._opts.sample_rate,
+                            num_channels=1,
+                            samples_per_channel=len(data) // 2,  # 16-bit
+                        ),
                     )
                 )
         finally:
             self._queue.put_nowait(None)
 
-    async def __anext__(self) -> rtc.AudioFrame:
+    async def __anext__(self) -> tts.SynthesizedAudio:
         if not self._main_task:
             self.main_task = asyncio.create_task(self._run())
 

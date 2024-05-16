@@ -121,7 +121,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = opts
         self._client = client
         self._main_task: asyncio.Task | None = None
-        self._queue = asyncio.Queue[rtc.AudioFrame | None]()
+        self._queue = asyncio.Queue[tts.SynthesizedAudio | None]()
 
     async def _run(self) -> None:
         try:
@@ -136,14 +136,17 @@ class ChunkedStream(tts.ChunkedStream):
                 decoder = codecs.Mp3StreamDecoder()
                 frames = decoder.decode_chunk(data)
                 for frame in frames:
-                    self._queue.put_nowait(frame)
+                    self._queue.put_nowait(tts.SynthesizedAudio(text="", data=frame))
             else:
                 self._queue.put_nowait(
-                    rtc.AudioFrame(
-                        data=data,
-                        sample_rate=self._opts.audio_config.sample_rate_hertz,
-                        num_channels=1,
-                        samples_per_channel=len(data) // 2,  # 16-bit
+                    tts.SynthesizedAudio(
+                        text="",
+                        data=rtc.AudioFrame(
+                            data=data,
+                            sample_rate=self._opts.audio_config.sample_rate_hertz,
+                            num_channels=1,
+                            samples_per_channel=len(data) // 2,  # 16-bit
+                        ),
                     )
                 )
 
@@ -152,7 +155,7 @@ class ChunkedStream(tts.ChunkedStream):
         finally:
             self._queue.put_nowait(None)
 
-    async def __anext__(self) -> rtc.AudioFrame:
+    async def __anext__(self) -> tts.SynthesizedAudio:
         if not self._main_task:
             self.main_task = asyncio.create_task(self._run())
 

@@ -83,7 +83,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._session = session
         self._decoder = codecs.Mp3StreamDecoder()
         self._main_task: asyncio.Task | None = None
-        self._queue = asyncio.Queue[rtc.AudioFrame | None]()
+        self._queue = asyncio.Queue[tts.SynthesizedAudio | None]()
 
     async def _run(self):
         try:
@@ -99,12 +99,14 @@ class ChunkedStream(tts.ChunkedStream):
                 async for data in resp.content.iter_chunked(4096):
                     frames = self._decoder.decode_chunk(data)
                     for frame in frames:
-                        self._queue.put_nowait(frame)
+                        self._queue.put_nowait(
+                            tts.SynthesizedAudio(text="", data=frame)
+                        )
 
         finally:
             self._queue.put_nowait(None)
 
-    async def __anext__(self) -> rtc.AudioFrame:
+    async def __anext__(self) -> tts.SynthesizedAudio:
         if not self._main_task:
             self.main_task = asyncio.create_task(self._run())
 
