@@ -4,11 +4,11 @@ from .stream_adapter import (
 )
 from .tts import (
     TTS,
+    ChunkedStream,
     SynthesisEvent,
     SynthesisEventType,
     SynthesizedAudio,
     SynthesizeStream,
-    ChunkedStream,
 )
 
 __all__ = [

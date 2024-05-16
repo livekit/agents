@@ -19,7 +19,7 @@ import dataclasses
 import json
 import os
 from dataclasses import dataclass
-from typing import AsyncIterable, List
+from typing import List
 
 import aiohttp
 from livekit import rtc

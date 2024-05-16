@@ -3,9 +3,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncIterable, AsyncIterator
+from typing import AsyncIterator
 
 from livekit import rtc
+
 from ..utils import misc
 
 
