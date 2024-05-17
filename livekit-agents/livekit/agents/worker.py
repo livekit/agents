@@ -20,6 +20,7 @@ import os
 from typing import (
     Callable,
     Coroutine,
+    Literal,
 )
 from urllib.parse import urlparse
 
@@ -29,7 +30,7 @@ from attr import define
 from livekit import api
 from livekit.protocol import agent, models
 
-from . import aio, consts, http_server, ipc
+from . import aio, consts, http_server, ipc, utils
 from .job_request import AcceptData, AvailRes, JobRequest
 from .log import logger
 from .version import __version__
@@ -74,19 +75,39 @@ class ActiveJob:
     accept_data: AcceptData
 
 
-class Worker:
+EventTypes = Literal["worker_registered"]
+
+
+class Worker(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         opts: WorkerOptions,
         *,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
+        super().__init__()
         opts.ws_url = opts.ws_url or opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
         opts.api_key = opts.api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         opts.api_secret = opts.api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
 
+        if not opts.ws_url:
+            raise ValueError(
+                "ws_url is required, or add LIVEKIT_URL in your environment"
+            )
+
+        if not opts.api_key:
+            raise ValueError(
+                "api_key is required, or add LIVEKIT_API_KEY in your environment"
+            )
+
+        if not opts.api_secret:
+            raise ValueError(
+                "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
+            )
+
         self._opts = opts
         self._loop = loop or asyncio.get_event_loop()
+
         self._id = "unregistered"
         self._session = None
         self._closed = False
@@ -95,76 +116,22 @@ class Worker:
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
         self._processes = dict[str, tuple[ipc.JobProcess, ActiveJob]]()
         self._close_future = asyncio.Future(loop=self._loop)
+        self._api = api.LiveKitAPI(
+            self._opts.ws_url, self._opts.api_key, self._opts.api_secret
+        )
 
         self._chan = aio.Chan[agent.WorkerMessage](32, loop=self._loop)
-        # We use the same event loop as the worker (so the health checks are more accurate)
+
+        # use the same event loop as the main worker task
+        #  -> more accurate health checks
         self._http_server = http_server.HttpServer(
             opts.host, opts.port, loop=self._loop
         )
 
     async def run(self):
         logger.info("starting worker", extra={"version": __version__})
-
-        if not self._opts.ws_url:
-            raise ValueError("ws_url is required, or set LIVEKIT_URL env var")
-
-        if not self._opts.api_key:
-            raise ValueError("api_key is required, or set LIVEKIT_API_KEY env var")
-
-        if not self._opts.api_secret:
-            raise ValueError(
-                "api_secret is required, or set LIVEKIT_API_SECRET env var"
-            )
-
         self._session = aiohttp.ClientSession()
-
-        async def _worker_ws():
-            assert self._session is not None
-
-            retry_count = 0
-            while not self._closed:
-                try:
-                    join_jwt = (
-                        api.AccessToken(self._opts.api_key, self._opts.api_secret)
-                        .with_grants(api.VideoGrants(agent=True))
-                        .to_jwt()
-                    )
-
-                    headers = {"Authorization": f"Bearer {join_jwt}"}
-
-                    parse = urlparse(self._opts.ws_url)
-                    scheme = parse.scheme
-                    if scheme.startswith("http"):
-                        scheme = scheme.replace("http", "ws")
-                    agent_url = (
-                        f"{scheme}://{parse.netloc}/{parse.path.rstrip('/')}/agent"
-                    )
-
-                    ws = await self._session.ws_connect(agent_url, headers=headers)
-                    retry_count = 0
-
-                    await self._run_ws(ws)
-                except Exception as e:
-                    if self._closed:
-                        break
-
-                    if retry_count >= self._opts.max_retry:
-                        raise Exception(
-                            f"failed to connect to livekit-server after {retry_count} attempts: {e}"
-                        )
-
-                    retry_delay = min(retry_count * 2, 10)
-                    retry_count += 1
-
-                    logger.warning(
-                        f"failed to connect to livekit-server, retrying in {retry_delay}s: {e}",
-                    )
-                    await asyncio.sleep(retry_delay)
-
-        async def _http_server():
-            await self._http_server.run()
-
-        await asyncio.gather(_worker_ws(), _http_server())
+        await asyncio.gather(self._worker_task(), self._http_server_task())
         self._close_future.set_result(None)
 
     @property
@@ -203,6 +170,23 @@ class Worker:
         else:
             await _join_jobs()
 
+    async def simulate_job(
+        self, room: str, participant_identity: str | None = None
+    ) -> None:
+        room_obj = await self._api.room.create_room(api.CreateRoomRequest(name=room))
+        participant = None
+        if participant_identity:
+            participant = await self._api.room.get_participant(
+                api.RoomParticipantIdentity(room=room, identity=participant_identity)
+            )
+
+        msg = agent.WorkerMessage()
+        msg.simulate_job.room.CopyFrom(room_obj)
+        if participant:
+            msg.simulate_job.participant.CopyFrom(participant)
+
+        await _send_ignore_err(self._chan, msg)
+
     async def aclose(self) -> None:
         if self._closed:
             return
@@ -223,6 +207,51 @@ class Worker:
         self._closed = True
         self._chan.close()
         await self._close_future
+
+    async def _worker_task(self):
+        assert self._session is not None
+
+        retry_count = 0
+        while not self._closed:
+            try:
+                join_jwt = (
+                    api.AccessToken(self._opts.api_key, self._opts.api_secret)
+                    .with_grants(api.VideoGrants(agent=True))
+                    .to_jwt()
+                )
+
+                headers = {"Authorization": f"Bearer {join_jwt}"}
+
+                parse = urlparse(self._opts.ws_url)
+                scheme = parse.scheme
+                if scheme.startswith("http"):
+                    scheme = scheme.replace("http", "ws")
+                agent_url = f"{scheme}://{parse.netloc}/{parse.path.rstrip('/')}/agent"
+
+                ws = await self._session.ws_connect(agent_url, headers=headers)
+                retry_count = 0
+
+                await self._run_ws(ws)
+            except Exception as e:
+                if self._closed:
+                    break
+
+                if retry_count >= self._opts.max_retry:
+                    raise Exception(
+                        f"failed to connect to livekit-server after {retry_count} attempts: {e}"
+                    )
+
+                retry_delay = min(retry_count * 2, 10)
+                retry_count += 1
+
+                logger.warning(
+                    f"failed to connect to livekit-server, retrying in {retry_delay}s: {e}",
+                    exc_info=e,
+                )
+                await asyncio.sleep(retry_delay)
+
+    async def _http_server_task(self):
+        await self._http_server.run()
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse):
         closing_ws = False
@@ -375,6 +404,7 @@ class Worker:
             "registered worker",
             extra={"id": reg.worker_id, "server_info": reg.server_info},
         )
+        self.emit("worker_registered", reg.worker_id, reg.server_info)
 
     def _handle_availability(self, msg: agent.AvailabilityRequest):
         answer_tx, answer_rx = aio.channel(1)  # wait for the user res

@@ -165,7 +165,7 @@ def _run_job(cch: ipc_enc.ProcessPipe, args: protocol.JobMainArgs) -> None:
     )
 
     pipe = apipe.AsyncPipe(cch, loop, protocol.IPC_MESSAGES)
-    loop.slow_callback_duration = 0.02  # 20ms
+    loop.slow_callback_duration = 0.03  # 30ms
     aio.debug.hook_slow_callbacks(0.75)
     loop.set_debug(args.asyncio_debug)
 
