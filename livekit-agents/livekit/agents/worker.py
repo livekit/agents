@@ -245,7 +245,8 @@ class Worker(utils.EventEmitter[EventTypes]):
                 retry_count += 1
 
                 logger.warning(
-                    f"failed to connect to livekit-server, retrying in {retry_delay}s: {e}", exc_info=e
+                    f"failed to connect to livekit-server, retrying in {retry_delay}s: {e}",
+                    exc_info=e,
                 )
                 await asyncio.sleep(retry_delay)
 

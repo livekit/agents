@@ -5,6 +5,7 @@ import signal
 import sys
 
 import click
+from livekit.protocol import models
 
 from .. import aio
 from ..log import logger
@@ -12,7 +13,6 @@ from ..plugin import Plugin
 from ..worker import Worker, WorkerOptions
 from . import protocol
 from .log import setup_logging
-from livekit.protocol import models
 
 
 def shared_args(func):
