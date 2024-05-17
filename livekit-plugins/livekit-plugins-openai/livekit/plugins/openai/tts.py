@@ -20,7 +20,7 @@ import os
 from dataclasses import dataclass
 
 import aiohttp
-from livekit.agents import codecs, tts
+from livekit.agents import codecs, tts, utils
 
 from .models import TTSModels, TTSVoices
 
@@ -43,6 +43,7 @@ class TTS(tts.TTS):
         model: TTSModels,
         voice: TTSVoices,
         api_key: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
             streaming_supported=False,
@@ -55,16 +56,7 @@ class TTS(tts.TTS):
             raise ValueError("OPENAI_API_KEY must be set")
 
         self._opts = _TTSOptions(model=model, voice=voice, api_key=api_key)
-
-        # TODO: we want to reuse aiohttp sessions
-        # for improved latency but doing so doesn't
-        # give us a clean way to close the session.
-        # Perhaps we introduce a close method to TTS?
-        # We also probalby want to send a warmup HEAD
-        # request after we create this
-        self._session = aiohttp.ClientSession(
-            headers={"Authorization": f"Bearer {api_key}"}
-        )
+        self._session = http_session or utils.http_session()
 
     def synthesize(
         self,
@@ -88,6 +80,7 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             async with self._session.post(
                 OPENAI_ENPOINT,
+                headers={"Authorization": f"Bearer {self._opts.api_key}"},
                 json={
                     "input": self._text,
                     "model": self._opts.model,
