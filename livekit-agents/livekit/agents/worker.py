@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 from typing import (
     Callable,
@@ -109,7 +108,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._loop = loop or asyncio.get_event_loop()
 
         self._id = "unregistered"
-        self._closed, self_draining, self._connecting = True, False, False
+        self._closed, self._draining, self._connecting = True, False, False
         self._tasks = set()
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
         self._processes = dict[str, tuple[ipc.JobProcess, ActiveJob]]()
@@ -479,7 +478,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                         availability=agent.AvailabilityResponse(available=False)
                     )
                 )
-        
+
         # ask the user if they want to accept the job
         user_task = self._loop.create_task(_user_cb())
 
@@ -487,9 +486,9 @@ class Worker(utils.EventEmitter[EventTypes]):
         resp = agent.WorkerMessage()
         resp.availability.job_id = req.id
         resp.availability.available = av.avail
-    
+
         if not av.avail:
-            await self._queue_msg(resp) # job rejected, early return
+            await self._queue_msg(resp)  # job rejected, early return
             return
 
         assert av.data is not None
@@ -516,7 +515,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             await av.assignment_tx.send(e)
             return
         finally:
-            await user_task # make sure the user task is done
+            await user_task  # make sure the user task is done
 
         asgn = wait_assignment.result()
         url = asgn.url
