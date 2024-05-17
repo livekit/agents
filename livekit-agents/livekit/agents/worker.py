@@ -218,10 +218,10 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         await asyncio.gather(*close_co, return_exceptions=True)
 
+        self._msg_chan.close()
+
         await self._http_server.aclose()
         await self._session.close()
-
-        self._msg_chan.close()
         await self._close_future
 
     async def _queue_msg(self, msg: agent.WorkerMessage) -> None:
