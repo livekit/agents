@@ -43,9 +43,13 @@ class WatchServer:
         if self._watch_plugins:
             # also watch plugins that are installed in editable mode
             # this is particulary useful when developing plugins
-            packages.append(Distribution.from_name("livekit.agents"))
-            for p in Plugin.registered_plugins:
-                packages.append(Distribution.from_name(p.package))
+            try:
+                packages.append(Distribution.from_name("livekit.agents"))
+                for p in Plugin.registered_plugins:
+                    packages.append(Distribution.from_name(p.package))
+            except Exception:
+                # TODO(theomonnom): distribution isn't found on Python 3.9
+                pass
 
         paths: list[str | pathlib.Path] = [self._main_file.absolute()]
         for p in packages:

@@ -237,7 +237,7 @@ def run_worker(args: protocol.CliArgs) -> None:
         watch_client = WatchClient(worker, args.cch, loop=loop)
         watch_client.start()
 
-    main_task = loop.create_task(_worker_run(worker))
+    main_task = loop.create_task(_worker_run(worker), name="agent_runner")
     try:
         loop.run_until_complete(main_task)
     except (Shutdown, KeyboardInterrupt):

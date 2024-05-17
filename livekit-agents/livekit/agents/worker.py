@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import contextlib
 from typing import (
     Callable,
     Coroutine,
@@ -114,10 +115,6 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._processes = dict[str, tuple[ipc.JobProcess, ActiveJob]]()
         self._close_future: asyncio.Future | None = None
 
-        # this LiveKit API object is only really useful in non-third-party workers
-        self._api = api.LiveKitAPI(
-            self._opts.ws_url, self._opts.api_key, self._opts.api_secret
-        )
 
         self._msg_chan = aio.Chan[agent.WorkerMessage](128, loop=self._loop)
 
@@ -127,6 +124,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             opts.host, opts.port, loop=self._loop
         )
         self._session: aiohttp.ClientSession | None = None
+        self._api: api.LiveKitAPI | None = None
 
     async def run(self):
         if not self._closed:
@@ -134,6 +132,11 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         logger.info("starting worker", extra={"version": __version__})
 
+
+        # this LiveKit API object is only really useful in non-third-party workers
+        self._api = api.LiveKitAPI(
+            self._opts.ws_url, self._opts.api_key, self._opts.api_secret
+        )
         self._session = aiohttp.ClientSession()
         self._closed = False
         self._close_future = asyncio.Future(loop=self._loop)
@@ -184,6 +187,8 @@ class Worker(utils.EventEmitter[EventTypes]):
     async def simulate_job(
         self, room: str, participant_identity: str | None = None
     ) -> None:
+        assert self._api is not None
+
         room_obj = await self._api.room.create_room(api.CreateRoomRequest(name=room))
         participant = None
         if participant_identity:
@@ -208,6 +213,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         assert self._close_future is not None
         assert self._session is not None
+        assert self._api is not None
 
         self._closed = True
 
@@ -218,10 +224,13 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         await asyncio.gather(*close_co, return_exceptions=True)
 
+        await self._session.close()
+        await self._http_server.aclose()
+        await self._api.aclose()
+        await asyncio.sleep(.25) # see https://github.com/aio-libs/aiohttp/issues/1925
+
         self._msg_chan.close()
 
-        await self._http_server.aclose()
-        await self._session.close()
         await self._close_future
 
     async def _queue_msg(self, msg: agent.WorkerMessage) -> None:
@@ -260,6 +269,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 ws = await self._session.ws_connect(
                     agent_url, headers=headers, autoping=True
                 )
+
                 retry_count = 0
 
                 # do worker registration
@@ -352,10 +362,8 @@ class Worker(utils.EventEmitter[EventTypes]):
                         )
 
                 msg = agent.WorkerMessage(update_worker=update)
-                try:
+                with contextlib.suppress(aio.ChanClosed):
                     await self._queue_msg(msg)
-                except aio.ChanClosed:
-                    return
 
         async def _send_task():
             nonlocal closing_ws
