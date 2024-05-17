@@ -15,8 +15,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import contextlib
+import os
 from typing import (
     Callable,
     Coroutine,
