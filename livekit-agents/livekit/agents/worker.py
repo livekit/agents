@@ -115,7 +115,6 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._processes = dict[str, tuple[ipc.JobProcess, ActiveJob]]()
         self._close_future: asyncio.Future | None = None
 
-
         self._msg_chan = aio.Chan[agent.WorkerMessage](128, loop=self._loop)
 
         # use the same event loop as the main worker task
@@ -131,7 +130,6 @@ class Worker(utils.EventEmitter[EventTypes]):
             raise Exception("worker is already running")
 
         logger.info("starting worker", extra={"version": __version__})
-
 
         # this LiveKit API object is only really useful in non-third-party workers
         self._api = api.LiveKitAPI(
@@ -227,7 +225,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         await self._session.close()
         await self._http_server.aclose()
         await self._api.aclose()
-        await asyncio.sleep(.25) # see https://github.com/aio-libs/aiohttp/issues/1925
+        await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
 
         self._msg_chan.close()
 
