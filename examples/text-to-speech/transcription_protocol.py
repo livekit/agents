@@ -46,12 +46,11 @@ async def entrypoint(job: JobContext):
 
     tts_11labs = elevenlabs.TTS()
 
+    # publish an audio track
     source = rtc.AudioSource(tts_11labs.sample_rate, tts_11labs.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
     options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     await job.room.local_participant.publish_track(track, options)
-
-
 
     #
     # 1. example using a tts stream (we split text into chunks just for the example)
@@ -129,7 +128,7 @@ async def entrypoint(job: JobContext):
     # 3. example with deferred playout
     #
     await asyncio.sleep(2)
-    
+
     # disable auto playout
     tts_forwarder = transcription.TTSSegmentsForwarder(
         room=job.room,
@@ -150,15 +149,14 @@ async def entrypoint(job: JobContext):
 
     tts_forwarder.mark_audio_segment_end()
 
-    await asyncio.sleep(2)
     logging.info("waiting 2 seconds before starting playout")
+    await asyncio.sleep(2)
 
     tts_forwarder.segment_playout_started()
     playout_task = asyncio.create_task(_playout_task(playout_q, source))
 
     playout_q.put_nowait(None)
     await playout_task
-
     await tts_forwarder.aclose()
 
 

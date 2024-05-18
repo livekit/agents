@@ -110,7 +110,8 @@ async def _start(
     def on_disconnected():
         close_tx.send_nowait(_ShutdownInfo(reason="room disconnected"))
 
-    async with contextlib.aclosing(aio.select([pipe, cnt, close_rx])) as select:
+    select = aio.select([pipe, cnt, close_rx])
+    try:
         while True:
             s = await select()
             if s.selected is cnt:
@@ -136,6 +137,8 @@ async def _start(
                 await pipe.write(
                     protocol.Pong(last_timestamp=last_timestamp, timestamp=time_ms())
                 )
+    finally:
+        await select.aclose()
 
     logger.debug("disconnecting from room")
     await room.disconnect()
