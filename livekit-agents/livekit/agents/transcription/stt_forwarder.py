@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
+from typing import Optional
 import uuid
 
 from livekit import rtc
@@ -7,29 +10,33 @@ from livekit import rtc
 from .. import stt
 from ..log import logger
 
-
-def _uuid() -> str:
-    return str(uuid.uuid4())[:12]
+from . import _utils
 
 
 class STTSegmentsForwarder:
     """
-    Forward the STT transcription and keep the right timing info
+    Forward STT transcription to the users. (Useful for client-side rendering)
     """
 
     def __init__(
         self,
         *,
         room: rtc.Room,
-        participant_identity: str,
-        track_id: str,
+        participant: rtc.Participant | str,
+        track: rtc.Track | rtc.TrackPublication | str | None = None,
     ):
+        identity = participant if isinstance(participant, str) else participant.identity
+        if track is None:
+            track = _utils.find_micro_track_id(room, identity)
+        elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
+            track = track.sid
+
         self._room = room
-        self._participant_identity = participant_identity
-        self._track_id = track_id
-        self._queue = asyncio.Queue[rtc.TranscriptionSegment | None]()
+        self._participant_identity = identity
+        self._track_id = track
+        self._queue = asyncio.Queue[Optional[rtc.TranscriptionSegment]]()
         self._main_task = asyncio.create_task(self._run())
-        self._current_id = _uuid()
+        self._current_id = _utils.segment_uuid()
 
     async def _run(self):
         try:
@@ -75,9 +82,9 @@ class STTSegmentsForwarder:
                 )
             )
 
-            self._current_id = _uuid()
+            self._current_id = _utils.segment_uuid()
 
-    async def aclose(self, *, wait=True) -> None:
+    async def aclose(self, *, wait: bool = True) -> None:
         self._queue.put_nowait(None)
 
         if not wait:

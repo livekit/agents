@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import time
 import uuid
 from collections import deque
-from typing import Callable
+from typing import Callable, Optional
 
 from attrs import define
 from livekit import rtc
@@ -11,14 +13,17 @@ from livekit import rtc
 from .. import tokenize
 from ..log import logger
 
+from . import _utils
+
 
 @define
-class TTSOptions:
+class _TTSOptions:
     room: rtc.Room
     participant_identity: str
     track_id: str
     language: str
     speed: float
+    auto_playout: bool
     word_tokenizer: tokenize.WordTokenizer
     sentence_tokenizer: tokenize.SentenceTokenizer
     hyphenate_word: Callable[[str], list[str]]
@@ -31,6 +36,13 @@ class _SegmentData:
     audio_duration: float
     avg_speed: float | None
     processed_hyphenes: int
+    first_frame_future: asyncio.Future
+
+
+def _validate_playout(seg: _SegmentData) -> None:
+    if seg.audio_duration == 0.0:
+        with contextlib.suppress(asyncio.InvalidStateError):
+            seg.first_frame_future.set_result(None)
 
 
 @define
@@ -40,16 +52,46 @@ class _PendingSegments:
     q: deque[_SegmentData]
 
 
-def _uuid() -> str:
-    return str(uuid.uuid4())[:12]
-
-
 class TTSSegmentsForwarder:
+    """
+    Forward TTS transcription to the users. This class tries to imitate the right timing of
+    speech with the synthesized text. The first estimation is based on the speed argument. Once
+    we have received the full audio of a specific text segment, we recalculate the avg speech
+    speed using the length of the text & audio and catch up/ slow down the transcription if needed.
+    """
+
     def __init__(
         self,
-        opts: TTSOptions,
+        *,
+        room: rtc.Room,
+        participant: rtc.Participant | str,
+        track: rtc.Track | rtc.TrackPublication | str | None = None,
+        language: str = "",
+        speed: float = 4,
+        auto_playout: bool = True,
+        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
+        sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
+        hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
     ):
-        self._opts = opts
+        identity = participant if isinstance(participant, str) else participant.identity
+
+        if track is None:
+            track = _utils.find_micro_track_id(room, identity)
+        elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
+            track = track.sid
+
+        self._opts = _TTSOptions(
+            room=room,
+            participant_identity=identity,
+            track_id=track,
+            language=language,
+            speed=speed,
+            auto_playout=auto_playout,
+            word_tokenizer=word_tokenizer,
+            sentence_tokenizer=sentence_tokenizer,
+            hyphenate_word=hyphenate_word,
+        )
+
         self._main_task = asyncio.create_task(self._run())
 
         # current segment where the user may still be pushing text & audio
@@ -63,22 +105,28 @@ class TTSSegmentsForwarder:
             q=segments_q,
         )
 
-        self._seg_queue = asyncio.Queue[_SegmentData | None]()
+        self._seg_queue = asyncio.Queue[Optional[_SegmentData]]()
         self._seg_queue.put_nowait(first_segment)
 
-        # the forwarding of the transcription is started as soon as the user push the first audio frame.
-        self._start_future = asyncio.Future()
+        self._validated_playout_q = asyncio.Queue[None]()
 
-    def validate(self) -> None:
-        """Validate must be called once we started to playout the audio to the user"""
-        with contextlib.suppress(asyncio.InvalidStateError):
-            self._start_future.set_result(None)
+    def segment_playout_started(self) -> None:
+        """Call this function when the playout of the audio segment starts,
+        this will start forwarding the transcription for the current segment.
+
+        This is only needed if auto_playout is set to False.
+
+        Note that you don't need to wait for the first synthesized audio frame to call this function.
+        The forwarder will wait for the first audio frame before starting the transcription.
+        """
+        self._validated_playout_q.put_nowait(None)
 
     def push_audio(self, frame: rtc.AudioFrame | None, **kwargs) -> None:
         if frame is not None:
             frame_duration = frame.samples_per_channel / frame.sample_rate
             cur_seg = self._pending_segment.cur_audio
             cur_seg.audio_duration += frame_duration
+            _validate_playout(cur_seg)
         else:
             self.mark_audio_segment_end()
 
@@ -88,7 +136,7 @@ class TTSSegmentsForwarder:
             seg = self._pending_segment.q.popleft()
         except IndexError:
             raise IndexError(
-                "mark_audio_segment_end called before any mark_segment_end"
+                "mark_audio_segment_end called before any mark_text_segment_end"
             )
 
         seg.avg_speed = len(self._calc_hyphenes(seg.text)) / seg.audio_duration
@@ -100,19 +148,27 @@ class TTSSegmentsForwarder:
             cur_seg.text += text
             cur_seg.sentence_stream.push_text(text)
         else:
-            self.mark_segment_end()
+            self.mark_text_segment_end()
 
-    def mark_segment_end(self) -> None:
-        # create new segment on "mark_segment_end"
+    def mark_text_segment_end(self) -> None:
+        # create new segment on "mark_text_segment_end"
         self._pending_segment.cur_text.sentence_stream.mark_segment_end()
         new_seg = self._create_segment()
         self._pending_segment.cur_text = new_seg
         self._pending_segment.q.append(new_seg)
         self._seg_queue.put_nowait(new_seg)
 
+    async def aclose(self, *, wait: bool = True) -> None:
+        self._seg_queue.put_nowait(None)
+
+        if not wait:
+            self._main_task.cancel()
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._main_task
+
     async def _run(self) -> None:
-        await self._start_future
-        transcription_msg_q = asyncio.Queue[rtc.TranscriptionSegment | None]()
+        transcription_msg_q = asyncio.Queue[Optional[rtc.TranscriptionSegment]]()
         try:
             await asyncio.gather(
                 self._synchronize(transcription_msg_q),
@@ -129,17 +185,8 @@ class TTSSegmentsForwarder:
             audio_duration=0.0,
             avg_speed=None,
             processed_hyphenes=0,
+            first_frame_future=asyncio.Future(),
         )
-
-    async def aclose(self, *, wait: bool = True) -> None:
-        self._start_future.cancel()
-        self._seg_queue.put_nowait(None)
-
-        if not wait:
-            self._main_task.cancel()
-
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
 
     async def _forward(self, q: asyncio.Queue[rtc.TranscriptionSegment | None]):
         while True:
@@ -160,7 +207,9 @@ class TTSSegmentsForwarder:
             seg: _SegmentData, tokenized_sentence: str, start_time: float
         ):
             # sentence data
-            seg_id = _uuid()  # put each sentence in a different transcription segment
+            seg_id = (
+                _utils.segment_uuid()
+            )  # put each sentence in a different transcription segment
             words = self._opts.word_tokenizer.tokenize(tokenized_sentence)
             processed_words = []
 
@@ -209,6 +258,11 @@ class TTSSegmentsForwarder:
             audio_seg = await self._seg_queue.get()
             if audio_seg is None:
                 break
+
+            await audio_seg.first_frame_future
+
+            if not self._opts.auto_playout:
+                _ = await self._validated_playout_q.get()
 
             start_time = time.time()
             sentence_stream = audio_seg.sentence_stream
