@@ -36,7 +36,7 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
             stream_context_len=stream_context_len,
         )
 
-    def tokenize(self, text: str, language: str | None = None) -> list[str]:
+    def tokenize(self, *, text: str, language: str | None = None) -> list[str]:
         return _basic_sent.split_sentences(
             text, min_sentence_len=self._config.min_sentence_len
         )
@@ -56,7 +56,7 @@ class WordTokenizer(tokenizer.WordTokenizer):
     def __init__(self, *, ignore_punctuation: bool = True) -> None:
         self._ignore_punctuation = ignore_punctuation
 
-    def tokenize(self, text: str, language: str | None = None) -> list[str]:
+    def tokenize(self, *, text: str, language: str | None = None) -> list[str]:
         return _basic_word.split_words(text)
 
     def stream(self, *, language: str | None = None) -> tokenizer.WordStream:
