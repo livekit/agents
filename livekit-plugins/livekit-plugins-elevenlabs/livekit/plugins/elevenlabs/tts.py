@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import contextlib
@@ -19,11 +21,11 @@ import dataclasses
 import json
 import os
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional, Union
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import aio, tts, utils
+from livekit.agents import aio, tts, utils, tokenize
 
 from .log import logger
 from .models import TTSModels
@@ -66,6 +68,7 @@ class _TTSOptions:
     base_url: str
     sample_rate: int
     streaming_latency: int
+    word_tokenizer: tokenize.WordTokenizer
 
 
 class TTS(tts.TTS):
@@ -78,6 +81,7 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         sample_rate: int = 24000,
         streaming_latency: int = 3,
+        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -87,7 +91,6 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("ELEVEN_API_KEY must be set")
 
-        self._session = http_session or utils.http_session()
         self._opts = _TTSOptions(
             voice=voice,
             model_id=model_id,
@@ -95,10 +98,18 @@ class TTS(tts.TTS):
             base_url=base_url or API_BASE_URL_V1,
             sample_rate=sample_rate,
             streaming_latency=streaming_latency,
+            word_tokenizer=word_tokenizer,
         )
+        self._session = http_session
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_session()
+
+        return self._session
 
     async def list_voices(self) -> List[Voice]:
-        async with self._session.get(
+        async with self._ensure_session().get(
             f"{self._opts.base_url}/voices",
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
         ) as resp:
@@ -109,12 +120,12 @@ class TTS(tts.TTS):
         self,
         text: str,
     ) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts, self._session)
+        return ChunkedStream(text, self._opts, self._ensure_session())
 
     def stream(
         self,
     ) -> "SynthesizeStream":
-        return SynthesizeStream(self._session, self._opts)
+        return SynthesizeStream(self._ensure_session(), self._opts)
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -125,7 +136,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._text = text
         self._session = session
         self._main_task: asyncio.Task | None = None
-        self._queue = asyncio.Queue[tts.SynthesizedAudio | None]()
+        self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
 
     def _synthesize_url(self) -> str:
         voice = self._opts.voice
@@ -219,13 +230,11 @@ class SynthesizeStream(tts.SynthesizeStream):
     ):
         self._opts = opts
         self._session = session
-
-        self._queue = asyncio.Queue[str | None]()
-        self._event_queue = asyncio.Queue[tts.SynthesisEvent | None]()
-        self._closed = False
-        self._text = ""
-
         self._main_task = asyncio.create_task(self._run(max_retry))
+        self._event_queue = asyncio.Queue[Union[tts.SynthesisEvent, None]]()
+        self._closed = False
+        self._word_stream = opts.word_tokenizer.stream()
+
 
     def _stream_url(self) -> str:
         base_url = self._opts.base_url
@@ -240,39 +249,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise ValueError("cannot push to a closed stream")
 
         if token is None:
-            self._flush_if_needed()
+            self._word_stream.mark_segment_end()
             return
 
-        if len(token) == 0:
-            # 11labs marks the EOS with an empty string, avoid users from pushing empty strings
-            return
+        self._word_stream.push_text(token)
 
-        # TODO: Naive word boundary detection may not be good enough for all languages
-        # fmt: off
-        splitters = (".", ",", "?", "!", ";", ":", "—", "-", "(", ")", "[", "]", "}", " ")
-        # fmt: on
-
-        self._text += token
-
-        while True:
-            last_split = -1
-            for i, c in enumerate(self._text):
-                if c in splitters:
-                    last_split = i
-                    break
-
-            if last_split == -1:
-                break
-
-            seg = self._text[: last_split + 1]
-            seg = seg.strip() + " "  # 11labs expects a space at the end
-            self._queue.put_nowait(seg)
-            self._text = self._text[last_split + 1 :]
-
+       
     async def aclose(self, *, wait: bool = True) -> None:
-        self._flush_if_needed()
-        self._queue.put_nowait(None)
         self._closed = True
+        await self._word_stream.aclose()
 
         if not wait:
             self._main_task.cancel()
@@ -280,13 +265,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
 
-    def _flush_if_needed(self) -> None:
-        seg = self._text.strip()
-        if len(seg) > 0:
-            self._queue.put_nowait(seg + " ")
-
-        self._text = ""
-        self._queue.put_nowait(SynthesizeStream._STREAM_EOS)
+    # self._queue.put_nowait(SynthesizeStream._STREAM_EOS)
 
     async def _run(self, max_retry: int) -> None:
         retry_count = 0
@@ -295,11 +274,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         data_tx: aio.ChanSender[str] | None = None
 
         try:
-            while True:
+            async for ev in self._word_stream:
                 ws_connected = ws is not None and not ws.closed
                 try:
-                    data = await self._queue.get()
-
                     if data is None:
                         if ws_task is not None:
                             await ws_task
@@ -422,6 +399,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                     )
                 elif data.get("isFinal"):
+                    return
+                else:
+                    logger.error("unexpected 11labs message %s", data)
                     return
 
         try:

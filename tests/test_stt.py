@@ -22,7 +22,7 @@ With hands locked together, invisible among the press of bodies,\
 they stared steadily in front of them, and instead of the eyes of the girl, the eyes of the aged prisoner gazed mournfully at Winston out of nests of hair."
 
 
-def read_mp3_file(filename: str) -> List[rtc.AudioFrame]:
+def read_mp3_file(filename: str) -> rtc.AudioFrame:
     mp3 = agents.codecs.Mp3StreamDecoder()
     frames: List[rtc.AudioFrame] = []
     with open(filename, "rb") as file:
@@ -143,7 +143,7 @@ async def test_stream(provider: str, input_key: str):
 
     async def stream_output():
         # STT Should start with a START_OF_SPEECH event
-        start_event = await anext(stream)
+        start_event = await stream.__anext__()
         assert start_event.type == agents.stt.SpeechEventType.START_OF_SPEECH
 
         total_text = ""

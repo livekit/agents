@@ -18,7 +18,7 @@ import asyncio
 import contextlib
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, AsyncIterable, Dict, List
+from typing import Any, AsyncIterable, Dict, List, Union
 
 from livekit import agents, rtc
 from livekit.agents import stt
@@ -31,8 +31,8 @@ from google.cloud.speech_v2.types import cloud_speech
 from .log import logger
 from .models import SpeechLanguages, SpeechModels
 
-LgType = SpeechLanguages | str
-LanguageCode = LgType | List[LgType]
+LgType = Union[SpeechLanguages, str]
+LanguageCode = Union[LgType, List[LgType]]
 
 
 # This class is only be used internally to encapsulate the options
@@ -218,7 +218,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._queue.put_nowait(frame)
 
-    async def aclose(self, wait: bool = True) -> None:
+    async def aclose(self, *, wait: bool = True) -> None:
         self._closed = True
         if not wait:
             self._main_task.cancel()

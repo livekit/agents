@@ -2,9 +2,7 @@ import re
 from collections import defaultdict
 
 
-def compare_word_counts(actual: str, expected: str):
-    """Crude way to compare two strings by counting similar words."""
-
+def assert_similar_words(actual: str, expected: str, threshold):
     lookup = defaultdict(int)
 
     expected_split = re.split(r"\W+", expected)
@@ -29,4 +27,4 @@ def compare_word_counts(actual: str, expected: str):
     if unique_words == 0:
         return 0
 
-    return 1 - (deviation / unique_words)
+    return (1 - (deviation / unique_words)) >= threshold

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
+from typing import Callable, Optional
 
 from .tokenizer import TokenStream
 
@@ -17,7 +17,7 @@ class BufferedTokenStream(TokenStream):
         self._tokenizer = tokenizer
         self._ctx_len = ctx_len
         self._min_token_len = min_token_len
-        self._event_queue = asyncio.Queue[str | None]()
+        self._event_queue = asyncio.Queue[Optional[str]]()
         self._closed = False
 
         self._incomplete_tokens: list[str] = []  # <= min_token_len
