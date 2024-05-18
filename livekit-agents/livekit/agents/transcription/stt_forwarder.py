@@ -3,13 +3,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from typing import Optional
-import uuid
 
 from livekit import rtc
 
 from .. import stt
 from ..log import logger
-
 from . import _utils
 
 

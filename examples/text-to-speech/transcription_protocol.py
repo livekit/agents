@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 from typing import Optional
 
 from livekit import rtc

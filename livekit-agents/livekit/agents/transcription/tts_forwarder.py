@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-import uuid
 from collections import deque
 from typing import Callable, Optional
 
@@ -12,7 +11,6 @@ from livekit import rtc
 
 from .. import tokenize
 from ..log import logger
-
 from . import _utils
 
 
