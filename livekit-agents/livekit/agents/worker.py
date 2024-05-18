@@ -49,6 +49,7 @@ class WorkerPermissions:
     can_subscribe: bool = True
     can_publish_data: bool = True
     can_update_metadata: bool = True
+    can_publish_sources: list[models.TrackSource] = []
     hidden: bool = False
 
 
@@ -109,30 +110,40 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._loop = loop or asyncio.get_event_loop()
 
         self._id = "unregistered"
-        self._session = None
-        self._closed = False
+        self._closed, self._draining, self._connecting = True, False, False
         self._tasks = set()
-        self._draining = False
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
         self._processes = dict[str, tuple[ipc.JobProcess, ActiveJob]]()
-        self._close_future = asyncio.Future(loop=self._loop)
-        self._api = api.LiveKitAPI(
-            self._opts.ws_url, self._opts.api_key, self._opts.api_secret
-        )
+        self._close_future: asyncio.Future | None = None
 
-        self._chan = aio.Chan[agent.WorkerMessage](32, loop=self._loop)
+        self._msg_chan = aio.Chan[agent.WorkerMessage](128, loop=self._loop)
 
         # use the same event loop as the main worker task
         #  -> more accurate health checks
         self._http_server = http_server.HttpServer(
             opts.host, opts.port, loop=self._loop
         )
+        self._session: aiohttp.ClientSession | None = None
+        self._api: api.LiveKitAPI | None = None
 
     async def run(self):
+        if not self._closed:
+            raise Exception("worker is already running")
+
         logger.info("starting worker", extra={"version": __version__})
+
+        # this LiveKit API object is only really useful in non-third-party workers
+        self._api = api.LiveKitAPI(
+            self._opts.ws_url, self._opts.api_key, self._opts.api_secret
+        )
         self._session = aiohttp.ClientSession()
-        await asyncio.gather(self._worker_task(), self._http_server_task())
-        self._close_future.set_result(None)
+        self._closed = False
+        self._close_future = asyncio.Future(loop=self._loop)
+
+        try:
+            await asyncio.gather(self._worker_task(), self._http_server.run())
+        finally:
+            self._close_future.set_result(None)
 
     @property
     def id(self) -> str:
@@ -143,6 +154,10 @@ class Worker(utils.EventEmitter[EventTypes]):
         return [active_job for (_, active_job) in self._processes.values()]
 
     async def drain(self, timeout: int | None = None) -> None:
+        """
+        When timeout isn't None, it will raise asyncio.TimeoutError if the processes didn't finish
+        in time.
+        """
         if self._draining:
             return
 
@@ -150,29 +165,29 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._draining = True
 
         # exit the queue
-        update = agent.UpdateWorkerStatus(
-            status=(agent.WorkerStatus.WS_FULL),
+        update_worker = agent.WorkerMessage(
+            update_worker=agent.UpdateWorkerStatus(
+                status=(agent.WorkerStatus.WS_FULL),
+            )
         )
-        msg = agent.WorkerMessage(update_worker=update)
-        try:
-            self._chan.send_nowait(msg)
-        except aio.ChanClosed:
-            return
+        await self._queue_msg(update_worker)
 
-        # wait for all jobs to finish with a final timeout
+        # wait for all jobs to finish
         async def _join_jobs():
             for proc, _ in self._processes.values():
                 await proc.join()
 
         if timeout:
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(_join_jobs(), timeout)
+            # this could raise asyncio.TimeoutError
+            await asyncio.wait_for(_join_jobs(), timeout)
         else:
             await _join_jobs()
 
     async def simulate_job(
         self, room: str, participant_identity: str | None = None
     ) -> None:
+        assert self._api is not None
+
         room_obj = await self._api.room.create_room(api.CreateRoomRequest(name=room))
         participant = None
         if participant_identity:
@@ -185,13 +200,21 @@ class Worker(utils.EventEmitter[EventTypes]):
         if participant:
             msg.simulate_job.participant.CopyFrom(participant)
 
-        await _send_ignore_err(self._chan, msg)
+        await self._queue_msg(msg)
 
     async def aclose(self) -> None:
         if self._closed:
+            if self._close_future is not None:
+                await self._close_future
             return
 
         logger.info("shutting down worker", extra={"id": self.id})
+
+        assert self._close_future is not None
+        assert self._session is not None
+        assert self._api is not None
+
+        self._closed = True
 
         # shutdown processes before closing the connection to the lkserver
         close_co = []
@@ -200,20 +223,33 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         await asyncio.gather(*close_co, return_exceptions=True)
 
-        await self._http_server.aclose()
-        assert self._session is not None
         await self._session.close()
+        await self._http_server.aclose()
+        await self._api.aclose()
+        await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
 
-        self._closed = True
-        self._chan.close()
+        self._msg_chan.close()
+
         await self._close_future
 
-    async def _worker_task(self):
+    async def _queue_msg(self, msg: agent.WorkerMessage) -> None:
+        """_queue_msg raises aio.ChanClosed when the worker is closing/closed"""
+        if self._connecting:
+            which = msg.WhichOneof("message")
+            if which == "update_worker" and not msg.update_worker.metadata:
+                return
+            elif which == "ping":
+                return
+
+        await self._msg_chan.send(msg)
+
+    async def _worker_task(self) -> None:
         assert self._session is not None
 
         retry_count = 0
         while not self._closed:
             try:
+                self._connecting = True
                 join_jwt = (
                     api.AccessToken(self._opts.api_key, self._opts.api_secret)
                     .with_grants(api.VideoGrants(agent=True))
@@ -226,10 +262,43 @@ class Worker(utils.EventEmitter[EventTypes]):
                 scheme = parse.scheme
                 if scheme.startswith("http"):
                     scheme = scheme.replace("http", "ws")
+
                 agent_url = f"{scheme}://{parse.netloc}/{parse.path.rstrip('/')}/agent"
 
-                ws = await self._session.ws_connect(agent_url, headers=headers)
+                ws = await self._session.ws_connect(
+                    agent_url, headers=headers, autoping=True
+                )
+
                 retry_count = 0
+
+                # do worker registration
+                req = agent.WorkerMessage()
+                req.register.type = self._opts.worker_type
+                req.register.allowed_permissions.CopyFrom(
+                    models.ParticipantPermission(
+                        can_publish=self._opts.permissions.can_publish,
+                        can_subscribe=self._opts.permissions.can_subscribe,
+                        can_publish_data=self._opts.permissions.can_publish_data,
+                        can_update_metadata=self._opts.permissions.can_update_metadata,
+                        can_publish_sources=self._opts.permissions.can_publish_sources,
+                        hidden=self._opts.permissions.hidden,
+                        agent=True,
+                    )
+                )
+                req.register.namespace = self._opts.namespace
+                req.register.version = __version__
+                await ws.send_bytes(req.SerializeToString())
+
+                # wait for the register response before running this connection
+                first_msg_b = await ws.receive_bytes()
+                msg = agent.ServerMessage()
+                msg.ParseFromString(first_msg_b)
+
+                if not msg.HasField("register"):
+                    raise Exception("expected register response as first message")
+
+                self._handle_register(msg.register)
+                self._connecting = False
 
                 await self._run_ws(ws)
             except Exception as e:
@@ -238,63 +307,49 @@ class Worker(utils.EventEmitter[EventTypes]):
 
                 if retry_count >= self._opts.max_retry:
                     raise Exception(
-                        f"failed to connect to livekit-server after {retry_count} attempts: {e}"
+                        f"failed to connect to livekit after {retry_count} attempts: {e}"
                     )
 
                 retry_delay = min(retry_count * 2, 10)
                 retry_count += 1
 
                 logger.warning(
-                    f"failed to connect to livekit-server, retrying in {retry_delay}s: {e}",
-                    exc_info=e,
+                    f"failed to connect to livekit, retrying in {retry_delay}s: {e}",
                 )
                 await asyncio.sleep(retry_delay)
-
-    async def _http_server_task(self):
-        await self._http_server.run()
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse):
         closing_ws = False
 
-        # register the worker
-        req = agent.WorkerMessage()
-        req.register.type = self._opts.worker_type
-        req.register.allowed_permissions.CopyFrom(
-            models.ParticipantPermission(
-                can_publish=self._opts.permissions.can_publish,
-                can_subscribe=self._opts.permissions.can_subscribe,
-                can_publish_data=self._opts.permissions.can_publish_data,
-                can_update_metadata=self._opts.permissions.can_update_metadata,
-                hidden=self._opts.permissions.hidden,
-                agent=True,
-            )
-        )
-        req.register.namespace = self._opts.namespace
-        req.register.version = __version__
-        await self._chan.send(req)
-
-        async def load_monitor_task():
+        async def _load_task():
+            """periodically check load and update worker status"""
             interval = aio.interval(consts.LOAD_INTERVAL)
-            registered = True
+            current_status = agent.WorkerStatus.WS_AVAILABLE
             while True:
                 await interval.tick()
-                load = self._opts.load_fnc()
-                is_full = load >= self._opts.load_threshold
-                should_register = not is_full and not self._draining
 
-                update = agent.UpdateWorkerStatus(
-                    load=load,
-                    status=(
-                        agent.WorkerStatus.WS_FULL
-                        if is_full
-                        else agent.WorkerStatus.WS_AVAILABLE
-                    ),
+                old_status = current_status
+                current_load = self._opts.load_fnc()
+                is_full = current_load >= self._opts.load_threshold
+                currently_available = not is_full and not self._draining
+
+                current_status = (
+                    agent.WorkerStatus.WS_AVAILABLE
+                    if currently_available
+                    else agent.WorkerStatus.WS_FULL
                 )
 
-                if should_register != registered:
-                    registered = should_register
+                update = agent.UpdateWorkerStatus(
+                    load=current_load,
+                    status=current_status,
+                )
 
-                    extra = {"load": load, "threshold": self._opts.load_threshold}
+                # only log if status has changed
+                if old_status != current_status and not self._draining:
+                    extra = {
+                        "load": current_load,
+                        "threshold": self._opts.load_threshold,
+                    }
                     if is_full:
                         logger.info(
                             "worker is at full capacity, marking as unavailable",
@@ -307,22 +362,20 @@ class Worker(utils.EventEmitter[EventTypes]):
                         )
 
                 msg = agent.WorkerMessage(update_worker=update)
-                try:
-                    self._chan.send_nowait(msg)
-                except aio.ChanClosed:
-                    return
+                with contextlib.suppress(aio.ChanClosed):
+                    await self._queue_msg(msg)
 
-        async def send_task():
+        async def _send_task():
             nonlocal closing_ws
             while True:
                 try:
-                    msg = await self._chan.recv()
+                    msg = await self._msg_chan.recv()
                     await ws.send_bytes(msg.SerializeToString())
                 except aio.ChanClosed:
                     closing_ws = True
                     return
 
-        async def recv_task():
+        async def _recv_task():
             nonlocal closing_ws
             while True:
                 msg = await ws.receive()
@@ -344,30 +397,25 @@ class Worker(utils.EventEmitter[EventTypes]):
                 msg = agent.ServerMessage()
                 msg.ParseFromString(data)
                 which = msg.WhichOneof("message")
-                if which == "register":
-                    self._handle_register(
-                        msg.register
-                    )  # we assume this is the first message we receive
-                elif which == "availability":
+                if which == "availability":
                     self._handle_availability(msg.availability)
                 elif which == "assignment":
                     self._handle_assignment(msg.assignment)
 
-        await asyncio.gather(send_task(), recv_task(), load_monitor_task())
+        await asyncio.gather(_send_task(), _recv_task(), _load_task())
 
-    def _reload_jobs(self, jobs: list[ActiveJob]):
+    def _reload_jobs(self, jobs: list[ActiveJob]) -> None:
         for aj in jobs:
             logger.info("reloading job", extra={"job": aj.job})
 
-            # reloading jobs doesn't work on third-party workers
-            # so it is ok to use the ws_url from the local worker
-            # (also create a token with the worker api key)
+            # reloading jobs isn't supported on third-party workers, using ws_url of the local worker
+            # is OK
             url = self._opts.ws_url
 
             jwt = (
                 api.AccessToken(self._opts.api_key, self._opts.api_secret)
                 .with_grants(
-                    api.VideoGrants(agent=True, room=aj.job.room.name, room_join=True)
+                    api.VideoGrants(agent=True, room_join=True, room=aj.job.room.name)
                 )
                 .with_name(aj.accept_data.name)
                 .with_metadata(aj.accept_data.metadata)
@@ -407,78 +455,83 @@ class Worker(utils.EventEmitter[EventTypes]):
         self.emit("worker_registered", reg.worker_id, reg.server_info)
 
     def _handle_availability(self, msg: agent.AvailabilityRequest):
+        task = self._loop.create_task(self._answer_availability(msg))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _answer_availability(self, msg: agent.AvailabilityRequest):
+        """Ask the user if they want to accept this job and forward the answer to the server.
+        If we get the job assigned, we start a new process."""
+
         answer_tx, answer_rx = aio.channel(1)  # wait for the user res
         req = JobRequest(msg.job, answer_tx)
 
-        async def _wait_response():
-            async def _user_cb():
-                try:
-                    await self._opts.request_fnc(req)
-                except Exception:
-                    logger.exception(
-                        f"user request handler for job {req.id} failed",
-                        extra={"req": req},
-                    )
-
-                if not req.answered:
-                    logger.warning(
-                        f"no answer for job {req.id}, automatically rejecting the job",
-                        extra={"req": req},
-                    )
-                    await _send_ignore_err(
-                        self._chan,
-                        agent.WorkerMessage(
-                            availability=agent.AvailabilityResponse(available=False)
-                        ),
-                    )
-
-            user_task = self._loop.create_task(_user_cb())
-
-            av: AvailRes = await answer_rx.recv()  # wait for user answer
-            msg = agent.WorkerMessage()
-            msg.availability.job_id = req.id
-            msg.availability.available = av.avail
-
-            if not av.avail:
-                await _send_ignore_err(self._chan, msg)
-                return
-
-            assert av.data is not None
-            assert av.assignment_tx is not None
-            msg.availability.participant_identity = av.data.identity
-            msg.availability.participant_name = av.data.name
-            msg.availability.participant_metadata = av.data.metadata
-
-            wait_assignment = asyncio.Future[agent.JobAssignment]()
-            self._pending_assignments[req.id] = wait_assignment
-
-            await _send_ignore_err(self._chan, msg)
-
-            # wait for server assignment
+        async def _user_cb():
             try:
-                await asyncio.wait_for(wait_assignment, consts.ASSIGNMENT_TIMEOUT)
-                await av.assignment_tx.send(None)
-            except asyncio.TimeoutError as e:
-                logger.warning(
-                    f"assignment for job {req.id} timed out",
+                await self._opts.request_fnc(req)
+            except Exception:
+                logger.exception(
+                    f"user request handler for job {req.id} failed",
                     extra={"req": req},
                 )
-                await av.assignment_tx.send(e)
-                return
-            finally:
-                await user_task
 
-            asgn = wait_assignment.result()
-            url = asgn.url
+            if not req.answered:
+                logger.warning(
+                    f"no answer for job {req.id}, automatically rejecting the job",
+                    extra={"req": req},
+                )
 
-            if not url:
-                url = self._opts.ws_url
+                await self._queue_msg(
+                    agent.WorkerMessage(
+                        availability=agent.AvailabilityResponse(available=False)
+                    )
+                )
 
-            self._start_process(asgn.job, url, asgn.token, av.data)
+        # ask the user if they want to accept the job
+        user_task = self._loop.create_task(_user_cb())
 
-        task = self._loop.create_task(_wait_response())
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        av: AvailRes = await answer_rx.recv()
+        resp = agent.WorkerMessage()
+        resp.availability.job_id = req.id
+        resp.availability.available = av.avail
+
+        if not av.avail:
+            await self._queue_msg(resp)  # job rejected, early return
+            return
+
+        assert av.data is not None
+        assert av.assignment_tx is not None
+
+        resp.availability.participant_identity = av.data.identity
+        resp.availability.participant_name = av.data.name
+        resp.availability.participant_metadata = av.data.metadata
+
+        wait_assignment = asyncio.Future[agent.JobAssignment]()
+        self._pending_assignments[req.id] = wait_assignment
+
+        await self._queue_msg(resp)
+
+        # the job was accepted by the user, wait for the server assignment
+        try:
+            await asyncio.wait_for(wait_assignment, consts.ASSIGNMENT_TIMEOUT)
+            await av.assignment_tx.send(None)
+        except asyncio.TimeoutError as e:
+            logger.warning(
+                f"assignment for job {req.id} timed out",
+                extra={"req": req},
+            )
+            await av.assignment_tx.send(e)
+            return
+        finally:
+            await user_task  # make sure the user task is done
+
+        asgn = wait_assignment.result()
+        url = asgn.url
+
+        if not url:
+            url = self._opts.ws_url
+
+        self._start_process(asgn.job, url, asgn.token, av.data)
 
     def _handle_assignment(self, assignment: agent.JobAssignment):
         job = assignment.job
@@ -490,12 +543,3 @@ class Worker(utils.EventEmitter[EventTypes]):
                 f"received assignment for unknown job {job.id}",
                 extra={"job": job},
             )
-
-
-async def _send_ignore_err(
-    ch: aio.ChanSender[agent.WorkerMessage], msg: agent.WorkerMessage
-):
-    # Used when we don't care about the result of sending
-    # e.g. when closing the worker, we close the channel.
-    with contextlib.suppress(aio.ChanClosed):
-        await ch.send(msg)
