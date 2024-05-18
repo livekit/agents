@@ -49,6 +49,7 @@ class WorkerPermissions:
     can_subscribe: bool = True
     can_publish_data: bool = True
     can_update_metadata: bool = True
+    can_publish_sources: list[models.TrackSource] = []
     hidden: bool = False
 
 
@@ -279,6 +280,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                         can_subscribe=self._opts.permissions.can_subscribe,
                         can_publish_data=self._opts.permissions.can_publish_data,
                         can_update_metadata=self._opts.permissions.can_update_metadata,
+                        can_publish_sources=self._opts.permissions.can_publish_sources,
                         hidden=self._opts.permissions.hidden,
                         agent=True,
                     )
