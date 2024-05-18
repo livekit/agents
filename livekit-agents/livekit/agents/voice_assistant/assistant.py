@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import contextvars
@@ -7,7 +9,7 @@ from typing import Any, AsyncIterable, Callable, Literal
 from attrs import define
 from livekit import rtc
 
-from .. import aio, utils
+from .. import aio, transcription, utils
 from .. import llm as allm
 from .. import stt as astt
 from .. import tts as atts
@@ -175,8 +177,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 - user_speech_committed: the user speech was committed to the chat context
                 - agent_speech_committed: the agent speech was committed to the chat context
                 - agent_speech_interrupted: the agent speech was interrupted
-                - function_calls_completed: all function calls have been completed
-                - will_synthesize_llm: the assistant will synthesize the LLM output
+                - function_calls_collected: received the complete set of functions to be executed
+                - function_calls_finished: all function calls have been completed
             callback: the callback to call when the event is emitted
         """
         return super().on(event, callback)
@@ -237,6 +239,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._started = True
         self._start_args = _StartArgs(room=room, participant=participant)
+        self._tr_man = transcription.TranscriptionManager(room)
 
         room.on("track_published", self._on_track_published)
         room.on("track_subscribed", self._on_track_subscribed)
@@ -244,31 +247,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         room.on("participant_connected", self._on_participant_connected)
 
         self._launch_task = asyncio.create_task(self._launch())
-
-    def _mark_dirty(self):
-        """Called when the AudioStream isn't valid anymore (microphone unsubscribed or participant
-        disconnected)"""
-        if not self._ready:
-            logger.warning("assistant already marked as dirty")
-            return
-
-        self._log_debug("marking assistant as dirty")
-        self._ready = False
-
-        if self._recognize_task is not None:
-            self._recognize_task.cancel()
-
-    def _mark_ready(self, audio_stream: rtc.AudioStream):
-        """We have everything we need to start the voice assistant (audio sources & audio
-        streams)"""
-        if self._ready:
-            logger.warning("assistant already marked as ready")
-            return
-
-        self._log_debug("marking assistant as ready")
-        self._audio_stream = audio_stream
-        self._ready = True
-        self._recognize_task = asyncio.create_task(self._recognize_loop())
 
     async def aclose(self, wait: bool = True) -> None:
         if not self.started:
@@ -375,8 +353,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            audio_stream = rtc.AudioStream(track)
-            self._stream_ready(audio_stream)
+            self._user_track_ready(track)  # type: ignore
 
     def _on_track_unsubscribed(
         self,
@@ -388,9 +365,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         if pub.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            self._stream_dirty()
+            self._user_track_dirty()
 
-    def _stream_dirty(self):
+    def _user_track_dirty(self):
         """Called when the AudioStream isn't valid anymore (microphone unsubscribed or participant
         disconnected)"""
         if not self._ready:
@@ -403,14 +380,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if self._recognize_task is not None:
             self._recognize_task.cancel()
 
-    def _stream_ready(self, audio_stream: rtc.AudioStream):
+    def _user_track_ready(self, user_track: rtc.AudioTrack):
         """We have everything we need to start the voice assistant (audio sources & audio
         streams)"""
         if self._ready:
             logger.warning("assistant already marked as ready")
             return
 
+        audio_stream = rtc.AudioStream(user_track)
+
         self._log_debug("marking assistant as ready")
+        self._user_track = user_track
         self._audio_stream = audio_stream
         self._ready = True
         self._recognize_task = asyncio.create_task(self._recognize_loop())
@@ -469,6 +449,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
+        stt_forwarder = self._tr_man.forward_stt_transcription(
+            participant=self._linked_participant, track_id=self._user_track.sid
+        )
 
         select = aio.select([self._audio_stream, vad_stream, stt_stream])
         try:
@@ -490,6 +473,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
                 if s.selected is stt_stream:
                     stt_event = s.result()
+                    stt_forwarder.update(stt_event)
                     if stt_event.type == astt.SpeechEventType.FINAL_TRANSCRIPT:
                         self._recv_final_transcript(stt_event)
                     elif stt_event.type == astt.SpeechEventType.INTERIM_TRANSCRIPT:
@@ -499,6 +483,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         except Exception:
             logger.exception("error in recognize loop")
         finally:
+            await stt_forwarder.aclose(wait=False)
             await stt_stream.aclose(wait=False)
             await vad_stream.aclose(wait=False)
             await select.aclose()
@@ -643,13 +628,18 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         """
         Start synthesis and playout the speech only if validated
         """
-        self._log_debug(f"assistant - maybe_play_speech {data}")
+        self._log_debug(f"assistant - play_speech_if_validated {data}")
         assert data.source is not None
 
         # reset volume before starting a new speech
         self._vol_filter.reset()
         po_tx, po_rx = aio.channel()  # playout channel
-        tts_co = self._synthesize_task(data, po_tx)
+
+        tr_forwarder = self._tr_man.forward_tts_transcription(
+            participant=self._start_args.room.local_participant
+        )
+
+        tts_co = self._synthesize_task(data, po_tx, tr_forwarder)
         _synthesize_task = asyncio.create_task(tts_co)
 
         try:
@@ -668,7 +658,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self._chat_ctx.messages.append(msg)
                 self.emit("user_speech_committed", self._chat_ctx, msg)
 
-            await self._playout_task(po_rx)
+            await self._playout_task(po_rx, tr_forwarder)
 
             msg = allm.ChatMessage(
                 text=data.collected_text,
@@ -685,6 +675,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._log_debug(
                 "assistant - playout finished", extra={"interrupted": data.interrupted}
             )
+
         except Exception:
             logger.exception("error while playing speech")
         finally:
@@ -693,12 +684,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 _synthesize_task.cancel()
                 await _synthesize_task
 
-            self._log_debug("assistant - maybe_play_speech finished")
+            await tr_forwarder.aclose()
+            self._log_debug("assistant - play_speech_if_validated finished")
 
     async def _synthesize_task(
         self,
         data: _SpeechData,
         po_tx: aio.ChanSender[rtc.AudioFrame],
+        tr_forwarder: transcription.TTSSegmentsForwarder,
     ) -> None:
         """Synthesize speech from the source"""
         assert data.source is not None
@@ -709,6 +702,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             # This should be faster when the whole text is known in advance
             # (no buffering on the provider side)
             data.collected_text = data.source
+            tr_forwarder.push_text(data.source)
+            tr_forwarder.mark_segment_end()
             _start_time = time.time()
             _first_frame = True
             async for audio in self._tts.synthesize(data.source):
@@ -717,8 +712,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     _first_frame = False
                     self._log_debug(f"assistant - tts first frame in {dt:.2f}s")
 
+                tr_forwarder.push_audio(audio.data)
                 po_tx.send_nowait(audio.data)
 
+            tr_forwarder.mark_audio_segment_end()
             po_tx.close()
             self._log_debug("tts inference finished")
             return
@@ -743,7 +740,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                         )
 
                     assert event.audio is not None
+                    tr_forwarder.push_audio(event.audio.data)
                     po_tx.send_nowait(event.audio.data)
+
+            tr_forwarder.mark_audio_segment_end()
 
         _forward_task = asyncio.create_task(_forward_stream())
         try:
@@ -756,9 +756,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     if not alt:
                         continue
                     data.collected_text += alt
+                    tr_forwarder.push_text(alt)
                     tts_stream.push_text(alt)
 
+                tr_forwarder.mark_segment_end()
                 tts_stream.mark_segment_end()
+
                 if len(data.source.called_functions) > 0:
                     self.emit("function_calls_collected", assistant_ctx)
 
@@ -772,8 +775,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 # user defined source, stream the text to the TTS
                 async for seg in data.source:
                     data.collected_text += seg
+                    tr_forwarder.push_text(seg)
                     tts_stream.push_text(seg)
 
+                tr_forwarder.mark_segment_end()
                 tts_stream.mark_segment_end()
 
             await tts_stream.aclose()
@@ -790,6 +795,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     async def _playout_task(
         self,
         po_rx: aio.ChanReceiver[rtc.AudioFrame],
+        tr_forwarder: transcription.TTSSegmentsForwarder,
     ) -> None:
         """Playout the synthesized speech with volume control"""
         assert self._audio_source is not None
@@ -805,8 +811,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             )
 
         async for buf in po_rx:
-            if first_frame and self._opts.debug:
+            if first_frame:
                 self._agent_started_speaking()
+                tr_forwarder.validate()
                 first_frame = False
 
             if _should_break():
@@ -829,13 +836,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     data[si] = int(j * vol * 32768)
                     sample_idx += 1
 
-                frame = rtc.AudioFrame(
-                    data=data.tobytes(),
-                    sample_rate=buf.sample_rate,
-                    num_channels=buf.num_channels,
-                    samples_per_channel=rem,
+                await self._audio_source.capture_frame(
+                    rtc.AudioFrame(
+                        data=data.tobytes(),
+                        sample_rate=buf.sample_rate,
+                        num_channels=buf.num_channels,
+                        samples_per_channel=rem,
+                    )
                 )
-                await self._audio_source.capture_frame(frame)
 
         self._agent_stopped_speaking()
 

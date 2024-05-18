@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import io
 import struct
 from typing import ClassVar, Protocol, Type
