@@ -177,7 +177,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 - user_speech_committed: the user speech was committed to the chat context
                 - agent_speech_committed: the agent speech was committed to the chat context
                 - agent_speech_interrupted: the agent speech was interrupted
-                - function_calls_collected: all function calls have been completed
+                - function_calls_collected: received the complete set of functions to be executed
                 - function_calls_finished: all function calls have been completed
             callback: the callback to call when the event is emitted
         """

@@ -40,28 +40,18 @@ async def _playout_task(
         await audio_source.capture_frame(frame)
 
 
-async def entrypoint(job: JobContext):
-    logging.info("starting transcription protocol example")
-
-    tts_11labs = elevenlabs.TTS()
-
-    # publish an audio track
-    source = rtc.AudioSource(tts_11labs.sample_rate, tts_11labs.num_channels)
-    track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
-    options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-    await job.room.local_participant.publish_track(track, options)
-
-    #
-    # 1. example using a tts stream (we split text into chunks just for the example)
-    #
-    await asyncio.sleep(2)
+async def _eg_streamed_tts_stream(
+    ctx: JobContext, tts_11labs: tts.TTS, source: rtc.AudioSource
+):
+    """Transcription example using a tts stream (we split text into chunks just for the example)"""
 
     # this tts_forwarder will forward the transcription to the client and sync with the audio
     tts_forwarder = transcription.TTSSegmentsForwarder(
-        room=job.room, participant=job.room.local_participant
+        room=ctx.room, participant=ctx.room.local_participant
     )
 
     tts_stream = tts_11labs.stream()
+
     streamed_text = "Hello world, this text is going to be splitted into small chunks"
     logging.info("pushing text %s", streamed_text)
     for chunk in _text_to_chunks(streamed_text):
@@ -98,13 +88,14 @@ async def entrypoint(job: JobContext):
     await asyncio.gather(synth_task, playout_task)
     await tts_forwarder.aclose()
 
-    #
-    # 2. example without streaming (single segment)
-    #
-    await asyncio.sleep(2)
+
+async def _eg_single_segment(
+    ctx: JobContext, tts_11labs: tts.TTS, source: rtc.AudioSource
+):
+    """Transcription example without streaming (single segment"""
 
     tts_forwarder = transcription.TTSSegmentsForwarder(
-        room=job.room, participant=job.room.local_participant
+        room=ctx.room, participant=ctx.room.local_participant
     )
 
     text = "Hello world, this is a single segment"
@@ -120,18 +111,19 @@ async def entrypoint(job: JobContext):
         playout_q.put_nowait(output.data)
 
     tts_forwarder.mark_audio_segment_end()
+    playout_q.put_nowait(None)
 
     await tts_forwarder.aclose()
+    await playout_task
 
-    #
-    # 3. example with deferred playout
-    #
-    await asyncio.sleep(2)
 
-    # disable auto playout
+async def _eg_deferred_playout(
+    ctx: JobContext, tts_11labs: tts.TTS, source: rtc.AudioSource
+):
+    """example with deferred playout (We have a synthesized audio before starting to play it)"""
     tts_forwarder = transcription.TTSSegmentsForwarder(
-        room=job.room,
-        participant=job.room.local_participant,
+        room=ctx.room,
+        participant=ctx.room.local_participant,
         auto_playout=False,
     )
 
@@ -157,6 +149,26 @@ async def entrypoint(job: JobContext):
     playout_q.put_nowait(None)
     await playout_task
     await tts_forwarder.aclose()
+
+
+async def entrypoint(ctx: JobContext):
+    logging.info("starting transcription protocol example")
+
+    tts_11labs = elevenlabs.TTS()
+
+    # publish an audio track
+    source = rtc.AudioSource(tts_11labs.sample_rate, tts_11labs.num_channels)
+    track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
+    options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+    await ctx.room.local_participant.publish_track(track, options)
+
+    # start the transcription examples
+    await asyncio.sleep(2)
+    await _eg_streamed_tts_stream(ctx, tts_11labs, source)
+    await asyncio.sleep(2)
+    await _eg_single_segment(ctx, tts_11labs, source)
+    await asyncio.sleep(2)
+    await _eg_deferred_playout(ctx, tts_11labs, source)
 
 
 async def request_fnc(req: JobRequest) -> None:

@@ -25,4 +25,4 @@ def find_micro_track_id(room: rtc.Room, identity: str) -> str:
 
 
 def segment_uuid() -> str:
-    return "SG_" + str(uuid.uuid4())[:12]
+    return "SG_" + str(uuid.uuid4().hex)[:12]
