@@ -7,19 +7,21 @@ from livekit.agents import (
     JobRequest,
     WorkerOptions,
     cli,
+    stt,
+    transcription,
 )
 from livekit.plugins import deepgram
 
 
 async def _forward_transcription(
-    stt_stream: agents.stt.SpeechStream,
-    stt_forwarder: agents.transcription.STTSegmentsForwarder,
+    stt_stream: stt.SpeechStream,
+    stt_forwarder: transcription.STTSegmentsForwarder,
 ):
     async for ev in stt_stream:
         stt_forwarder.update(ev)
-        if ev.type == agents.stt.SpeechEventType.INTERIM_TRANSCRIPT:
+        if ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
             print(ev.alternatives[0].text, end="")
-        elif ev.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
+        elif ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             print(" -> ", ev.alternatives[0].text)
 
 
@@ -30,7 +32,7 @@ async def entrypoint(job: JobContext):
 
     async def transcribe_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        stt_forwarder = agents.transcription.STTSegmentsForwarder(
+        stt_forwarder = transcription.STTSegmentsForwarder(
             room=job.room, participant=job.room.local_participant
         )
 
