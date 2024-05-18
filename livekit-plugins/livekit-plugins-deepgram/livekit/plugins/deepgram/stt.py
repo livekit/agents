@@ -27,7 +27,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import stt
+from livekit.agents import stt, utils
 from livekit.agents.utils import AudioBuffer, merge_frames
 
 from .log import logger
@@ -57,6 +57,7 @@ class STT(stt.STT):
         model: DeepgramModels = "nova-2-general",
         api_key: str | None = None,
         min_silence_duration: int = 0,
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(streaming_supported=True)
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
@@ -73,6 +74,7 @@ class STT(stt.STT):
             smart_format=smart_format,
             endpointing=min_silence_duration,
         )
+        self._session = http_session or utils.http_session()
 
     async def recognize(
         self,
@@ -113,11 +115,10 @@ class STT(stt.STT):
             "Content-Type": "audio/wav",
         }
 
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.post(url, data=data) as res:
-                return prerecorded_transcription_to_speech_event(
-                    config.language, await res.json()
-                )
+        async with self._session.post(url, data=data, headers=headers) as res:
+            return prerecorded_transcription_to_speech_event(
+                config.language, await res.json()
+            )
 
     def stream(
         self,
@@ -125,7 +126,7 @@ class STT(stt.STT):
         language: DeepgramLanguages | str | None = None,
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(config, api_key=self._api_key)
+        return SpeechStream(config, self._api_key, self._session)
 
     def _sanitize_options(
         self,
@@ -149,6 +150,7 @@ class SpeechStream(stt.SpeechStream):
         self,
         opts: STTOptions,
         api_key: str,
+        http_session: aiohttp.ClientSession,
         sample_rate: int = 48000,
         num_channels: int = 1,
         max_retry: int = 32,
@@ -163,8 +165,7 @@ class SpeechStream(stt.SpeechStream):
         self._num_channels = num_channels
         self._api_key = api_key
         self._speaking = False
-
-        self._session = aiohttp.ClientSession()
+        self._session = http_session
         self._queue = asyncio.Queue[rtc.AudioFrame | str]()
         self._event_queue = asyncio.Queue[stt.SpeechEvent | None]()
         self._closed = False

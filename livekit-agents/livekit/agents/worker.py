@@ -132,7 +132,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         logger.info("starting worker", extra={"version": __version__})
 
-        # this LiveKit API object is only really useful in non-third-party workers
+        # this LiveKit API object is only really useful in standard workers
         self._api = api.LiveKitAPI(
             self._opts.ws_url, self._opts.api_key, self._opts.api_secret
         )

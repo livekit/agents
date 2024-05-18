@@ -1,5 +1,6 @@
 from .event_emitter import EventEmitter
 from .exp_filter import ExpFilter
+from .http_session import http_session
 from .misc import AudioBuffer, merge_frames, time_ms
 from .moving_average import MovingAverage
 
@@ -10,4 +11,5 @@ __all__ = [
     "ExpFilter",
     "MovingAverage",
     "EventEmitter",
+    "http_session",
 ]

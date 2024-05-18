@@ -7,7 +7,7 @@ import traceback
 
 from livekit import rtc
 
-from .. import aio, apipe, ipc_enc
+from .. import aio, apipe, ipc_enc, utils
 from ..job_context import JobContext, _ShutdownInfo
 from ..job_request import AutoSubscribe
 from ..log import logger
@@ -46,6 +46,7 @@ class LogHandler(logging.Handler):
 async def _start(
     pipe: apipe.AsyncPipe, args: protocol.JobMainArgs, room: rtc.Room
 ) -> None:
+    g_session = utils.http_session()  # initialize for current context
     close_tx, close_rx = aio.channel()  # used by the JobContext to signal shutdown
 
     auto_subscribe = args.accept_data.auto_subscribe
@@ -147,6 +148,8 @@ async def _start(
         # exceptions are already logged inside the done_callback
         if usertask is not None:
             await usertask  # type: ignore
+
+    await g_session.close()
 
     if shutting_down:
         await pipe.write(protocol.ShutdownResponse())

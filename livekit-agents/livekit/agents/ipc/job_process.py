@@ -112,9 +112,6 @@ class JobProcess:
         finally:
             await select.aclose()
 
-        finally:
-            await select.aclose()
-
         await self.join()
         logger.info("job process closed", extra=self.logging_extra())
 

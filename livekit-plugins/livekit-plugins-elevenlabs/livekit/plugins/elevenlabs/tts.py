@@ -25,7 +25,7 @@ from typing import List
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import aio, tts
+from livekit.agents import aio, tts, utils
 
 from .log import logger
 from .models import TTSModels
@@ -80,7 +80,7 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         sample_rate: int = 24000,
         streaming_latency: int = 3,
-        session: aiohttp.ClientSession | None = None,
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
             streaming_supported=True, sample_rate=sample_rate, num_channels=1
@@ -89,7 +89,7 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("ELEVEN_API_KEY must be set")
 
-        self._session = session or aiohttp.ClientSession()
+        self._session = http_session or utils.http_session()
         self._opts = _TTSOptions(
             voice=voice,
             model_id=model_id,
