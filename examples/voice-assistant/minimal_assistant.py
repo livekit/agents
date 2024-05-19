@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
@@ -12,6 +13,7 @@ from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 
 async def entrypoint(ctx: JobContext):
+    print("Starting voice assistant")
     initial_ctx = ChatContext(
         messages=[
             ChatMessage(
@@ -20,7 +22,6 @@ async def entrypoint(ctx: JobContext):
             )
         ]
     )
-
     assistant = VoiceAssistant(
         vad=silero.VAD(),
         stt=deepgram.STT(),
@@ -28,8 +29,23 @@ async def entrypoint(ctx: JobContext):
         tts=elevenlabs.TTS(),
         chat_ctx=initial_ctx,
     )
-    assistant.start(ctx.room)
 
+    async def update_state(state: str):
+        print(f"updating state to {state}")
+        await ctx.room.local_participant.update_metadata(
+            json.dumps({"agent_state": state})
+        )
+
+    assistant.on(
+        "agent_started_speaking",
+        lambda: asyncio.ensure_future(update_state("speaking")),
+    )
+    assistant.on(
+        "agent_stopped_speaking",
+        lambda: asyncio.ensure_future(update_state("listening")),
+    )
+    assistant.start(ctx.room)
+    await update_state("listening")
     await asyncio.sleep(3)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
