@@ -109,6 +109,8 @@ class JobProcess:
                         extra={"exit": res, **self.logging_extra()},
                     )
                     break
+        finally:
+            await select.aclose()
 
         finally:
             await select.aclose()

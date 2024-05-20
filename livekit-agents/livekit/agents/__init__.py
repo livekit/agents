@@ -19,6 +19,7 @@ from . import (
     llm,
     stt,
     tokenize,
+    transcription,
     tts,
     utils,
     vad,
@@ -51,4 +52,5 @@ __all__ = [
     "tokenize",
     "llm",
     "voice_assistant",
+    "transcription",
 ]
