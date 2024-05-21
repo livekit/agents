@@ -3,13 +3,18 @@ Check if all Text-To-Speech are producing valid audio.
 We verify the content using a good STT model
 """
 
+import os
+import pathlib
+
 import pytest
 from livekit import agents
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins import elevenlabs, google, nltk, openai
 from utils import wer
 
-TEST_AUDIO_SYNTHESIZE = "the people who are crazy enough to think they can change the world are the ones who do"
+TEST_AUDIO_SYNTHESIZE = pathlib.Path(
+    os.path.dirname(__file__), "long_synthesize.txt"
+).read_text()
 SIMILARITY_THRESHOLD = 0.9
 
 
@@ -19,6 +24,7 @@ async def _assert_valid_synthesized_audio(
     # use whisper as the source of truth to verify synthesized speech (smallest WER)
     whisper_stt = openai.STT(model="whisper-1")
     res = await whisper_stt.recognize(buffer=frames)
+    print(res.alternatives[0].text)
     assert wer(res.alternatives[0].text, text) < 0.2
 
     merged_frame = merge_frames(frames)
