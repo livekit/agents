@@ -324,6 +324,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for ev in self._word_stream:
                 if ev.type == tokenize.TokenEventType.STARTED:
                     token_tx, token_rx = aio.channel()
+                    audio_tx: aio.ChanSender[tts.SynthesizedAudio]
+                    audio_rx: aio.ChanReceiver[tts.SynthesizedAudio]
                     audio_tx, audio_rx = aio.channel()
                     task = asyncio.create_task(
                         self._run_ws(max_retry_per_segment, audio_tx, token_rx)
