@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import contextvars
 
@@ -5,20 +6,21 @@ import aiohttp
 
 from ..log import logger
 
-_ContextVar = contextvars.ContextVar("agent_http_session")
-
+_g_session: aiohttp.ClientSession | None = None
+_g_loop: asyncio.AbstractEventLoop | None = None
 
 def http_session() -> aiohttp.ClientSession:
     """Optional utility function to avoid having to manually manage an aiohttp.ClientSession lifetime.
     On job processes, this http session will be bound to the main event loop."""
 
-    if asyncio.current_task() is None:
-        raise Exception("http_session() must be called within an asyncio task")
+    global _g_session, _g_loop
 
-    val = _ContextVar.get(None)
-    if val is None:
-        logger.debug("http_session(): creating a new http client session")
-        val = aiohttp.ClientSession()
-        _ContextVar.set(val)
+    if _g_session is not None:
+        if _g_loop != asyncio.get_running_loop():
+            raise ValueError("http_session is bound to a different event loop")
 
-    return val
+        return _g_session
+
+    _g_loop = asyncio.get_running_loop()
+    _g_session = aiohttp.ClientSession()
+    return _g_session

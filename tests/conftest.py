@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 from livekit.agents import utils
 
@@ -7,3 +8,4 @@ async def job_process():
     g_session = utils.http_session()
     yield
     await g_session.close()
+    await asyncio.sleep(0)
