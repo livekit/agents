@@ -4,6 +4,8 @@ import asyncio
 
 import aiohttp
 
+from ..log import logger
+
 _g_session: aiohttp.ClientSession | None = None
 _g_loop: asyncio.AbstractEventLoop | None = None
 
@@ -20,6 +22,7 @@ def http_session() -> aiohttp.ClientSession:
 
         return _g_session
 
+    logger.debug("http_session(): creating a new http client session")
     _g_loop = asyncio.get_running_loop()
     _g_session = aiohttp.ClientSession()
     return _g_session
