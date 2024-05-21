@@ -290,7 +290,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await self._main_task
 
     async def _run(self, max_retry_per_segment: int) -> None:
-        conns_q = asyncio.Queue[Optional[__class__._SegmentConnection]]()
+        conns_q = asyncio.Queue[Optional[SynthesizeStream._SegmentConnection]]()
 
         async def _forward_events() -> None:
             """forward events from the ws connections to the event queue.
@@ -319,7 +319,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             """read tokens from the word stream and create connections for each segment,
             (this also allows concurrent connections to 11labs)"""
 
-            cur_segment: __class__._SegmentConnection | None = None
+            cur_segment: SynthesizeStream._SegmentConnection | None = None
             token_tx: aio.ChanSender[str] | None = None
             async for ev in self._word_stream:
                 if ev.type == tokenize.TokenEventType.STARTED:
@@ -328,7 +328,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     task = asyncio.create_task(
                         self._run_ws(max_retry_per_segment, audio_tx, token_rx)
                     )
-                    cur_segment = __class__._SegmentConnection(audio_rx, task)
+                    cur_segment = SynthesizeStream._SegmentConnection(audio_rx, task)
                     conns_q.put_nowait(cur_segment)
                 elif ev.type == tokenize.TokenEventType.TOKEN:
                     assert token_tx is not None
