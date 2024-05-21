@@ -58,7 +58,7 @@ STREAM_VAD = silero.VAD()
 STREAM_STT = [
     deepgram.STT(),
     google.STT(),
-    # agents.stt.StreamAdapter(openai.STT(), STREAM_VAD),
+    agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
 ]
 
 
@@ -82,7 +82,7 @@ async def test_stream(stt: agents.stt.STT):
 
     stream = stt.stream()
 
-    async def stream_input():
+    async def _stream_input():
         for frame in frames:
             stream.push_frame(frame)
             # audio are split in 10ms chunks but the whole file is 40s
@@ -91,7 +91,7 @@ async def test_stream(stt: agents.stt.STT):
 
         await stream.aclose()
 
-    async def stream_output():
+    async def _stream_output():
         text = ""
         # make sure the events are sent in the right order
         recv_final, recv_start, recv_end = False, False, True
@@ -117,7 +117,11 @@ async def test_stream(stt: agents.stt.STT):
                 recv_end = True
 
         dt = time.time() - start_time
-        print(f"WER: {wer(text, TEST_AUDIO_TRANSCRIPT)} for {stt} in {dt:.2f}s")
+        print(
+            f"WER: {wer(text, TEST_AUDIO_TRANSCRIPT)} for streamed {stt} in {dt:.2f}s"
+        )
         assert wer(text, TEST_AUDIO_TRANSCRIPT) < 0.2
 
-    await asyncio.wait_for(asyncio.gather(stream_input(), stream_output()), timeout=60)
+    await asyncio.wait_for(
+        asyncio.gather(_stream_input(), _stream_output()), timeout=60
+    )

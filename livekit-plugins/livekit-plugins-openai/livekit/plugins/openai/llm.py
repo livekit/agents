@@ -172,9 +172,11 @@ class LLMStream(llm.LLMStream):
                 logger.error(f"invalid arg {arg.name} for ai_callable {name}")
                 return
 
-            if issubclass(arg.type, enum.Enum) and args[arg.name] not in arg.type:
-                logger.error(f"invalid arg {arg.name} for ai_callable {name}")
-                return
+            if issubclass(arg.type, enum.Enum):
+                values = set(item.value for item in arg.type) 
+                if args[arg.name] not in values:
+                    logger.error(f"invalid arg {arg.name} for ai_callable {name}")
+                    return
 
         logger.debug(f"calling function {name} with arguments {args}")
         self._called_functions.append(

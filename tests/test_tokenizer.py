@@ -1,3 +1,5 @@
+import pytest
+from livekit.agents import tokenize
 from livekit.agents.tokenize import basic
 from livekit.plugins import nltk
 
@@ -27,19 +29,21 @@ EXPECTED_MIN_20 = [
 ]
 
 
-def test_sent_tokenizer():
-    tokenizers = [
-        nltk.SentenceTokenizer(min_sentence_len=20),
-        basic.SentenceTokenizer(min_sentence_len=20),
-    ]
-
-    for tok in tokenizers:
-        segmented = tok.tokenize(text=TEXT)
-        for i, segment in enumerate(EXPECTED_MIN_20):
-            assert segment == segmented[i]
+SENT_TOKENIZERS = [
+    nltk.SentenceTokenizer(min_sentence_len=20),
+    basic.SentenceTokenizer(min_sentence_len=20),
+]
 
 
-async def test_streamed_sent_tokenizer():
+@pytest.mark.parametrize("tokenizer", SENT_TOKENIZERS)
+def test_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer):
+    segmented = tokenizer.tokenize(text=TEXT)
+    for i, segment in enumerate(EXPECTED_MIN_20):
+        assert segment == segmented[i]
+
+
+@pytest.mark.parametrize("tokenizer", SENT_TOKENIZERS)
+async def test_streamed_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer):
     # divide text by chunks of arbitrary length (1-4)
     pattern = [1, 2, 4]
     text = TEXT
@@ -52,24 +56,22 @@ async def test_streamed_sent_tokenizer():
         chunks.append(text[:chunk_size])
         text = text[chunk_size:]
 
-    tokenizers = [
-        nltk.SentenceTokenizer(min_sentence_len=20),
-        basic.SentenceTokenizer(min_sentence_len=20),
-    ]
+    stream = tokenizer.stream()
+    for chunk in chunks:
+        stream.push_text(chunk)
 
-    for tok in tokenizers:
-        stream = tok.stream()
-        for chunk in chunks:
-            stream.push_text(chunk)
+    assert (await stream.__anext__()).type == tokenize.TokenEventType.STARTED
+    for i in range(len(EXPECTED_MIN_20) - 1):
+        ev = await stream.__anext__()
+        assert ev.type == tokenize.TokenEventType.TOKEN
+        assert ev.token == EXPECTED_MIN_20[i]
 
-        for i in range(len(EXPECTED_MIN_20) - 1):
-            segmented = await stream.__anext__()
-            assert segmented == EXPECTED_MIN_20[i]
+    stream.mark_segment_end()
 
-        stream.mark_segment_end()
-
-        segmented = await stream.__anext__()
-        assert segmented == EXPECTED_MIN_20[-1]
+    ev = await stream.__anext__()
+    assert ev.type == tokenize.TokenEventType.TOKEN
+    assert ev.token == EXPECTED_MIN_20[-1]
+    assert (await stream.__anext__()).type == tokenize.TokenEventType.FINISHED
 
 
 WORDS_TEXT = (
@@ -89,17 +91,18 @@ WORDS_EXPECTED = [
     "done",
 ]
 
-
-def test_word_tokenizer():
-    tokenizers = [basic.WordTokenizer()]
-
-    for tok in tokenizers:
-        tokens = tok.tokenize(text=WORDS_TEXT)
-        for i, token in enumerate(WORDS_EXPECTED):
-            assert token == tokens[i]
+WORD_TOKENIZERS = [basic.WordTokenizer()]
 
 
-async def test_streamed_word_tokenizer():
+@pytest.mark.parametrize("tokenizer", WORD_TOKENIZERS)
+def test_word_tokenizer(tokenizer: tokenize.WordTokenizer):
+    tokens = tokenizer.tokenize(text=WORDS_TEXT)
+    for i, token in enumerate(WORDS_EXPECTED):
+        assert token == tokens[i]
+
+
+@pytest.mark.parametrize("tokenizer", WORD_TOKENIZERS)
+async def test_streamed_word_tokenizer(tokenizer: tokenize.WordTokenizer):
     # divide text by chunks of arbitrary length (1-4)
     pattern = [1, 2, 4]
     text = WORDS_TEXT
@@ -112,23 +115,22 @@ async def test_streamed_word_tokenizer():
         chunks.append(text[:chunk_size])
         text = text[chunk_size:]
 
-    tokenizers = [
-        basic.WordTokenizer(),
-    ]
+    stream = tokenizer.stream()
+    for chunk in chunks:
+        stream.push_text(chunk)
 
-    for tok in tokenizers:
-        stream = tok.stream()
-        for chunk in chunks:
-            stream.push_text(chunk)
+    assert (await stream.__anext__()).type == tokenize.TokenEventType.STARTED
+    for i in range(len(WORDS_EXPECTED) - 1):
+        ev = await stream.__anext__()
+        assert ev.type == tokenize.TokenEventType.TOKEN
+        assert ev.token == WORDS_EXPECTED[i]
 
-        for i in range(len(WORDS_EXPECTED) - 1):
-            segmented = await stream.__anext__()
-            assert segmented == WORDS_EXPECTED[i]
+    stream.mark_segment_end()
 
-        stream.mark_segment_end()
-
-        segmented = await stream.__anext__()
-        assert segmented == WORDS_EXPECTED[-1]
+    ev = await stream.__anext__()
+    assert ev.type == tokenize.TokenEventType.TOKEN
+    assert ev.token == WORDS_EXPECTED[-1]
+    assert (await stream.__anext__()).type == tokenize.TokenEventType.FINISHED
 
 
 HYPHENATOR_TEXT = [

@@ -18,7 +18,7 @@ import asyncio
 import contextlib
 import time
 from collections import deque
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -84,8 +84,8 @@ class VADStream(agents.vad.VADStream):
         if sample_rate not in [8000, 16000]:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
 
-        self._queue = asyncio.Queue[rtc.AudioFrame | None]()
-        self._event_queue = asyncio.Queue[agents.vad.VADEvent | None]()
+        self._queue = asyncio.Queue[Optional[rtc.AudioFrame]]()
+        self._event_queue = asyncio.Queue[Optional[agents.vad.VADEvent]]()
         self._model = model
 
         self._closed = False

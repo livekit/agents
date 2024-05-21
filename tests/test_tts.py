@@ -7,7 +7,7 @@ import pytest
 from livekit import agents
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins import elevenlabs, google, openai
-from utils import assert_similar_words
+from utils import wer
 
 TEST_AUDIO_SYNTHESIZE = "the people who are crazy enough to think they can change the world are the ones who do"
 SIMILARITY_THRESHOLD = 0.9
@@ -19,7 +19,7 @@ async def _assert_valid_synthesized_audio(
     # use whisper as the source of truth to verify synthesized speech (smallest WER)
     whisper_stt = openai.STT(model="whisper-1")
     res = await whisper_stt.recognize(buffer=frames)
-    assert_similar_words(res.alternatives[0].text, text, threshold)
+    assert wer(res.alternatives[0].text, text) < 0.2
 
     merged_frame = merge_frames(frames)
     assert merged_frame.sample_rate == tts.sample_rate, "sample rate should be the same"

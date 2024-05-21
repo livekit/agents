@@ -9,7 +9,7 @@ from livekit import rtc
 
 from ..log import logger
 from ..utils import AudioBuffer, merge_frames
-from ..vad import VADEventType, VADStream
+from ..vad import VADEventType, VAD
 from .stt import (
     STT,
     SpeechEvent,
@@ -21,11 +21,12 @@ from .stt import (
 class StreamAdapter(STT):
     def __init__(
         self,
+        *,
         stt: STT,
-        vad_stream: VADStream,
+        vad: VAD,
     ) -> None:
         super().__init__(streaming_supported=True)
-        self._vad = vad_stream
+        self._vad = vad
         self._stt = stt
 
     @property
@@ -53,30 +54,25 @@ class StreamAdapter(STT):
 class StreamAdapterWrapper(SpeechStream):
     def __init__(
         self,
-        vad_stream: VADStream,
+        vad: VAD,
         stt: STT,
         *args,
         **kwargs,
     ) -> None:
         super().__init__()
-        self._vad = vad_stream
+        self._vad = vad
         self._stt = stt
         self._event_queue = asyncio.Queue[Optional[SpeechEvent]]()
+        self._main_task = asyncio.create_task(self._run())
+        self._vad_stream = self._vad.stream()
         self._closed = False
         self._args = args
         self._kwargs = kwargs
 
-        self._main_task = asyncio.create_task(self._run())
-
-        def log_exception(task: asyncio.Task) -> None:
-            if not task.cancelled() and task.exception():
-                logger.error(f"stream adapter task failed: {task.exception()}")
-
-        self._main_task.add_done_callback(log_exception)
-
+    # TODO(theomonnom): smarter adapter, create interim results using another STT?
     async def _run(self) -> None:
         try:
-            async for event in self._vad:
+            async for event in self._vad_stream:
                 if event.type == VADEventType.START_OF_SPEECH:
                     start_event = SpeechEvent(SpeechEventType.START_OF_SPEECH)
                     self._event_queue.put_nowait(start_event)
@@ -87,13 +83,19 @@ class StreamAdapterWrapper(SpeechStream):
                     )
                     self._event_queue.put_nowait(event)
 
+                    final_event = SpeechEvent(
+                        type=SpeechEventType.FINAL_TRANSCRIPT,
+                        alternatives=[event.alternatives[0]],
+                    )
+                    self._event_queue.put_nowait(final_event)
+
                     end_event = SpeechEvent(
                         type=SpeechEventType.END_OF_SPEECH,
                         alternatives=[event.alternatives[0]],
                     )
                     self._event_queue.put_nowait(end_event)
-        except Exception as e:
-            logging.exception(f"stream adapter failed: {e}")
+        except Exception:
+            logging.exception(f"stt stream adapter failed")
         finally:
             self._event_queue.put_nowait(None)
 
@@ -101,14 +103,14 @@ class StreamAdapterWrapper(SpeechStream):
         if self._closed:
             raise ValueError("cannot push frame to closed stream")
 
-        self._vad.push_frame(frame)
+        self._vad_stream.push_frame(frame)
 
     async def aclose(self, *, wait: bool = True) -> None:
         self._closed = True
         if not wait:
             self._main_task.cancel()
 
-        await self._vad.aclose(wait=wait)
+        await self._vad_stream.aclose(wait=wait)
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
 
