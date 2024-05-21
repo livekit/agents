@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 
 from livekit.agents import aio
 
@@ -55,14 +54,18 @@ async def test_select():
     asyncio.create_task(mark_future())
 
     sel = aio.select([agen(), coro(), task, future])
-    async with contextlib.aclosing(sel) as select:
-        async for _ in select:
+    try:
+        async for _ in sel:
             pass
+    finally:
+        await sel.aclose()
 
     sel = aio.select([agen(), coro()])
-    async with contextlib.aclosing(sel) as select:
-        async for _ in select:
+    try:
+        async for _ in sel:
             pass
+    finally:
+        await sel.aclose()
 
 
 async def test_select_timeout():
@@ -71,8 +74,8 @@ async def test_select_timeout():
 
     selectable = [sleep1, sleep2]
     sel = aio.select(selectable)
-    assert (await anext(sel)).selected == sleep1
-    assert (await anext(sel)).selected == sleep2
+    assert (await sel.__anext__()).selected == sleep1
+    assert (await sel.__anext__()).selected == sleep2
 
 
 async def test_interval():

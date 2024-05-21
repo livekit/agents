@@ -1,6 +1,7 @@
 def split_words(text: str, ignore_punctuation: bool = True) -> list[str]:
     # fmt: off
-    punctuations = [".", ",", "!", "?", ";", ":", "'", '"', "(", ")", "[", "]", "{", "}", "<", ">"]
+    punctuations = [".", ",", "!", "?", ";", ":", "'", '"', "(", ")", "[", "]", "{", "}", "<", ">",
+                    "—"]
     # fmt: on
 
     if ignore_punctuation:

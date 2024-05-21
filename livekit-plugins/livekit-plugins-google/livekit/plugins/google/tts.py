@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 from __future__ import annotations
 
 import asyncio
 import contextlib
 from dataclasses import dataclass
-from typing import Union
+from typing import Optional, Union
 
 from livekit import rtc
 from livekit.agents import codecs, tts
@@ -50,31 +49,23 @@ class TTS(tts.TTS):
         language: LgType = "en-US",
         gender: GenderType = "neutral",
         voice_name: str = "",  # Not required
-        audio_encoding: AudioEncodingType = "linear16",
+        encoding: AudioEncodingType = "linear16",
         sample_rate: int = 24000,
         speaking_rate: float = 1.0,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
     ) -> None:
+        """
+        if no credentials is provided, it will use the credentials on the environment
+        GOOGLE_APPLICATION_CREDENTIALS (default behavior of Google TextToSpeechAsyncClient)
+        """
         super().__init__(
             streaming_supported=False, sample_rate=sample_rate, num_channels=1
         )
 
-        if credentials_info:
-            self._client = (
-                texttospeech.TextToSpeechAsyncClient.from_service_account_info(
-                    credentials_info
-                )
-            )
-
-        elif credentials_file:
-            self._client = (
-                texttospeech.TextToSpeechAsyncClient.from_service_account_file(
-                    credentials_file
-                )
-            )
-        else:
-            self._client = texttospeech.TextToSpeechAsyncClient()
+        self._client: texttospeech.TextToSpeechAsyncClient | None = None
+        self._credentials_info = credentials_info
+        self._credentials_file = credentials_file
 
         ssml_gender = SsmlVoiceGender.NEUTRAL
         if gender == "male":
@@ -88,14 +79,12 @@ class TTS(tts.TTS):
             ssml_gender=ssml_gender,
         )
 
-        if audio_encoding == "linear16" or audio_encoding == "wav":
+        if encoding == "linear16" or encoding == "wav":
             _audio_encoding = texttospeech.AudioEncoding.LINEAR16
-        elif audio_encoding == "mp3":
+        elif encoding == "mp3":
             _audio_encoding = texttospeech.AudioEncoding.MP3
         else:
-            raise NotImplementedError(
-                f"audio encoding {audio_encoding} is not supported"
-            )
+            raise NotImplementedError(f"audio encoding {encoding} is not supported")
 
         self._opts = _TTSOptions(
             voice=voice,
@@ -106,11 +95,32 @@ class TTS(tts.TTS):
             ),
         )
 
+    def _ensure_client(self) -> texttospeech.TextToSpeechAsyncClient:
+        if not self._client:
+            if self._credentials_info:
+                self._client = (
+                    texttospeech.TextToSpeechAsyncClient.from_service_account_info(
+                        self._credentials_info
+                    )
+                )
+
+            elif self._credentials_file:
+                self._client = (
+                    texttospeech.TextToSpeechAsyncClient.from_service_account_file(
+                        self._credentials_file
+                    )
+                )
+            else:
+                self._client = texttospeech.TextToSpeechAsyncClient()
+
+        assert self._client is not None
+        return self._client
+
     def synthesize(
         self,
         text: str,
     ) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts, self._client)
+        return ChunkedStream(text, self._opts, self._ensure_client())
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -121,7 +131,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = opts
         self._client = client
         self._main_task: asyncio.Task | None = None
-        self._queue = asyncio.Queue[tts.SynthesizedAudio | None]()
+        self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
 
     async def _run(self) -> None:
         try:
@@ -150,8 +160,8 @@ class ChunkedStream(tts.ChunkedStream):
                     )
                 )
 
-        except Exception as e:
-            logger.error(f"failed to synthesize: {e}")
+        except Exception:
+            logger.exception("failed to synthesize")
         finally:
             self._queue.put_nowait(None)
 

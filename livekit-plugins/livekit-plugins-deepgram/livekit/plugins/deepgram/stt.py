@@ -22,7 +22,7 @@ import os
 import wave
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional, Union
 from urllib.parse import urlencode
 
 import aiohttp
@@ -74,7 +74,13 @@ class STT(stt.STT):
             smart_format=smart_format,
             endpointing=min_silence_duration,
         )
-        self._session = http_session or utils.http_session()
+        self._session = http_session
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_session()
+
+        return self._session
 
     async def recognize(
         self,
@@ -115,7 +121,7 @@ class STT(stt.STT):
             "Content-Type": "audio/wav",
         }
 
-        async with self._session.post(url, data=data, headers=headers) as res:
+        async with self._ensure_session().post(url, data=data, headers=headers) as res:
             return prerecorded_transcription_to_speech_event(
                 config.language, await res.json()
             )
@@ -126,7 +132,7 @@ class STT(stt.STT):
         language: DeepgramLanguages | str | None = None,
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(config, self._api_key, self._session)
+        return SpeechStream(config, self._api_key, self._ensure_session())
 
     def _sanitize_options(
         self,
@@ -166,8 +172,8 @@ class SpeechStream(stt.SpeechStream):
         self._api_key = api_key
         self._speaking = False
         self._session = http_session
-        self._queue = asyncio.Queue[rtc.AudioFrame | str]()
-        self._event_queue = asyncio.Queue[stt.SpeechEvent | None]()
+        self._queue = asyncio.Queue[Union[rtc.AudioFrame, str]]()
+        self._event_queue = asyncio.Queue[Optional[stt.SpeechEvent]]()
         self._closed = False
         self._main_task = asyncio.create_task(self._run(max_retry))
 

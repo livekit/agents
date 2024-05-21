@@ -18,10 +18,12 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 import aiohttp
 from livekit.agents import codecs, tts, utils
 
+from .log import logger
 from .models import TTSModels, TTSVoices
 
 OPENAI_TTS_SAMPLE_RATE = 24000
@@ -40,8 +42,8 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels,
-        voice: TTSVoices,
+        model: TTSModels = "tts-1",
+        voice: TTSVoices = "alloy",
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -56,13 +58,19 @@ class TTS(tts.TTS):
             raise ValueError("OPENAI_API_KEY must be set")
 
         self._opts = _TTSOptions(model=model, voice=voice, api_key=api_key)
-        self._session = http_session or utils.http_session()
+        self._session = http_session
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_session()
+
+        return self._session
 
     def synthesize(
         self,
         text: str,
     ) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts, self._session)
+        return ChunkedStream(text, self._opts, self._ensure_session())
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -74,7 +82,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._session = session
         self._decoder = codecs.Mp3StreamDecoder()
         self._main_task: asyncio.Task | None = None
-        self._queue = asyncio.Queue[tts.SynthesizedAudio | None]()
+        self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
 
     async def _run(self):
         try:
@@ -88,13 +96,15 @@ class ChunkedStream(tts.ChunkedStream):
                     "response_format": "mp3",
                 },
             ) as resp:
-                async for data in resp.content.iter_chunked(4096):
+                async for data, _ in resp.content.iter_chunks():
                     frames = self._decoder.decode_chunk(data)
                     for frame in frames:
                         self._queue.put_nowait(
                             tts.SynthesizedAudio(text="", data=frame)
                         )
 
+        except Exception:
+            logger.exception("openai tts main task failed in chunked stream")
         finally:
             self._queue.put_nowait(None)
 

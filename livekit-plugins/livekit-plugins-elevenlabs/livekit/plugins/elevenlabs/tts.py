@@ -21,11 +21,11 @@ import dataclasses
 import json
 import os
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import aio, tts, utils
+from livekit.agents import aio, tokenize, tts, utils
 
 from .log import logger
 from .models import TTSModels
@@ -68,6 +68,8 @@ class _TTSOptions:
     base_url: str
     sample_rate: int
     streaming_latency: int
+    word_tokenizer: tokenize.WordTokenizer
+    chunk_length_schedule: list[int]
 
 
 class TTS(tts.TTS):
@@ -80,6 +82,12 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         sample_rate: int = 24000,
         streaming_latency: int = 3,
+        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
+            ignore_punctuation=False  # punctuation can help for intonation
+        ),
+        # default value of 11labs is [120, 160, 250, 290], but we want faster responses by default
+        # (range is 50-500)
+        chunk_length_schedule: list[int] = [80, 120, 200, 260],
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -89,7 +97,6 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("ELEVEN_API_KEY must be set")
 
-        self._session = http_session or utils.http_session()
         self._opts = _TTSOptions(
             voice=voice,
             model_id=model_id,
@@ -97,103 +104,121 @@ class TTS(tts.TTS):
             base_url=base_url or API_BASE_URL_V1,
             sample_rate=sample_rate,
             streaming_latency=streaming_latency,
+            word_tokenizer=word_tokenizer,
+            chunk_length_schedule=chunk_length_schedule,
         )
+        self._session = http_session
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_session()
+
+        return self._session
 
     async def list_voices(self) -> List[Voice]:
-        async with self._session.get(
+        async with self._ensure_session().get(
             f"{self._opts.base_url}/voices",
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
         ) as resp:
-            data = await resp.json()
-            return dict_to_voices_list(data)
+            return _dict_to_voices_list(await resp.json())
 
     def synthesize(
         self,
         text: str,
     ) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts, self._session)
+        return ChunkedStream(text, self._opts, self._ensure_session())
 
     def stream(
         self,
     ) -> "SynthesizeStream":
-        return SynthesizeStream(self._session, self._opts)
+        return SynthesizeStream(self._ensure_session(), self._opts)
 
 
 class ChunkedStream(tts.ChunkedStream):
+    """Synthesize using the chunked api endpoint"""
+
     def __init__(
         self, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
     ) -> None:
         self._opts = opts
         self._text = text
         self._session = session
-        self._main_task: asyncio.Task | None = None
-        self._queue = asyncio.Queue[tts.SynthesizedAudio | None]()
+        self._task: asyncio.Task | None = None
+        self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
 
     def _synthesize_url(self) -> str:
-        voice = self._opts.voice
+        base_url = self._opts.base_url
+        voice_id = self._opts.voice.id
+        model_id = self._opts.model_id
         sample_rate = self._opts.sample_rate
         latency = self._opts.streaming_latency
-        url = f"{self._opts.base_url}/text-to-speech/{voice.id}/stream?output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
+        url = (
+            f"{base_url}/text-to-speech/{voice_id}/stream?"
+            f"model_id={model_id}&output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
+        )
         return url
 
-    async def _run(self):
+    async def _main_task(self):
         try:
-            async with self._session.post(
-                self._synthesize_url(),
-                headers={AUTHORIZATION_HEADER: self._opts.api_key},
-                json=dict(
-                    text=self._text,
-                    model_id=self._opts.model_id,
-                    voice_settings=(
-                        dataclasses.asdict(self._opts.voice.settings)
-                        if self._opts.voice.settings
-                        else None
-                    ),
+            await self._run()
+        except Exception:
+            logger.exception("11labs main task failed in chunked stream")
+        finally:
+            self._queue.put_nowait(None)
+
+    async def _run(self) -> None:
+        async with self._session.post(
+            self._synthesize_url(),
+            headers={AUTHORIZATION_HEADER: self._opts.api_key},
+            json=dict(
+                text=self._text,
+                model_id=self._opts.model_id,
+                voice_settings=(
+                    dataclasses.asdict(self._opts.voice.settings)
+                    if self._opts.voice.settings
+                    else None
                 ),
-            ) as resp:
-                # avoid very small frames. chunk by 10ms 16bits
-                bytes_per_frame = (self._opts.sample_rate // 100) * 2
-                buf = bytearray()
-                async for data, _ in resp.content.iter_chunks():
-                    buf.extend(data)
+            ),
+        ) as resp:
+            # avoid very small frames. chunk by 10ms 16bits
+            bytes_per_frame = (self._opts.sample_rate // 100) * 2
+            buf = bytearray()
+            async for data, _ in resp.content.iter_chunks():
+                buf.extend(data)
 
-                    while len(buf) >= bytes_per_frame:
-                        frame_data = buf[:bytes_per_frame]
-                        buf = buf[bytes_per_frame:]
+                while len(buf) >= bytes_per_frame:
+                    frame_data = buf[:bytes_per_frame]
+                    buf = buf[bytes_per_frame:]
 
-                        self._queue.put_nowait(
-                            tts.SynthesizedAudio(
-                                text=self._text,
-                                data=rtc.AudioFrame(
-                                    data=frame_data,
-                                    sample_rate=self._opts.sample_rate,
-                                    num_channels=1,
-                                    samples_per_channel=len(frame_data) // 2,
-                                ),
-                            )
-                        )
-
-                if buf:
                     self._queue.put_nowait(
                         tts.SynthesizedAudio(
                             text=self._text,
                             data=rtc.AudioFrame(
-                                data=buf,
+                                data=frame_data,
                                 sample_rate=self._opts.sample_rate,
                                 num_channels=1,
-                                samples_per_channel=len(buf) // 2,
+                                samples_per_channel=len(frame_data) // 2,
                             ),
                         )
                     )
 
-        except Exception:
-            logger.exception("failed to synthesize")
-        finally:
-            self._queue.put_nowait(None)
+            # send any remaining data
+            if len(buf) > 0:
+                self._queue.put_nowait(
+                    tts.SynthesizedAudio(
+                        text=self._text,
+                        data=rtc.AudioFrame(
+                            data=buf,
+                            sample_rate=self._opts.sample_rate,
+                            num_channels=1,
+                            samples_per_channel=len(buf) // 2,
+                        ),
+                    )
+                )
 
     async def __anext__(self) -> tts.SynthesizedAudio:
-        if not self._main_task:
-            self._main_task = asyncio.create_task(self._run())
+        if not self._task:
+            self._task = asyncio.create_task(self._main_task())
 
         frame = await self._queue.get()
         if frame is None:
@@ -202,32 +227,34 @@ class ChunkedStream(tts.ChunkedStream):
         return frame
 
     async def aclose(self) -> None:
-        if not self._main_task:
+        if not self._task:
             return
 
-        self._main_task.cancel()
+        self._task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
+            await self._task
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    _STREAM_EOS = ""
+    """Streamed API using websockets"""
+
+    @dataclass
+    class _SegmentConnection:
+        audio_rx: aio.ChanReceiver[tts.SynthesizedAudio]
+        task: asyncio.Task
 
     def __init__(
         self,
         session: aiohttp.ClientSession,
         opts: _TTSOptions,
-        max_retry: int = 32,
+        max_retry_per_segment: int = 3,
     ):
         self._opts = opts
         self._session = session
-
-        self._queue = asyncio.Queue[str | None]()
-        self._event_queue = asyncio.Queue[tts.SynthesisEvent | None]()
+        self._main_task = asyncio.create_task(self._run(max_retry_per_segment))
+        self._event_queue = asyncio.Queue[Optional[tts.SynthesisEvent]]()
         self._closed = False
-        self._text = ""
-
-        self._main_task = asyncio.create_task(self._run(max_retry))
+        self._word_stream = opts.word_tokenizer.stream()
 
     def _stream_url(self) -> str:
         base_url = self._opts.base_url
@@ -235,46 +262,26 @@ class SynthesizeStream(tts.SynthesizeStream):
         model_id = self._opts.model_id
         sample_rate = self._opts.sample_rate
         latency = self._opts.streaming_latency
-        return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
+        url = (
+            f"{base_url}/text-to-speech/{voice_id}/stream-input?"
+            f"model_id={model_id}&output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
+        )
+
+        return url
 
     def push_text(self, token: str | None) -> None:
         if self._closed:
             raise ValueError("cannot push to a closed stream")
 
         if token is None:
-            self._flush_if_needed()
+            self._word_stream.mark_segment_end()
             return
 
-        if len(token) == 0:
-            # 11labs marks the EOS with an empty string, avoid users from pushing empty strings
-            return
-
-        # TODO: Naive word boundary detection may not be good enough for all languages
-        # fmt: off
-        splitters = (".", ",", "?", "!", ";", ":", "—", "-", "(", ")", "[", "]", "}", " ")
-        # fmt: on
-
-        self._text += token
-
-        while True:
-            last_split = -1
-            for i, c in enumerate(self._text):
-                if c in splitters:
-                    last_split = i
-                    break
-
-            if last_split == -1:
-                break
-
-            seg = self._text[: last_split + 1]
-            seg = seg.strip() + " "  # 11labs expects a space at the end
-            self._queue.put_nowait(seg)
-            self._text = self._text[last_split + 1 :]
+        self._word_stream.push_text(token)
 
     async def aclose(self, *, wait: bool = True) -> None:
-        self._flush_if_needed()
-        self._queue.put_nowait(None)
         self._closed = True
+        await self._word_stream.aclose()
 
         if not wait:
             self._main_task.cancel()
@@ -282,158 +289,181 @@ class SynthesizeStream(tts.SynthesizeStream):
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
 
-    def _flush_if_needed(self) -> None:
-        seg = self._text.strip()
-        if len(seg) > 0:
-            self._queue.put_nowait(seg + " ")
+    async def _run(self, max_retry_per_segment: int) -> None:
+        conns_q = asyncio.Queue[Optional[SynthesizeStream._SegmentConnection]]()
 
-        self._text = ""
-        self._queue.put_nowait(SynthesizeStream._STREAM_EOS)
+        async def _forward_events() -> None:
+            """forward events from the ws connections to the event queue.
+            This is used to keep the right order."""
+            while True:
+                c = await conns_q.get()
+                if c is None:
+                    break  # no more segment, stream closed
 
-    async def _run(self, max_retry: int) -> None:
-        retry_count = 0
-        ws: aiohttp.ClientWebSocketResponse | None = None
-        ws_task: asyncio.Task | None = None
-        data_tx: aio.ChanSender[str] | None = None
+                self._event_queue.put_nowait(
+                    tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
+                )
+
+                async for frame in c.audio_rx:
+                    self._event_queue.put_nowait(
+                        tts.SynthesisEvent(
+                            type=tts.SynthesisEventType.AUDIO, audio=frame
+                        )
+                    )
+
+                self._event_queue.put_nowait(
+                    tts.SynthesisEvent(type=tts.SynthesisEventType.FINISHED)
+                )
+
+        async def _read_tokens() -> None:
+            """read tokens from the word stream and create connections for each segment,
+            (this also allows concurrent connections to 11labs)"""
+
+            cur_segment: SynthesizeStream._SegmentConnection | None = None
+            token_tx: aio.ChanSender[str] | None = None
+            async for ev in self._word_stream:
+                if ev.type == tokenize.TokenEventType.STARTED:
+                    token_tx, token_rx = aio.channel()
+                    audio_tx: aio.ChanSender[tts.SynthesizedAudio]
+                    audio_rx: aio.ChanReceiver[tts.SynthesizedAudio]
+                    audio_tx, audio_rx = aio.channel()
+                    task = asyncio.create_task(
+                        self._run_ws(max_retry_per_segment, audio_tx, token_rx)
+                    )
+                    cur_segment = SynthesizeStream._SegmentConnection(audio_rx, task)
+                    conns_q.put_nowait(cur_segment)
+                elif ev.type == tokenize.TokenEventType.TOKEN:
+                    assert token_tx is not None
+                    token_tx.send_nowait(ev.token)
+                elif ev.type == tokenize.TokenEventType.FINISHED:
+                    assert token_tx is not None
+                    token_tx.close()
+                    cur_segment = token_tx = None
+
+            conns_q.put_nowait(None)
 
         try:
-            while True:
-                ws_connected = ws is not None and not ws.closed
-                try:
-                    data = await self._queue.get()
-
-                    if data is None:
-                        if ws_task is not None:
-                            await ws_task
-                        break
-
-                    if not ws_connected:
-                        if data == SynthesizeStream._STREAM_EOS:
-                            continue
-
-                        with contextlib.suppress(asyncio.CancelledError):
-                            if ws_task is not None:
-                                await ws_task
-
-                        ws = await self._session.ws_connect(
-                            self._stream_url(),
-                            headers={AUTHORIZATION_HEADER: self._opts.api_key},
-                        )
-                        data_tx, data_rx = aio.channel()
-                        ws_task = asyncio.create_task(self._run_ws(ws, data_rx))
-
-                    assert data_tx is not None
-                    assert ws_task is not None
-                    assert ws is not None
-
-                    data_tx.send_nowait(data)
-
-                except Exception:
-                    if retry_count >= max_retry:
-                        logger.exception(
-                            f"failed to connect to 11labs after {max_retry} retries"
-                        )
-                        break
-
-                    retry_delay = min(retry_count * 5, 5)  # max 5s
-                    retry_count += 1
-
-                    logger.warning(
-                        f"failed to connect to 11labs, retrying in {retry_delay}s"
-                    )
-                    await asyncio.sleep(retry_delay)
-
+            await asyncio.gather(_forward_events(), _read_tokens())
         except Exception:
             logger.exception("11labs task failed")
-        finally:
-            with contextlib.suppress(asyncio.CancelledError):
-                if ws_task is not None:
-                    ws_task.cancel()
-                    await ws_task
 
-            self._event_queue.put_nowait(None)
+        self._event_queue.put_nowait(None)
 
     async def _run_ws(
-        self, ws: aiohttp.ClientWebSocketResponse, data_rx: aio.ChanReceiver[str]
+        self,
+        max_retry: int,
+        audio_tx: aio.ChanSender[tts.SynthesizedAudio],
+        token_rx: aio.ChanReceiver[str],
     ) -> None:
-        closing_ws = False
-
-        self._event_queue.put_nowait(
-            tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
-        )
-
-        async def send_task():
-            nonlocal closing_ws
-
-            # 11labs stream must be initialized with a space
-            voice = self._opts.voice
-            voice_settings = (
-                dataclasses.asdict(voice.settings) if voice.settings else None
-            )
-            init_pkt = dict(
-                text=" ",
-                voice_settings=voice_settings,
-            )
-            await ws.send_str(json.dumps(init_pkt))
-
-            while True:
-                data = await data_rx.recv()
-                data_pkt = dict(
-                    text=data,
-                    try_trigger_generation=True,
+        # try to connect to 11labs
+        ws_conn: aiohttp.ClientWebSocketResponse | None = None
+        for try_i in range(max_retry):
+            try:
+                ws_conn = await self._session.ws_connect(
+                    self._stream_url(),
+                    headers={AUTHORIZATION_HEADER: self._opts.api_key},
                 )
-                if data == SynthesizeStream._STREAM_EOS:
-                    closing_ws = True
 
-                await ws.send_str(json.dumps(data_pkt))
+                voice_settings = None
+                if self._opts.voice.settings is not None:
+                    voice_settings = dataclasses.asdict(self._opts.voice.settings)
 
-                if closing_ws:
+                init_pkt = dict(
+                    text=" ",
+                    try_trigger_generation=True,
+                    voice_settings=voice_settings,
+                    generation_config=dict(
+                        chunk_length_schedule=self._opts.chunk_length_schedule,
+                    ),
+                )
+                await ws_conn.send_str(json.dumps(init_pkt))
+            except Exception:
+                if try_i + 1 == max_retry:
+                    logger.exception(
+                        f"failed to connect to 11labs after {max_retry} retries"
+                    )
                     return
 
+                retry_delay = min(try_i * 5, 5)  # max 5s
+                logger.warning(
+                    f"failed to connect to 11labs, retrying in {retry_delay}s"
+                )
+                await asyncio.sleep(retry_delay)
+
+        assert ws_conn is not None
+
+        all_tokens_consumed = False
+
+        async def send_task():
+            async for token in token_rx:
+                if token == "":
+                    continue  # empty token is closing the stream in 11labs protocol
+
+                # try_trigger_generation=True is a bad practice, we expose
+                # chunk_length_schedule instead
+                data_pkt = dict(
+                    text=token,
+                    try_trigger_generation=False,
+                )
+                await ws_conn.send_str(json.dumps(data_pkt))
+
+            # no more token, mark eos
+            flush_pkt = dict(
+                text="",
+            )
+            await ws_conn.send_str(json.dumps(flush_pkt))
+
+            nonlocal all_tokens_consumed
+            all_tokens_consumed = True
+
         async def recv_task():
-            nonlocal closing_ws
             while True:
-                msg = await ws.receive()
+                msg = await ws_conn.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:  # close is expected
-                        return
+                    if all_tokens_consumed:
+                        return  # close is expected
 
-                    raise Exception("11labs connection closed unexpectedly")
+                    raise Exception(
+                        "11labs connection closed unexpectedly, not all tokens have been consumed"
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
+                    # audio frames are serialized in base64..
                     logger.warning("unexpected 11labs message type %s", msg.type)
                     continue
 
                 data: dict = json.loads(msg.data)
                 if data.get("audio"):
                     b64data = base64.b64decode(data["audio"])
+
                     frame = rtc.AudioFrame(
                         data=b64data,
                         sample_rate=self._opts.sample_rate,
                         num_channels=1,
                         samples_per_channel=len(b64data) // 2,
                     )
-                    self._event_queue.put_nowait(
-                        tts.SynthesisEvent(
-                            type=tts.SynthesisEventType.AUDIO,
-                            audio=tts.SynthesizedAudio(text="", data=frame),
-                        )
-                    )
+
+                    text = ""
+                    if data.get("alignment"):
+                        text = data["alignment"].get("chars", "")
+
+                    audio_tx.send_nowait(tts.SynthesizedAudio(text=text, data=frame))
+                    continue
                 elif data.get("isFinal"):
-                    return
+                    return  # last message
+
+                logger.error("unexpected 11labs message %s", data)
 
         try:
             await asyncio.gather(send_task(), recv_task())
         except Exception:
-            logger.exception("11labs connection failed")
+            logger.exception("11labs ws connection failed")
         finally:
-            self._event_queue.put_nowait(
-                tts.SynthesisEvent(type=tts.SynthesisEventType.FINISHED)
-            )
+            audio_tx.close()
 
     async def __anext__(self) -> tts.SynthesisEvent:
         evt = await self._event_queue.get()
@@ -443,7 +473,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         return evt
 
 
-def dict_to_voices_list(data: dict) -> List[Voice]:
+def _dict_to_voices_list(data: dict) -> List[Voice]:
     voices = []
     for voice in data["voices"]:
         voices.append(

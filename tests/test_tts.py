@@ -1,38 +1,54 @@
-import asyncio
+"""
+Check if all Text-To-Speech are producing valid audio.
+We verify the content using a good STT model
+"""
 
+import pytest
 from livekit import agents
+from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins import elevenlabs, google, openai
-from utils import compare_word_counts
+from utils import wer
 
 TEST_AUDIO_SYNTHESIZE = "the people who are crazy enough to think they can change the world are the ones who do"
+SIMILARITY_THRESHOLD = 0.9
 
 
-async def test_synthetize():
-    ttss = [
-        elevenlabs.TTS(),
-        openai.TTS(model="tts-1", voice="nova"),
-        google.TTS(audio_encoding="mp3"),
-    ]
+async def _assert_valid_synthesized_audio(
+    frames: AudioBuffer, tts: agents.tts.TTS, text: str, threshold: float
+):
+    # use whisper as the source of truth to verify synthesized speech (smallest WER)
+    whisper_stt = openai.STT(model="whisper-1")
+    res = await whisper_stt.recognize(buffer=frames)
+    assert wer(res.alternatives[0].text, text) < 0.2
 
-    async def synthetize(tts: agents.tts.TTS):
-        frames = []
-        async for frame in tts.synthesize(text=TEST_AUDIO_SYNTHESIZE):
-            frames.append(frame.data)
-
-        result = await openai.STT().recognize(buffer=agents.utils.merge_frames(frames))
-        assert (
-            compare_word_counts(result.alternatives[0].text, TEST_AUDIO_SYNTHESIZE)
-            > 0.9
-        )
-
-    async with asyncio.TaskGroup() as group:
-        for tts in ttss:
-            group.create_task(synthetize(tts))
+    merged_frame = merge_frames(frames)
+    assert merged_frame.sample_rate == tts.sample_rate, "sample rate should be the same"
+    assert (
+        merged_frame.num_channels == tts.num_channels
+    ), "num channels should be the same"
 
 
-async def test_stream():
-    tts = elevenlabs.TTS()
+SYNTHESIZE_TTS = [elevenlabs.TTS(), openai.TTS(), google.TTS()]
 
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("tts", SYNTHESIZE_TTS)
+async def test_synthetize(tts: agents.tts.TTS):
+    frames = []
+    async for frame in tts.synthesize(text=TEST_AUDIO_SYNTHESIZE):
+        frames.append(frame.data)
+
+    await _assert_valid_synthesized_audio(
+        frames, tts, TEST_AUDIO_SYNTHESIZE, SIMILARITY_THRESHOLD
+    )
+
+
+STREAM_TTS = [elevenlabs.TTS()]
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("tts", STREAM_TTS)
+async def test_stream(tts: agents.tts.TTS):
     pattern = [1, 2, 4]
     text = TEST_AUDIO_SYNTHESIZE
     chunks = []
@@ -49,19 +65,20 @@ async def test_stream():
     for chunk in chunks:
         stream.push_text(chunk)
 
-    await stream.flush()
+    stream.mark_segment_end()
 
     frames = []
-    assert (await anext(stream)).type == agents.tts.SynthesisEventType.STARTED
+    assert (await stream.__anext__()).type == agents.tts.SynthesisEventType.STARTED
 
     async for event in stream:
         if event.type == agents.tts.SynthesisEventType.FINISHED:
             break
 
         assert event.type == agents.tts.SynthesisEventType.AUDIO
+        assert event.audio is not None
         frames.append(event.audio.data)
 
-    result = await openai.STT().recognize(buffer=agents.utils.merge_frames(frames))
-    assert compare_word_counts(result.alternatives[0].text, TEST_AUDIO_SYNTHESIZE) > 0.9
-
-    await stream.aclose()
+    await stream.aclose(wait=True)
+    await _assert_valid_synthesized_audio(
+        frames, tts, TEST_AUDIO_SYNTHESIZE, SIMILARITY_THRESHOLD
+    )
