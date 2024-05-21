@@ -3,13 +3,18 @@ Check if all Text-To-Speech are producing valid audio.
 We verify the content using a good STT model
 """
 
+import os
+import pathlib
+
 import pytest
 from livekit import agents
 from livekit.agents.utils import AudioBuffer, merge_frames
-from livekit.plugins import elevenlabs, google, openai
+from livekit.plugins import elevenlabs, google, nltk, openai
 from utils import wer
 
-TEST_AUDIO_SYNTHESIZE = "the people who are crazy enough to think they can change the world are the ones who do"
+TEST_AUDIO_SYNTHESIZE = pathlib.Path(
+    os.path.dirname(__file__), "long_synthesize.txt"
+).read_text()
 SIMILARITY_THRESHOLD = 0.9
 
 
@@ -19,6 +24,7 @@ async def _assert_valid_synthesized_audio(
     # use whisper as the source of truth to verify synthesized speech (smallest WER)
     whisper_stt = openai.STT(model="whisper-1")
     res = await whisper_stt.recognize(buffer=frames)
+    print(res.alternatives[0].text)
     assert wer(res.alternatives[0].text, text) < 0.2
 
     merged_frame = merge_frames(frames)
@@ -43,7 +49,16 @@ async def test_synthetize(tts: agents.tts.TTS):
     )
 
 
-STREAM_TTS = [elevenlabs.TTS()]
+STREAM_SENT_TOKENIZER = nltk.SentenceTokenizer(min_sentence_len=20)
+STREAM_TTS = [
+    elevenlabs.TTS(),
+    agents.tts.StreamAdapter(
+        tts=openai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    ),
+    agents.tts.StreamAdapter(
+        tts=google.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    ),
+]
 
 
 @pytest.mark.usefixtures("job_process")
@@ -66,19 +81,23 @@ async def test_stream(tts: agents.tts.TTS):
         stream.push_text(chunk)
 
     stream.mark_segment_end()
+    await stream.aclose(wait=True)
 
     frames = []
     assert (await stream.__anext__()).type == agents.tts.SynthesisEventType.STARTED
 
+    # this test only have one segment
+    one_finished = False
     async for event in stream:
         if event.type == agents.tts.SynthesisEventType.FINISHED:
-            break
+            assert not one_finished
+            one_finished = True
+            continue
 
         assert event.type == agents.tts.SynthesisEventType.AUDIO
         assert event.audio is not None
         frames.append(event.audio.data)
 
-    await stream.aclose(wait=True)
     await _assert_valid_synthesized_audio(
         frames, tts, TEST_AUDIO_SYNTHESIZE, SIMILARITY_THRESHOLD
     )
