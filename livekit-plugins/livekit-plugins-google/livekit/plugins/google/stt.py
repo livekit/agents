@@ -13,20 +13,18 @@
 # limitations under the License.
 
 from __future__ import annotations
-import datetime
 
-import os
 import asyncio
 import contextlib
 import dataclasses
+import os
 from dataclasses import dataclass
-from typing import Any, AsyncIterable, Dict, List, Optional, Union
+from typing import AsyncIterable, List, Optional, Union
 
 from livekit import agents, rtc
 from livekit.agents import stt
 from livekit.agents.utils import AudioBuffer
 
-from google.auth import credentials  # type: ignore
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
 

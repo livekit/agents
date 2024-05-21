@@ -2,7 +2,6 @@ import jiwer
 
 
 def wer(hypothesis: str, reference: str) -> float:
-    import jiwer
 
     transformers = jiwer.Compose(
         [

@@ -2,14 +2,12 @@
 Do speech recognition on a long audio file and compare the result with the expected transcript
 """
 
-import time
 import asyncio
 import os
-import wave
-import pytest
 import pathlib
+import time
 
-from typing import List
+import pytest
 from livekit import agents, rtc
 from livekit.plugins import deepgram, google, openai, silero
 from utils import wer
@@ -94,7 +92,7 @@ async def test_stream(stt: agents.stt.STT):
     async def _stream_output():
         text = ""
         # make sure the events are sent in the right order
-        recv_final, recv_start, recv_end = False, False, True
+        recv_start, recv_end = False, True
         start_time = time.time()
 
         async for event in stream:
@@ -109,11 +107,9 @@ async def test_stream(stt: agents.stt.STT):
 
             assert recv_start, "START_OF_SPEECH should be sent before any other event"
 
-            if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
-                recv_final = True
-            elif event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
+            if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
                 text += event.alternatives[0].text
-                recv_final = recv_start = False
+                recv_start = False
                 recv_end = True
 
         dt = time.time() - start_time

@@ -23,8 +23,8 @@ from typing import Optional
 import aiohttp
 from livekit.agents import codecs, tts, utils
 
-from .models import TTSModels, TTSVoices
 from .log import logger
+from .models import TTSModels, TTSVoices
 
 OPENAI_TTS_SAMPLE_RATE = 24000
 OPENAI_TTS_CHANNELS = 1

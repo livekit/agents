@@ -21,7 +21,7 @@ import dataclasses
 import json
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import aiohttp
 from livekit import rtc
@@ -375,7 +375,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     ),
                 )
                 await ws_conn.send_str(json.dumps(init_pkt))
-            except:
+            except Exception:
                 if try_i + 1 == max_retry:
                     logger.exception(
                         f"failed to connect to 11labs after {max_retry} retries"

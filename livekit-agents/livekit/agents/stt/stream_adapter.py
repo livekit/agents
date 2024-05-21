@@ -7,9 +7,8 @@ from typing import Optional
 
 from livekit import rtc
 
-from ..log import logger
 from ..utils import AudioBuffer, merge_frames
-from ..vad import VADEventType, VAD
+from ..vad import VAD, VADEventType
 from .stt import (
     STT,
     SpeechEvent,
@@ -95,7 +94,7 @@ class StreamAdapterWrapper(SpeechStream):
                     )
                     self._event_queue.put_nowait(end_event)
         except Exception:
-            logging.exception(f"stt stream adapter failed")
+            logging.exception("stt stream adapter failed")
         finally:
             self._event_queue.put_nowait(None)
 
