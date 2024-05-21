@@ -152,9 +152,13 @@ class LLMStream(llm.LLMStream):
         fnc = fncs[name]
         # validate args before calling fnc
         for arg in fnc.args.values():
-            if arg.default is inspect.Parameter.empty and arg.name not in args:
-                logger.error(f"missing required arg {arg.name} for ai_callable {name}")
-                return
+            if arg.name not in args:
+                if arg.default is inspect.Parameter.empty:
+                    logger.error(
+                        f"missing required arg {arg.name} for ai_callable {name}"
+                    )
+                    return
+                continue
 
             if arg.type is bool and args[arg.name] not in (True, False):
                 logger.error(f"invalid arg {arg.name} for ai_callable {name}")
