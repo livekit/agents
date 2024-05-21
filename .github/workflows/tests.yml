@@ -29,6 +29,7 @@ jobs:
       - name: install packages
         run: |
           pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
+          pip3 install -r ./tests/test-requirements.txt
           for dir in livekit-plugins/*; do
             pip3 install $dir
           done
