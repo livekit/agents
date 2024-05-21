@@ -1,7 +1,7 @@
 # Copyright 2023 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
+# You may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
@@ -68,6 +68,7 @@ class _TTSOptions:
     base_url: str
     sample_rate: int
     streaming_latency: int
+    output_format: str = "mp3"
 
 
 class TTS(tts.TTS):
@@ -80,6 +81,7 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         sample_rate: int = 24000,
         streaming_latency: int = 3,
+        output_format: str = "mp3",
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -97,6 +99,7 @@ class TTS(tts.TTS):
             base_url=base_url or API_BASE_URL_V1,
             sample_rate=sample_rate,
             streaming_latency=streaming_latency,
+            output_format=output_format,
         )
 
     async def list_voices(self) -> List[Voice]:
@@ -110,6 +113,7 @@ class TTS(tts.TTS):
     def synthesize(
         self,
         text: str,
+        output_format: str = "mp3",
     ) -> "ChunkedStream":
         return ChunkedStream(text, self._opts, self._session)
 
@@ -133,7 +137,8 @@ class ChunkedStream(tts.ChunkedStream):
         voice = self._opts.voice
         sample_rate = self._opts.sample_rate
         latency = self._opts.streaming_latency
-        url = f"{self._opts.base_url}/text-to-speech/{voice.id}/stream?output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
+        output_format = self._opts.output_format
+        url = f"{self._opts.base_url}/text-to-speech/{voice.id}/stream?output_format={output_format}_{sample_rate}&optimize_streaming_latency={latency}"
         return url
 
     async def _run(self):
@@ -235,7 +240,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         model_id = self._opts.model_id
         sample_rate = self._opts.sample_rate
         latency = self._opts.streaming_latency
-        return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
+        output_format = self._opts.output_format
+        return f"{base_url}/text-to-speech/{voice_id}/stream-input?model_id={model_id}&output_format={output_format}_{sample_rate}&optimize_streaming_latency={latency}"
 
     def push_text(self, token: str | None) -> None:
         if self._closed:
