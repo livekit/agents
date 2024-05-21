@@ -1,13 +1,12 @@
 from __future__ import annotations
+
 import asyncio
-import contextvars
 
 import aiohttp
 
-from ..log import logger
-
 _g_session: aiohttp.ClientSession | None = None
 _g_loop: asyncio.AbstractEventLoop | None = None
+
 
 def http_session() -> aiohttp.ClientSession:
     """Optional utility function to avoid having to manually manage an aiohttp.ClientSession lifetime.
