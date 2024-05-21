@@ -100,6 +100,7 @@ class STT(stt.STT):
         else:
             self._client = SpeechAsyncClient()
 
+        assert self._client is not None
         return self._client
 
     @property
