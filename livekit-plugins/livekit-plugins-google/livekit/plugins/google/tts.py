@@ -112,7 +112,7 @@ class TTS(tts.TTS):
                 )
             else:
                 self._client = texttospeech.TextToSpeechAsyncClient()
-        
+
         assert self._client is not None
         return self._client
 
