@@ -1,5 +1,7 @@
-# Check if all TTS is producing valid audio
-
+"""
+Check if all Text-To-Speech are producing valid audio.
+We verify the content using a good STT model
+"""
 
 import pytest
 from livekit import agents
@@ -14,7 +16,7 @@ SIMILARITY_THRESHOLD = 0.9
 async def _assert_valid_synthesized_audio(
     frames: AudioBuffer, tts: agents.tts.TTS, text: str, threshold: float
 ):
-    # use whisper as the source of truth to verify synthesized speech (accuracy is currently the highest)
+    # use whisper as the source of truth to verify synthesized speech (smallest WER)
     whisper_stt = openai.STT(model="whisper-1")
     res = await whisper_stt.recognize(buffer=frames)
     assert_similar_words(res.alternatives[0].text, text, threshold)
@@ -62,6 +64,8 @@ async def test_stream(tts: agents.tts.TTS):
 
     for chunk in chunks:
         stream.push_text(chunk)
+
+    stream.mark_segment_end()
 
     frames = []
     assert (await stream.__anext__()).type == agents.tts.SynthesisEventType.STARTED

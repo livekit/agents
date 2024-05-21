@@ -24,6 +24,7 @@ import aiohttp
 from livekit.agents import codecs, tts, utils
 
 from .models import TTSModels, TTSVoices
+from .log import logger
 
 OPENAI_TTS_SAMPLE_RATE = 24000
 OPENAI_TTS_CHANNELS = 1
@@ -102,6 +103,8 @@ class ChunkedStream(tts.ChunkedStream):
                             tts.SynthesizedAudio(text="", data=frame)
                         )
 
+        except Exception:
+            logger.exception("openai tts main task failed in chunked stream")
         finally:
             self._queue.put_nowait(None)
 

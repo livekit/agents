@@ -55,6 +55,10 @@ class TTS(tts.TTS):
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
     ) -> None:
+        """
+        if no credentials is provided, it will use the credentials on the environment
+        GOOGLE_APPLICATION_CREDENTIALS (default behavior of Google TextToSpeechAsyncClient)
+        """
         super().__init__(
             streaming_supported=False, sample_rate=sample_rate, num_channels=1
         )

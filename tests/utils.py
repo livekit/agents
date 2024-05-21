@@ -1,30 +1,23 @@
-import re
-from collections import defaultdict
+import jiwer
 
 
-def assert_similar_words(actual: str, expected: str, threshold):
-    lookup = defaultdict(int)
+def wer(hypothesis: str, reference: str) -> float:
+    import jiwer
 
-    expected_split = re.split(r"\W+", expected)
-    actual_split = re.split(r"\W+", actual)
-    expected_split = [word.strip(" .,?![]()") for word in expected_split if word]
-    actual_split = [word.strip(" .,?![]()") for word in actual_split if word]
-
-    for word in expected_split:
-        lookup[word.lower()] += 1
-
-    for word in actual_split:
-        lookup[word.lower()] -= 1
-
-    deviation = 0
-    for word in lookup.keys():
-        deviation += abs(lookup[word])
-
-    # If every words is different, we want 0
-    # if every word is the same, we want 1
-    unique_words = len(lookup.keys())
-
-    if unique_words == 0:
-        return 0
-
-    return (1 - (deviation / unique_words)) >= threshold
+    transformers = jiwer.Compose(
+        [
+            jiwer.ExpandCommonEnglishContractions(),
+            jiwer.RemoveEmptyStrings(),
+            jiwer.ToLowerCase(),
+            jiwer.RemoveMultipleSpaces(),
+            jiwer.Strip(),
+            jiwer.RemovePunctuation(),
+            jiwer.ReduceToListOfListOfWords(),
+        ]
+    )
+    return jiwer.wer(
+        reference,
+        hypothesis,
+        reference_transform=transformers,
+        hypothesis_transform=transformers,
+    )

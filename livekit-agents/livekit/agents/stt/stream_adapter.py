@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from typing import Optional
 
 from livekit import rtc
 
@@ -60,7 +61,7 @@ class StreamAdapterWrapper(SpeechStream):
         super().__init__()
         self._vad = vad_stream
         self._stt = stt
-        self._event_queue = asyncio.Queue[SpeechEvent | None]()
+        self._event_queue = asyncio.Queue[Optional[SpeechEvent]]()
         self._closed = False
         self._args = args
         self._kwargs = kwargs
