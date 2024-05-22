@@ -4,13 +4,13 @@ import re
 # rule based segmentation from https://stackoverflow.com/a/31505798, works surprisingly well
 def split_sentences(text: str, min_sentence_len: int = 20) -> list[str]:
     """the text can't contains substrings "<prd>" or "<stop>"""
-    alphabets = "([A-Za-z])"
-    prefixes = "(Mr|St|Mrs|Ms|Dr)[.]"
-    suffixes = "(Inc|Ltd|Jr|Sr|Co)"
-    starters = "(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)"
-    acronyms = "([A-Z][.][A-Z][.](?:[A-Z][.])?)"
-    websites = "[.](com|net|org|io|gov|edu|me)"
-    digits = "([0-9])"
+    alphabets = r"([A-Za-z])"
+    prefixes = r"(Mr|St|Mrs|Ms|Dr)[.]"
+    suffixes = r"(Inc|Ltd|Jr|Sr|Co)"
+    starters = r"(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)"
+    acronyms = r"([A-Z][.][A-Z][.](?:[A-Z][.])?)"
+    websites = r"[.](com|net|org|io|gov|edu|me)"
+    digits = r"([0-9])"
     multiple_dots = r"\.{2,}"
 
     # fmt: off
@@ -25,13 +25,13 @@ def split_sentences(text: str, min_sentence_len: int = 20) -> list[str]:
     text = re.sub(multiple_dots, lambda match: "<prd>" * len(match.group(0)), text)
     if "Ph.D" in text:
         text = text.replace("Ph.D.","Ph<prd>D<prd>")
-    text = re.sub("\s" + alphabets + "[.] "," \\1<prd> ",text)
+    text = re.sub(r"\s" + alphabets + "[.] "," \\1<prd> ",text)
     text = re.sub(acronyms+" "+starters,"\\1<stop> \\2",text)
     text = re.sub(alphabets + "[.]" + alphabets + "[.]" + alphabets + "[.]","\\1<prd>\\2<prd>\\3<prd>",text)
     text = re.sub(alphabets + "[.]" + alphabets + "[.]","\\1<prd>\\2<prd>",text)
-    text = re.sub(" "+suffixes+"[.] "+starters," \\1<stop> \\2",text)
-    text = re.sub(" "+suffixes+"[.]"," \\1<prd>",text)
-    text = re.sub(" " + alphabets + "[.]"," \\1<prd>",text)
+    text = re.sub(r" "+suffixes+"[.] "+starters," \\1<stop> \\2",text)
+    text = re.sub(r" "+suffixes+"[.]"," \\1<prd>",text)
+    text = re.sub(r" " + alphabets + "[.]"," \\1<prd>",text)
     if "”" in text:
         text = text.replace(".”","”.")
     if "\"" in text:
