@@ -123,8 +123,8 @@ class TTSSegmentsForwarder:
         if frame is not None:
             frame_duration = frame.samples_per_channel / frame.sample_rate
             cur_seg = self._pending_segment.cur_audio
-            cur_seg.audio_duration += frame_duration
             _validate_playout(cur_seg)
+            cur_seg.audio_duration += frame_duration
         else:
             self.mark_audio_segment_end()
 
@@ -171,7 +171,6 @@ class TTSSegmentsForwarder:
             await asyncio.gather(
                 self._synchronize(transcription_msg_q),
                 self._forward(transcription_msg_q),
-                return_exceptions=True,
             )
         except Exception:
             logger.exception("error in tts transcription")
@@ -208,7 +207,7 @@ class TTSSegmentsForwarder:
             seg_id = (
                 _utils.segment_uuid()
             )  # put each sentence in a different transcription segment
-            words = self._opts.word_tokenizer.tokenize(tokenized_sentence)
+            words = self._opts.word_tokenizer.tokenize(text=tokenized_sentence)
             processed_words = []
 
             for word in words:
