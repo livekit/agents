@@ -208,7 +208,7 @@ class TTSSegmentsForwarder:
             seg_id = (
                 _utils.segment_uuid()
             )  # put each sentence in a different transcription segment
-            words = self._opts.word_tokenizer.tokenize(tokenized_sentence)
+            words = self._opts.word_tokenizer.tokenize(text=tokenized_sentence)
             processed_words = []
 
             for word in words:
