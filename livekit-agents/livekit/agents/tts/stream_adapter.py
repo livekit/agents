@@ -120,10 +120,14 @@ class StreamAdapterWrapper(SynthesizeStream):
         self, sentence: str, audio_tx: aio.ChanSender[SynthesizedAudio]
     ) -> None:
         async with self._sem:
-            async for audio in self._tts.synthesize(text=sentence):
-                audio_tx.send_nowait(audio)
+            stream = self._tts.synthesize(text=sentence)
+            try:
+                async for audio in stream:
+                    audio_tx.send_nowait(audio)
 
-            audio_tx.close()
+            finally:
+                audio_tx.close()
+                await stream.aclose()
 
     async def _schedule(self) -> None:
         async for ev in self._sent_stream:
