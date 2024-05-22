@@ -9,7 +9,7 @@ from typing import Any, AsyncIterable, Callable, Literal
 from attrs import define
 from livekit import rtc
 
-from .. import aio, transcription, utils
+from .. import aio, tokenize, transcription, utils
 from .. import llm as allm
 from .. import stt as astt
 from .. import tts as atts
@@ -46,6 +46,11 @@ class _AssistantOptions:
     int_speech_duration: float
     int_min_words: int
     base_volume: float
+    transcription: bool
+    word_tokenizer: tokenize.WordTokenizer
+    sentence_tokenizer: tokenize.SentenceTokenizer
+    hyphenate_word: Callable[[str], list[str]]
+    transcription_speed: float
 
 
 @define(kw_only=True, frozen=True)
@@ -116,6 +121,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         debug: bool = False,
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
+        transcription: bool = True,
+        sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
+        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
+        hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
+        transcription_speed: float = 4,
     ) -> None:
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
@@ -126,6 +136,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             int_speech_duration=interrupt_speech_duration,
             int_min_words=interrupt_min_words,
             base_volume=base_volume,
+            transcription=transcription,
+            sentence_tokenizer=sentence_tokenizer,
+            word_tokenizer=word_tokenizer,
+            hyphenate_word=hyphenate_word,
+            transcription_speed=transcription_speed,
         )
         self._vad, self._tts, self._llm, self._stt = vad, tts, llm, stt
         self._fnc_ctx = fnc_ctx
@@ -448,11 +463,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
-        stt_forwarder = transcription.STTSegmentsForwarder(
-            room=self._start_args.room,
-            participant=self._linked_participant,
-            track=self._user_track,
-        )
+
+        stt_forwarder = utils._noop.Nop()
+        if self._opts.transcription:
+            stt_forwarder = transcription.STTSegmentsForwarder(
+                room=self._start_args.room,
+                participant=self._linked_participant,
+                track=self._user_track,
+            )
 
         select = aio.select([self._audio_stream, vad_stream, stt_stream])
         try:
@@ -636,12 +654,18 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._vol_filter.reset()
         po_tx, po_rx = aio.channel()  # playout channel
 
-        tts_forwarder = transcription.TTSSegmentsForwarder(
-            room=self._start_args.room,
-            participant=self._start_args.room.local_participant,
-            track=self._pub.sid,
-            auto_playout=False,
-        )
+        tts_forwarder = utils._noop.Nop()
+        if self._opts.transcription:
+            tts_forwarder = transcription.TTSSegmentsForwarder(
+                room=self._start_args.room,
+                participant=self._start_args.room.local_participant,
+                track=self._pub.sid,
+                auto_playout=False,
+                sentence_tokenizer=self._opts.sentence_tokenizer,
+                word_tokenizer=self._opts.word_tokenizer,
+                hyphenate_word=self._opts.hyphenate_word,
+                speed=self._opts.transcription_speed,
+            )
 
         tts_co = self._synthesize_task(data, po_tx, tts_forwarder)
         _synthesize_task = asyncio.create_task(tts_co)
@@ -695,7 +719,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self,
         data: _SpeechData,
         po_tx: aio.ChanSender[rtc.AudioFrame],
-        tts_forwarder: transcription.TTSSegmentsForwarder,
+        tts_forwarder: transcription.TTSSegmentsForwarder | utils._noop.Nop,
     ) -> None:
         """Synthesize speech from the source"""
         assert data.source is not None
@@ -799,7 +823,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     async def _playout_task(
         self,
         po_rx: aio.ChanReceiver[rtc.AudioFrame],
-        tts_forwarder: transcription.TTSSegmentsForwarder,
+        tts_forwarder: transcription.TTSSegmentsForwarder | utils._noop.Nop,
     ) -> None:
         """Playout the synthesized speech with volume control"""
         assert self._audio_source is not None

@@ -1,4 +1,4 @@
-from . import http_context  # noqa
+from . import http_context, _noop  # noqa
 from .event_emitter import EventEmitter
 from .exp_filter import ExpFilter
 from .http_context import http_session
