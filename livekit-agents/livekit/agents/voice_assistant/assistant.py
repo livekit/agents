@@ -466,7 +466,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         stt_forwarder = utils._noop.Nop()
         if self._opts.transcription:
-            transcription.STTSegmentsForwarder(
+            stt_forwarder = transcription.STTSegmentsForwarder(
                 room=self._start_args.room,
                 participant=self._linked_participant,
                 track=self._user_track,
