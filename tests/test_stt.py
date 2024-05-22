@@ -10,6 +10,7 @@ import time
 import pytest
 from livekit import agents, rtc
 from livekit.plugins import deepgram, google, openai, silero
+
 from .utils import wer
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "long.mp3")
