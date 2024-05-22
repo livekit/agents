@@ -402,7 +402,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # try_trigger_generation=True is a bad practice, we expose
                 # chunk_length_schedule instead
                 data_pkt = dict(
-                    text=token,
+                    text=f"{token} ",  # must always end with a space
                     try_trigger_generation=False,
                 )
                 await ws_conn.send_str(json.dumps(data_pkt))
