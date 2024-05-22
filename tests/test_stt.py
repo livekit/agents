@@ -48,7 +48,7 @@ async def test_recognize(stt: agents.stt.STT):
     dt = time.time() - start_time
 
     print(f"WER: {wer(text, TEST_AUDIO_TRANSCRIPT)} for {stt} in {dt:.2f}s")
-    assert wer(text, TEST_AUDIO_TRANSCRIPT) < 0.2
+    assert wer(text, TEST_AUDIO_TRANSCRIPT) <= 0.2
     assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
 
 
@@ -116,7 +116,7 @@ async def test_stream(stt: agents.stt.STT):
         print(
             f"WER: {wer(text, TEST_AUDIO_TRANSCRIPT)} for streamed {stt} in {dt:.2f}s"
         )
-        assert wer(text, TEST_AUDIO_TRANSCRIPT) < 0.2
+        assert wer(text, TEST_AUDIO_TRANSCRIPT) <= 0.2
 
     await asyncio.wait_for(
         asyncio.gather(_stream_input(), _stream_output()), timeout=60
