@@ -100,7 +100,7 @@ class ChunkedStream(tts.ChunkedStream):
                     frames = self._decoder.decode_chunk(data)
                     for frame in frames:
                         self._queue.put_nowait(
-                            tts.SynthesizedAudio(text="", data=frame)
+                            tts.SynthesizedAudio(text=self._text, data=frame)
                         )
 
         except Exception:
