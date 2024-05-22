@@ -1,6 +1,7 @@
+from . import http_context  # noqa
 from .event_emitter import EventEmitter
 from .exp_filter import ExpFilter
-from .http_session import http_session
+from .http_context import http_session
 from .misc import AudioBuffer, merge_frames, time_ms
 from .moving_average import MovingAverage
 

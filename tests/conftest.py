@@ -2,8 +2,8 @@ import pytest
 from livekit.agents import utils
 
 
-@pytest.fixture()
-async def job_process():
-    g_session = utils.http_session()
+@pytest.fixture
+def job_process(event_loop):
+    utils.http_context._new_session_ctx()
     yield
-    await g_session.close()
+    event_loop.run_until_complete(utils.http_context._close_http_ctx())
