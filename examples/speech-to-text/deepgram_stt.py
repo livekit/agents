@@ -35,9 +35,8 @@ async def entrypoint(job: JobContext):
     async def transcribe_track(track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
         stt_forwarder = transcription.STTSegmentsForwarder(
-            room=job.room, participant=job.room.local_participant
+            room=job.room, participant=job.room.local_participant, track=track
         )
-
         stt_stream = deepgram_stt.stream()
         stt_task = asyncio.create_task(
             _forward_transcription(stt_stream, stt_forwarder)

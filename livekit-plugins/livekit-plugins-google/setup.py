@@ -59,7 +59,7 @@ setuptools.setup(
         "google-cloud-translate >= 3, < 4",
         "googleapis-common-protos >= 1, < 2",
         "livekit ~= 0.11",
-        "livekit-agents~=0.6.0",
+        "livekit-agents~=0.7.dev0",
     ],
     package_data={
         "livekit.plugins.google": ["py.typed"],
