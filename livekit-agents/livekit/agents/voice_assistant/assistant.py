@@ -215,8 +215,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         enqueue: bool = True,
     ) -> None:
         with contextlib.suppress(asyncio.CancelledError):
-            if not self._started:
-                await self._start_future
+            await self._start_future
 
         if isinstance(source, str) and force_stream:
             text = source
@@ -622,6 +621,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     async def _start_speech(
         self, data: _SpeechData, *, interrupt_current_if_possible: bool
     ) -> None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._start_future
+
         if data.source is None:
             raise ValueError("source must be provided")
 
