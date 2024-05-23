@@ -12,10 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .settings import OutputFormat, TTSModels
 from .tts import DEFAULT_VOICE, TTS, Voice, VoiceSettings
 from .version import __version__
 
-__all__ = ["TTS", "Voice", "VoiceSettings", "DEFAULT_VOICE", "__version__"]
+__all__ = [
+    "TTS",
+    "Voice",
+    "VoiceSettings",
+    "OutputFormat",
+    "TTSModels",
+    "DEFAULT_VOICE",
+    "__version__",
+]
 
 from livekit.agents import Plugin
 
