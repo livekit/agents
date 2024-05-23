@@ -34,7 +34,12 @@ async def _assert_valid_synthesized_audio(
     ), "num channels should be the same"
 
 
-SYNTHESIZE_TTS = [elevenlabs.TTS(), openai.TTS(), google.TTS()]
+SYNTHESIZE_TTS = [
+    elevenlabs.TTS(),
+    elevenlabs.TTS(output_format="pcm_44100"),
+    openai.TTS(),
+    google.TTS(),
+]
 
 
 @pytest.mark.usefixtures("job_process")
@@ -52,6 +57,7 @@ async def test_synthetize(tts: agents.tts.TTS):
 STREAM_SENT_TOKENIZER = nltk.SentenceTokenizer(min_sentence_len=20)
 STREAM_TTS = [
     elevenlabs.TTS(),
+    elevenlabs.TTS(output_format="pcm_44100"),
     agents.tts.StreamAdapter(
         tts=openai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
