@@ -7,7 +7,7 @@ import traceback
 
 from livekit import rtc
 
-from .. import aio, apipe, ipc_enc
+from .. import aio, apipe, ipc_enc, utils
 from ..job_context import JobContext, _ShutdownInfo
 from ..job_request import AutoSubscribe
 from ..log import logger
@@ -46,6 +46,7 @@ class LogHandler(logging.Handler):
 async def _start(
     pipe: apipe.AsyncPipe, args: protocol.JobMainArgs, room: rtc.Room
 ) -> None:
+    utils.http_context._new_session_ctx()
     close_tx, close_rx = aio.channel()  # used by the JobContext to signal shutdown
 
     auto_subscribe = args.accept_data.auto_subscribe
@@ -110,7 +111,8 @@ async def _start(
     def on_disconnected():
         close_tx.send_nowait(_ShutdownInfo(reason="room disconnected"))
 
-    async with contextlib.aclosing(aio.select([pipe, cnt, close_rx])) as select:
+    select = aio.select([pipe, cnt, close_rx])
+    try:
         while True:
             s = await select()
             if s.selected is cnt:
@@ -136,6 +138,8 @@ async def _start(
                 await pipe.write(
                     protocol.Pong(last_timestamp=last_timestamp, timestamp=time_ms())
                 )
+    finally:
+        await select.aclose()
 
     logger.debug("disconnecting from room")
     await room.disconnect()
@@ -144,6 +148,8 @@ async def _start(
         # exceptions are already logged inside the done_callback
         if usertask is not None:
             await usertask  # type: ignore
+
+    await utils.http_context._close_http_ctx()
 
     if shutting_down:
         await pipe.write(protocol.ShutdownResponse())
@@ -165,7 +171,7 @@ def _run_job(cch: ipc_enc.ProcessPipe, args: protocol.JobMainArgs) -> None:
     )
 
     pipe = apipe.AsyncPipe(cch, loop, protocol.IPC_MESSAGES)
-    loop.slow_callback_duration = 0.02  # 20ms
+    loop.slow_callback_duration = 0.03  # 30ms
     aio.debug.hook_slow_callbacks(0.75)
     loop.set_debug(args.asyncio_debug)
 

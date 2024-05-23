@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 from collections import deque
@@ -148,9 +150,9 @@ class Chan(Generic[T]):
     #        if self.empty():
     #            self._finished_ev.set()
 
-    @property
-    def closed(self) -> bool:
-        return self._closed
+    # @property
+    # def closed(self) -> bool:
+    #    return self._closed
 
     #    async def join(self) -> None:
     #        await self._finished_ev.wait()

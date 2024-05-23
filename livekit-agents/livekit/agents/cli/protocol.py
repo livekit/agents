@@ -19,6 +19,8 @@ class CliArgs:
     asyncio_debug: bool
     watch: bool
     drain_timeout: int
+    room: str = ""
+    participant_identity: str = ""
     cch: ipc_enc.ProcessPipe | None = None  # None when watch is disabled
 
 
@@ -39,23 +41,21 @@ class ActiveJobsResponse:
     jobs: list[ActiveJob] = Factory(list)
 
     def write(self, b: io.BytesIO) -> None:
-        b.write(len(self.jobs).to_bytes(4, "big"))
+        ipc_enc._write_int(b, len(self.jobs))
         for aj in self.jobs:
             job_s = aj.job.SerializeToString()
-            b.write(len(job_s).to_bytes(4, "big"))
-            b.write(job_s)
+            ipc_enc._write_bytes(b, job_s)
             accept_s = pickle.dumps(aj.accept_data)
-            b.write(len(accept_s).to_bytes(4, "big"))
-            b.write(accept_s)
+            ipc_enc._write_bytes(b, accept_s)
 
     def read(self, b: io.BytesIO) -> None:
-        job_count = int.from_bytes(b.read(4), "big")
+        job_count = ipc_enc._read_int(b)
         for _ in range(job_count):
-            job_len = int.from_bytes(b.read(4), "big")
+            job_s = ipc_enc._read_bytes(b)
             job = agent.Job()
-            job.ParseFromString(b.read(job_len))
-            accept_len = int.from_bytes(b.read(4), "big")
-            accept_data = pickle.loads(b.read(accept_len))
+            job.ParseFromString(job_s)
+            accept_s = ipc_enc._read_bytes(b)
+            accept_data = pickle.loads(accept_s)
             self.jobs.append(ActiveJob(job=job, accept_data=accept_data))
 
 
@@ -76,11 +76,10 @@ class ReloadJobsResponse:
     jobs: list[ActiveJob] = Factory(list)
 
     def write(self, b: io.BytesIO) -> None:
-        b.write(len(self.jobs).to_bytes(4, "big"))
+        ipc_enc._write_int(b, len(self.jobs))
         for aj in self.jobs:
             job_s = aj.job.SerializeToString()
-            b.write(len(job_s).to_bytes(4, "big"))
-            b.write(job_s)
+            ipc_enc._write_bytes(b, job_s)
             accept_s = pickle.dumps(aj.accept_data)
             b.write(len(accept_s).to_bytes(4, "big"))
             b.write(accept_s)

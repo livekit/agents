@@ -9,7 +9,8 @@ class EventEmitter(Generic[T]):
 
     def emit(self, event: T, *args, **kwargs) -> None:
         if event in self._events:
-            for callback in self._events[event]:
+            callables = self._events[event].copy()
+            for callback in callables:
                 callback(*args, **kwargs)
 
     def once(self, event: T, callback: Optional[Callable] = None) -> Callable:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
@@ -48,9 +50,8 @@ class JobProcess:
         start_res: protocol.StartJobResponse | None = None
 
         await self._pipe.write(protocol.StartJobRequest(job=self._job))
-        async with contextlib.aclosing(
-            aio.select([self._pipe, start_timeout, ping_interval, pong_timeout])
-        ) as select:
+        select = aio.select([self._pipe, start_timeout, ping_interval, pong_timeout])
+        try:
             while True:
                 s = await select()
                 if s.selected is start_timeout and start_res is None:
@@ -108,6 +109,8 @@ class JobProcess:
                         extra={"exit": res, **self.logging_extra()},
                     )
                     break
+        finally:
+            await select.aclose()
 
         await self.join()
         logger.info("job process closed", extra=self.logging_extra())

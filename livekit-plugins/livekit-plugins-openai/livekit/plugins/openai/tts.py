@@ -12,12 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+import asyncio
+import contextlib
 import os
-from typing import AsyncIterable, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 import aiohttp
-from livekit.agents import codecs, tts
+from livekit.agents import codecs, tts, utils
 
+from .log import logger
 from .models import TTSModels, TTSVoices
 
 OPENAI_TTS_SAMPLE_RATE = 24000
@@ -25,51 +31,97 @@ OPENAI_TTS_CHANNELS = 1
 OPENAI_ENPOINT = "https://api.openai.com/v1/audio/speech"
 
 
+@dataclass
+class _TTSOptions:
+    model: TTSModels
+    voice: TTSVoices
+    api_key: str
+
+
 class TTS(tts.TTS):
     def __init__(
-        self, model: TTSModels, voice: TTSVoices, api_key: Optional[str] = None
+        self,
+        *,
+        model: TTSModels = "tts-1",
+        voice: TTSVoices = "alloy",
+        api_key: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
             streaming_supported=False,
             sample_rate=OPENAI_TTS_SAMPLE_RATE,
             num_channels=OPENAI_TTS_CHANNELS,
         )
+
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY must be set")
 
-        # TODO: we want to reuse aiohttp sessions
-        # for improved latency but doing so doesn't
-        # give us a clean way to close the session.
-        # Perhaps we introduce a close method to TTS?
-        # We also probalby want to send a warmup HEAD
-        # request after we create this
-        self._session = aiohttp.ClientSession(
-            headers={"Authorization": f"Bearer {api_key}"}
-        )
+        self._opts = _TTSOptions(model=model, voice=voice, api_key=api_key)
+        self._session = http_session
 
-        self._model = model
-        self._voice = voice
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_session()
+
+        return self._session
 
     def synthesize(
         self,
         text: str,
-    ) -> AsyncIterable[tts.SynthesizedAudio]:
-        decoder = codecs.Mp3StreamDecoder()
+    ) -> "ChunkedStream":
+        return ChunkedStream(text, self._opts, self._ensure_session())
 
-        async def generator():
+
+class ChunkedStream(tts.ChunkedStream):
+    def __init__(
+        self, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
+    ) -> None:
+        self._opts = opts
+        self._text = text
+        self._session = session
+        self._decoder = codecs.Mp3StreamDecoder()
+        self._main_task: asyncio.Task | None = None
+        self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
+
+    async def _run(self):
+        try:
             async with self._session.post(
                 OPENAI_ENPOINT,
+                headers={"Authorization": f"Bearer {self._opts.api_key}"},
                 json={
-                    "input": text,
-                    "model": self._model,
-                    "voice": self._voice,
+                    "input": self._text,
+                    "model": self._opts.model,
+                    "voice": self._opts.voice,
                     "response_format": "mp3",
                 },
             ) as resp:
-                async for data in resp.content.iter_chunked(4096):
-                    frames = decoder.decode_chunk(data)
+                async for data, _ in resp.content.iter_chunks():
+                    frames = self._decoder.decode_chunk(data)
                     for frame in frames:
-                        yield tts.SynthesizedAudio(text=text, data=frame)
+                        self._queue.put_nowait(
+                            tts.SynthesizedAudio(text="", data=frame)
+                        )
 
-        return generator()
+        except Exception:
+            logger.exception("openai tts main task failed in chunked stream")
+        finally:
+            self._queue.put_nowait(None)
+
+    async def __anext__(self) -> tts.SynthesizedAudio:
+        if not self._main_task:
+            self._main_task = asyncio.create_task(self._run())
+
+        frame = await self._queue.get()
+        if frame is None:
+            raise StopAsyncIteration
+
+        return frame
+
+    async def aclose(self) -> None:
+        if not self._main_task:
+            return
+
+        self._main_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._main_task

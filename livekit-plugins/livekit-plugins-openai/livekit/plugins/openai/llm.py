@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import enum
 import functools
@@ -23,7 +25,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "gpt-4-turbo",
+        model: str | ChatModels = "gpt-4o",
         client: openai.AsyncClient | None = None,
     ) -> None:
         self._opts = LLMOptions(model=model)
@@ -150,9 +152,13 @@ class LLMStream(llm.LLMStream):
         fnc = fncs[name]
         # validate args before calling fnc
         for arg in fnc.args.values():
-            if arg.default is inspect.Parameter.empty and arg.name not in args:
-                logger.error(f"missing required arg {arg.name} for ai_callable {name}")
-                return
+            if arg.name not in args:
+                if arg.default is inspect.Parameter.empty:
+                    logger.error(
+                        f"missing required arg {arg.name} for ai_callable {name}"
+                    )
+                    return
+                continue
 
             if arg.type is bool and args[arg.name] not in (True, False):
                 logger.error(f"invalid arg {arg.name} for ai_callable {name}")
@@ -170,9 +176,11 @@ class LLMStream(llm.LLMStream):
                 logger.error(f"invalid arg {arg.name} for ai_callable {name}")
                 return
 
-            if issubclass(arg.type, enum.Enum) and args[arg.name] not in arg.type:
-                logger.error(f"invalid arg {arg.name} for ai_callable {name}")
-                return
+            if issubclass(arg.type, enum.Enum):
+                values = set(item.value for item in arg.type)
+                if args[arg.name] not in values:
+                    logger.error(f"invalid arg {arg.name} for ai_callable {name}")
+                    return
 
         logger.debug(f"calling function {name} with arguments {args}")
         self._called_functions.append(

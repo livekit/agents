@@ -13,9 +13,10 @@
 # limitations under the License.
 
 from .stt import STT, SpeechStream
+from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "SpeechStream", "__version__"]
+__all__ = ["STT", "TTS", "SpeechStream", "__version__"]
 
 from livekit.agents import Plugin
 

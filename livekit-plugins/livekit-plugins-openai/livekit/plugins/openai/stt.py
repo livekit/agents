@@ -20,20 +20,22 @@ import os
 import wave
 from dataclasses import dataclass
 
+import aiohttp
 from livekit import agents
-from livekit.agents import stt
+from livekit.agents import stt, utils
 from livekit.agents.utils import AudioBuffer
-
-import openai
 
 from .models import WhisperModels
 
+OPENAI_ENPOINT = "https://api.openai.com/v1/audio/transcriptions"
+
 
 @dataclass
-class STTOptions:
+class _STTOptions:
     language: str
     detect_language: bool
     model: WhisperModels
+    api_key: str
 
 
 class STT(stt.STT):
@@ -44,29 +46,36 @@ class STT(stt.STT):
         detect_language: bool = False,
         model: WhisperModels = "whisper-1",
         api_key: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
     ):
         super().__init__(streaming_supported=False)
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY must be set")
 
-        self._client = openai.AsyncOpenAI(api_key=api_key)
-
         if detect_language:
             language = ""
 
-        self._config = STTOptions(
+        self._opts = _STTOptions(
             language=language,
             detect_language=detect_language,
             model=model,
+            api_key=api_key,
         )
+        self._session = http_session
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_session()
+
+        return self._session
 
     def _sanitize_options(
         self,
         *,
         language: str | None = None,
-    ) -> STTOptions:
-        config = dataclasses.replace(self._config)
+    ) -> _STTOptions:
+        config = dataclasses.replace(self._opts)
         config.language = language or config.language
         return config
 
@@ -86,17 +95,29 @@ class STT(stt.STT):
             wav.setframerate(buffer.sample_rate)
             wav.writeframes(buffer.data)
 
-        resp = await self._client.audio.transcriptions.create(
-            file=("a.wav", io_buffer),
-            model=config.model,
-            language=config.language,
-            response_format="json",
-        )
-        return transcription_to_speech_event(resp, config.language)
+        form = aiohttp.FormData()
+        form.add_field("file", io_buffer.getvalue(), filename="my_file.wav")
+        form.add_field("model", config.model)
+
+        if config.language:
+            form.add_field("language", config.language)
+
+        form.add_field("response_format", "json")
+
+        async with self._ensure_session().post(
+            OPENAI_ENPOINT,
+            headers={"Authorization": f"Bearer {config.api_key}"},
+            data=form,
+        ) as resp:
+            data = await resp.json()
+            if "text" not in data or "error" in data:
+                raise ValueError(f"Unexpected response: {data}")
+
+            return _transcription_to_speech_event(data, config.language)
 
 
-def transcription_to_speech_event(transcription, language) -> stt.SpeechEvent:
+def _transcription_to_speech_event(transcription: dict, language) -> stt.SpeechEvent:
     return stt.SpeechEvent(
         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-        alternatives=[stt.SpeechData(text=transcription.text, language=language)],
+        alternatives=[stt.SpeechData(text=transcription["text"], language=language)],
     )
