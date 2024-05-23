@@ -25,12 +25,15 @@ class _TTSOptions:
     word_tokenizer: tokenize.WordTokenizer
     sentence_tokenizer: tokenize.SentenceTokenizer
     hyphenate_word: Callable[[str], list[str]]
+    new_sentence_delay: float
+    debug: bool = False
 
 
 @define
 class _SegmentData:
     sentence_stream: tokenize.SentenceStream
     text: str
+    sentence_count: int
     audio_duration: float
     avg_speed: float | None
     processed_hyphenes: int
@@ -65,12 +68,31 @@ class TTSSegmentsForwarder:
         participant: rtc.Participant | str,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
         language: str = "",
-        speed: float = 4,
+        speed: float = 3.83,
+        new_sentence_delay: float = 0.7,
         auto_playout: bool = True,
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
         sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
+        debug: bool = False,
     ):
+        """
+        Args:
+            room: room where the transcription will be sent
+            participant: participant or identity that is pushing the TTS
+            track: track where the TTS audio is being sent
+            language: language of the text
+            speed: average speech speed in characters per second (used by default if the full audio is not received yet)
+            new_sentence_delay: delay in seconds between sentences
+            auto_playout: if True, the forwarder will automatically start the transcription once the
+                first audio frame is received. If False, you need to call segment_playout_started
+                to start the transcription.
+            word_tokenizer: word tokenizer used to split the text into words
+            sentence_tokenizer: sentence tokenizer used to split the text into sentences
+            hyphenate_word: function that returns a list of hyphenes for a given word
+            debug: if True, debug messages will be printed
+
+        """
         identity = participant if isinstance(participant, str) else participant.identity
 
         if track is None:
@@ -88,6 +110,7 @@ class TTSSegmentsForwarder:
             word_tokenizer=word_tokenizer,
             sentence_tokenizer=sentence_tokenizer,
             hyphenate_word=hyphenate_word,
+            new_sentence_delay=new_sentence_delay,
         )
 
         self._main_task = asyncio.create_task(self._run())
@@ -105,7 +128,6 @@ class TTSSegmentsForwarder:
 
         self._seg_queue = asyncio.Queue[Optional[_SegmentData]]()
         self._seg_queue.put_nowait(first_segment)
-
         self._validated_playout_q = asyncio.Queue[None]()
 
     def segment_playout_started(self) -> None:
@@ -139,6 +161,9 @@ class TTSSegmentsForwarder:
 
         seg.avg_speed = len(self._calc_hyphenes(seg.text)) / seg.audio_duration
         self._pending_segment.cur_audio = self._pending_segment.q[0]
+        self._log_debug(
+            f"mark_audio_segment_end: calculated avg speed: {seg.avg_speed}"
+        )
 
     def push_text(self, text: str | None) -> None:
         if text is not None:
@@ -179,6 +204,7 @@ class TTSSegmentsForwarder:
         return _SegmentData(
             sentence_stream=self._opts.sentence_tokenizer.stream(),
             text="",
+            sentence_count=0,
             audio_duration=0.0,
             avg_speed=None,
             processed_hyphenes=0,
@@ -210,27 +236,31 @@ class TTSSegmentsForwarder:
             words = self._opts.word_tokenizer.tokenize(text=tokenized_sentence)
             processed_words = []
 
+            text = ""
             for word in words:
                 word_hyphenes = len(self._opts.hyphenate_word(word))
                 processed_words.append(word)
 
-                elapsed_time = (
-                    time.time() - start_time
-                )  # elapsed time since the start of the seg
+                # elapsed time since the start of the seg
+                elapsed_time = time.time() - start_time
                 text = self._opts.word_tokenizer.format_words(processed_words)
 
                 delay = 0
                 if seg.avg_speed is not None:
+                    estimated_pauses_s = (
+                        seg.sentence_count * self._opts.new_sentence_delay
+                    )
+                    hyph_pauses = estimated_pauses_s * seg.avg_speed
+
                     target_hyphenes = round(seg.avg_speed * elapsed_time)
-                    dt = target_hyphenes - seg.processed_hyphenes
+                    dt = target_hyphenes - seg.processed_hyphenes - hyph_pauses
                     to_wait_hyphenes = max(0, word_hyphenes - dt)
                     delay = to_wait_hyphenes / seg.avg_speed
                 else:
                     delay = word_hyphenes / self._opts.speed
 
-                await asyncio.sleep(delay)
-
-                seg.processed_hyphenes += word_hyphenes
+                halfdelay = delay / 2
+                await asyncio.sleep(halfdelay)
                 q.put_nowait(
                     rtc.TranscriptionSegment(
                         id=seg_id,
@@ -240,6 +270,8 @@ class TTSSegmentsForwarder:
                         final=False,
                     )
                 )
+                await asyncio.sleep(halfdelay)
+                seg.processed_hyphenes += word_hyphenes
 
             q.put_nowait(
                 rtc.TranscriptionSegment(
@@ -250,6 +282,9 @@ class TTSSegmentsForwarder:
                     final=True,
                 )
             )
+
+            await asyncio.sleep(self._opts.new_sentence_delay)
+            seg.sentence_count += 1
 
         while True:
             audio_seg = await self._seg_queue.get()
@@ -276,6 +311,11 @@ class TTSSegmentsForwarder:
         hyphenes = []
         words = self._opts.word_tokenizer.tokenize(text=text)
         for word in words:
-            hyphenes.extend(self._opts.hyphenate_word(word))
+            new = self._opts.hyphenate_word(word)
+            hyphenes.extend(new)
 
         return hyphenes
+
+    def _log_debug(self, msg: str, **kwargs) -> None:
+        if self._opts.debug:
+            logger.debug(msg, **kwargs)

@@ -125,7 +125,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
-        transcription_speed: float = 4,
+        transcription_speed: float = 3.83,
     ) -> None:
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
@@ -502,10 +502,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         except Exception:
             logger.exception("error in recognize loop")
         finally:
-            await stt_forwarder.aclose(wait=False)
-            await stt_stream.aclose(wait=False)
-            await vad_stream.aclose(wait=False)
-            await select.aclose()
+            await asyncio.gather(
+                stt_forwarder.aclose(wait=False),
+                stt_stream.aclose(wait=False),
+                vad_stream.aclose(wait=False),
+                select.aclose(),
+            )
 
     async def _update_loop(self):
         """Update the volume every 10ms based on the speech probability"""
