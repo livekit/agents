@@ -146,7 +146,9 @@ class ChunkedStream(tts.ChunkedStream):
                 decoder = codecs.Mp3StreamDecoder()
                 frames = decoder.decode_chunk(data)
                 for frame in frames:
-                    self._queue.put_nowait(tts.SynthesizedAudio(text="", data=frame))
+                    self._queue.put_nowait(
+                        tts.SynthesizedAudio(text=self._text, data=frame)
+                    )
             else:
                 self._queue.put_nowait(
                     tts.SynthesizedAudio(
