@@ -76,6 +76,23 @@ class TTSSegmentsForwarder:
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
         debug: bool = False,
     ):
+        """
+        Args:
+            room: room where the transcription will be sent
+            participant: participant or identity that is pushing the TTS
+            track: track where the TTS audio is being sent
+            language: language of the text
+            speed: average speech speed in characters per second (used by default if the full audio is not received yet)
+            new_sentence_delay: delay in seconds between sentences
+            auto_playout: if True, the forwarder will automatically start the transcription once the
+                first audio frame is received. If False, you need to call segment_playout_started
+                to start the transcription.
+            word_tokenizer: word tokenizer used to split the text into words
+            sentence_tokenizer: sentence tokenizer used to split the text into sentences
+            hyphenate_word: function that returns a list of hyphenes for a given word
+            debug: if True, debug messages will be printed
+
+        """
         identity = participant if isinstance(participant, str) else participant.identity
 
         if track is None:
