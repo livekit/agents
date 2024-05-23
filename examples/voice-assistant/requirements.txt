@@ -1,6 +1,6 @@
-livekit-agents~=0.6.0
-livekit-plugins-openai~=0.4.0
-livekit-plugins-deepgram~=0.4.0
-livekit-plugins-elevenlabs~=0.4.0
-livekit-plugins-silero~=0.4.0
+livekit-agents~=0.7.dev0
+livekit-plugins-openai~=0.5.dev0
+livekit-plugins-deepgram~=0.5.dev0
+livekit-plugins-elevenlabs~=0.5.dev0
+livekit-plugins-silero~=0.5.dev0
 
