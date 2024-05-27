@@ -110,12 +110,14 @@ class FunctionContext:
 
             type_info = _find_param_type_info(param.annotation)
             desc = type_info.desc if type_info else ""
+            choices = type_info.choices if type_info else None
 
             args[name] = AIFncArg(
                 name=name,
                 desc=desc,
                 type=th,
                 default=default,
+                choices=choices,
             )
 
         aifnc = AIFunction(metadata=metadata, fnc=fnc, args=args)
@@ -156,6 +158,7 @@ class AIFncArg:
     desc: str
     type: type
     default: Any
+    choices: list[Any] | None
 
 
 @define(kw_only=True, frozen=True)
@@ -175,6 +178,10 @@ class CalledFunction:
 def is_type_supported(t: type) -> bool:
     if t in (str, int, float, bool):
         return True
+
+    if typing.get_origin(t) is list:
+        in_type = typing.get_args(t)[0]
+        return in_type in (str, int, float)
 
     if issubclass(t, enum.Enum):
         return all(isinstance(e.value, str) for e in t)

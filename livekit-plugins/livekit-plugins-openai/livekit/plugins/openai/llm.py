@@ -5,6 +5,7 @@ import enum
 import functools
 import inspect
 import json
+import typing
 from typing import Any, Dict, MutableSet
 
 from attrs import define
@@ -177,6 +178,12 @@ class LLMStream(llm.LLMStream):
                 logger.error(f"invalid arg {arg.name} for ai_callable {name}")
                 return
 
+            if typing.get_origin(arg.type) is list and not isinstance(
+                args[arg.name], list
+            ):
+                logger.error(f"invalid arg {arg.name} for ai_callable {name}")
+                return
+
             if issubclass(arg.type, enum.Enum):
                 values = set(item.value for item in arg.type)
                 if args[arg.name] not in values:
@@ -231,17 +238,38 @@ def to_openai_tools(fnc_ctx: llm.FunctionContext):
             if arg.desc:
                 p["description"] = arg.desc
 
-            if arg.type is str:
-                p["type"] = "string"
-            elif arg.type is int:
-                p["type"] = "int"
-            elif arg.type is float:
-                p["type"] = "float"
-            elif arg.type is bool:
-                p["type"] = "boolean"
-            elif issubclass(arg.type, enum.Enum):
-                p["type"] = "string"
-                p["enum"] = [e.value for e in arg.type]
+            if typing.get_origin(arg.type) is list:
+                in_type = typing.get_args(arg.type)[0]
+                p["type"] = "array"
+
+                items = {}
+                if in_type is str:
+                    items["type"] = "string"
+                elif in_type is int or in_type is float:
+                    items["type"] = "number"
+                else:
+                    raise ValueError(f"unsupported in_type {in_type}")
+
+                if arg.choices:
+                    items["enum"] = arg.choices
+
+                p["items"] = items
+
+            else:
+                if arg.type is str:
+                    p["type"] = "string"
+                elif arg.type is int or arg.type is float:
+                    p["type"] = "number"
+                elif arg.type is bool:
+                    p["type"] = "boolean"
+                elif issubclass(arg.type, enum.Enum):
+                    p["type"] = "string"
+                    p["enum"] = [e.value for e in arg.type]
+                else:
+                    raise ValueError(f"unsupported type {arg.type}")
+
+                if arg.choices:
+                    p["enum"] = arg.choices
 
             plist[arg_name] = p
 
