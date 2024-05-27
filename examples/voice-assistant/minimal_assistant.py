@@ -16,7 +16,10 @@ async def entrypoint(ctx: JobContext):
         messages=[
             ChatMessage(
                 role=ChatRole.SYSTEM,
-                text="You are a voice assistant created by LiveKit. Your interface with users will be voice. You should use short and concise responses, and avoiding usage of unpronouncable punctuation.",
+                text=(
+                    "You are a voice assistant created by LiveKit. Your interface with users will be voice. "
+                    "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
+                ),
             )
         ]
     )
