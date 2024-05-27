@@ -5,7 +5,7 @@ import contextlib
 import contextvars
 import copy
 import time
-from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional
+from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, Union
 
 from attrs import define
 from livekit import rtc
@@ -27,10 +27,7 @@ class _SpeechData:
     val_ch: aio.Chan[None]  # validate the speech for playout
     validated: bool = False
     interrupted: bool = False
-    collected_text: str = (
-        ""  # if the source is a stream, this will be the collected text
-    )
-
+    collected_text: str = ""  # this will be the collected text of the source
     answering_user_speech: str | None = None  # the this speech is answering to
 
 
@@ -53,7 +50,8 @@ EventTypes = Literal[
 
 
 WillCreateLLMStream = Callable[
-    ["VoiceAssistant", allm.ChatContext], Awaitable[Optional[allm.LLMStream]]
+    ["VoiceAssistant", allm.ChatContext],
+    Union[Optional[allm.LLMStream], Awaitable[Optional[allm.LLMStream]]],
 ]
 
 
@@ -96,14 +94,15 @@ class AssistantCallContext:
     def assistant(self) -> "VoiceAssistant":
         return self._assistant
 
+    @property
+    def llm_stream(self) -> allm.LLMStream:
+        return self._llm_stream
+
     def store_metadata(self, key: str, value: Any) -> None:
         self._metadata[key] = value
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         return self._metadata.get(key, default)
-
-    def llm_stream(self) -> allm.LLMStream:
-        return self._llm_stream
 
 
 async def _default_will_create_llm_stream(
@@ -629,7 +628,16 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ctx: allm.ChatContext, data: _SpeechData
         ) -> None:
             try:
-                data.source = await self._opts.will_create_llm_stream(self, ctx)
+                custom_stream: allm.LLMStream | None = None
+                result = self._opts.will_create_llm_stream(self, ctx)
+                if asyncio.iscoroutine(result):
+                    custom_stream = await result
+
+                if custom_stream is None:
+                    # fallback to default impl if no custom stream is returned
+                    custom_stream = await _default_will_create_llm_stream(self, ctx)
+
+                data.source = custom_stream
                 await self._start_speech(data, interrupt_current_if_possible=False)
             except Exception:
                 logger.exception("error while answering")
