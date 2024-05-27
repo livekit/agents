@@ -109,6 +109,44 @@ async def test_fnc_calls():
     assert fnc_ctx._get_weather_calls == 2, "get_weather should be called twice"
 
 
+async def test_fnc_calls_runtime_addition():
+    fnc_ctx = FncCtx()
+    llm = openai.LLM(model="gpt-4o")
+    called_msg = ""
+
+    @fnc_ctx.ai_callable(desc="Show a message on the screen")
+    async def show_message(
+        message: Annotated[
+            str,
+            TypeInfo(
+                desc="The message to show",
+            ),
+        ],
+    ):
+        nonlocal called_msg
+        called_msg = message
+
+    # test fnc calls
+    stream = await llm.chat(
+        chat_ctx=ChatContext(
+            messages=[
+                ChatMessage(
+                    role=ChatRole.USER,
+                    text='Can you show "Hello LiveKit!" on the screen?',
+                ),
+            ]
+        ),
+        fnc_ctx=fnc_ctx,
+    )
+
+    async for _ in stream:
+        pass
+
+    await stream.aclose()
+
+    assert called_msg == "Hello LiveKit!", "send_message should be called"
+
+
 async def test_cancelled_calls():
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")

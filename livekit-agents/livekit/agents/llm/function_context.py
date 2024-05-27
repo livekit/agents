@@ -16,6 +16,32 @@ METADATA_ATTR = "__livekit_ai_metadata__"
 USE_DOCSTRING = UseDocMarker()
 
 
+def _set_metadata(
+    f: Callable,
+    name: str | None = None,
+    desc: str | UseDocMarker | None = None,
+    auto_retry: bool = False,
+) -> None:
+    if desc is None:
+        desc = ""
+
+    if isinstance(desc, UseDocMarker):
+        desc = inspect.getdoc(f)
+        if desc is None:
+            raise ValueError(
+                f"missing docstring for function {f.__name__}, "
+                "use explicit description or provide docstring"
+            )
+
+    metadata = AIFncMetadata(
+        name=name or f.__name__,
+        desc=desc,
+        auto_retry=auto_retry,
+    )
+
+    setattr(f, METADATA_ATTR, metadata)
+
+
 def ai_callable(
     *,
     name: str | None = None,
@@ -23,25 +49,7 @@ def ai_callable(
     auto_retry: bool = False,
 ) -> Callable:
     def deco(f):
-        nonlocal desc
-        if desc is None:
-            desc = ""
-
-        if isinstance(desc, UseDocMarker):
-            desc = inspect.getdoc(f)
-            if desc is None:
-                raise ValueError(
-                    f"missing docstring for function {f.__name__}, "
-                    "use explicit description or provide docstring"
-                )
-
-        metadata = AIFncMetadata(
-            name=name or f.__name__,
-            desc=desc,
-            auto_retry=auto_retry,
-        )
-
-        setattr(f, METADATA_ATTR, metadata)
+        _set_metadata(f, name=name, desc=desc, auto_retry=auto_retry)
         return f
 
     return deco
@@ -52,7 +60,8 @@ class FunctionContext:
         self._fncs = dict[str, AIFunction]()
 
         for _, member in inspect.getmembers(self, predicate=inspect.ismethod):
-            self._register_ai_function(member)
+            if hasattr(member, METADATA_ATTR):
+                self._register_ai_function(member)
 
     def ai_callable(
         self,
@@ -61,12 +70,15 @@ class FunctionContext:
         desc: str | UseDocMarker | None = None,
         auto_retry: bool = True,
     ) -> Callable:
-        deco = ai_callable(name=name, desc=desc, auto_retry=auto_retry)
-        self._register_ai_function(deco)
+        def deco(f):
+            _set_metadata(f, name=name, desc=desc, auto_retry=auto_retry)
+            self._register_ai_function(f)
+
         return deco
 
     def _register_ai_function(self, fnc: Callable) -> None:
         if not hasattr(fnc, METADATA_ATTR):
+            print(f"no metadata for {fnc}")
             return
 
         metadata: AIFncMetadata = getattr(fnc, METADATA_ATTR)
