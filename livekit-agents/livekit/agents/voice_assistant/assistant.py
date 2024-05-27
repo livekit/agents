@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import copy
 import time
-from typing import Any, AsyncIterable, Callable, Literal
+from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional
 
 from attrs import define
 from livekit import rtc
@@ -38,6 +39,24 @@ def _validate_speech(data: _SpeechData):
     data.val_ch.close()
 
 
+EventTypes = Literal[
+    "user_started_speaking",
+    "user_stopped_speaking",
+    "agent_started_speaking",
+    "agent_stopped_speaking",
+    "user_speech_committed",
+    "agent_speech_committed",
+    "agent_speech_interrupted",
+    "function_calls_collected",
+    "function_calls_finished",
+]
+
+
+WillCreateLLMStream = Callable[
+    ["VoiceAssistant", allm.ChatContext], Awaitable[Optional[allm.LLMStream]]
+]
+
+
 @define(kw_only=True, frozen=True)
 class _AssistantOptions:
     plotting: bool
@@ -51,6 +70,7 @@ class _AssistantOptions:
     sentence_tokenizer: tokenize.SentenceTokenizer
     hyphenate_word: Callable[[str], list[str]]
     transcription_speed: float
+    will_create_llm_stream: WillCreateLLMStream
 
 
 @define(kw_only=True, frozen=True)
@@ -59,18 +79,18 @@ class _StartArgs:
     participant: rtc.RemoteParticipant | str | None
 
 
-_ContextVar = contextvars.ContextVar("voice_assistant_contextvar")
+_CallContextVar = contextvars.ContextVar("voice_assistant_contextvar")
 
 
-class AssistantContext:
+class AssistantCallContext:
     def __init__(self, assistant: "VoiceAssistant", llm_stream: allm.LLMStream) -> None:
         self._assistant = assistant
         self._metadata = dict()
         self._llm_stream = llm_stream
 
     @staticmethod
-    def get_current() -> "AssistantContext":
-        return _ContextVar.get()
+    def get_current() -> "AssistantCallContext":
+        return _CallContextVar.get()
 
     @property
     def assistant(self) -> "VoiceAssistant":
@@ -86,17 +106,10 @@ class AssistantContext:
         return self._llm_stream
 
 
-EventTypes = Literal[
-    "user_started_speaking",
-    "user_stopped_speaking",
-    "agent_started_speaking",
-    "agent_stopped_speaking",
-    "user_speech_committed",
-    "agent_speech_committed",
-    "agent_speech_interrupted",
-    "function_calls_collected",
-    "function_calls_finished",
-]
+async def _default_will_create_llm_stream(
+    assistant: VoiceAssistant, chat_ctx: allm.ChatContext
+) -> allm.LLMStream:
+    return await assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
 
 
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
@@ -118,14 +131,15 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         interrupt_speech_duration: float = 0.7,
         interrupt_min_words: int = 3,
         base_volume: float = 1.0,
-        debug: bool = False,
-        plotting: bool = False,
-        loop: asyncio.AbstractEventLoop | None = None,
         transcription: bool = True,
+        will_create_llm_stream: WillCreateLLMStream = _default_will_create_llm_stream,
         sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
         transcription_speed: float = 3.83,
+        loop: asyncio.AbstractEventLoop | None = None,
+        plotting: bool = False,
+        debug: bool = False,
     ) -> None:
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
@@ -141,12 +155,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             word_tokenizer=word_tokenizer,
             hyphenate_word=hyphenate_word,
             transcription_speed=transcription_speed,
+            will_create_llm_stream=will_create_llm_stream,
         )
         self._vad, self._tts, self._llm, self._stt = vad, tts, llm, stt
-        self._fnc_ctx = fnc_ctx
         self._chat_ctx = chat_ctx or allm.ChatContext()
         self._speaking, self._user_speaking = False, False
         self._plotter = plotter.AssistantPlotter(self._loop)
+
+        self._current_fnc_ctx = fnc_ctx
 
         self._audio_source, self._audio_stream = None, None
         self._closed, self._started, self._ready = False, False, False
@@ -178,6 +194,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             int(self._opts.int_speech_duration * 100)
         )
         self._transcripted_text, self._interim_text = "", ""
+
+        # this future is set when the assistant is started (track published)
         self._start_future = asyncio.Future()
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
@@ -199,16 +217,37 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         return super().on(event, callback)
 
     @property
-    def chat_context(self) -> allm.ChatContext:
+    def fnc_ctx(self) -> allm.FunctionContext | None:
+        return self._current_fnc_ctx
+
+    @fnc_ctx.setter
+    def fnc_ctx(self, fnc_ctx: allm.FunctionContext | None) -> None:
+        self._current_fnc_ctx = fnc_ctx
+
+    @property
+    def chat_ctx(self) -> allm.ChatContext:
         return self._chat_ctx
 
     @property
-    def started(self) -> bool:
-        return self._started
+    def llm(self) -> allm.LLM:
+        return self._llm
+
+    @property
+    def tts(self) -> atts.TTS:
+        return self._tts
+
+    @property
+    def stt(self) -> astt.STT:
+        return self._stt
+
+    @property
+    def vad(self) -> avad.VAD:
+        return self._vad
 
     async def say(
         self,
         source: str | allm.LLMStream | AsyncIterable[str],
+        *,
         allow_interruptions: bool = True,
         add_to_ctx: bool = True,
         force_stream: bool = False,  # force the usage of TTS stream
@@ -247,7 +286,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             participant: the participant to listen to, can either be a participant or a participant identity
                 If None, the first participant in the room will be used
         """
-        if self.started:
+        if self._started:
             logger.warning("voice assistant already started")
             return
 
@@ -262,7 +301,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._launch_task = asyncio.create_task(self._launch())
 
     async def aclose(self, wait: bool = True) -> None:
-        if not self.started:
+        if not self._started:
             return
 
         self._closed = True
@@ -590,7 +629,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ctx: allm.ChatContext, data: _SpeechData
         ) -> None:
             try:
-                data.source = await self._llm.chat(ctx, fnc_ctx=self._fnc_ctx)
+                data.source = await self._opts.will_create_llm_stream(self, ctx)
                 await self._start_speech(data, interrupt_current_if_possible=False)
             except Exception:
                 logger.exception("error while answering")
@@ -602,18 +641,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             answering_user_speech=text,
         )
 
-        messages = self._chat_ctx.messages.copy()
+        chat_ctx = copy.deepcopy(self._chat_ctx)
         user_msg = allm.ChatMessage(
             text=text,
             role=allm.ChatRole.USER,
         )
-        messages.append(user_msg)
-        ctx = allm.ChatContext(messages=messages)
+        chat_ctx.messages.append(user_msg)
 
         if self._maybe_answer_task is not None:
             self._maybe_answer_task.cancel()
 
-        t = asyncio.create_task(_answer_if_validated(ctx, self._answer_speech))
+        t = asyncio.create_task(_answer_if_validated(chat_ctx, self._answer_speech))
         self._maybe_answer_task = t
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
@@ -665,6 +703,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 participant=self._start_args.room.local_participant,
                 track=self._pub.sid,
                 auto_playout=False,
+                debug=self._opts.debug,
                 sentence_tokenizer=self._opts.sentence_tokenizer,
                 word_tokenizer=self._opts.word_tokenizer,
                 hyphenate_word=self._opts.hyphenate_word,
@@ -781,8 +820,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         try:
             if isinstance(data.source, allm.LLMStream):
                 # stream the LLM output to the TTS
-                assistant_ctx = AssistantContext(self, data.source)
-                token = _ContextVar.set(assistant_ctx)
+                call_ctx = AssistantCallContext(self, data.source)
+                token = _CallContextVar.set(call_ctx)
                 async for chunk in data.source:
                     alt = chunk.choices[0].delta.content
                     if not alt:
@@ -795,14 +834,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 tts_stream.mark_segment_end()
 
                 if len(data.source.called_functions) > 0:
-                    self.emit("function_calls_collected", assistant_ctx)
+                    self.emit("function_calls_collected", call_ctx)
 
                 await data.source.aclose()
 
                 if len(data.source.called_functions) > 0:
-                    self.emit("function_calls_finished", assistant_ctx)
+                    self.emit("function_calls_finished", call_ctx)
 
-                _ContextVar.reset(token)
+                _CallContextVar.reset(token)
             else:
                 # user defined source, stream the text to the TTS
                 async for seg in data.source:

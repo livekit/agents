@@ -59,13 +59,38 @@ class FncCtx(FunctionContext):
             self._toggle_light_cancelled = True
 
 
+async def test_chat():
+    llm = openai.LLM(model="gpt-4o")
+
+    chat_ctx = ChatContext(
+        messages=[
+            ChatMessage(
+                role=ChatRole.SYSTEM,
+                text=(
+                    'You are an assistant at a drive-thru restaurant "Live-Burger". '
+                    "Ask the customer what they would like to order."
+                ),
+            ),
+        ]
+    )
+
+    stream = await llm.chat(chat_ctx=chat_ctx)
+    text = ""
+    async for chunk in stream:
+        content = chunk.choices[0].delta.content
+        if content:
+            text += content
+
+    assert len(text) > 0
+
+
 async def test_fnc_calls():
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4-1106-preview")
+    llm = openai.LLM(model="gpt-4o")
 
     # test fnc calls
     stream = await llm.chat(
-        history=ChatContext(
+        chat_ctx=ChatContext(
             messages=[
                 ChatMessage(
                     role=ChatRole.USER,
@@ -81,11 +106,15 @@ async def test_fnc_calls():
 
     await stream.aclose()
 
-    assert fnc_ctx._get_weather_calls == 2
+    assert fnc_ctx._get_weather_calls == 2, "get_weather should be called twice"
 
-    # test cancellable
+
+async def test_cancelled_calls():
+    fnc_ctx = FncCtx()
+    llm = openai.LLM(model="gpt-4o")
+
     stream = await llm.chat(
-        history=ChatContext(
+        chat_ctx=ChatContext(
             messages=[
                 ChatMessage(
                     role=ChatRole.USER,
@@ -102,4 +131,4 @@ async def test_fnc_calls():
     await stream.aclose(wait=False)  # cancel running function calls
 
     assert fnc_ctx._toggle_light_calls == 1
-    assert fnc_ctx._toggle_light_cancelled
+    assert fnc_ctx._toggle_light_cancelled, "toggle_light should be cancelled"

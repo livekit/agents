@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import abc
 import enum
-from typing import Callable
 
 from attrs import define
 
-from .function_context import FunctionContext
+from . import function_context
 
 
 class ChatRole(enum.Enum):
@@ -27,6 +26,18 @@ class ChatContext:
     messages: list[ChatMessage] = []
 
 
+class LLM(abc.ABC):
+    @abc.abstractmethod
+    async def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        fnc_ctx: function_context.FunctionContext | None = None,
+        temperature: float | None = None,
+        n: int | None = None,
+    ) -> "LLMStream": ...
+
+
 @define
 class ChoiceDelta:
     content: str | None = None
@@ -44,31 +55,13 @@ class ChatChunk:
     choices: list[Choice] = []
 
 
-class LLM(abc.ABC):
-    @abc.abstractmethod
-    async def chat(
-        self,
-        history: ChatContext,
-        fnc_ctx: FunctionContext | None = None,
-        temperature: float | None = None,
-        n: int | None = None,
-    ) -> "LLMStream": ...
-
-
-@define
-class CalledFunction:
-    fnc_name: str
-    fnc: Callable
-    args: dict
-
-
 class LLMStream(abc.ABC):
     def __init__(self) -> None:
         # fnc_name, args..
-        self._called_functions: list[CalledFunction] = []
+        self._called_functions: list[function_context.CalledFunction] = []
 
     @property
-    def called_functions(self) -> list[CalledFunction]:
+    def called_functions(self) -> list[function_context.CalledFunction]:
         """List of called functions from this stream."""
         return self._called_functions
 

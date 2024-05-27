@@ -34,7 +34,8 @@ class LLM(llm.LLM):
 
     async def chat(
         self,
-        history: llm.ChatContext,
+        *,
+        chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = None,
@@ -44,7 +45,7 @@ class LLM(llm.LLM):
             opts["tools"] = to_openai_tools(fnc_ctx)
 
         cmp = await self._client.chat.completions.create(
-            messages=to_openai_ctx(history),
+            messages=to_openai_ctx(chat_ctx),
             model=self._opts.model,
             n=n,
             temperature=temperature,
@@ -145,7 +146,7 @@ class LLMStream(llm.LLMStream):
             try:
                 args = json.loads(arguments)
             except json.JSONDecodeError:
-                # TODO(theomonnom): Try to recover from invalid json
+                # TODO(theomonnom): try to recover from invalid json
                 logger.exception(f"failed to decode arguments for tool call {name}")
                 return
 

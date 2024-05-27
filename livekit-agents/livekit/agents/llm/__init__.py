@@ -1,14 +1,15 @@
 from .function_context import (
+    USE_DOCSTRING,
     AIFncArg,
     AIFncMetadata,
     AIFunction,
+    CalledFunction,
     FunctionContext,
     TypeInfo,
     ai_callable,
 )
 from .llm import (
     LLM,
-    CalledFunction,
     ChatChunk,
     ChatContext,
     ChatMessage,
@@ -35,4 +36,5 @@ __all__ = [
     "AIFunction",
     "AIFncMetadata",
     "CalledFunction",
+    "USE_DOCSTRING",
 ]
