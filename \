@@ -135,11 +135,11 @@ class LLMStream(llm.LLMStream):
 
         fncs = self._fnc_ctx.ai_functions
         if name not in fncs:
-            logger.warning(f"ai_function {name} not found, ignoring..")
+            logger.warning(f"ai_fnc {name} not found")
             return
 
         if arguments is None:
-            logger.warning(f"{name} no arguments, ignoring..")
+            logger.warning(f"no arguments for ai_fnc {name}")
             return
 
         args = {}
@@ -148,71 +148,63 @@ class LLMStream(llm.LLMStream):
                 args = json.loads(arguments)
             except json.JSONDecodeError:
                 # TODO(theomonnom): try to recover from invalid json
-                logger.exception(
-                    f"{name}: failed to decode json", extra={"arguments": arguments}
-                )
+                logger.exception(f"ai_fnc {name}: failed to decode json args {arguments}")
                 return
 
-        # validate/sanitize args before calling any ai function
-        fnc_info = fncs[name]
-        for arg_info in fnc_info.args.values():
-            if arg_info.name not in args:
-                if arg_info.default is inspect.Parameter.empty:
-                    logger.error(f"{name}: missing required arg {arg_info.name}")
+        fnc = fncs[name]
+        # validate args before calling fnc
+        for arg in fnc.args.values():
+            if arg.name not in args:
+                if arg.default is inspect.Parameter.empty:
+                    logger.error(f"missing required arg {arg.name} for ai_fnc {name}")
                     return
                 continue
 
-            val = args[arg_info.name]
+            val = args[arg.name]
             try:
-                val = _sanitize_primitive(arg_info.type, val)
+                val = _sanitize_primitive(arg.type, val)
             except ValueError:
-                logger.exception(
-                    f"{name}: invalid arg {arg_info.name}", extra={"value": val}
-                )
+                logger.exception(f"invalid arg {arg.name} for ai_fnc {name}: {val}")
                 return
 
-            if typing.get_origin(arg_info.type) is list:
+            if typing.get_origin(arg.type) is list:
                 if not isinstance(val, list):
                     logger.error(
-                        f"{name}: invalid arg {arg_info.name}", extra={"value": val}
+                        f"invalid arg {arg.name} for ai_fnc{name}, must be list: {val}"
                     )
                     return
 
                 # validate all list items
-                in_type = typing.get_args(arg_info.type)[0]
+                in_type = typing.get_args(arg.type)[0]
                 for i in range(len(val)):
                     try:
                         val[i] = _sanitize_primitive(in_type, val[i])
                     except ValueError:
                         logger.error(
-                            f"{name}: invalid arg {arg_info.name}",
-                            extra={"value": val},
+                            f"invalid arg {arg.name} for ai_fnc {name}, must be list[{in_type}]: {val}"
                         )
                         return
 
-            if issubclass(arg_info.type, enum.Enum):
-                enum_values = set(item.value for item in arg_info.type)
+            if issubclass(arg.type, enum.Enum):
+                enum_values = set(item.value for item in arg.type)
                 if val not in enum_values:
                     logger.error(
-                        f"{name}: invalid arg {arg_info.name}", extra={"value": val}
+                        f"invalid arg {arg.name} for ai_callable {name}, must be a valid enum value"
                     )
                     return
 
-            if arg_info.choices is not None:
-                if val not in arg_info.choices:
-                    logger.error(
-                        f"{name}: invalid arg {arg_info.name}", extra={"value": val}
-                    )
-                    return
-
-            args[arg_info.name] = val  # sanitized value
+            if arg.choices is not None and val not in arg.choices:
+                logger.error(
+                    f"invalid arg {arg.name} for ai_callable {name}, must be one of {arg.choices}"
+                )
+                return
 
         logger.debug(f"calling function {name} with arguments {args}")
         self._called_functions.append(
-            llm.CalledFunction(fnc_name=name, fnc=fnc_info.fnc, args=args)
+            llm.CalledFunction(fnc_name=name, fnc=fnc.fnc, args=args)
         )
-        func = functools.partial(fnc_info.fnc, **args)
-        if asyncio.iscoroutinefunction(fnc_info.fnc):
+        func = functools.partial(fnc.fnc, **args)
+        if asyncio.iscoroutinefunction(fnc.fnc):
             task = asyncio.create_task(func())
         else:
             task = asyncio.create_task(asyncio.to_thread(func))
