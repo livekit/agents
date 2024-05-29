@@ -37,13 +37,13 @@ class _SegmentData:
     audio_duration: float
     avg_speed: float | None
     processed_hyphenes: int
-    first_frame_future: asyncio.Future
+    ready_future: asyncio.Future  # marked ready on the first audio frame
 
 
 def _validate_playout(seg: _SegmentData) -> None:
     if seg.audio_duration == 0.0:
         with contextlib.suppress(asyncio.InvalidStateError):
-            seg.first_frame_future.set_result(None)
+            seg.ready_future.set_result(None)
 
 
 @define
@@ -130,6 +130,8 @@ class TTSSegmentsForwarder:
         self._seg_queue.put_nowait(first_segment)
         self._validated_playout_q = asyncio.Queue[None]()
 
+        self._closed = False
+
     def segment_playout_started(self) -> None:
         """Call this function when the playout of the audio segment starts,
         this will start forwarding the transcription for the current segment.
@@ -142,6 +144,9 @@ class TTSSegmentsForwarder:
         self._validated_playout_q.put_nowait(None)
 
     def push_audio(self, frame: rtc.AudioFrame | None, **kwargs) -> None:
+        if self._closed:
+            raise RuntimeError("push_audio called after close")
+
         if frame is not None:
             frame_duration = frame.samples_per_channel / frame.sample_rate
             cur_seg = self._pending_segment.cur_audio
@@ -151,6 +156,9 @@ class TTSSegmentsForwarder:
             self.mark_audio_segment_end()
 
     def mark_audio_segment_end(self) -> None:
+        if self._closed:
+            raise RuntimeError("mark_audio_segment_end called after close")
+
         try:
             # get last ended segment (text always end before audio)
             seg = self._pending_segment.q.popleft()
@@ -166,6 +174,9 @@ class TTSSegmentsForwarder:
         )
 
     def push_text(self, text: str | None) -> None:
+        if self._closed:
+            raise RuntimeError("push_text called after close")
+
         if text is not None:
             cur_seg = self._pending_segment.cur_text
             cur_seg.text += text
@@ -174,6 +185,9 @@ class TTSSegmentsForwarder:
             self.mark_text_segment_end()
 
     def mark_text_segment_end(self) -> None:
+        if self._closed:
+            raise RuntimeError("mark_text_segment_end called after close")
+
         # create new segment on "mark_text_segment_end"
         self._pending_segment.cur_text.sentence_stream.mark_segment_end()
         new_seg = self._create_segment()
@@ -182,7 +196,11 @@ class TTSSegmentsForwarder:
         self._seg_queue.put_nowait(new_seg)
 
     async def aclose(self, *, wait: bool = True) -> None:
+        self._closed = True
         self._seg_queue.put_nowait(None)
+
+        for seg in self._pending_segment.q:
+            seg.ready_future.cancel()
 
         if not wait:
             self._main_task.cancel()
@@ -208,7 +226,7 @@ class TTSSegmentsForwarder:
             audio_duration=0.0,
             avg_speed=None,
             processed_hyphenes=0,
-            first_frame_future=asyncio.Future(),
+            ready_future=asyncio.Future(),
         )
 
     async def _forward(self, q: asyncio.Queue[rtc.TranscriptionSegment | None]):
@@ -291,7 +309,10 @@ class TTSSegmentsForwarder:
             if audio_seg is None:
                 break
 
-            await audio_seg.first_frame_future
+            try:
+                await audio_seg.ready_future
+            except asyncio.CancelledError:
+                continue
 
             if not self._opts.auto_playout:
                 _ = await self._validated_playout_q.get()

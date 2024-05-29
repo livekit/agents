@@ -44,6 +44,9 @@ class _AssistantOptions:
     debug: bool
     allow_interruptions: bool
     int_speech_duration: float
+    # some STT doesn't support streaming (e.g Whisper)
+    # so it doesn't make sense to wait for a certain amount of words
+    # before interrupting the speech. we should set this to 0 in that case
     int_min_words: int
     base_volume: float
     transcription: bool
@@ -100,10 +103,6 @@ EventTypes = Literal[
 
 
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
-    _SAY_CUSTOM_PRIORITY = 3
-    _SAY_AGENT_ANSWER_PRIORITY = 2
-    _SAY_CALL_CONTEXT_PRIORITY = 1
-
     def __init__(
         self,
         *,
@@ -115,7 +114,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         fnc_ctx: allm.FunctionContext | None = None,
         allow_interruptions: bool = True,
         interrupt_volume: float = 0.05,
-        interrupt_speech_duration: float = 0.7,
+        interrupt_speech_duration: float = 0.65,
         interrupt_min_words: int = 3,
         base_volume: float = 1.0,
         debug: bool = False,
@@ -152,6 +151,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._closed, self._started, self._ready = False, False, False
         self._linked_participant = ""
 
+        self._pending_validation = False
+
         # tasks
         self._launch_task: asyncio.Task | None = None
         self._recognize_task: asyncio.Task | None = None
@@ -167,16 +168,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         # synthesis state
         self._speech_playing: _SpeechData | None = None  # validated and playing speech
-        self._speech_queue = asyncio.PriorityQueue[_SpeechData]()
         self._user_speaking, self._agent_speaking = False, False
 
         self._target_volume = self._opts.base_volume
         self._vol_filter = utils.ExpFilter(0.9, max_val=self._opts.base_volume)
         self._vol_filter.apply(1.0, self._opts.base_volume)
         self._speech_prob = 0.0
-        self._speaking_avg = utils.MovingAverage(
-            int(self._opts.int_speech_duration * 100)
-        )
+        self._last_speech_prob = 0.0
         self._transcripted_text, self._interim_text = "", ""
         self._start_future = asyncio.Future()
 
@@ -209,21 +207,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     async def say(
         self,
         source: str | allm.LLMStream | AsyncIterable[str],
+        *,
         allow_interruptions: bool = True,
         add_to_ctx: bool = True,
-        force_stream: bool = False,  # force the usage of TTS stream
-        enqueue: bool = True,
     ) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await self._start_future
-
-        if isinstance(source, str) and force_stream:
-            text = source
-
-            async def _gen():
-                yield text
-
-            source = _gen()
 
         data = _SpeechData(
             source=source,
@@ -411,18 +400,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     def _recv_final_transcript(self, ev: astt.SpeechEvent):
         self._log_debug(f"assistant - received transcript {ev.alternatives[0].text}")
         self._transcripted_text += ev.alternatives[0].text
-        self._interrupt_if_needed()
         self._maybe_answer(self._transcripted_text)
 
     def _recv_interim_transcript(self, ev: astt.SpeechEvent):
         self._interim_text = ev.alternatives[0].text
-        self._interrupt_if_needed()
 
     def _transcript_finished(self, ev: astt.SpeechEvent):
         self._log_debug("assistant - transcript finished")
-        self._transcripted_text = self._interim_text = ""
-        self._interrupt_if_needed()
-        self._validate_answer_if_needed()
+        self._pending_validation = True
 
     def _did_vad_inference(self, ev: avad.VADEvent):
         self._plotter.plot_value("vad_raw", ev.raw_inference_prob)
@@ -439,8 +424,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     def _user_stopped_speaking(self, speech_duration: float):
         self._log_debug(f"assistant - user stopped speaking {speech_duration:.2f}s")
         self._plotter.plot_event("user_started_speaking")
-        self._interrupt_if_needed()
-        self._validate_answer_if_needed()
+        self._pending_validation = True
         self._user_speaking = False
         self.emit("user_stopped_speaking")
 
@@ -509,17 +493,25 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             )
 
     async def _update_loop(self):
-        """Update the volume every 10ms based on the speech probability"""
-        speech_prob_avg = utils.MovingAverage(100)  # avg over 1s
+        """Update the volume every 10ms based on the speech probability, decide whether to interrupt
+        and when to validate an answer"""
+        speech_prob_avg = utils.MovingAverage(100)
+        speaking_avg_validation = utils.MovingAverage(210)
+        interruption_speaking_avg = utils.MovingAverage(
+            int(self._opts.int_speech_duration * 100)
+        )
 
-        vad_pw = 2.4  # should this be exposed
+        interval_10ms = aio.interval(0.01)
+
+        vad_pw = 2.4  # TODO(theomonnom): should this be exposed?
         while not self._closed:
-            bvol = self._opts.base_volume
+            await interval_10ms.tick()
 
-            self._speaking_avg.add_sample(int(self._user_speaking))
-            speech_prob_avg.add_sample(
-                self._speech_prob
-            )  # not totally accurate due to timing between vad inference and this task
+            speech_prob_avg.add_sample(self._speech_prob)
+            speaking_avg_validation.add_sample(int(self._user_speaking))
+            interruption_speaking_avg.add_sample(int(self._user_speaking))
+
+            bvol = self._opts.base_volume
             self._target_volume = max(0, 1 - speech_prob_avg.get_avg() * vad_pw) * bvol
 
             if self._playing_speech:
@@ -532,13 +524,18 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     self._target_volume = 0
 
             if self._user_speaking:
-                self._interrupt_if_needed()
+                if (
+                    interruption_speaking_avg.get_avg() >= 0.1
+                ):  # allow 10% of "noise"/false positives in the VAD?
+                    self._interrupt_if_needed()
+            elif self._pending_validation:
+                if speaking_avg_validation.get_avg() <= 0.05:
+                    self._pending_validation = False
+                    self._validate_answer_if_needed()
 
             if self._opts.plotting:
                 self._plotter.plot_value("raw_t_vol", self._target_volume)
                 self._plotter.plot_value("vol", self._vol_filter.filtered())
-
-            await asyncio.sleep(0.01)
 
     def _interrupt_if_needed(self):
         """Check whether the current speech should be interrupted"""
@@ -549,15 +546,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         ):
             return
 
-        if (
-            self._speaking_avg.get_avg() < 0.9
-        ):  # allow 10% of "noise"/false positives in the VAD?
-            return
-
         if self._opts.int_min_words != 0:
-            # some STT doesn't support streaming (e.g Whisper)
-            # so it doesn't make sense to wait for a certain amount of words
-            # before interrupting the speech
             txt = self._transcripted_text.strip().split()
             if len(txt) <= self._opts.int_min_words:
                 txt = self._interim_text.strip().split()
@@ -566,12 +555,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         if (
             self._playout_start_time is not None
-            and (time.time() - self._playout_start_time) < 0.5
-        ):  # don't interrupt new speech (if they're not older than 0.5s)
+            and (time.time() - self._playout_start_time) < 1
+        ):  # don't interrupt new speech (if they're not older than 1s)
             return
 
         self._log_debug("assistant - interrupting speech")
         self._playing_speech.interrupted = True
+        self._validate_answer_if_needed()
 
     def _validate_answer_if_needed(self):
         if self._answer_speech is None:
@@ -583,6 +573,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         self._log_debug("assistant - validating answer")
+        self._transcripted_text = self._interim_text = ""
         _validate_speech(self._answer_speech)
 
     def _maybe_answer(self, text: str) -> None:
@@ -644,6 +635,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             logger.debug("assistant - current speech finished")
         elif self._play_task is not None:
             self._play_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._play_task
 
         self._play_task = asyncio.create_task(self._play_speech_if_validated(data))
 
@@ -701,8 +694,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self._chat_ctx.messages.append(msg)
                 if data.interrupted:
                     self.emit("agent_speech_interrupted", self._chat_ctx, msg)
+                    await tts_forwarder.aclose(wait=False)
                 else:
                     self.emit("agent_speech_committed", self._chat_ctx, msg)
+                    await tts_forwarder.aclose()
 
             self._log_debug(
                 "assistant - playout finished", extra={"interrupted": data.interrupted}
@@ -716,7 +711,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 _synthesize_task.cancel()
                 await _synthesize_task
 
-            await tts_forwarder.aclose()
+            await tts_forwarder.aclose(wait=False)
             self._log_debug("assistant - play_speech_if_validated finished")
 
     async def _synthesize_task(
