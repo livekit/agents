@@ -1,1 +1,1 @@
-livekit-agents~=0.7.dev0
+livekit-agents~=0.7.0
