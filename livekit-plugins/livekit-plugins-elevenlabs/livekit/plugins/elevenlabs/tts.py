@@ -21,19 +21,36 @@ import dataclasses
 import json
 import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import aiohttp
 from livekit import rtc
 from livekit.agents import aio, codecs, tokenize, tts, utils
 
 from .log import logger
-from .settings import (
-    OutputFormat,
+from .models import (
+    TTSFormats,
     TTSModels,
-    encoding_from_format,
-    sample_rate_from_format,
 )
+
+_Encoding = Literal[
+    "mp3",
+    "pcm",
+]
+
+
+def _sample_rate_from_format(output_format: TTSFormats) -> int:
+    split = output_format.split("_")  # e.g: mp3_22050_32
+    return int(split[1])
+
+
+def _encoding_from_format(output_format: TTSFormats) -> _Encoding:
+    if output_format.startswith("mp3"):
+        return "mp3"
+    elif output_format.startswith("pcm"):
+        return "pcm"
+
+    raise ValueError(f"Unknown format: {output_format}")
 
 
 @dataclass
@@ -71,7 +88,8 @@ class _TTSOptions:
     voice: Voice
     model_id: TTSModels
     base_url: str
-    output_format: OutputFormat
+    format: TTSFormats
+    sample_rate: int
     streaming_latency: int
     word_tokenizer: tokenize.WordTokenizer
     chunk_length_schedule: list[int]
@@ -85,7 +103,7 @@ class TTS(tts.TTS):
         model_id: TTSModels = "eleven_turbo_v2",
         api_key: str | None = None,
         base_url: str | None = None,
-        output_format: OutputFormat = "mp3_22050_32",
+        format: TTSFormats = "mp3_22050_32",
         streaming_latency: int = 3,
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False  # punctuation can help for intonation
@@ -95,9 +113,10 @@ class TTS(tts.TTS):
         chunk_length_schedule: list[int] = [80, 120, 200, 260],
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
-        sample_rate = sample_rate_from_format(output_format)
         super().__init__(
-            streaming_supported=True, sample_rate=sample_rate, num_channels=1
+            streaming_supported=True,
+            sample_rate=_sample_rate_from_format(format),
+            num_channels=1,
         )
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
         if not api_key:
@@ -108,7 +127,8 @@ class TTS(tts.TTS):
             model_id=model_id,
             api_key=api_key,
             base_url=base_url or API_BASE_URL_V1,
-            output_format=output_format,
+            format=format,
+            sample_rate=self.sample_rate,
             streaming_latency=streaming_latency,
             word_tokenizer=word_tokenizer,
             chunk_length_schedule=chunk_length_schedule,
@@ -156,7 +176,7 @@ class ChunkedStream(tts.ChunkedStream):
         base_url = self._opts.base_url
         voice_id = self._opts.voice.id
         model_id = self._opts.model_id
-        sample_rate = sample_rate_from_format(self._opts.output_format)
+        sample_rate = _sample_rate_from_format(self._opts.format)
         latency = self._opts.streaming_latency
         url = (
             f"{base_url}/text-to-speech/{voice_id}/stream?"
@@ -173,7 +193,6 @@ class ChunkedStream(tts.ChunkedStream):
             self._queue.put_nowait(None)
 
     async def _run(self) -> None:
-        sample_rate = sample_rate_from_format(self._opts.output_format)
         async with self._session.post(
             self._synthesize_url(),
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
@@ -188,7 +207,7 @@ class ChunkedStream(tts.ChunkedStream):
             ),
         ) as resp:
             # avoid very small frames. chunk by 10ms 16bits
-            bytes_per_frame = (sample_rate // 100) * 2
+            bytes_per_frame = (self._opts.sample_rate // 100) * 2
             buf = bytearray()
             async for data, _ in resp.content.iter_chunks():
                 buf.extend(data)
@@ -202,7 +221,7 @@ class ChunkedStream(tts.ChunkedStream):
                             text=self._text,
                             data=rtc.AudioFrame(
                                 data=frame_data,
-                                sample_rate=sample_rate,
+                                sample_rate=self._opts.sample_rate,
                                 num_channels=1,
                                 samples_per_channel=len(frame_data) // 2,
                             ),
@@ -216,7 +235,7 @@ class ChunkedStream(tts.ChunkedStream):
                         text=self._text,
                         data=rtc.AudioFrame(
                             data=buf,
-                            sample_rate=sample_rate,
+                            sample_rate=self._opts.sample_rate,
                             num_channels=1,
                             samples_per_channel=len(buf) // 2,
                         ),
@@ -267,7 +286,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         base_url = self._opts.base_url
         voice_id = self._opts.voice.id
         model_id = self._opts.model_id
-        output_format = self._opts.output_format
+        output_format = self._opts.format
         latency = self._opts.streaming_latency
         url = (
             f"{base_url}/text-to-speech/{voice_id}/stream-input?"
@@ -424,8 +443,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             all_tokens_consumed = True
 
         async def recv_task():
-            sample_rate = sample_rate_from_format(self._opts.output_format)
-            encoding = encoding_from_format(self._opts.output_format)
+            encoding = _encoding_from_format(self._opts.format)
             mp3_decoder = codecs.Mp3StreamDecoder()
             while True:
                 msg = await ws_conn.receive()
@@ -447,8 +465,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 data: dict = json.loads(msg.data)
-                if data.get("audio"):
-                    b64data = base64.b64decode(data["audio"])
+                audio = data.get("audio")
+
+                if data.get("error"):
+                    logger.error("11labs error %s", data)
+                    return
+                elif audio is not None:
+                    if audio == "":
+                        # 11labs sometimes sends empty audio, ignore
+                        continue
+
+                    b64data = base64.b64decode(audio)
                     frame: rtc.AudioFrame
                     if encoding == "mp3":
                         frames = mp3_decoder.decode_chunk(b64data)
@@ -456,14 +483,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         frame = rtc.AudioFrame(
                             data=b64data,
-                            sample_rate=sample_rate,
+                            sample_rate=self._opts.sample_rate,
                             num_channels=1,
                             samples_per_channel=len(b64data) // 2,
                         )
 
                     text = ""
                     if data.get("alignment"):
-                        text = data["alignment"].get("chars", "")
+                        text = "".join(data["alignment"].get("chars", ""))
 
                     audio_tx.send_nowait(tts.SynthesizedAudio(text=text, data=frame))
                     continue
