@@ -18,7 +18,10 @@ async def entrypoint(ctx: JobContext):
         messages=[
             ChatMessage(
                 role=ChatRole.SYSTEM,
-                text="You are a voice assistant created by LiveKit. Your interface with users will be voice. You should use short and concise responses, and avoiding usage of unpronouncable punctuation.",
+                text=(
+                    "You are a funny bot created by LiveKit. Your interface with users will be voice. "
+                    "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
+                ),
             )
         ]
     )
@@ -28,7 +31,7 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD(),
         stt=deepgram.STT(),
         llm=gpt,
-        tts=elevenlabs.TTS(),
+        tts=elevenlabs.TTS(output_format="pcm_44100"),
         chat_ctx=initial_ctx,
     )
 
