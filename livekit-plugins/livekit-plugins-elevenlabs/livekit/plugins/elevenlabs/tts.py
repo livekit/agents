@@ -29,7 +29,7 @@ from livekit.agents import aio, codecs, tokenize, tts, utils
 
 from .log import logger
 from .models import (
-    TTSFormats,
+    TTSEncoding,
     TTSModels,
 )
 
@@ -39,12 +39,12 @@ _Encoding = Literal[
 ]
 
 
-def _sample_rate_from_format(output_format: TTSFormats) -> int:
+def _sample_rate_from_format(output_format: TTSEncoding) -> int:
     split = output_format.split("_")  # e.g: mp3_22050_32
     return int(split[1])
 
 
-def _encoding_from_format(output_format: TTSFormats) -> _Encoding:
+def _encoding_from_format(output_format: TTSEncoding) -> _Encoding:
     if output_format.startswith("mp3"):
         return "mp3"
     elif output_format.startswith("pcm"):
@@ -88,7 +88,7 @@ class _TTSOptions:
     voice: Voice
     model_id: TTSModels
     base_url: str
-    encoding: TTSFormats
+    encoding: TTSEncoding
     sample_rate: int
     streaming_latency: int
     word_tokenizer: tokenize.WordTokenizer
@@ -103,7 +103,7 @@ class TTS(tts.TTS):
         model_id: TTSModels = "eleven_turbo_v2",
         api_key: str | None = None,
         base_url: str | None = None,
-        encoding: TTSFormats = "mp3_22050_32",
+        encoding: TTSEncoding = "mp3_22050_32",
         streaming_latency: int = 3,
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False  # punctuation can help for intonation
