@@ -41,7 +41,7 @@ RUN python -m pip install --user --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN python minimal_assistant.py download-files 
+RUN python kitt.py download-files 
 
 # Run the application.
-CMD python minimal_assistant.py start
+CMD python kitt.py start
