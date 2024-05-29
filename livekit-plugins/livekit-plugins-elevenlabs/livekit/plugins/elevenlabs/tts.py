@@ -29,7 +29,7 @@ from livekit.agents import aio, codecs, tokenize, tts, utils
 
 from .log import logger
 from .models import (
-    TTSFormats,
+    TTSEncoding,
     TTSModels,
 )
 
@@ -39,12 +39,12 @@ _Encoding = Literal[
 ]
 
 
-def _sample_rate_from_format(output_format: TTSFormats) -> int:
+def _sample_rate_from_format(output_format: TTSEncoding) -> int:
     split = output_format.split("_")  # e.g: mp3_22050_32
     return int(split[1])
 
 
-def _encoding_from_format(output_format: TTSFormats) -> _Encoding:
+def _encoding_from_format(output_format: TTSEncoding) -> _Encoding:
     if output_format.startswith("mp3"):
         return "mp3"
     elif output_format.startswith("pcm"):
@@ -88,7 +88,7 @@ class _TTSOptions:
     voice: Voice
     model_id: TTSModels
     base_url: str
-    format: TTSFormats
+    encoding: TTSEncoding
     sample_rate: int
     streaming_latency: int
     word_tokenizer: tokenize.WordTokenizer
@@ -103,7 +103,7 @@ class TTS(tts.TTS):
         model_id: TTSModels = "eleven_turbo_v2",
         api_key: str | None = None,
         base_url: str | None = None,
-        format: TTSFormats = "mp3_22050_32",
+        encoding: TTSEncoding = "mp3_22050_32",
         streaming_latency: int = 3,
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False  # punctuation can help for intonation
@@ -115,7 +115,7 @@ class TTS(tts.TTS):
     ) -> None:
         super().__init__(
             streaming_supported=True,
-            sample_rate=_sample_rate_from_format(format),
+            sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
         )
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
@@ -127,7 +127,7 @@ class TTS(tts.TTS):
             model_id=model_id,
             api_key=api_key,
             base_url=base_url or API_BASE_URL_V1,
-            format=format,
+            encoding=encoding,
             sample_rate=self.sample_rate,
             streaming_latency=streaming_latency,
             word_tokenizer=word_tokenizer,
@@ -176,7 +176,7 @@ class ChunkedStream(tts.ChunkedStream):
         base_url = self._opts.base_url
         voice_id = self._opts.voice.id
         model_id = self._opts.model_id
-        sample_rate = _sample_rate_from_format(self._opts.format)
+        sample_rate = _sample_rate_from_format(self._opts.encoding)
         latency = self._opts.streaming_latency
         url = (
             f"{base_url}/text-to-speech/{voice_id}/stream?"
@@ -286,7 +286,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         base_url = self._opts.base_url
         voice_id = self._opts.voice.id
         model_id = self._opts.model_id
-        output_format = self._opts.format
+        output_format = self._opts.encoding
         latency = self._opts.streaming_latency
         url = (
             f"{base_url}/text-to-speech/{voice_id}/stream-input?"
@@ -443,7 +443,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             all_tokens_consumed = True
 
         async def recv_task():
-            encoding = _encoding_from_format(self._opts.format)
+            encoding = _encoding_from_format(self._opts.encoding)
             mp3_decoder = codecs.Mp3StreamDecoder()
             while True:
                 msg = await ws_conn.receive()

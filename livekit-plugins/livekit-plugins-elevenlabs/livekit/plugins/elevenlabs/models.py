@@ -7,7 +7,7 @@ TTSModels = Literal[
     "eleven_turbo_v2",
 ]
 
-TTSFormats = Literal[
+TTSEncoding = Literal[
     "mp3_22050_32",
     "mp3_44100_32",
     "mp3_44100_64",
