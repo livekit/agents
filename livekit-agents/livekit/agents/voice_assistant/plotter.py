@@ -27,13 +27,13 @@ class PlotMessage:
     y: float = 0.0
 
     def write(self, b: io.BytesIO) -> None:
-        b.write(len(self.which).to_bytes(4))
+        b.write(len(self.which).to_bytes(4, byteorder="big"))
         b.write(self.which.encode())
         b.write(struct.pack("d", self.x))
         b.write(struct.pack("d", self.y))
 
     def read(self, b: io.BytesIO) -> None:
-        which_len = int.from_bytes(b.read(4))
+        which_len = int.from_bytes(b.read(4), byteorder="big")
         self.which = b.read(which_len).decode()  # type: ignore
         self.x = struct.unpack("d", b.read(8))[0]
         self.y = struct.unpack("d", b.read(8))[0]
@@ -47,12 +47,12 @@ class PlotEventMessage:
     x: float = 0.0
 
     def write(self, b: io.BytesIO) -> None:
-        b.write(len(self.which).to_bytes(4))
+        b.write(len(self.which).to_bytes(4, byteorder="big"))
         b.write(self.which.encode())
         b.write(struct.pack("d", self.x))
 
     def read(self, b: io.BytesIO) -> None:
-        which_len = int.from_bytes(b.read(4))
+        which_len = int.from_bytes(b.read(4), byteorder="big")
         self.which = b.read(which_len).decode()  # type: ignore
         self.x = struct.unpack("d", b.read(8))[0]
 

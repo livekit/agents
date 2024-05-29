@@ -201,8 +201,8 @@ def run_worker(args: protocol.CliArgs) -> None:
     worker = Worker(args.opts, loop=loop)
 
     loop.set_debug(args.asyncio_debug)
-    loop.slow_callback_duration = 0.03  # 30ms
-    aio.debug.hook_slow_callbacks(0.75)
+    loop.slow_callback_duration = 0.05  # 50ms
+    aio.debug.hook_slow_callbacks(2)
 
     if args.room:
         # directly connect to a specific roomj
