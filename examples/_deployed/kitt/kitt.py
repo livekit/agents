@@ -31,7 +31,7 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD(),
         stt=deepgram.STT(),
         llm=gpt,
-        tts=elevenlabs.TTS(output_format="pcm_44100"),
+        tts=elevenlabs.TTS(encoding="pcm_44100"),
         chat_ctx=initial_ctx,
     )
 
