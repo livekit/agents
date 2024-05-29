@@ -27,8 +27,6 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(),
         tts=elevenlabs.TTS(),
         chat_ctx=initial_ctx,
-        debug=True,
-        plotting=True,
     )
     assistant.start(ctx.room)
 
