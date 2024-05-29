@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .models import TTSFormats, TTSModels
+from .models import TTSEncoding, TTSModels
 from .tts import DEFAULT_VOICE, TTS, Voice, VoiceSettings
 from .version import __version__
 
@@ -20,7 +20,7 @@ __all__ = [
     "TTS",
     "Voice",
     "VoiceSettings",
-    "TTSFormats",
+    "TTSEncoding",
     "TTSModels",
     "DEFAULT_VOICE",
     "__version__",
