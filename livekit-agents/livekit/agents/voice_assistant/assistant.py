@@ -103,10 +103,6 @@ EventTypes = Literal[
 
 
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
-    _SAY_CUSTOM_PRIORITY = 3
-    _SAY_AGENT_ANSWER_PRIORITY = 2
-    _SAY_CALL_CONTEXT_PRIORITY = 1
-
     def __init__(
         self,
         *,
@@ -172,7 +168,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         # synthesis state
         self._speech_playing: _SpeechData | None = None  # validated and playing speech
-        self._speech_queue = asyncio.PriorityQueue[_SpeechData]()
         self._user_speaking, self._agent_speaking = False, False
 
         self._target_volume = self._opts.base_volume
@@ -212,21 +207,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     async def say(
         self,
         source: str | allm.LLMStream | AsyncIterable[str],
+        *,
         allow_interruptions: bool = True,
         add_to_ctx: bool = True,
-        force_stream: bool = False,  # force the usage of TTS stream
-        enqueue: bool = True,
     ) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await self._start_future
-
-        if isinstance(source, str) and force_stream:
-            text = source
-
-            async def _gen():
-                yield text
-
-            source = _gen()
 
         data = _SpeechData(
             source=source,
@@ -509,24 +495,24 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     async def _update_loop(self):
         """Update the volume every 10ms based on the speech probability, decide whether to interrupt
         and when to validate an answer"""
-        speaking_avg_vol = utils.MovingAverage(150)
-        speaking_avg_validation = utils.MovingAverage(230)
+        speech_prob_avg = utils.MovingAverage(100)
+        speaking_avg_validation = utils.MovingAverage(210)
         interruption_speaking_avg = utils.MovingAverage(
             int(self._opts.int_speech_duration * 100)
         )
 
         interval_10ms = aio.interval(0.01)
 
-        vad_pw = 1.2  # TODO(theomonnom): should this be exposed?
+        vad_pw = 2.4  # TODO(theomonnom): should this be exposed?
         while not self._closed:
             await interval_10ms.tick()
 
-            speaking_avg_vol.add_sample(int(self._user_speaking))
+            speech_prob_avg.add_sample(self._speech_prob)
             speaking_avg_validation.add_sample(int(self._user_speaking))
             interruption_speaking_avg.add_sample(int(self._user_speaking))
 
             bvol = self._opts.base_volume
-            self._target_volume = max(0, 1 - speaking_avg_vol.get_avg() * vad_pw) * bvol
+            self._target_volume = max(0, 1 - speech_prob_avg.get_avg() * vad_pw) * bvol
 
             if self._playing_speech:
                 if not self._playing_speech.allow_interruptions:
