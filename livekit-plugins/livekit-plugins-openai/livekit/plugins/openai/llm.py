@@ -6,7 +6,7 @@ import functools
 import inspect
 import json
 import typing
-from typing import Any, Dict, MutableSet
+from typing import Any, MutableSet
 
 from attrs import define
 from livekit.agents import llm
@@ -43,10 +43,10 @@ class LLM(llm.LLM):
     ) -> "LLMStream":
         opts = dict()
         if fnc_ctx:
-            opts["tools"] = to_openai_tools(fnc_ctx)
+            opts["tools"] = _to_openai_tools(fnc_ctx)
 
         cmp = await self._client.chat.completions.create(
-            messages=to_openai_ctx(chat_ctx),
+            messages=_to_openai_ctx(chat_ctx),
             model=self._opts.model,
             n=n,
             temperature=temperature,
@@ -64,7 +64,7 @@ class LLMStream(llm.LLMStream):
         super().__init__()
         self._oai_stream = oai_stream
         self._fnc_ctx = fnc_ctx
-        self._running_fncs: MutableSet[asyncio.Task] = set()
+        self._running_tasks: MutableSet[asyncio.Task] = set()
 
     def __aiter__(self) -> "LLMStream":
         return self
@@ -154,8 +154,9 @@ class LLMStream(llm.LLMStream):
                 return
 
         # validate/sanitize args before calling any ai function
+        # TODO(theomonnom): try to recover from invalid args
         fnc_info = fncs[name]
-        for arg_info in fnc_info.args.values():
+        for arg_info in fnc_info.arguments.values():
             if arg_info.name not in args:
                 if arg_info.default is inspect.Parameter.empty:
                     logger.error(f"{name}: missing required arg {arg_info.name}")
@@ -184,7 +185,7 @@ class LLMStream(llm.LLMStream):
                     try:
                         val[i] = _sanitize_primitive(in_type, val[i])
                     except ValueError:
-                        logger.error(
+                        logger.exception(
                             f"{name}: invalid arg {arg_info.name}",
                             extra={"value": val},
                         )
@@ -208,34 +209,39 @@ class LLMStream(llm.LLMStream):
             args[arg_info.name] = val  # sanitized value
 
         logger.debug(f"calling function {name} with arguments {args}")
-        self._called_functions.append(
-            llm.CalledFunction(fnc_name=name, fnc=fnc_info.fnc, args=args)
-        )
-        func = functools.partial(fnc_info.fnc, **args)
-        if asyncio.iscoroutinefunction(fnc_info.fnc):
+
+        func = functools.partial(fnc_info.callable, **args)
+        if asyncio.iscoroutinefunction(fnc_info.callable):
             task = asyncio.create_task(func())
         else:
             task = asyncio.create_task(asyncio.to_thread(func))
 
+        self._called_functions.append(
+            llm.CalledFunction(info=fnc_info, arguments=args, task=task)
+        )
+
         def _task_done(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():
                 logger.error("ai_callable task failed", exc_info=task.exception())
-            self._running_fncs.discard(task)
+            self._running_tasks.discard(task)
 
         task.add_done_callback(_task_done)
-        self._running_fncs.add(task)
+        self._running_tasks.add(task)
 
-    async def aclose(self, wait: bool = True) -> None:
+    async def gather_function_results(self) -> list[llm.CalledFunction]:
+        await asyncio.gather(*self._running_tasks, return_exceptions=True)
+        return self._called_functions
+
+    async def aclose(self) -> None:
         await self._oai_stream.close()
 
-        if not wait:
-            for task in self._running_fncs:
-                task.cancel()
+        for task in self._running_tasks:
+            task.cancel()
 
-        await asyncio.gather(*self._running_fncs, return_exceptions=True)
+        await asyncio.gather(*self._running_tasks, return_exceptions=True)
 
 
-def to_openai_ctx(chat_ctx: llm.ChatContext) -> list:
+def _to_openai_ctx(chat_ctx: llm.ChatContext) -> list:
     return [
         {
             "role": msg.role.value,
@@ -245,70 +251,66 @@ def to_openai_ctx(chat_ctx: llm.ChatContext) -> list:
     ]
 
 
-def to_openai_tools(fnc_ctx: llm.FunctionContext):
-    tools = []
-    for fnc in fnc_ctx.ai_functions.values():
-        plist = {}
-        required = []
-        for arg_name, arg in fnc.args.items():
-            p: Dict[str, Any] = {}
-            if arg.desc:
-                p["description"] = arg.desc
+def _to_openai_tools(fnc_ctx: llm.FunctionContext):
+    tools_desc = []
+    for fnc_info in fnc_ctx.ai_functions.values():
+        properties = {}
+        required_properties = []
 
-            if typing.get_origin(arg.type) is list:
-                in_type = typing.get_args(arg.type)[0]  # list type
-                p["type"] = "array"
+        # build the properties for the function
+        for arg_info in fnc_info.arguments.values():
+            if arg_info.default is inspect.Parameter.empty:
+                # property is required when there is no default value
+                required_properties.append(arg_info.name)
 
+            p = {}
+            if arg_info.description:
+                p["description"] = arg_info.description
+
+            if typing.get_origin(arg_info.type) is list:
+                in_type = typing.get_args(arg_info.type)[0]
                 items = {}
-                if in_type is str:
-                    items["type"] = "string"
-                elif in_type is int or in_type is float:
-                    items["type"] = "number"
-                else:
-                    raise ValueError(f"unsupported in_type {in_type}")
-
-                if arg.choices:
-                    items["enum"] = arg.choices
-
+                _to_openai_items(items, in_type, arg_info.choices)
+                p["type"] = "array"
                 p["items"] = items
-
             else:
-                if arg.type is str:
-                    p["type"] = "string"
-                elif arg.type is int or arg.type is float:
-                    p["type"] = "number"
-                elif arg.type is bool:
-                    p["type"] = "boolean"
-                elif issubclass(arg.type, enum.Enum):
-                    p["type"] = "string"
-                    p["enum"] = [e.value for e in arg.type]
-                else:
-                    raise ValueError(f"unsupported type {arg.type}")
+                _to_openai_items(p, arg_info.type, arg_info.choices)
 
-                if arg.choices:
-                    p["enum"] = arg.choices
+            properties[arg_info.name] = p
 
-            plist[arg_name] = p
-
-            if arg.default is inspect.Parameter.empty:
-                required.append(arg_name)
-
-        tools.append(
+        tools_desc.append(
             {
                 "type": "function",
                 "function": {
-                    "name": fnc.metadata.name,
-                    "description": fnc.metadata.desc,
+                    "name": fnc_info.name,
+                    "description": fnc_info.description,
                     "parameters": {
                         "type": "object",
-                        "properties": plist,
-                        "required": required,
+                        "properties": properties,
+                        "required": required_properties,
                     },
                 },
             }
         )
 
-    return tools
+    return tools_desc
+
+
+def _to_openai_items(dst: dict, ty: type, choices: list | None):
+    if ty is str:
+        dst["type"] = "string"
+    elif ty in (int, float):
+        dst["type"] = "number"
+    elif ty is bool:
+        dst["type"] = "boolean"
+    elif issubclass(ty, enum.Enum):
+        dst["type"] = "string"
+        dst["enum"] = [e.value for e in ty]
+    else:
+        raise ValueError(f"unsupported type {ty}")
+
+    if choices:
+        dst["enum"] = choices
 
 
 def _sanitize_primitive(ty: type, value: Any) -> Any:
@@ -323,7 +325,7 @@ def _sanitize_primitive(ty: type, value: Any) -> Any:
 
         if ty is int:
             if value % 1 != 0:
-                raise ValueError(f"expected int, got float")
+                raise ValueError("expected int, got float")
 
             return int(value)
 

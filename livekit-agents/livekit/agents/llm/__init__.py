@@ -1,8 +1,7 @@
 from .function_context import (
     USE_DOCSTRING,
-    AIFncArg,
-    AIFncMetadata,
-    AIFunction,
+    FunctionArgInfo,
+    FunctionInfo,
     CalledFunction,
     FunctionContext,
     TypeInfo,
@@ -32,9 +31,8 @@ __all__ = [
     "FunctionContext",
     "ai_callable",
     "TypeInfo",
-    "AIFncArg",
-    "AIFunction",
-    "AIFncMetadata",
+    "FunctionArgInfo",
+    "FunctionInfo",
     "CalledFunction",
     "USE_DOCSTRING",
 ]
