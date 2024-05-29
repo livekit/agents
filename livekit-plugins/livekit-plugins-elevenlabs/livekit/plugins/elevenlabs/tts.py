@@ -286,7 +286,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         base_url = self._opts.base_url
         voice_id = self._opts.voice.id
         model_id = self._opts.model_id
-        output_format = self._opts.sample_rate
+        output_format = self._opts.format
         latency = self._opts.streaming_latency
         url = (
             f"{base_url}/text-to-speech/{voice_id}/stream-input?"
@@ -466,7 +466,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 data: dict = json.loads(msg.data)
                 audio = data.get("audio")
-                if audio is not None:
+
+                if data.get("error"):
+                    logger.error("11labs error %s", data)
+                    return
+                elif audio is not None:
                     if audio == "":
                         # 11labs sometimes sends empty audio, ignore
                         continue
@@ -486,7 +490,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     text = ""
                     if data.get("alignment"):
-                        text = data["alignment"].get("chars", "")
+                        text = "".join(data["alignment"].get("chars", ""))
 
                     audio_tx.send_nowait(tts.SynthesizedAudio(text=text, data=frame))
                     continue
