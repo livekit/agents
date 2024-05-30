@@ -162,6 +162,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         # playout state
         self._maybe_answer_task: asyncio.Task | None = None
+        self._data_waiting_to_play: _SpeechData | None = None
         self._playing_speech: _SpeechData | None = None
         self._answer_speech: _SpeechData | None = None
         self._playout_start_time: float | None = None
@@ -631,12 +632,20 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self._playing_speech.interrupted = True
 
             logger.debug("assistant - waiting for current speech to finish")
+            self._data_waiting_to_play = data
             await self._play_task
+            self._data_waiting_to_play = None
             logger.debug("assistant - current speech finished")
+
+            if data.interrupted:  # signaled an interrupt while waiting
+                logger.debug("assistant - speech was interrupted while waiting")
+                return
         elif self._play_task is not None:
             self._play_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._play_task
+            if self._data_waiting_to_play:
+                self._data_waiting_to_play.interrupted = True
 
         self._play_task = asyncio.create_task(self._play_speech_if_validated(data))
 
