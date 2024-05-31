@@ -1,3 +1,10 @@
+from .chat_context import (
+    ChatContext,
+    ChatMessage,
+    ChatMessageURLImage,
+    ChatMessageVideoFrameImage,
+    ChatRole,
+)
 from .function_context import (
     AIFncArg,
     AIFncMetadata,
@@ -10,9 +17,6 @@ from .llm import (
     LLM,
     CalledFunction,
     ChatChunk,
-    ChatContext,
-    ChatMessage,
-    ChatRole,
     Choice,
     ChoiceDelta,
     LLMStream,
@@ -24,6 +28,8 @@ __all__ = [
     "ChatContext",
     "ChatRole",
     "ChatMessage",
+    "ChatMessageVideoFrameImage",
+    "ChatMessageURLImage",
     "ChatContext",
     "ChoiceDelta",
     "Choice",

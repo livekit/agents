@@ -61,6 +61,7 @@ setuptools.setup(
     ],
     extras_require={
         "codecs": ["av>=11.0.0"],
+        "images": ["pillow~=10.3.0"],
     },
     package_data={
         "livekit.agents": ["py.typed"],

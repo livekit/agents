@@ -12,4 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.6.dev0"
+import enum
+from typing import Union
+
+from attrs import define
+from livekit import rtc
+
+
+class ChatRole(enum.Enum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+
+
+@define
+class ChatMessage:
+    role: ChatRole
+    text: str
+    images: list[Union["ChatMessageVideoFrameImage", "ChatMessageURLImage"]] = []
+
+
+@define
+class ChatContext:
+    messages: list[ChatMessage] = []
+
+
+@define
+class ChatMessageVideoFrameImage:
+    video_frame: rtc.VideoFrame
+
+
+@define
+class ChatMessageURLImage:
+    url: str

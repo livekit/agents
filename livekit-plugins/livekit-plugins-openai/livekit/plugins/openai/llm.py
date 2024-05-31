@@ -1,6 +1,21 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import asyncio
+import base64
 import enum
 import functools
 import inspect
@@ -8,17 +23,18 @@ import json
 from typing import Any, Dict, MutableSet
 
 from attrs import define
-from livekit.agents import llm
+from livekit.agents import images, llm
 
 import openai
 
 from .log import logger
-from .models import ChatModels
+from .models import ChatModels, ImageDetail, ImageDetailsResizeValues
 
 
 @define
 class LLMOptions:
     model: str | ChatModels
+    image_detail: ImageDetail
 
 
 class LLM(llm.LLM):
@@ -27,24 +43,26 @@ class LLM(llm.LLM):
         *,
         model: str | ChatModels = "gpt-4o",
         client: openai.AsyncClient | None = None,
+        image_detail: ImageDetail = "low",
     ) -> None:
-        self._opts = LLMOptions(model=model)
+        self._opts = LLMOptions(model=model, image_detail=image_detail)
         self._client = client or openai.AsyncClient()
         self._running_fncs: MutableSet[asyncio.Task] = set()
+        self._base64_image_cache: Dict[llm.ChatMessageVideoFrameImage, str] = {}
 
     async def chat(
         self,
         history: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
-        n: int | None = None,
+        n: int | None = 1,
     ) -> "LLMStream":
         opts = dict()
         if fnc_ctx:
             opts["tools"] = to_openai_tools(fnc_ctx)
 
         cmp = await self._client.chat.completions.create(
-            messages=to_openai_ctx(history),
+            messages=self._to_openai_ctx(history),
             model=self._opts.model,
             n=n,
             temperature=temperature,
@@ -53,6 +71,56 @@ class LLM(llm.LLM):
         )
 
         return LLMStream(cmp, fnc_ctx)
+
+    def _sync_image_cache(self, history: llm.ChatContext):
+        video_frame_images = [
+            img
+            for msg in history.messages
+            for img in msg.images
+            if isinstance(img, llm.ChatMessageVideoFrameImage)
+        ]
+        seen_images = set(video_frame_images)
+        (w, h) = ImageDetailsResizeValues[self._opts.image_detail]
+        encode_options = images.EncodeOptions(
+            format="JPEG",
+            resize_options=images.ResizeOptions(
+                width=w, height=h, strategy="center_aspect_fit"
+            ),
+        )
+        for img in video_frame_images:
+            jpg_bytes = images.encode(img.video_frame, encode_options)
+            b64 = base64.b64encode(jpg_bytes).decode("utf-8")
+            self._base64_image_cache[img] = b64
+
+        old_images = set(self._base64_image_cache.keys()) - seen_images
+        for img in old_images:
+            del self._base64_image_cache[img]
+
+    def _to_openai_ctx(self, history: llm.ChatContext):
+        res = []
+        self._sync_image_cache(history)
+
+        for msg in history.messages:
+            content = [{"type": "text", "text": msg.text}]
+            for img in msg.images:
+                url = ""
+                if isinstance(img, llm.ChatMessageURLImage):
+                    url = img.url
+                elif isinstance(img, llm.ChatMessageVideoFrameImage):
+                    url = f"data:image/jpeg;base64,{self._base64_image_cache[img]}"
+                else:
+                    logger.error(f"unknown image type {type(img)}")
+                    continue
+                content.append({"type": "image_url", "url": url})
+
+            res.append(
+                {
+                    "role": msg.role.value,
+                    "content": content,
+                }
+            )
+
+        return res
 
 
 class LLMStream(llm.LLMStream):
@@ -208,16 +276,6 @@ class LLMStream(llm.LLMStream):
                 task.cancel()
 
         await asyncio.gather(*self._running_fncs, return_exceptions=True)
-
-
-def to_openai_ctx(chat_ctx: llm.ChatContext) -> list:
-    return [
-        {
-            "role": msg.role.value,
-            "content": msg.text,
-        }
-        for msg in chat_ctx.messages
-    ]
 
 
 def to_openai_tools(fnc_ctx: llm.FunctionContext):
