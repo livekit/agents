@@ -324,13 +324,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         p = self._start_args.room.participants_by_identity.get(identity)
         assert p is not None
 
+        # link partcipant before subscribing to tracks to avoid race where
+        # _on_track_published or _on_track_subscribed is quickly called before
+        # self._linked_participant is set
+        self._linked_participant = identity
+        self._log_debug(f"assistant - linked participant {identity}")
+
         for pub in p.tracks.values():
             if pub.subscribed:
                 self._on_track_subscribed(pub.track, pub, p)  # type: ignore
             else:
                 self._on_track_published(pub, p)
-
-        self._linked_participant = identity
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if not self._linked_participant:
