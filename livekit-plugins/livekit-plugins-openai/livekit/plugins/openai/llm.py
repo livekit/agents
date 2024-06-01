@@ -79,6 +79,9 @@ class LLM(llm.LLM):
             for img in msg.images
             if isinstance(img, llm.ChatMessageVideoFrameImage)
         ]
+        new_images = [
+            img for img in video_frame_images if img not in self._base64_image_cache
+        ]
         seen_images = set(video_frame_images)
         (w, h) = ImageDetailsResizeValues[self._opts.image_detail]
         encode_options = images.EncodeOptions(
@@ -87,7 +90,7 @@ class LLM(llm.LLM):
                 width=w, height=h, strategy="center_aspect_fit"
             ),
         )
-        for img in video_frame_images:
+        for img in new_images:
             jpg_bytes = images.encode(img.video_frame, encode_options)
             b64 = base64.b64encode(jpg_bytes).decode("utf-8")
             self._base64_image_cache[img] = b64
