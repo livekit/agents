@@ -141,6 +141,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             hyphenate_word=hyphenate_word,
             transcription_speed=transcription_speed,
         )
+
+        # wrap with adapter automatically with default options
+        # to override StreamAdapter options, create the adapter manually
+        if not tts.streaming_supported:
+            tts = atts.StreamAdapter(
+                tts=tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
+            )
+
         self._vad, self._tts, self._llm, self._stt = vad, tts, llm, stt
         self._fnc_ctx = fnc_ctx
         self._chat_ctx = chat_ctx or allm.ChatContext()
