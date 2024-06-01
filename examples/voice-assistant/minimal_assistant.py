@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, tts, tokenize
+from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, tokenize, tts
 from livekit.agents.llm import (
     ChatContext,
     ChatMessage,
