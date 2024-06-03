@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import copy
 import asyncio
 import contextlib
 import contextvars
+import copy
 import time
 from typing import Any, AsyncIterable, Callable, Literal
 
@@ -847,7 +847,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         assert (
             self._audio_source is not None
         ), "audio source should be set before playout"
-        self._log_debug(f"starting playout")
+        self._log_debug("starting playout")
 
         sample_idx = 0
         first_frame = True
