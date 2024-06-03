@@ -875,8 +875,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     break
 
                 # divide frame by 20ms
-                ms10 = buf.sample_rate // 50
-                rem = min(ms10, len(buf.data) - i)
+                ms20 = buf.sample_rate // 50
+                rem = min(ms20, len(buf.data) - i)
                 data = buf.data[i : i + rem]
                 i += rem
 
