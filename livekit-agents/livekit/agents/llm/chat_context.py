@@ -11,9 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import enum
-from typing import Union
+from typing import Tuple
 
 from attrs import define
 from livekit import rtc
@@ -30,7 +31,7 @@ class ChatRole(enum.Enum):
 class ChatMessage:
     role: ChatRole
     text: str
-    images: list[Union["ChatMessageVideoFrameImage", "ChatMessageURLImage"]] = []
+    images: list[ChatImage] = []
 
 
 @define
@@ -39,10 +40,9 @@ class ChatContext:
 
 
 @define
-class ChatMessageVideoFrameImage:
-    video_frame: rtc.VideoFrame
-
-
-@define
-class ChatMessageURLImage:
-    url: str
+class ChatImage:
+    image: str | rtc.VideoFrame
+    dimensions: Tuple[int, int]
+    """Width and height for the chat context representation of the image.
+    LLM implementations will use this as a suggestion for how to deliver the image for inference.
+    """

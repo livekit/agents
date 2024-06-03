@@ -20,21 +20,27 @@ import enum
 import functools
 import inspect
 import json
-from typing import Any, Dict, MutableSet
+from typing import Any, Dict, List, MutableSet, Tuple
 
 from attrs import define
+from livekit import rtc
 from livekit.agents import images, llm
 
 import openai
 
 from .log import logger
-from .models import ChatModels, ImageDetail, ImageDetailsResizeValues
+from .models import ChatModels
+
+IMAGE_DETAIL_DIMENSIONS: List[Tuple[int, str]] = [
+    (512, "low"),
+    (768, "medium"),
+    (2048, "high"),
+]
 
 
 @define
 class LLMOptions:
     model: str | ChatModels
-    image_detail: ImageDetail
 
 
 class LLM(llm.LLM):
@@ -43,12 +49,11 @@ class LLM(llm.LLM):
         *,
         model: str | ChatModels = "gpt-4o",
         client: openai.AsyncClient | None = None,
-        image_detail: ImageDetail = "low",
     ) -> None:
-        self._opts = LLMOptions(model=model, image_detail=image_detail)
+        self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient()
         self._running_fncs: MutableSet[asyncio.Task] = set()
-        self._base64_image_cache: Dict[llm.ChatMessageVideoFrameImage, str] = {}
+        self._base64_image_cache: Dict[llm.ChatImage, str] = {}
 
     async def chat(
         self,
@@ -73,25 +78,19 @@ class LLM(llm.LLM):
         return LLMStream(cmp, fnc_ctx)
 
     def _sync_image_cache(self, history: llm.ChatContext):
-        video_frame_images = [
-            img
-            for msg in history.messages
-            for img in msg.images
-            if isinstance(img, llm.ChatMessageVideoFrameImage)
-        ]
-        new_images = [
-            img for img in video_frame_images if img not in self._base64_image_cache
-        ]
-        seen_images = set(video_frame_images)
-        (w, h) = ImageDetailsResizeValues[self._opts.image_detail]
-        encode_options = images.EncodeOptions(
-            format="JPEG",
-            resize_options=images.ResizeOptions(
-                width=w, height=h, strategy="center_aspect_fit"
-            ),
-        )
-        for img in new_images:
-            jpg_bytes = images.encode(img.video_frame, encode_options)
+        seen_images: MutableSet[llm.ChatImage] = set()
+        for img in [img for msg in history.messages for img in msg.images]:
+            seen_images.add(img)
+            if img in self._base64_image_cache or isinstance(img.image, str):
+                continue
+            (w, h) = img.dimensions
+            encode_options = images.EncodeOptions(
+                format="JPEG",
+                resize_options=images.ResizeOptions(
+                    width=w, height=h, strategy="center_aspect_fit"
+                ),
+            )
+            jpg_bytes = images.encode(img.image, encode_options)
             b64 = base64.b64encode(jpg_bytes).decode("utf-8")
             self._base64_image_cache[img] = b64
 
@@ -106,15 +105,24 @@ class LLM(llm.LLM):
         for msg in history.messages:
             content = [{"type": "text", "text": msg.text}]
             for img in msg.images:
-                url = ""
-                if isinstance(img, llm.ChatMessageURLImage):
-                    url = img.url
-                elif isinstance(img, llm.ChatMessageVideoFrameImage):
-                    url = f"data:image/jpeg;base64,{self._base64_image_cache[img]}"
+                if isinstance(img.image, str):
+                    content.append(
+                        {
+                            "type": "image_url",
+                            "url": img.image,
+                            "detail": image_detail_from_dimensions(img.dimensions),
+                        }
+                    )
+                elif isinstance(img.image, rtc.VideoFrame):
+                    content.append(
+                        {
+                            "type": "image_url",
+                            "url": f"data:image/jpeg;base64,{self._base64_image_cache[img]}",
+                        }
+                    )
                 else:
                     logger.error(f"unknown image type {type(img)}")
                     continue
-                content.append({"type": "image_url", "url": url})
 
             res.append(
                 {
@@ -272,13 +280,20 @@ class LLMStream(llm.LLMStream):
         self._running_fncs.add(task)
 
     async def aclose(self, wait: bool = True) -> None:
-        await self._oai_stream.close()
-
         if not wait:
             for task in self._running_fncs:
                 task.cancel()
 
         await asyncio.gather(*self._running_fncs, return_exceptions=True)
+
+
+def image_detail_from_dimensions(dimensions: Tuple[int, int]) -> str:
+    w, h = dimensions
+    deltas = [
+        (min(abs(w - d[0]), abs(h - d[0])), d[1]) for d in IMAGE_DETAIL_DIMENSIONS
+    ]
+    smallest_delta = min(deltas, key=lambda d: d[0])
+    return smallest_delta[1]
 
 
 def to_openai_tools(fnc_ctx: llm.FunctionContext):

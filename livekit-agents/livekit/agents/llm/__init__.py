@@ -1,8 +1,7 @@
 from .chat_context import (
     ChatContext,
+    ChatImage,
     ChatMessage,
-    ChatMessageURLImage,
-    ChatMessageVideoFrameImage,
     ChatRole,
 )
 from .function_context import (
@@ -28,8 +27,7 @@ __all__ = [
     "ChatContext",
     "ChatRole",
     "ChatMessage",
-    "ChatMessageVideoFrameImage",
-    "ChatMessageURLImage",
+    "ChatImage",
     "ChatContext",
     "ChoiceDelta",
     "Choice",

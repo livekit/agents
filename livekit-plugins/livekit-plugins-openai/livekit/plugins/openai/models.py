@@ -26,9 +26,3 @@ ChatModels = Literal[
     "gpt-3.5-turbo-1106",
     "gpt-3.5-turbo-16k-0613",
 ]
-ImageDetail = Literal["low", "medium", "high"]
-ImageDetailsResizeValues = {
-    "low": (128, 128),
-    "medium": (256, 256),
-    "high": (512, 512),
-}
