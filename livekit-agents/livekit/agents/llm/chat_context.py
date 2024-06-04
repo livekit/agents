@@ -14,9 +14,9 @@
 from __future__ import annotations
 
 import enum
+from dataclasses import dataclass, field
 from typing import Tuple
 
-from attrs import define
 from livekit import rtc
 
 
@@ -27,19 +27,19 @@ class ChatRole(enum.Enum):
     TOOL = "tool"
 
 
-@define
+@dataclass
 class ChatMessage:
     role: ChatRole
     text: str
-    images: list[ChatImage] = []
+    images: list[ChatImage] = field(default_factory=list)
 
 
-@define
+@dataclass
 class ChatContext:
-    messages: list[ChatMessage] = []
+    messages: list[ChatMessage] = field(default_factory=list)
 
 
-@define
+@dataclass
 class ChatImage:
     image: str | rtc.VideoFrame
     dimensions: Tuple[int, int]

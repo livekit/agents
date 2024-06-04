@@ -50,7 +50,7 @@ setuptools.setup(
     install_requires=[
         "livekit ~= 0.11",
         "livekit-agents[codecs, images]~=0.8.dev0",
-        "openai ~= 1.0.0",
+        "openai ~= 1.30.0",
         "pillow ~= 10.3.0",
         "requests >= 2, < 3",
     ],

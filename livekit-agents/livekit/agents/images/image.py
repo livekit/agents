@@ -57,14 +57,14 @@ def _resize_image(image: PIL.Image.Image, options: EncodeOptions):
     resize_opts = options.resize_options
     if resize_opts.strategy == "skew":
         return image.resize((resize_opts.width, resize_opts.height))
-    elif resize_opts.strategy == "aspect_fit":
+    elif resize_opts.strategy == "center_aspect_fit":
         result = PIL.Image.new("RGB", (resize_opts.width, resize_opts.height))
 
-        # Image is width constrained
+        # Start with assuming image is width constrained
         new_width = resize_opts.width
         new_height = int(image.height * (resize_opts.width / image.width))
 
-        # Image is height constrained
+        # If image is height constrained
         if image.width / image.height < resize_opts.width / resize_opts.height:
             new_width = resize_opts.width
             new_height = int(image.height * (resize_opts.width / image.width))
@@ -79,10 +79,10 @@ def _resize_image(image: PIL.Image.Image, options: EncodeOptions):
             ),
         )
         return result
-    elif resize_opts.strategy == "aspect_cover":
+    elif resize_opts.strategy == "center_aspect_cover":
         result = PIL.Image.new("RGB", (resize_opts.width, resize_opts.height))
 
-        # Image is width constrained
+        # Start with assuming image is width constrained
         new_width = resize_opts.width
         new_height = int(image.height * (resize_opts.width / image.width))
 

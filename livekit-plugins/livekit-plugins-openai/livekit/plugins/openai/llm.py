@@ -53,7 +53,7 @@ class LLM(llm.LLM):
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient()
         self._running_fncs: MutableSet[asyncio.Task] = set()
-        self._base64_image_cache: Dict[llm.ChatImage, str] = {}
+        self._base64_image_cache: Dict[int, str] = {}
 
     async def chat(
         self,
@@ -66,22 +66,24 @@ class LLM(llm.LLM):
         if fnc_ctx:
             opts["tools"] = to_openai_tools(fnc_ctx)
 
+        messages = self._to_openai_ctx(history)
         cmp = await self._client.chat.completions.create(
-            messages=self._to_openai_ctx(history),
+            messages=messages,
             model=self._opts.model,
             n=n,
             temperature=temperature,
             stream=True,
+            max_tokens=2000,
             **opts,
         )
 
         return LLMStream(cmp, fnc_ctx)
 
     def _sync_image_cache(self, history: llm.ChatContext):
-        seen_images: MutableSet[llm.ChatImage] = set()
+        seen_images: MutableSet[int] = set()
         for img in [img for msg in history.messages for img in msg.images]:
-            seen_images.add(img)
-            if img in self._base64_image_cache or isinstance(img.image, str):
+            seen_images.add(id(img))
+            if id(img) in self._base64_image_cache or isinstance(img.image, str):
                 continue
             (w, h) = img.dimensions
             encode_options = images.EncodeOptions(
@@ -92,9 +94,9 @@ class LLM(llm.LLM):
             )
             jpg_bytes = images.encode(img.image, encode_options)
             b64 = base64.b64encode(jpg_bytes).decode("utf-8")
-            self._base64_image_cache[img] = b64
+            self._base64_image_cache[id(img)] = b64
 
-        old_images = set(self._base64_image_cache.keys()) - seen_images
+        old_images = set(self._base64_image_cache.keys() - seen_images)
         for img in old_images:
             del self._base64_image_cache[img]
 
@@ -103,21 +105,25 @@ class LLM(llm.LLM):
         self._sync_image_cache(history)
 
         for msg in history.messages:
-            content = [{"type": "text", "text": msg.text}]
+            content: List[Dict[str, Any]] = [{"type": "text", "text": msg.text}]
             for img in msg.images:
                 if isinstance(img.image, str):
                     content.append(
                         {
                             "type": "image_url",
-                            "url": img.image,
-                            "detail": image_detail_from_dimensions(img.dimensions),
+                            "image_url": {
+                                "url": img.image,
+                                "detail": image_detail_from_dimensions(img.dimensions),
+                            },
                         }
                     )
                 elif isinstance(img.image, rtc.VideoFrame):
                     content.append(
                         {
                             "type": "image_url",
-                            "url": f"data:image/jpeg;base64,{self._base64_image_cache[img]}",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{self._base64_image_cache[id(img)]}"
+                            },
                         }
                     )
                 else:
