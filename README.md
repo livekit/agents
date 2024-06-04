@@ -12,7 +12,7 @@
 
 <!--BEGIN_DESCRIPTION-->
 
-The Agent Framework is designed for building real-time, programmable participants
+The Agents Framework is designed for building real-time, programmable participants
 that run on servers. Easily tap into LiveKit WebRTC sessions and process or generate
 audio, video, and data streams.
 
@@ -60,9 +60,9 @@ The following plugins are available today:
 | ---------------------------------------------------------------------------------- | ------------------------------- |
 | [livekit-plugins-deepgram](https://pypi.org/project/livekit-plugins-deepgram/)     | STT                             |
 | [livekit-plugins-elevenlabs](https://pypi.org/project/livekit-plugins-elevenlabs/) | TTS                             |
-| [livekit-plugins-google](https://pypi.org/project/livekit-plugins-google/)         | STT                             |
+| [livekit-plugins-google](https://pypi.org/project/livekit-plugins-google/)         | STT, TTS                        |
 | [livekit-plugins-nltk](https://pypi.org/project/livekit-plugins-nltk/)             | Utilities for working with text |
-| [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-openai/)         | Dalle 3, STT, TTS               |
+| [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-openai/)         | LLM, STT, TTS                   |
 | [livekit-plugins-silero](https://pypi.org/project/livekit-plugins-silero/)         | VAD                             |
 
 ## Concepts

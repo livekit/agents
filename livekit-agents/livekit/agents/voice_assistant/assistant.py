@@ -141,6 +141,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             hyphenate_word=hyphenate_word,
             transcription_speed=transcription_speed,
         )
+
+        # wrap with adapter automatically with default options
+        # to override StreamAdapter options, create the adapter manually
+        if not tts.streaming_supported:
+            tts = atts.StreamAdapter(
+                tts=tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
+            )
+
         self._vad, self._tts, self._llm, self._stt = vad, tts, llm, stt
         self._fnc_ctx = fnc_ctx
         self._chat_ctx = chat_ctx or allm.ChatContext()
@@ -324,13 +332,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         p = self._start_args.room.participants_by_identity.get(identity)
         assert p is not None
 
+        # link partcipant before subscribing to tracks to avoid race where
+        # _on_track_published or _on_track_subscribed is quickly called before
+        # self._linked_participant is set
+        self._linked_participant = identity
+        self._log_debug(f"assistant - linked participant {identity}")
+
         for pub in p.tracks.values():
             if pub.subscribed:
                 self._on_track_subscribed(pub.track, pub, p)  # type: ignore
             else:
                 self._on_track_published(pub, p)
-
-        self._linked_participant = identity
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if not self._linked_participant:
@@ -496,7 +508,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         """Update the volume every 10ms based on the speech probability, decide whether to interrupt
         and when to validate an answer"""
         speech_prob_avg = utils.MovingAverage(100)
-        speaking_avg_validation = utils.MovingAverage(210)
+        speaking_avg_validation = utils.MovingAverage(150)
         interruption_speaking_avg = utils.MovingAverage(
             int(self._opts.int_speech_duration * 100)
         )

@@ -51,7 +51,7 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit ~= 0.11",
-        "livekit-agents[codecs]~=0.7.0",
+        "livekit-agents[codecs]~=0.8.dev0",
         "aiohttp >= 3.8.5",
     ],
     package_data={
