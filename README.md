@@ -62,7 +62,7 @@ The following plugins are available today:
 | [livekit-plugins-elevenlabs](https://pypi.org/project/livekit-plugins-elevenlabs/) | TTS                             |
 | [livekit-plugins-google](https://pypi.org/project/livekit-plugins-google/)         | STT, TTS                        |
 | [livekit-plugins-nltk](https://pypi.org/project/livekit-plugins-nltk/)             | Utilities for working with text |
-| [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-openai/)         | GPT, STT, TTS                   |
+| [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-openai/)         | LLM, STT, TTS                   |
 | [livekit-plugins-silero](https://pypi.org/project/livekit-plugins-silero/)         | VAD                             |
 
 ## Concepts
