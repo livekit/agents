@@ -1,19 +1,41 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import asyncio
+import base64
 import enum
 import functools
 import inspect
 import json
-from typing import Any, Dict, MutableSet
+from typing import Any, Dict, List, MutableSet, Tuple
 
 from attrs import define
-from livekit.agents import llm
+from livekit import rtc
+from livekit.agents import images, llm
 
 import openai
 
 from .log import logger
 from .models import ChatModels
+
+IMAGE_DETAIL_DIMENSIONS: List[Tuple[int, str]] = [
+    (512, "low"),
+    (768, "medium"),
+    (2048, "high"),
+]
 
 
 @define
@@ -31,28 +53,91 @@ class LLM(llm.LLM):
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient()
         self._running_fncs: MutableSet[asyncio.Task] = set()
+        self._base64_image_cache: Dict[int, str] = {}
 
     async def chat(
         self,
         history: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
-        n: int | None = None,
+        n: int | None = 1,
     ) -> "LLMStream":
         opts = dict()
         if fnc_ctx:
             opts["tools"] = to_openai_tools(fnc_ctx)
 
+        messages = self._to_openai_ctx(history)
         cmp = await self._client.chat.completions.create(
-            messages=to_openai_ctx(history),
+            messages=messages,
             model=self._opts.model,
             n=n,
             temperature=temperature,
             stream=True,
+            max_tokens=2000,
             **opts,
         )
 
         return LLMStream(cmp, fnc_ctx)
+
+    def _sync_image_cache(self, history: llm.ChatContext):
+        seen_images: MutableSet[int] = set()
+        for img in [img for msg in history.messages for img in msg.images]:
+            seen_images.add(id(img))
+            if id(img) in self._base64_image_cache or isinstance(img.image, str):
+                continue
+            (w, h) = img.dimensions
+            encode_options = images.EncodeOptions(
+                format="JPEG",
+                resize_options=images.ResizeOptions(
+                    width=w, height=h, strategy="center_aspect_fit"
+                ),
+            )
+            jpg_bytes = images.encode(img.image, encode_options)
+            b64 = base64.b64encode(jpg_bytes).decode("utf-8")
+            self._base64_image_cache[id(img)] = b64
+
+        old_images = set(self._base64_image_cache.keys() - seen_images)
+        for img_key in old_images:
+            del self._base64_image_cache[img_key]
+
+    def _to_openai_ctx(self, history: llm.ChatContext):
+        res = []
+        self._sync_image_cache(history)
+
+        for msg in history.messages:
+            content: List[Dict[str, Any]] = [{"type": "text", "text": msg.text}]
+            for img in msg.images:
+                if isinstance(img.image, str):
+                    content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": img.image,
+                                "detail": image_detail_from_dimensions(img.dimensions),
+                            },
+                        }
+                    )
+                elif isinstance(img.image, rtc.VideoFrame):
+                    content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{self._base64_image_cache[id(img)]}"
+                            },
+                        }
+                    )
+                else:
+                    logger.error(f"unknown image type {type(img)}")
+                    continue
+
+            res.append(
+                {
+                    "role": msg.role.value,
+                    "content": content,
+                }
+            )
+
+        return res
 
 
 class LLMStream(llm.LLMStream):
@@ -201,8 +286,6 @@ class LLMStream(llm.LLMStream):
         self._running_fncs.add(task)
 
     async def aclose(self, wait: bool = True) -> None:
-        await self._oai_stream.close()
-
         if not wait:
             for task in self._running_fncs:
                 task.cancel()
@@ -210,14 +293,13 @@ class LLMStream(llm.LLMStream):
         await asyncio.gather(*self._running_fncs, return_exceptions=True)
 
 
-def to_openai_ctx(chat_ctx: llm.ChatContext) -> list:
-    return [
-        {
-            "role": msg.role.value,
-            "content": msg.text,
-        }
-        for msg in chat_ctx.messages
+def image_detail_from_dimensions(dimensions: Tuple[int, int]) -> str:
+    w, h = dimensions
+    deltas = [
+        (min(abs(w - d[0]), abs(h - d[0])), d[1]) for d in IMAGE_DETAIL_DIMENSIONS
     ]
+    smallest_delta = min(deltas, key=lambda d: d[0])
+    return smallest_delta[1]
 
 
 def to_openai_tools(fnc_ctx: llm.FunctionContext):

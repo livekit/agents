@@ -1,36 +1,18 @@
 from __future__ import annotations
 
 import abc
-import enum
 from typing import Callable
 
 from attrs import define
 
+from .chat_context import ChatContext, ChatRole
 from .function_context import FunctionContext
-
-
-class ChatRole(enum.Enum):
-    SYSTEM = "system"
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
-
-
-@define
-class ChatMessage:
-    role: ChatRole
-    text: str
-
-
-@define
-class ChatContext:
-    messages: list[ChatMessage] = []
 
 
 @define
 class ChoiceDelta:
+    role: ChatRole
     content: str | None = None
-    role: ChatRole | None = None
 
 
 @define

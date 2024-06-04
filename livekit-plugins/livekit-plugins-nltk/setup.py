@@ -49,7 +49,7 @@ setuptools.setup(
     install_requires=[
         "livekit~=0.11",
         "nltk >= 3, < 4",
-        "livekit-agents~=0.7.0",
+        "livekit-agents~=0.8.dev0",
     ],
     package_data={
         "livekit.plugins.nltk": ["py.typed"],
