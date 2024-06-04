@@ -78,6 +78,13 @@ async def entrypoint(ctx: JobContext):
     async def respond_to_image(user_msg: str):
         nonlocal latest_image, img_msg_queue, initial_ctx
         if not latest_image:
+            # We've setup sip-created rooms to have the 'sip' prefix
+            sip = ctx.room.name.startswith("sip")
+            msg = {
+                True: "I'm sorry, I can't see anything when you're calling from a phone. Try the web demo.",
+                False: "I'm sorry, I don't have an image to process. Are you publishing your video?",
+            }[sip]
+            await assistant.say(msg)
             return
 
         initial_ctx.messages.append(
