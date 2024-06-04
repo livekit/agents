@@ -508,7 +508,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         """Update the volume every 10ms based on the speech probability, decide whether to interrupt
         and when to validate an answer"""
         speech_prob_avg = utils.MovingAverage(100)
-        speaking_avg_validation = utils.MovingAverage(210)
+        speaking_avg_validation = utils.MovingAverage(150)
         interruption_speaking_avg = utils.MovingAverage(
             int(self._opts.int_speech_duration * 100)
         )
