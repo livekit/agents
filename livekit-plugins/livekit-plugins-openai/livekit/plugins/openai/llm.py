@@ -97,8 +97,8 @@ class LLM(llm.LLM):
             self._base64_image_cache[id(img)] = b64
 
         old_images = set(self._base64_image_cache.keys() - seen_images)
-        for img in old_images:
-            del self._base64_image_cache[img]
+        for img_key in old_images:
+            del self._base64_image_cache[img_key]
 
     def _to_openai_ctx(self, history: llm.ChatContext):
         res = []
