@@ -12,7 +12,7 @@
 
 <!--BEGIN_DESCRIPTION-->
 
-The Agent Framework is designed for building real-time, programmable participants
+The Agents Framework is designed for building real-time, programmable participants
 that run on servers. Easily tap into LiveKit WebRTC sessions and process or generate
 audio, video, and data streams.
 

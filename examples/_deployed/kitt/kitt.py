@@ -124,7 +124,7 @@ async def entrypoint(ctx: JobContext):
 
     assistant.start(ctx.room)
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(0.5)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
     await process_video_track()
 
