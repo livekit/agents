@@ -167,7 +167,9 @@ class TTSSegmentsForwarder:
                 "mark_audio_segment_end called before any mark_text_segment_end"
             )
 
-        seg.avg_speed = len(self._calc_hyphenes(seg.text)) / seg.audio_duration
+        if seg.audio_duration > 0.0:
+            seg.avg_speed = len(self._calc_hyphenes(seg.text)) / seg.audio_duration
+
         self._pending_segment.cur_audio = self._pending_segment.q[0]
         self._log_debug(
             f"mark_audio_segment_end: calculated avg speed: {seg.avg_speed}"
