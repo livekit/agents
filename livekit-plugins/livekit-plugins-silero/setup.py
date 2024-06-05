@@ -50,7 +50,7 @@ setuptools.setup(
     python_requires=">=3.8.0",
     install_requires=[
         "livekit ~= 0.11",
-        "livekit-agents~=0.8.dev0",
+        "livekit-agents~=0.7",
         "torch >= 2, < 3",
         "torchaudio >= 2",
         "numpy >= 1, < 2",
