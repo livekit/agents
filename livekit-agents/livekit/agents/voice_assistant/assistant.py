@@ -239,8 +239,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         await self._start_speech(data, interrupt_current_if_possible=False)
 
-        assert self._play_task is not None
-        await self._play_task
+        assert self._play_atask is not None
+        await self._play_atask
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         """Register a callback for an event
@@ -270,7 +270,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if not self.started:
             return
 
-        self._closed = True
         self._ready_future.cancel()
 
         self._start_args.room.off("track_published", self._on_track_published)
@@ -286,27 +285,21 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._main_atask.cancel()
             await self._main_atask
 
-        """if self._recognize_task is not None:
-            self._recognize_task.cancel()
+        if self._recognize_atask is not None:
+            self._recognize_atask.cancel()
 
         if not wait:
-            if self._update_task is not None:
-                self._update_task.cancel()
-
-            if self._play_task is not None:
-                self._play_task.cancel()
+            if self._play_atask is not None:
+                self._play_atask.cancel()
 
         with contextlib.suppress(asyncio.CancelledError):
-            if self._update_task is not None:
-                await self._update_task
+            if self._play_atask is not None:
+                await self._play_atask
 
-            if self._recognize_task is not None:
-                await self._recognize_task
+            if self._recognize_atask is not None:
+                await self._recognize_atask
 
-            if self._play_task is not None:
-                await self._play_task"""
-
-    @utils.log_exceptions()
+    @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         if self._opts.plotting:
             self._plotter.start()
@@ -406,7 +399,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._recognize_atask.cancel()
         self._user_track = None
 
-    @utils.log_exceptions()
+    @utils.log_exceptions(logger=logger)
     async def _recognize_task(self, audio_stream: rtc.AudioStream) -> None:
         """
         Receive the frames from the user audio stream and do the following:
@@ -552,7 +545,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         interval_10ms = aio.interval(0.01)
 
         vad_pw = 2.4  # TODO(theomonnom): should this be exposed?
-        while not self._closed:
+        while True:
             await interval_10ms.tick()
 
             speech_prob_avg.add_sample(self._speech_prob)
@@ -635,7 +628,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         await self._wait_ready()
 
         # interrupt the current speech if possible, otherwise wait before playing the new speech
-        if self._play_task is not None:
+        if self._play_atask is not None:
             if self._validated_speech is not None:
                 if (
                     interrupt_current_if_possible
@@ -646,19 +639,21 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             else:
                 # pending speech isn't validated yet, OK to cancel
-                self._play_task.cancel()
+                self._play_atask.cancel()
 
             with contextlib.suppress(asyncio.CancelledError):
-                await self._play_task
+                await self._play_atask
 
-        self._play_task = asyncio.create_task(self._play_speech_if_validated_task(data))
+        self._play_atask = asyncio.create_task(
+            self._play_speech_if_validated_task(data)
+        )
 
-    @utils.log_exceptions()
+    @utils.log_exceptions(logger=logger)
     async def _play_speech_if_validated_task(self, data: _SpeechData) -> None:
         """
         Start synthesis and playout the speech only if validated
         """
-        self._log_debug(f"play_speech_if_validated {data}")
+        self._log_debug(f"play_speech_if_validated {data.user_question}")
 
         # reset volume before starting a new speech
         self._vol_filter.reset()
@@ -789,7 +784,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         await tts_stream.aclose()
         await forward_task
 
-    @utils.log_exceptions()
+    @utils.log_exceptions(logger=logger)
     async def _synthesize_task(
         self,
         data: _SpeechData,
