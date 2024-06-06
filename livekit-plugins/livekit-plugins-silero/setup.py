@@ -51,8 +51,8 @@ setuptools.setup(
     install_requires=[
         "livekit ~= 0.11",
         "livekit-agents~=0.7",
-        "torch >= 2, < 3",
-        "torchaudio >= 2",
+        "torch==2.3.1+cpu",
+        "torchaudio==2.3.1+cpu",
         "numpy >= 1, < 2",
         "onnxruntime~=1.17.0",
     ],
