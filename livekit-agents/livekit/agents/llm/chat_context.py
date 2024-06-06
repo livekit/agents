@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Tuple
+from typing import Any, Dict, List
 
 from livekit import rtc
+
+from .llm import LLM
 
 
 class ChatRole(enum.Enum):
@@ -27,22 +29,36 @@ class ChatRole(enum.Enum):
     TOOL = "tool"
 
 
-@dataclass
+class ChatImage:
+    image: str | rtc.VideoFrame
+    inference_width: int
+    inference_height: int
+    _cache: Dict[LLM, Any] = {}
+    """Cache for the processed image. The key is the LLM instance. The value is the processed image.
+       This should only be used within LLM implementations.
+    """
+
+    def __init__(
+        self,
+        image: str | rtc.VideoFrame,
+        inference_width: int = 128,
+        inference_height: int = 128,
+    ):
+        self.image = image
+        self.inference_width = inference_width
+        self.inference_height = inference_height
+
+
 class ChatMessage:
     role: ChatRole
     text: str
-    images: list[ChatImage] = field(default_factory=list)
+    images: List[ChatImage]
+
+    def __init__(self, role: ChatRole, text: str, images: list[ChatImage] = []):
+        self.role = role
+        self.text = text
 
 
 @dataclass
 class ChatContext:
     messages: list[ChatMessage] = field(default_factory=list)
-
-
-@dataclass
-class ChatImage:
-    image: str | rtc.VideoFrame
-    dimensions: Tuple[int, int]
-    """Width and height for the chat context representation of the image.
-    LLM implementations will use this as a suggestion for how to deliver the image for inference.
-    """
