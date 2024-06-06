@@ -57,6 +57,9 @@ setuptools.setup(
         "onnxruntime~=1.17.0",
     ],
     package_data={"livekit.plugins.silero": ["files/silero_vad.jit"]},
+    dependency_links=[
+        "https://download.pytorch.org/whl/torch_stable.html"
+    ],
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",
