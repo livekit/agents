@@ -43,3 +43,40 @@ export OPENAI_API_KEY=<your OpenAI API key>
 ### Test with a LiveKit frontend:
 
 We've built [Agents Playground](https://agents-playground.livekit.io) so you don't have to build your own frontend while you iterate on your agent.
+
+### Use OpenAI TTS & STT
+
+```python
+from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, tokenize, tts, stt
+from livekit.plugins import openai, silero
+
+...
+
+    gpt = openai.LLM(
+        model="gpt-4o",
+    )
+
+    openai_tts = tts.StreamAdapter(
+        tts=openai.TTS(voice="shimmer"),
+        sentence_tokenizer=tokenize.basic.SentenceTokenizer(),
+    )
+
+    whisper_stt = stt.StreamAdapter(
+        stt=openai.STT(detect_language=True),
+        vad=silero.VAD()
+    )
+
+    latest_image: rtc.VideoFrame | None = None
+    img_msg_queue: deque[agents.llm.ChatMessage] = deque()
+    assistant = VoiceAssistant(
+        vad=silero.VAD(),
+        stt=whisper_stt,
+        llm=gpt,
+        tts=openai_tts,
+        fnc_ctx=AssistantFnc(),
+        chat_ctx=initial_ctx,
+    )
+
+...
+
+```
