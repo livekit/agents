@@ -31,6 +31,7 @@ import openai
 
 from .log import logger
 from .models import ChatModels
+from .utils import get_base_url
 
 IMAGE_DETAIL_DIMENSIONS: List[Tuple[int, str]] = [
     (512, "low"),
@@ -53,7 +54,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
     ) -> None:
         self._opts = LLMOptions(model=model)
-        self._client = client or openai.AsyncClient(base_url=base_url)
+        self._client = client or openai.AsyncClient(base_url=get_base_url(base_url))
         self._running_fncs: MutableSet[asyncio.Task] = set()
 
     async def chat(
