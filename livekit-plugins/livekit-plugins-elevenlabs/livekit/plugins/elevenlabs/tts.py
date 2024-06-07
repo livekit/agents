@@ -25,7 +25,7 @@ from typing import List, Literal, Optional
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import aio, codecs, tokenize, tts, utils
+from livekit.agents import aio, tokenize, tts, utils
 
 from .log import logger
 from .models import (
@@ -444,7 +444,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def recv_task():
             encoding = _encoding_from_format(self._opts.encoding)
-            mp3_decoder = codecs.Mp3StreamDecoder()
+            mp3_decoder = utils.codecs.Mp3StreamDecoder()
             while True:
                 msg = await ws_conn.receive()
                 if msg.type in (

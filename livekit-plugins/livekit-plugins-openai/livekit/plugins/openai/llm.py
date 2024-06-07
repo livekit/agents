@@ -24,7 +24,8 @@ from typing import Any, Dict, List, MutableSet, Tuple
 
 from attrs import define
 from livekit import rtc
-from livekit.agents import images, llm
+from livekit.agents import llm
+from livekit.agents.utils import images
 
 import openai
 
@@ -53,7 +54,6 @@ class LLM(llm.LLM):
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient()
         self._running_fncs: MutableSet[asyncio.Task] = set()
-        self._base64_image_cache: Dict[int, str] = {}
 
     async def chat(
         self,
@@ -73,36 +73,13 @@ class LLM(llm.LLM):
             n=n,
             temperature=temperature,
             stream=True,
-            max_tokens=2000,
             **opts,
         )
 
         return LLMStream(cmp, fnc_ctx)
 
-    def _sync_image_cache(self, history: llm.ChatContext):
-        seen_images: MutableSet[int] = set()
-        for img in [img for msg in history.messages for img in msg.images]:
-            seen_images.add(id(img))
-            if id(img) in self._base64_image_cache or isinstance(img.image, str):
-                continue
-            (w, h) = img.dimensions
-            encode_options = images.EncodeOptions(
-                format="JPEG",
-                resize_options=images.ResizeOptions(
-                    width=w, height=h, strategy="center_aspect_fit"
-                ),
-            )
-            jpg_bytes = images.encode(img.image, encode_options)
-            b64 = base64.b64encode(jpg_bytes).decode("utf-8")
-            self._base64_image_cache[id(img)] = b64
-
-        old_images = set(self._base64_image_cache.keys() - seen_images)
-        for img_key in old_images:
-            del self._base64_image_cache[img_key]
-
     def _to_openai_ctx(self, history: llm.ChatContext):
         res = []
-        self._sync_image_cache(history)
 
         for msg in history.messages:
             content: List[Dict[str, Any]] = [{"type": "text", "text": msg.text}]
@@ -113,16 +90,33 @@ class LLM(llm.LLM):
                             "type": "image_url",
                             "image_url": {
                                 "url": img.image,
-                                "detail": image_detail_from_dimensions(img.dimensions),
+                                "detail": image_detail_from_dimensions(
+                                    img.inference_width or 512,
+                                    img.inference_height or 512,
+                                ),
                             },
                         }
                     )
                 elif isinstance(img.image, rtc.VideoFrame):
+                    if self not in img._cache:
+                        w, h = img.inference_width, img.inference_height
+                        encode_options = images.EncodeOptions(
+                            format="JPEG",
+                            resize_options=images.ResizeOptions(
+                                width=w or 128,
+                                height=h or 128,
+                                strategy="center_aspect_fit",
+                            ),
+                        )
+                        jpg_bytes = images.encode(img.image, encode_options)
+                        b64 = base64.b64encode(jpg_bytes).decode("utf-8")
+                        img._cache[self] = b64
+
                     content.append(
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{self._base64_image_cache[id(img)]}"
+                                "url": f"data:image/jpeg;base64,{img._cache[self]}"
                             },
                         }
                     )
@@ -293,10 +287,10 @@ class LLMStream(llm.LLMStream):
         await asyncio.gather(*self._running_fncs, return_exceptions=True)
 
 
-def image_detail_from_dimensions(dimensions: Tuple[int, int]) -> str:
-    w, h = dimensions
+def image_detail_from_dimensions(width: int, height: int) -> str:
     deltas = [
-        (min(abs(w - d[0]), abs(h - d[0])), d[1]) for d in IMAGE_DETAIL_DIMENSIONS
+        (min(abs(width - d[0]), abs(height - d[0])), d[1])
+        for d in IMAGE_DETAIL_DIMENSIONS
     ]
     smallest_delta = min(deltas, key=lambda d: d[0])
     return smallest_delta[1]

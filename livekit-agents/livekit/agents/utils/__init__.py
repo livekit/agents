@@ -5,6 +5,8 @@ from .http_context import http_session
 from .misc import AudioBuffer, merge_frames, time_ms
 from .moving_average import MovingAverage
 from .log import log_exceptions
+from . import codecs
+from . import images
 
 __all__ = [
     "AudioBuffer",
@@ -15,4 +17,6 @@ __all__ = [
     "EventEmitter",
     "http_session",
     "log_exceptions",
+    "codecs",
+    "images",
 ]
