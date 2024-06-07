@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
-import copy
 import time
 from typing import Any, AsyncIterable, Callable, Literal
 
