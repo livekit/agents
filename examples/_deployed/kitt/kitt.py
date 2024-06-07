@@ -2,7 +2,7 @@ import asyncio
 import copy
 import logging
 from collections import deque
-from typing import Annotated
+from typing import Annotated, List
 
 from livekit import agents, rtc
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
@@ -44,14 +44,15 @@ async def get_human_video_track(room: rtc.Room):
 
     room.on("track_subscribed", on_sub)
 
-    remote_video_tracks = [
-        t_pub.track
-        for _, p in room.participants.items()
-        for _, t_pub in p.tracks.items()
-        if t_pub.track is not None
-        and t_pub.kind == rtc.TrackKind.KIND_VIDEO
-        and isinstance(t_pub.track, rtc.RemoteVideoTrack)
-    ]
+    remote_video_tracks: List[rtc.RemoteVideoTrack] = []
+    for _, p in room.participants.items():
+        for _, t_pub in p.tracks.items():
+            if (
+                t_pub.track is not None
+                and t_pub.kind == rtc.TrackKind.KIND_VIDEO
+                and isinstance(t_pub.track, rtc.RemoteVideoTrack)
+            ):
+                remote_video_tracks.append(t_pub.track)
 
     if len(remote_video_tracks) > 0:
         track_future.set_result(remote_video_tracks[0])
