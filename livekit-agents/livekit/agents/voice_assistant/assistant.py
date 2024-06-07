@@ -481,13 +481,15 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         # this speech may not be validated, so we create a copy
         # of our context to add the new user message
-        chat_ctx = copy.deepcopy(self._chat_ctx)
-        chat_ctx.messages.append(
+        copied_ctx = allm.ChatContext()
+        history = self._chat_ctx.messages.copy()
+        history.append(
             allm.ChatMessage(
                 text=text,
                 role=allm.ChatRole.USER,
             )
         )
+        copied_ctx.messages = history
 
         if self._maybe_answer_task is not None:
             self._maybe_answer_task.cancel()
@@ -499,7 +501,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             except Exception:
                 logger.exception("error while answering")
 
-        t = asyncio.create_task(_answer_task(chat_ctx, self._answer_speech))
+        t = asyncio.create_task(_answer_task(copied_ctx, self._answer_speech))
         self._maybe_answer_task = t
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
