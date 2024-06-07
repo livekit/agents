@@ -44,7 +44,17 @@ class ChatMessage:
     text: str
     images: List[ChatImage] = field(default_factory=list)
 
+    def copy(self):
+        return ChatMessage(
+            role=self.role,
+            text=self.text,
+            images=self.images.copy(),  # Shallow copy is fine here, no use case right now for images to be mutated
+        )
+
 
 @dataclass
 class ChatContext:
     messages: list[ChatMessage] = field(default_factory=list)
+
+    def copy(self):
+        return ChatContext(messages=[m.copy() for m in self.messages])
