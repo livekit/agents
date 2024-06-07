@@ -47,10 +47,8 @@ async def get_human_video_track(room: rtc.Room):
     remote_video_tracks: List[rtc.RemoteVideoTrack] = []
     for _, p in room.participants.items():
         for _, t_pub in p.tracks.items():
-            if (
-                t_pub.track is not None
-                and t_pub.kind == rtc.TrackKind.KIND_VIDEO
-                and isinstance(t_pub.track, rtc.RemoteVideoTrack)
+            if t_pub.track is not None and isinstance(
+                t_pub.track, rtc.RemoteVideoTrack
             ):
                 remote_video_tracks.append(t_pub.track)
 
