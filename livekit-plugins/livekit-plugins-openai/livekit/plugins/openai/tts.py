@@ -28,8 +28,13 @@ from .models import TTSModels, TTSVoices
 
 OPENAI_TTS_SAMPLE_RATE = 24000
 OPENAI_TTS_CHANNELS = 1
-OPENAI_ENPOINT = "https://api.openai.com/v1/audio/speech"
 
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+if os.environ.get("OPENAI_BASE_URL"):
+    OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
+
+OPENAI_ENPOINT = f"{OPENAI_BASE_URL}/audio/speech"
 
 @dataclass
 class _TTSOptions:
