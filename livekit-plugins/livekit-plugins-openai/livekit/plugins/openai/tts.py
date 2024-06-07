@@ -21,7 +21,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 import aiohttp
-from livekit.agents import codecs, tts, utils
+from livekit.agents import tts, utils
+from livekit.agents.utils import codecs
 
 from .log import logger
 from .models import TTSModels, TTSVoices
