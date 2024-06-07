@@ -301,6 +301,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        """
+        Main task is publising the agent audio track and run the update loop
+        """
         if self._opts.plotting:
             self._plotter.start()
 
@@ -328,7 +331,53 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         )
 
         self._ready_future.set_result(None)
-        await self._update_co()
+
+        # Loop running each 10ms to do the following:
+        #  - Update the volume based on the user speech probability
+        #  - Decide when to interrupt the agent speech
+        #  - Decide when to validate the user speech (starting the agent answer)
+        speech_prob_avg = utils.MovingAverage(100)
+        speaking_avg_validation = utils.MovingAverage(150)
+        interruption_speaking_avg = utils.MovingAverage(
+            int(self._opts.int_speech_duration * 100)
+        )
+
+        interval_10ms = aio.interval(0.01)
+
+        vad_pw = 2.4  # TODO(theomonnom): should this be exposed?
+        while True:
+            await interval_10ms.tick()
+
+            speech_prob_avg.add_sample(self._speech_prob)
+            speaking_avg_validation.add_sample(int(self._user_speaking))
+            interruption_speaking_avg.add_sample(int(self._user_speaking))
+
+            bvol = self._opts.base_volume
+            self._target_volume = max(0, 1 - speech_prob_avg.get_avg() * vad_pw) * bvol
+
+            if self._validated_speech:
+                if not self._validated_speech.allow_interruptions:
+                    # avoid volume to go to 0 even if speech probability is high
+                    self._target_volume = max(self._target_volume, bvol * 0.5)
+
+                if self._validated_speech.interrupted:
+                    # the current speech is interrupted, target volume should be 0
+                    self._target_volume = 0
+
+            if self._user_speaking:
+                if (
+                    interruption_speaking_avg.get_avg() >= 0.1
+                ):  # allow 10% of "noise"/false positives in the VAD?
+                    self._interrupt_if_needed()
+            elif self._pending_validation:
+                if speaking_avg_validation.get_avg() <= 0.05:
+                    self._pending_validation = False
+                    self._validate_answer_if_needed()
+
+            if self._opts.plotting:
+                self._plotter.plot_value("raw_t_vol", self._target_volume)
+                self._plotter.plot_value("vol", self._vol_filter.filtered())
+
 
     def _link_participant(self, identity: str) -> None:
         p = self._start_args.room.participants_by_identity.get(identity)
@@ -528,55 +577,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._plotter.plot_event("agent_stopped_speaking")
         self._agent_speaking = False
         self.emit("agent_stopped_speaking")
-
-    async def _update_co(self) -> None:
-        """
-        Loop running each 10ms to do the following:
-        - Update the volume based on the user speech probability
-        - Decide when to interrupt the agent speech
-        - Decide when to validate the user speech (starting the agent answer)
-        """
-        speech_prob_avg = utils.MovingAverage(100)
-        speaking_avg_validation = utils.MovingAverage(150)
-        interruption_speaking_avg = utils.MovingAverage(
-            int(self._opts.int_speech_duration * 100)
-        )
-
-        interval_10ms = aio.interval(0.01)
-
-        vad_pw = 2.4  # TODO(theomonnom): should this be exposed?
-        while True:
-            await interval_10ms.tick()
-
-            speech_prob_avg.add_sample(self._speech_prob)
-            speaking_avg_validation.add_sample(int(self._user_speaking))
-            interruption_speaking_avg.add_sample(int(self._user_speaking))
-
-            bvol = self._opts.base_volume
-            self._target_volume = max(0, 1 - speech_prob_avg.get_avg() * vad_pw) * bvol
-
-            if self._validated_speech:
-                if not self._validated_speech.allow_interruptions:
-                    # avoid volume to go to 0 even if speech probability is high
-                    self._target_volume = max(self._target_volume, bvol * 0.5)
-
-                if self._validated_speech.interrupted:
-                    # the current speech is interrupted, target volume should be 0
-                    self._target_volume = 0
-
-            if self._user_speaking:
-                if (
-                    interruption_speaking_avg.get_avg() >= 0.1
-                ):  # allow 10% of "noise"/false positives in the VAD?
-                    self._interrupt_if_needed()
-            elif self._pending_validation:
-                if speaking_avg_validation.get_avg() <= 0.05:
-                    self._pending_validation = False
-                    self._validate_answer_if_needed()
-
-            if self._opts.plotting:
-                self._plotter.plot_value("raw_t_vol", self._target_volume)
-                self._plotter.plot_value("vol", self._vol_filter.filtered())
 
     def _interrupt_if_needed(self) -> None:
         """
@@ -826,12 +826,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     async def _playout_co(
         self,
-        po_rx: aio.ChanReceiver[rtc.AudioFrame],
+        playout_rx: aio.ChanReceiver[rtc.AudioFrame],
         tts_forwarder: transcription.TTSSegmentsForwarder | utils._noop.Nop,
     ) -> None:
         """
         Playout audio with the current volume.
-        The po_rx is streaming the synthesized speech from the TTS provider to minimize latency
+        The playout_rx is streaming the synthesized speech from the TTS provider to minimize latency
         """
         assert (
             self._audio_source is not None
@@ -848,7 +848,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         first_frame = True
 
-        async for buf in po_rx:
+        async for frame in playout_rx:
             if first_frame:
                 self._agent_started_speaking()
                 tts_forwarder.segment_playout_started()  # we have only one segment
@@ -857,15 +857,15 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             if _should_break():
                 break
 
-            # divide frame by chunks of 20ms
-            ms20 = buf.sample_rate // 50
+            # divide the frame by chunks of 20ms
+            ms20 = frame.sample_rate // 50
             i = 0
-            while i < len(buf.data):
+            while i < len(frame.data):
                 if _should_break():
                     break
 
-                rem = min(ms20, len(buf.data) - i)
-                data = buf.data[i : i + rem]
+                rem = min(ms20, len(frame.data) - i)
+                data = frame.data[i : i + rem]
                 i += rem
 
                 dt = 1 / len(data)
@@ -876,8 +876,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 await self._audio_source.capture_frame(
                     rtc.AudioFrame(
                         data=data.tobytes(),
-                        sample_rate=buf.sample_rate,
-                        num_channels=buf.num_channels,
+                        sample_rate=frame.sample_rate,
+                        num_channels=frame.num_channels,
                         samples_per_channel=rem,
                     )
                 )

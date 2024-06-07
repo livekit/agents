@@ -60,6 +60,7 @@ async def entrypoint(ctx: JobContext):
         tts=elevenlabs.TTS(),
         fnc_ctx=AssistantFnc(),
         chat_ctx=initial_ctx,
+        debug=True,
     )
 
     async def _answer_light_toggling(enabled_rooms, disabled_rooms):
