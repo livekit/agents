@@ -101,6 +101,14 @@ async def entrypoint(ctx: JobContext):
         await assistant.say(stream, allow_interruptions=True)
 
     async def get_human_video_track():
+        track_future = asyncio.Future[rtc.RemoteVideoTrack]()
+
+        def on_sub(track: rtc.Track, *_):
+            if isinstance(track, rtc.RemoteVideoTrack):
+                track_future.set_result(track)
+
+        ctx.room.on("track_subscribed", on_sub)
+
         remote_video_tracks = [
             t_pub.track
             for _, p in ctx.room.participants.items()
@@ -111,15 +119,8 @@ async def entrypoint(ctx: JobContext):
         ]
 
         if len(remote_video_tracks) > 0:
-            return remote_video_tracks[0]
+            track_future.set_result(remote_video_tracks[0])
 
-        track_future = asyncio.Future[rtc.RemoteVideoTrack]()
-
-        def on_sub(track: rtc.Track, *_):
-            if isinstance(track, rtc.RemoteVideoTrack):
-                track_future.set_result(track)
-
-        ctx.room.on("track_subscribed", on_sub)
         video_track = await track_future
         ctx.room.off("track_subscribed", on_sub)
         return video_track
