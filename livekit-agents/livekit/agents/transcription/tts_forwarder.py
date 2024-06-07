@@ -198,7 +198,7 @@ class TTSSegmentsForwarder:
         if self._closed:
             raise RuntimeError("mark_text_segment_end called after close")
 
-        # create new segment on "mark_text_segment_end" -> None:
+        # create new segment on "mark_text_segment_end"
         self._pending_segment.cur_text.sentence_stream.mark_segment_end()
         new_seg = self._create_segment()
         self._pending_segment.cur_text = new_seg
