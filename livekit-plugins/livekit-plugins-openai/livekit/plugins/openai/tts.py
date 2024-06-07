@@ -60,8 +60,12 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("OPENAI_API_KEY must be set")
 
-        self._opts = _TTSOptions(model=model, voice=voice, api_key=api_key,
-                                 endpoint=os.path.join(get_base_url(base_url), "audio/speech"))
+        self._opts = _TTSOptions(
+            model=model,
+            voice=voice,
+            api_key=api_key,
+            endpoint=os.path.join(get_base_url(base_url), "audio/speech"),
+        )
         self._session = http_session
 
     def _ensure_session(self) -> aiohttp.ClientSession:

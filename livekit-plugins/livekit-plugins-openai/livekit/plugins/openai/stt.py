@@ -37,6 +37,7 @@ class _STTOptions:
     api_key: str
     endpoint: str
 
+
 class STT(stt.STT):
     def __init__(
         self,
