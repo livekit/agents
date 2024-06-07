@@ -9,7 +9,7 @@ from typing import Callable, Optional
 from attrs import define
 from livekit import rtc
 
-from .. import tokenize
+from .. import tokenize, utils
 from ..log import logger
 from . import _utils
 
@@ -31,6 +31,7 @@ class _TTSOptions:
 
 @define
 class _SegmentData:
+    index: int
     sentence_stream: tokenize.SentenceStream
     text: str
     sentence_count: int
@@ -112,10 +113,12 @@ class TTSSegmentsForwarder:
             hyphenate_word=hyphenate_word,
             new_sentence_delay=new_sentence_delay,
         )
+        self._closed = False
 
-        self._main_task = asyncio.create_task(self._run())
+        self._next_segment_index = 0
+        self._playing_seg_index = -1
+        self._finshed_seg_index = -1
 
-        # current segment where the user may still be pushing text & audio
         first_segment = self._create_segment()
         segments_q = deque()
         segments_q.append(first_segment)
@@ -128,9 +131,7 @@ class TTSSegmentsForwarder:
 
         self._seg_queue = asyncio.Queue[Optional[_SegmentData]]()
         self._seg_queue.put_nowait(first_segment)
-        self._validated_playout_q = asyncio.Queue[None]()
-
-        self._closed = False
+        self._main_atask = asyncio.create_task(self._main_task())
 
     def segment_playout_started(self) -> None:
         """Call this function when the playout of the audio segment starts,
@@ -141,9 +142,16 @@ class TTSSegmentsForwarder:
         Note that you don't need to wait for the first synthesized audio frame to call this function.
         The forwarder will wait for the first audio frame before starting the transcription.
         """
-        self._validated_playout_q.put_nowait(None)
+        self._playing_seg_index += 1
 
-    def push_audio(self, frame: rtc.AudioFrame | None, **kwargs) -> None:
+    def segment_playout_finished(self) -> None:
+        """Notify that the playout of the audio segment has finished.
+        This will catchup and directly send the final transcription in case the forwarder is too
+        late.
+        """
+        self._finshed_seg_index += 1
+
+    def push_audio(self, frame: rtc.AudioFrame | None) -> None:
         if self._closed:
             raise RuntimeError("push_audio called after close")
 
@@ -197,31 +205,28 @@ class TTSSegmentsForwarder:
         self._pending_segment.q.append(new_seg)
         self._seg_queue.put_nowait(new_seg)
 
-    async def aclose(self, *, wait: bool = True) -> None:
+    async def aclose(self) -> None:
         self._closed = True
         self._seg_queue.put_nowait(None)
 
+        # can't push more text/audio
         for seg in self._pending_segment.q:
             seg.ready_future.cancel()
+            await seg.sentence_stream.aclose()
 
-        if not wait:
-            self._main_task.cancel()
+        await self._main_atask
 
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
-
-    async def _run(self) -> None:
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
         transcription_msg_q = asyncio.Queue[Optional[rtc.TranscriptionSegment]]()
-        try:
-            await asyncio.gather(
-                self._synchronize(transcription_msg_q),
-                self._forward(transcription_msg_q),
-            )
-        except Exception:
-            logger.exception("error in tts transcription")
+        await asyncio.gather(
+            self._synchronize_co(transcription_msg_q),
+            self._forward_co(transcription_msg_q),
+        )
 
     def _create_segment(self) -> _SegmentData:
-        return _SegmentData(
+        data = _SegmentData(
+            index=self._next_segment_index,
             sentence_stream=self._opts.sentence_tokenizer.stream(),
             text="",
             sentence_count=0,
@@ -230,8 +235,10 @@ class TTSSegmentsForwarder:
             processed_hyphenes=0,
             ready_future=asyncio.Future(),
         )
+        self._next_segment_index += 1
+        return data
 
-    async def _forward(self, q: asyncio.Queue[rtc.TranscriptionSegment | None]):
+    async def _forward_co(self, q: asyncio.Queue[rtc.TranscriptionSegment | None]):
         while True:
             seg = await q.get()
             if seg is None:
@@ -245,19 +252,25 @@ class TTSSegmentsForwarder:
             )
             await self._opts.room.local_participant.publish_transcription(tr)
 
-    async def _synchronize(self, q: asyncio.Queue[rtc.TranscriptionSegment | None]):
-        async def _sync_sentence(
+    async def _synchronize_co(self, q: asyncio.Queue[rtc.TranscriptionSegment | None]):
+        async def _sync_sentence_co(
             seg: _SegmentData, tokenized_sentence: str, start_time: float
         ):
-            # sentence data
-            seg_id = (
-                _utils.segment_uuid()
-            )  # put each sentence in a different transcription segment
+            # put each sentence in a different transcription segment
+            seg_id = _utils.segment_uuid()
             words = self._opts.word_tokenizer.tokenize(text=tokenized_sentence)
             processed_words = []
 
             text = ""
             for word in words:
+                if self._closed:
+                    # transcription closed, early
+                    return
+
+                if seg.index <= self._finshed_seg_index:
+                    # playout of the audio segment already finished
+                    break
+
                 word_hyphenes = len(self._opts.hyphenate_word(word))
                 processed_words.append(word)
 
@@ -317,14 +330,18 @@ class TTSSegmentsForwarder:
                 continue
 
             if not self._opts.auto_playout:
-                _ = await self._validated_playout_q.get()
+                # wait until the playout of the audio segment has started
+                while not self._closed:
+                    if self._playing_seg_index >= audio_seg.index:
+                        break
+                    await asyncio.sleep(0.1)
 
             start_time = time.time()
             sentence_stream = audio_seg.sentence_stream
 
             async for ev in sentence_stream:
                 if ev.type == tokenize.TokenEventType.TOKEN:
-                    await _sync_sentence(audio_seg, ev.token, start_time)
+                    await _sync_sentence_co(audio_seg, ev.token, start_time)
                 if ev.type == tokenize.TokenEventType.FINISHED:
                     break  # new segment
 
