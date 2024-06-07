@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import contextlib
 import contextvars
 import copy
+import logging
 import time
 from typing import Any, AsyncIterable, Callable, Literal
 
@@ -17,7 +17,6 @@ from .. import stt as astt
 from .. import tts as atts
 from .. import vad as avad
 from . import plotter
-
 
 logger = logging.getLogger("livekit.agents.voice_assistant")
 
