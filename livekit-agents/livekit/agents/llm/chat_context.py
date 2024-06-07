@@ -19,8 +19,6 @@ from typing import Any, Dict, List
 
 from livekit import rtc
 
-from .llm import LLM
-
 
 class ChatRole(enum.Enum):
     SYSTEM = "system"
@@ -33,7 +31,7 @@ class ChatImage:
     image: str | rtc.VideoFrame
     inference_width: int
     inference_height: int
-    _cache: Dict[LLM, Any] = {}
+    _cache: Dict[object, Any] = {}
     """Cache for the processed image. The key is the LLM instance. The value is the processed image.
        This should only be used within LLM implementations.
     """
