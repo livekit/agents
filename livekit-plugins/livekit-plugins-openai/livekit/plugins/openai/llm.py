@@ -24,7 +24,8 @@ from typing import Any, Dict, List, MutableSet, Tuple
 
 from attrs import define
 from livekit import rtc
-from livekit.agents import images, llm
+from livekit.agents import llm
+from livekit.agents.utils import images
 
 import openai
 
@@ -90,7 +91,8 @@ class LLM(llm.LLM):
                             "image_url": {
                                 "url": img.image,
                                 "detail": image_detail_from_dimensions(
-                                    img.inference_width, img.inference_height
+                                    img.inference_width or 512,
+                                    img.inference_height or 512,
                                 ),
                             },
                         }
@@ -101,7 +103,9 @@ class LLM(llm.LLM):
                         encode_options = images.EncodeOptions(
                             format="JPEG",
                             resize_options=images.ResizeOptions(
-                                width=w, height=h, strategy="center_aspect_fit"
+                                width=w or 128,
+                                height=h or 128,
+                                strategy="center_aspect_fit",
                             ),
                         )
                         jpg_bytes = images.encode(img.image, encode_options)

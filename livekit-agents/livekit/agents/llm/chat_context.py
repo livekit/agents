@@ -30,9 +30,9 @@ class ChatRole(enum.Enum):
 @dataclass
 class ChatImage:
     image: str | rtc.VideoFrame
-    inference_width: int = 128
-    inference_height: int = 128
-    _cache: Dict[object, Any] = field(default_factory=dict)
+    inference_width: int | None = None
+    inference_height: int | None = None
+    _cache: Dict[object, Any] = field(default_factory=dict, repr=False, init=False)
     """_cache is used  by LLM implementations to store a processed version of the image
     for later use during inference. It is not intended to be used by the user code.
     """

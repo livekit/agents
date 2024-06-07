@@ -15,8 +15,6 @@ from livekit.agents.voice_assistant import AssistantContext, VoiceAssistant
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 MAX_IMAGES = 3
-
-NO_IMAGE_MESSAGE_SIP = "I'm sorry, I can't see anything when you're calling from a phone. Try the web demo."
 NO_IMAGE_MESSAGE_GENERIC = (
     "I'm sorry, I don't have an image to process. Are you publishing your video?"
 )
@@ -38,6 +36,7 @@ class AssistantFnc(agents.llm.FunctionContext):
 
 
 async def entrypoint(ctx: JobContext):
+    sip = ctx.room.name.startswith("sip")
     initial_ctx = ChatContext(
         messages=[
             ChatMessage(
@@ -60,7 +59,7 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(),
         llm=gpt,
         tts=elevenlabs.TTS(encoding="pcm_44100"),
-        fnc_ctx=AssistantFnc(),
+        fnc_ctx=None if sip else AssistantFnc(),
         chat_ctx=initial_ctx,
     )
 
@@ -83,10 +82,7 @@ async def entrypoint(ctx: JobContext):
     async def respond_to_image(user_msg: str):
         nonlocal latest_image, img_msg_queue, initial_ctx
         if not latest_image:
-            # We've setup sip-created rooms to have the 'sip' prefix
-            sip = ctx.room.name.startswith("sip")
-            msg = NO_IMAGE_MESSAGE_SIP if sip else NO_IMAGE_MESSAGE_GENERIC
-            await assistant.say(msg)
+            await assistant.say(NO_IMAGE_MESSAGE_GENERIC)
             return
 
         initial_ctx.messages.append(
@@ -119,26 +115,14 @@ async def entrypoint(ctx: JobContext):
 
         track_future = asyncio.Future[rtc.RemoteVideoTrack]()
 
-        def on_track_subscribed(
-            track: rtc.Track,
-            publication: rtc.TrackPublication,
-            participant: rtc.RemoteParticipant,
-        ):
+        def on_sub(track: rtc.Track, *_):
             if isinstance(track, rtc.RemoteVideoTrack):
                 track_future.set_result(track)
 
-        ctx.room.on("track_subscribed", on_track_subscribed)
-
+        ctx.room.on("track_subscribed", on_sub)
         video_track = await track_future
-        ctx.room.off("track_subscribed", on_track_subscribed)
+        ctx.room.off("track_subscribed", on_sub)
         return video_track
-
-    async def process_video_track():
-        nonlocal latest_image
-        while True:
-            video_track = await get_human_video_track()
-            async for event in rtc.VideoStream(video_track):
-                latest_image = event.frame
 
     @assistant.on("function_calls_finished")
     def _function_calls_done(ctx: AssistantContext):
@@ -151,7 +135,10 @@ async def entrypoint(ctx: JobContext):
 
     await asyncio.sleep(0.5)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
-    await process_video_track()
+    while True:
+        video_track = await get_human_video_track()
+        async for event in rtc.VideoStream(video_track):
+            latest_image = event.frame
 
 
 async def request_fnc(req: JobRequest) -> None:
