@@ -35,6 +35,32 @@ class AssistantFnc(agents.llm.FunctionContext):
         ctx.store_metadata("user_msg", user_msg)
 
 
+async def get_human_video_track(room: rtc.Room):
+    track_future = asyncio.Future[rtc.RemoteVideoTrack]()
+
+    def on_sub(track: rtc.Track, *_):
+        if isinstance(track, rtc.RemoteVideoTrack):
+            track_future.set_result(track)
+
+    room.on("track_subscribed", on_sub)
+
+    remote_video_tracks = [
+        t_pub.track
+        for _, p in room.participants.items()
+        for _, t_pub in p.tracks.items()
+        if t_pub.track is not None
+        and t_pub.kind == rtc.TrackKind.KIND_VIDEO
+        and isinstance(t_pub.track, rtc.RemoteVideoTrack)
+    ]
+
+    if len(remote_video_tracks) > 0:
+        track_future.set_result(remote_video_tracks[0])
+
+    video_track = await track_future
+    room.off("track_subscribed", on_sub)
+    return video_track
+
+
 async def entrypoint(ctx: JobContext):
     sip = ctx.room.name.startswith("sip")
     initial_ctx = ChatContext(
@@ -100,31 +126,6 @@ async def entrypoint(ctx: JobContext):
         stream = await gpt.chat(initial_ctx)
         await assistant.say(stream, allow_interruptions=True)
 
-    async def get_human_video_track():
-        track_future = asyncio.Future[rtc.RemoteVideoTrack]()
-
-        def on_sub(track: rtc.Track, *_):
-            if isinstance(track, rtc.RemoteVideoTrack):
-                track_future.set_result(track)
-
-        ctx.room.on("track_subscribed", on_sub)
-
-        remote_video_tracks = [
-            t_pub.track
-            for _, p in ctx.room.participants.items()
-            for _, t_pub in p.tracks.items()
-            if t_pub.track is not None
-            and t_pub.kind == rtc.TrackKind.KIND_VIDEO
-            and isinstance(t_pub.track, rtc.RemoteVideoTrack)
-        ]
-
-        if len(remote_video_tracks) > 0:
-            track_future.set_result(remote_video_tracks[0])
-
-        video_track = await track_future
-        ctx.room.off("track_subscribed", on_sub)
-        return video_track
-
     @assistant.on("function_calls_finished")
     def _function_calls_done(ctx: AssistantContext):
         user_msg = ctx.get_metadata("user_msg")
@@ -136,8 +137,8 @@ async def entrypoint(ctx: JobContext):
 
     await asyncio.sleep(0.5)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
-    while True:
-        video_track = await get_human_video_track()
+    while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
+        video_track = await get_human_video_track(ctx.room)
         async for event in rtc.VideoStream(video_track):
             latest_image = event.frame
 
