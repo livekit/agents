@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import contextlib
 import contextvars
 import copy
@@ -15,8 +16,10 @@ from .. import llm as allm
 from .. import stt as astt
 from .. import tts as atts
 from .. import vad as avad
-from ..log import logger
 from . import plotter
+
+
+logger = logging.getLogger("livekit.agents.voice_assistant")
 
 
 @define(kw_only=True)
@@ -672,10 +675,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self._chat_ctx.messages.append(msg)
                 self.emit("user_speech_committed", self._chat_ctx, msg)
 
+            self._log_debug("starting playout")
             await self._playout_co(po_rx, tts_forwarder)
 
             msg = allm.ChatMessage(
-                text=data.collected_text,  # TODO(theomonnom)
+                text=data.collected_text,
                 role=allm.ChatRole.ASSISTANT,
             )
 
@@ -683,10 +687,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self._chat_ctx.messages.append(msg)
                 if data.interrupted:
                     self.emit("agent_speech_interrupted", self._chat_ctx, msg)
-                    await tts_forwarder.aclose(wait=False)
                 else:
                     self.emit("agent_speech_committed", self._chat_ctx, msg)
-                    await tts_forwarder.aclose()
 
             self._log_debug("playout finished", extra={"interrupted": data.interrupted})
         finally:
@@ -695,7 +697,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 _synthesize_task.cancel()
                 await _synthesize_task
 
-            await tts_forwarder.aclose(wait=False)
+            # make sure that _synthesize_task is finished before closing the transcription
+            # forwarder. pushing text/audio to the forwarder after closing it will raise an exception
+            await tts_forwarder.aclose()
 
     async def _synthesize_speech_co(
         self,
@@ -711,6 +715,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         start_time = time.time()
         first_frame = True
+        audio_duration = 0.0
         async for audio in self._tts.synthesize(text):
             if first_frame:
                 first_frame = False
@@ -718,11 +723,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self._log_debug(f"tts first frame in {dt:.2f}s")
 
             frame = audio.data
+            audio_duration += frame.samples_per_channel / frame.sample_rate
+
             po_tx.send_nowait(frame)
             tts_forwarder.push_audio(frame)
 
         tts_forwarder.mark_audio_segment_end()
         po_tx.close()
+        self._log_debug(f"tts finished synthesising {audio_duration:.2f}s of audio")
 
     async def _synthesize_streamed_speech_co(
         self,
@@ -736,6 +744,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         async def _read_generated_audio_task():
             start_time = time.time()
             first_frame = True
+            audio_duration = 0.0
             async for event in tts_stream:
                 if event.type == atts.SynthesisEventType.AUDIO:
                     if first_frame:
@@ -744,11 +753,16 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                         self._log_debug(f"tts first frame in {dt:.2f}s (streamed)")
 
                     assert event.audio is not None
-                    tts_forwarder.push_audio(event.audio.data)
-                    po_tx.send_nowait(event.audio.data)
+                    frame = event.audio.data
+                    audio_duration += frame.samples_per_channel / frame.sample_rate
+                    tts_forwarder.push_audio(frame)
+                    po_tx.send_nowait(frame)
 
             tts_forwarder.mark_audio_segment_end()
             po_tx.close()
+            self._log_debug(
+                f"tts finished synthesising {audio_duration:.2f}s audio (streamed)"
+            )
 
         # otherwise, stream the text to the TTS..
         tts_stream = self._tts.stream()
@@ -817,7 +831,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         assert (
             self._audio_source is not None
         ), "audio source should be set before playout"
-        self._log_debug("starting playout")
 
         def _should_break():
             eps = 1e-6
@@ -871,10 +884,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("agent_stopped_speaking")
             self._agent_speaking = False
             self.emit("agent_stopped_speaking")
+            tts_forwarder.segment_playout_finished()
 
     def _log_debug(self, msg: str, **kwargs) -> None:
         if self._opts.debug:
-            logger.debug(f"VoiceAssistant — {msg}", **kwargs)
+            logger.debug(msg, **kwargs)
 
     async def _wait_ready(self) -> None:
         """Wait for the assistant to be fully started"""
