@@ -27,8 +27,12 @@ from livekit.agents.utils import AudioBuffer
 
 from .models import WhisperModels
 
-OPENAI_ENPOINT = "https://api.openai.com/v1/audio/transcriptions"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
 
+if os.environ.get("OPENAI_BASE_URL"):
+    OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
+
+OPENAI_ENPOINT = f"{OPENAI_BASE_URL}/audio/transcriptions"
 
 @dataclass
 class _STTOptions:
