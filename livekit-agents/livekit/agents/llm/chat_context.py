@@ -27,34 +27,22 @@ class ChatRole(enum.Enum):
     TOOL = "tool"
 
 
+@dataclass
 class ChatImage:
     image: str | rtc.VideoFrame
-    inference_width: int
-    inference_height: int
-    _cache: Dict[object, Any] = {}
-    """Cache for the processed image. The key is the LLM instance. The value is the processed image.
-       This should only be used within LLM implementations.
+    inference_width: int = 128
+    inference_height: int = 128
+    _cache: Dict[object, Any] = field(default_factory=dict)
+    """_cache is used  by LLM implementations to store a processed version of the image
+    for later use during inference. It is not intended to be used by the user code.
     """
 
-    def __init__(
-        self,
-        image: str | rtc.VideoFrame,
-        inference_width: int = 128,
-        inference_height: int = 128,
-    ):
-        self.image = image
-        self.inference_width = inference_width
-        self.inference_height = inference_height
 
-
+@dataclass
 class ChatMessage:
     role: ChatRole
     text: str
-    images: List[ChatImage]
-
-    def __init__(self, role: ChatRole, text: str, images: list[ChatImage] = []):
-        self.role = role
-        self.text = text
+    images: List[ChatImage] = field(default_factory=list)
 
 
 @dataclass
