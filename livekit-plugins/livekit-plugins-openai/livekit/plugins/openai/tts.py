@@ -26,10 +26,10 @@ from livekit.agents.utils import codecs
 
 from .log import logger
 from .models import TTSModels, TTSVoices
+from .utils import get_base_url
 
 OPENAI_TTS_SAMPLE_RATE = 24000
 OPENAI_TTS_CHANNELS = 1
-OPENAI_ENPOINT = "https://api.openai.com/v1/audio/speech"
 
 
 @dataclass
@@ -37,6 +37,7 @@ class _TTSOptions:
     model: TTSModels
     voice: TTSVoices
     api_key: str
+    endpoint: str
 
 
 class TTS(tts.TTS):
@@ -46,6 +47,7 @@ class TTS(tts.TTS):
         model: TTSModels = "tts-1",
         voice: TTSVoices = "alloy",
         api_key: str | None = None,
+        base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -58,7 +60,12 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("OPENAI_API_KEY must be set")
 
-        self._opts = _TTSOptions(model=model, voice=voice, api_key=api_key)
+        self._opts = _TTSOptions(
+            model=model,
+            voice=voice,
+            api_key=api_key,
+            endpoint=os.path.join(get_base_url(base_url), "audio/speech"),
+        )
         self._session = http_session
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -88,7 +95,7 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self):
         try:
             async with self._session.post(
-                OPENAI_ENPOINT,
+                self._opts.endpoint,
                 headers={"Authorization": f"Bearer {self._opts.api_key}"},
                 json={
                     "input": self._text,
