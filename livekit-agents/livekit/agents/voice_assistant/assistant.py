@@ -538,6 +538,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         # this speech may not be validated, so we create a copy
         # of our context to add the new user message
         copied_ctx = self._chat_ctx.copy()
+        copied_ctx.messages.append(
+            allm.ChatMessage(
+                text=text,
+                role=allm.ChatRole.USER,
+            )
+        )
 
         if self._maybe_answer_task is not None:
             self._maybe_answer_task.cancel()
