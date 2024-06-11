@@ -21,12 +21,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 import aiohttp
-from livekit.agents import tts, utils
-from livekit.agents.utils import codecs
 from livekit import rtc
+from livekit.agents import tts, utils
 
 from .log import logger
-from .models import TTSEncoding, TTSModels, TTSDefaultVoiceEmbedding
+from .models import TTSDefaultVoiceEmbedding, TTSEncoding, TTSModels
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"

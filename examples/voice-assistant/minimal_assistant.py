@@ -8,7 +8,7 @@ from livekit.agents.llm import (
     ChatRole,
 )
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import deepgram, openai, cartesia, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 
 async def entrypoint(ctx: JobContext):
