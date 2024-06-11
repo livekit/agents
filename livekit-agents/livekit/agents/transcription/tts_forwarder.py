@@ -240,11 +240,8 @@ class TTSSegmentsForwarder:
                 if ev.type == tokenize.TokenEventType.TOKEN:
                     await self._sync_sentence_co(seg, ev.token, rtc_seg_q)
 
-            print("segment finished")
-
         rtc_seg_q.put_nowait(None)
         await forward_task
-        print("task done")
 
     async def _sync_sentence_co(
         self,

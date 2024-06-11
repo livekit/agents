@@ -179,7 +179,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._vol_filter = utils.ExpFilter(0.9, max_val=self._opts.base_volume)
         self._vol_filter.apply(1.0, self._opts.base_volume)
         self._speech_prob = 0.0
-        self._transcripted_text, self._interim_text = "", ""
+        self._transcribed_text, self._interim_text = "", ""
         self._ready_future = asyncio.Future()
 
     @property
@@ -521,8 +521,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             )
 
     def _on_final_transcript(self, text: str) -> None:
-        self._transcripted_text += text
-        self._log_debug(f"received final transcript: {self._transcripted_text}")
+        self._transcribed_text += text
+        self._log_debug(f"received final transcript: {self._transcribed_text}")
 
         # to create an llm stream we need an async context
         # setting it to "" and will be updated inside the _answer_task below
@@ -532,7 +532,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             allow_interruptions=self._opts.allow_interruptions,
             add_to_ctx=True,
             validation_future=asyncio.Future(),
-            user_question=self._transcripted_text,
+            user_question=self._transcribed_text,
         )
 
         # this speech may not be validated, so we create a copy
@@ -540,7 +540,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         copied_ctx = self._chat_ctx.copy()
         copied_ctx.messages.append(
             allm.ChatMessage(
-                text=self._transcripted_text,
+                text=self._transcribed_text,
                 role=allm.ChatRole.USER,
             )
         )
@@ -572,7 +572,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         if self._opts.int_min_words != 0:
-            txt = self._transcripted_text.strip().split()
+            txt = self._transcribed_text.strip().split()
             if len(txt) <= self._opts.int_min_words:
                 txt = self._interim_text.strip().split()
                 if len(txt) <= self._opts.int_min_words:
@@ -601,7 +601,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         self._pending_validation = False
-        self._transcripted_text = self._interim_text = ""
+        self._transcribed_text = self._interim_text = ""
         self._answer_speech.validate_speech()
         self._log_debug("user speech validated")
 
