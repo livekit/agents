@@ -27,7 +27,7 @@ with open(os.path.join(here, "livekit", "plugins", "cartesia", "version.py"), "r
 setuptools.setup(
     name="livekit-plugins-cartesia",
     version=about["__version__"],
-    description="LiveKit Agents Plugin for Cartesia1",
+    description="LiveKit Agents Plugin for Cartesia",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",
