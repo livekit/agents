@@ -14,9 +14,9 @@
 
 import io
 from dataclasses import dataclass
-from typing import Literal, Optional
+from importlib import import_module
+from typing import Any, Literal, Optional
 
-import PIL.Image
 from livekit import rtc
 
 
@@ -33,7 +33,18 @@ class ResizeOptions:
     strategy: Literal["center_aspect_fit", "center_aspect_cover", "skew"]
 
 
+def import_pil():
+    try:
+        if "Image" not in globals():
+            globals()["Image"] = import_module("PIL.Image")
+    except ImportError:
+        raise ImportError(
+            "You haven't included the 'images' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[images]`"
+        )
+
+
 def encode(frame: rtc.VideoFrame, options: EncodeOptions):
+    import_pil()
     img = _image_from_frame(frame)
     resized = _resize_image(img, options)
     buffer = io.BytesIO()
@@ -43,14 +54,17 @@ def encode(frame: rtc.VideoFrame, options: EncodeOptions):
 
 
 def _image_from_frame(frame: rtc.VideoFrame):
-    converted = frame.convert(rtc.VideoBufferType.RGBA)
-    rgb_image = PIL.Image.frombytes(
+    converted = frame
+    if frame.type != rtc.VideoBufferType.RGBA:
+        converted = frame.convert(rtc.VideoBufferType.RGBA)
+
+    rgb_image = Image.frombytes(  # noqa
         "RGBA", (frame.width, frame.height), converted.data
     ).convert("RGB")
     return rgb_image
 
 
-def _resize_image(image: PIL.Image.Image, options: EncodeOptions):
+def _resize_image(image: Any, options: EncodeOptions):
     if options.resize_options is None:
         return image
 
@@ -58,19 +72,19 @@ def _resize_image(image: PIL.Image.Image, options: EncodeOptions):
     if resize_opts.strategy == "skew":
         return image.resize((resize_opts.width, resize_opts.height))
     elif resize_opts.strategy == "center_aspect_fit":
-        result = PIL.Image.new("RGB", (resize_opts.width, resize_opts.height))
+        result = Image.new("RGB", (resize_opts.width, resize_opts.height))  # noqa
 
-        # Start with assuming image is width constrained
+        # Start with assuming the new image is narrower than the original
         new_width = resize_opts.width
         new_height = int(image.height * (resize_opts.width / image.width))
 
-        # If image is height constrained
-        if image.width / image.height < resize_opts.width / resize_opts.height:
+        # If the new image is wider than the original
+        if resize_opts.width / resize_opts.height > image.width / image.height:
             new_width = resize_opts.width
             new_height = int(image.height * (resize_opts.width / image.width))
 
         resized = image.resize((new_width, new_height))
-        PIL.Image.Image.paste(
+        Image.Image.paste(  # noqa
             result,
             resized,
             (
@@ -80,19 +94,19 @@ def _resize_image(image: PIL.Image.Image, options: EncodeOptions):
         )
         return result
     elif resize_opts.strategy == "center_aspect_cover":
-        result = PIL.Image.new("RGB", (resize_opts.width, resize_opts.height))
+        result = Image.new("RGB", (resize_opts.width, resize_opts.height))  # noqa
 
-        # Start with assuming image is width constrained
-        new_width = resize_opts.width
+        # Start with assuming the new image is shorter than the original
         new_height = int(image.height * (resize_opts.width / image.width))
+        new_width = resize_opts.width
 
-        # Image is height constrained
-        if image.width / image.height > resize_opts.width / resize_opts.height:
-            new_width = resize_opts.width
-            new_height = int(image.height * (resize_opts.width / image.width))
+        # If the new image is taller than the original
+        if resize_opts.height / resize_opts.width > image.height / image.width:
+            new_width = int(image.width * (resize_opts.height / image.height))
+            new_height = resize_opts.height
 
         resized = image.resize((new_width, new_height))
-        PIL.Image.Image.paste(
+        Image.Image.paste(  # noqa
             result,
             resized,
             (

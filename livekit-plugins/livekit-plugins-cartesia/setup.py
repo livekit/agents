@@ -16,17 +16,18 @@ import os
 import pathlib
 
 import setuptools
+import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, "livekit", "agents", "version.py"), "r") as f:
+with open(os.path.join(here, "livekit", "plugins", "cartesia", "version.py"), "r") as f:
     exec(f.read(), about)
 
 
 setuptools.setup(
-    name="livekit-agents",
+    name="livekit-plugins-cartesia",
     version=about["__version__"],
-    description="LiveKit Python Agents",
+    description="LiveKit Agents Plugin for Cartesia",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",
@@ -38,35 +39,19 @@ setuptools.setup(
         "Topic :: Multimedia :: Video",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3 :: Only",
     ],
-    keywords=["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"],
+    keywords=["webrtc", "realtime", "audio", "video", "livekit"],
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
-    python_requires=">=3.9.0",
+    python_requires=">=3.8.0",
     install_requires=[
-        "click~=8.1",
-        "livekit~=0.11",
-        "livekit-api~=0.4",
-        "livekit-protocol~=0.4",
-        "protobuf>=3",
-        "types-protobuf>=4,<5",
-        "attrs~=23.0",
-        "watchfiles~=0.22",
-        "psutil~=5.9",
+        "livekit ~= 0.11",
+        "livekit-agents~=0.7",
     ],
-    extras_require={
-        ':sys_platform=="win32"': [
-            "colorama"
-        ],  # fix logs color on windows (devmode only)
-        "codecs": ["av>=11.0.0"],
-        "images": ["pillow~=10.3.0"],
-    },
-    package_data={
-        "livekit.agents": ["py.typed"],
-    },
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

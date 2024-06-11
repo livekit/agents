@@ -9,7 +9,7 @@ import pathlib
 import pytest
 from livekit import agents
 from livekit.agents.utils import AudioBuffer, merge_frames
-from livekit.plugins import elevenlabs, google, nltk, openai
+from livekit.plugins import azure, cartesia, elevenlabs, google, nltk, openai
 
 from .utils import wer
 
@@ -39,6 +39,8 @@ SYNTHESIZE_TTS = [
     elevenlabs.TTS(encoding="pcm_44100"),
     openai.TTS(),
     google.TTS(),
+    azure.TTS(),
+    cartesia.TTS(),
 ]
 
 
@@ -63,6 +65,10 @@ STREAM_TTS = [
     ),
     agents.tts.StreamAdapter(
         tts=google.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    ),
+    agents.tts.StreamAdapter(tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER),
+    agents.tts.StreamAdapter(
+        tts=cartesia.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
 ]
 
