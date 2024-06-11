@@ -58,7 +58,6 @@ def _image_from_frame(frame: rtc.VideoFrame):
     if frame.type != rtc.VideoBufferType.RGBA:
         converted = frame.convert(rtc.VideoBufferType.RGBA)
 
-    print("NEIL", Image, frame, frame.data)
     rgb_image = Image.frombytes(  # noqa
         "RGBA", (frame.width, frame.height), converted.data
     ).convert("RGB")
