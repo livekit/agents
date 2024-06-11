@@ -8,7 +8,7 @@ from livekit.agents.llm import (
     ChatRole,
 )
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import deepgram, openai, silero
 
 
 async def entrypoint(ctx: JobContext):
@@ -25,7 +25,7 @@ async def entrypoint(ctx: JobContext):
     # to make it compatible with the VoiceAssistant
     # TODO: this can be removed in the next version
     openai_tts = tts.StreamAdapter(
-        tts=cartesia.TTS(),
+        tts=openai.TTS(voice="alloy"),
         sentence_tokenizer=tokenize.basic.SentenceTokenizer(),
     )
 
