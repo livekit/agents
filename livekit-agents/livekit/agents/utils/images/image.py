@@ -14,9 +14,9 @@
 
 import io
 from dataclasses import dataclass
+from importlib import import_module
 from typing import Literal, Optional
 
-import PIL.Image
 from livekit import rtc
 
 
@@ -33,6 +33,16 @@ class ResizeOptions:
     strategy: Literal["center_aspect_fit", "center_aspect_cover", "skew"]
 
 
+def import_pil():
+    try:
+        if "PIL.Image" not in globals():
+            globals()["PIL.Image"] = import_module("PIL.Image")
+    except ImportError:
+        raise ImportError(
+            "You haven't included the 'images' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[images]`"
+        )
+
+
 def encode(frame: rtc.VideoFrame, options: EncodeOptions):
     img = _image_from_frame(frame)
     resized = _resize_image(img, options)
@@ -44,13 +54,13 @@ def encode(frame: rtc.VideoFrame, options: EncodeOptions):
 
 def _image_from_frame(frame: rtc.VideoFrame):
     converted = frame.convert(rtc.VideoBufferType.RGBA)
-    rgb_image = PIL.Image.frombytes(
+    rgb_image = PIL.Image.Image.frombytes(  # noqa
         "RGBA", (frame.width, frame.height), converted.data
     ).convert("RGB")
     return rgb_image
 
 
-def _resize_image(image: PIL.Image.Image, options: EncodeOptions):
+def _resize_image(image: PIL.Image.Image, options: EncodeOptions):  # noqa
     if options.resize_options is None:
         return image
 
@@ -58,7 +68,7 @@ def _resize_image(image: PIL.Image.Image, options: EncodeOptions):
     if resize_opts.strategy == "skew":
         return image.resize((resize_opts.width, resize_opts.height))
     elif resize_opts.strategy == "center_aspect_fit":
-        result = PIL.Image.new("RGB", (resize_opts.width, resize_opts.height))
+        result = PIL.Image.new("RGB", (resize_opts.width, resize_opts.height))  # noqa
 
         # Start with assuming image is width constrained
         new_width = resize_opts.width
@@ -70,7 +80,7 @@ def _resize_image(image: PIL.Image.Image, options: EncodeOptions):
             new_height = int(image.height * (resize_opts.width / image.width))
 
         resized = image.resize((new_width, new_height))
-        PIL.Image.Image.paste(
+        PIL.Image.Image.paste(  # noqa
             result,
             resized,
             (
@@ -80,7 +90,7 @@ def _resize_image(image: PIL.Image.Image, options: EncodeOptions):
         )
         return result
     elif resize_opts.strategy == "center_aspect_cover":
-        result = PIL.Image.new("RGB", (resize_opts.width, resize_opts.height))
+        result = PIL.Image.new("RGB", (resize_opts.width, resize_opts.height))  # noqa
 
         # Start with assuming image is width constrained
         new_width = resize_opts.width
@@ -92,7 +102,7 @@ def _resize_image(image: PIL.Image.Image, options: EncodeOptions):
             new_height = int(image.height * (resize_opts.width / image.width))
 
         resized = image.resize((new_width, new_height))
-        PIL.Image.Image.paste(
+        PIL.Image.Image.paste(  # noqa
             result,
             resized,
             (
