@@ -641,7 +641,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         # reset volume before starting a new speech
         self._vol_filter.reset()
-        po_tx, po_rx = aio.channel()  # playout channel
+        playout_tx, playout_rx = aio.channel()  # playout channel
 
         tts_forwarder = utils._noop.Nop()
         if self._opts.transcription:
@@ -658,7 +658,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if not self._opts.preemptive_synthesis:
             await data.validation_future
 
-        tts_co = self._synthesize_task(data, po_tx, tts_forwarder)
+        tts_co = self._synthesize_task(data, playout_tx, tts_forwarder)
         _synthesize_task = asyncio.create_task(tts_co)
 
         try:
@@ -675,7 +675,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self.emit("user_speech_committed", self._chat_ctx, msg)
 
             self._log_debug("starting playout")
-            await self._playout_co(po_rx, tts_forwarder)
+            await self._playout_co(playout_rx, tts_forwarder)
 
             msg = allm.ChatMessage(
                 text=data.collected_text,
@@ -704,7 +704,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     async def _synthesize_speech_co(
         self,
         data: _SpeechData,
-        po_tx: aio.ChanSender[rtc.AudioFrame],
+        playout_tx: aio.ChanSender[rtc.AudioFrame],
         text: str,
         tts_forwarder: transcription.TTSSegmentsForwarder | utils._noop.Nop,
     ) -> None:
@@ -727,18 +727,18 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 frame = audio.data
                 audio_duration += frame.samples_per_channel / frame.sample_rate
 
-                po_tx.send_nowait(frame)
+                playout_tx.send_nowait(frame)
                 tts_forwarder.push_audio(frame)
 
         finally:
             tts_forwarder.mark_audio_segment_end()
-            po_tx.close()
+            playout_tx.close()
             self._log_debug(f"tts finished synthesising {audio_duration:.2f}s of audio")
 
     async def _synthesize_streamed_speech_co(
         self,
         data: _SpeechData,
-        po_tx: aio.ChanSender[rtc.AudioFrame],
+        playout_tx: aio.ChanSender[rtc.AudioFrame],
         streamed_text: AsyncIterable[str],
         tts_forwarder: transcription.TTSSegmentsForwarder | utils._noop.Nop,
     ) -> None:
@@ -759,7 +759,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     frame = event.audio.data
                     audio_duration += frame.samples_per_channel / frame.sample_rate
                     tts_forwarder.push_audio(frame)
-                    po_tx.send_nowait(frame)
+                    playout_tx.send_nowait(frame)
 
             self._log_debug(
                 f"tts finished synthesising {audio_duration:.2f}s audio (streamed)"
@@ -783,18 +783,20 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             await read_task
 
             tts_forwarder.mark_audio_segment_end()
-            po_tx.close()
+            playout_tx.close()
 
     @utils.log_exceptions(logger=logger)
     async def _synthesize_task(
         self,
         data: _SpeechData,
-        po_tx: aio.ChanSender[rtc.AudioFrame],
+        playout_tx: aio.ChanSender[rtc.AudioFrame],
         tts_forwarder: transcription.TTSSegmentsForwarder | utils._noop.Nop,
     ) -> None:
         """Synthesize speech from the source. Also run LLM inference when needed"""
         if isinstance(data.source, str):
-            await self._synthesize_speech_co(data, po_tx, data.source, tts_forwarder)
+            await self._synthesize_speech_co(
+                data, playout_tx, data.source, tts_forwarder
+            )
         elif isinstance(data.source, allm.LLMStream):
             llm_stream = data.source
             assistant_ctx = AssistantContext(self, llm_stream)
@@ -808,7 +810,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     yield alt
 
             await self._synthesize_streamed_speech_co(
-                data, po_tx, _forward_llm_chunks(), tts_forwarder
+                data, playout_tx, _forward_llm_chunks(), tts_forwarder
             )
 
             if len(llm_stream.called_functions) > 0:
@@ -822,7 +824,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             _ContextVar.reset(token)
         else:
             await self._synthesize_streamed_speech_co(
-                data, po_tx, data.source, tts_forwarder
+                data, playout_tx, data.source, tts_forwarder
             )
 
     async def _playout_co(
