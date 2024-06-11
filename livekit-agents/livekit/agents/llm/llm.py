@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import abc
-from typing import Callable, AsyncIterator
+from typing import AsyncIterator, Callable
 
 from attrs import define
 

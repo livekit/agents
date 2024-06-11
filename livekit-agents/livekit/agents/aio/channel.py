@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections import deque
-from typing import Generic, Protocol, Tuple, TypeVar, AsyncIterator
+from typing import AsyncIterator, Generic, Protocol, Tuple, TypeVar
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)

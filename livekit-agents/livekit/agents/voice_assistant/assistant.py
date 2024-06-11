@@ -785,7 +785,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             tts_forwarder.mark_audio_segment_end()
             po_tx.close()
 
-
     @utils.log_exceptions(logger=logger)
     async def _synthesize_task(
         self,
@@ -896,7 +895,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("agent_stopped_speaking")
             self._agent_speaking = False
             self.emit("agent_stopped_speaking")
-
 
     def _log_debug(self, msg: str, **kwargs) -> None:
         if self._opts.debug:

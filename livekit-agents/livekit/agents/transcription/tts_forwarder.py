@@ -9,7 +9,7 @@ from typing import Callable, Optional
 from attrs import define
 from livekit import rtc
 
-from .. import tokenize, utils, aio
+from .. import aio, tokenize, utils
 from ..log import logger
 from . import _utils
 
