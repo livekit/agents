@@ -20,7 +20,7 @@ __all__ = ["TTS", "ChunkedStream", "__version__"]
 from livekit.agents import Plugin
 
 
-class SileroPlugin(Plugin):
+class CartesiaPlugin(Plugin):
     def __init__(self):
         super().__init__(__name__, __version__, __package__)
 
@@ -28,4 +28,4 @@ class SileroPlugin(Plugin):
         pass
 
 
-Plugin.register_plugin(SileroPlugin())
+Plugin.register_plugin(CartesiaPlugin())
