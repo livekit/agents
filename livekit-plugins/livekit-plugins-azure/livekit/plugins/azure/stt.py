@@ -13,21 +13,17 @@
 from __future__ import annotations
 
 import asyncio
-import functools
-import contextlib
-import json
 import os
 from dataclasses import dataclass
 from typing import Optional
 
 from livekit import rtc
-from livekit import agents
 from livekit.agents import stt
-from livekit.agents.utils import AudioBuffer, merge_frames
-
-from .log import logger
+from livekit.agents.utils import AudioBuffer
 
 import azure.cognitiveservices.speech as speechsdk
+
+from .log import logger
 
 
 @dataclass

@@ -12,15 +12,14 @@
 
 from __future__ import annotations
 
-import contextlib
 import asyncio
-import functools
+import contextlib
 import os
 from dataclasses import dataclass
 from typing import Optional
 
 from livekit import rtc
-from livekit.agents import aio, tokenize, tts
+from livekit.agents import tts
 
 import azure.cognitiveservices.speech as speechsdk
 
