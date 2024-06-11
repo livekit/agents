@@ -170,7 +170,7 @@ class ColoredFormatter(logging.Formatter):
         for field in self._required_fields:
             args[field] = record.__dict__.get(field)
 
-        args["levelcolor"] = self._level_colors.get(record.levelname, "")
+        args["esc_levelcolor"] = self._level_colors.get(record.levelname, "")
         args["extra"] = ""
         args.update(self._esc_codes)
 
@@ -193,11 +193,13 @@ def setup_logging(log_level: str, production: bool = True) -> None:
     if not production:
         # colorful logs for dev (improves readability)
         formatter = ColoredFormatter(
-            "%(asctime)s - %(levelcolor)s%(levelname)-4s%(esc_reset)s - %(message)s %(extra)s",
+            "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(extra)s",
         )
         handler.setFormatter(formatter)
     else:
-        pass
+        # production logs (serialized of json)
+        formatter = JsonFormatter()
+        handler.setFormatter(formatter)
 
     root = logging.getLogger()
     root.addHandler(handler)
