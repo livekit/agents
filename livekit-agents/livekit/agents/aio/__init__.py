@@ -4,6 +4,7 @@ from .interval import Interval, interval
 from .select import SelectLoop, select
 from .sleep import Sleep, SleepFinished, sleep
 from .wait_group import WaitGroup
+from .task_set import TaskSet
 
 __all__ = [
     "ChanClosed",
@@ -20,4 +21,5 @@ __all__ = [
     "sleep",
     "WaitGroup",
     "debug",
+    "TaskSet",
 ]

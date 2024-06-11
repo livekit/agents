@@ -157,6 +157,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._user_identity: str | None = None  # linked participant identity
 
         self._started = False
+        self._start_speech_lock = asyncio.Lock()
         self._pending_validation = False
 
         # tasks
@@ -372,7 +373,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     self._interrupt_if_needed()
             elif self._pending_validation:
                 if speaking_avg_validation.get_avg() <= 0.05:
-                    self._pending_validation = False
                     self._validate_answer_if_needed()
 
             if self._opts.plotting:
@@ -532,7 +532,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             allow_interruptions=self._opts.allow_interruptions,
             add_to_ctx=True,
             validation_future=asyncio.Future(),
-            user_question=text,
+            user_question=self._transcripted_text,
         )
 
         # this speech may not be validated, so we create a copy
@@ -540,7 +540,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         copied_ctx = self._chat_ctx.copy()
         copied_ctx.messages.append(
             allm.ChatMessage(
-                text=text,
+                text=self._transcripted_text,
                 role=allm.ChatRole.USER,
             )
         )
@@ -600,6 +600,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         ):
             return
 
+        self._pending_validation = False
         self._transcripted_text = self._interim_text = ""
         self._answer_speech.validate_speech()
         self._log_debug("user speech validated")
@@ -609,26 +610,27 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     ) -> None:
         await self._wait_ready()
 
-        # interrupt the current speech if possible, otherwise wait before playing the new speech
-        if self._play_atask is not None:
-            if self._validated_speech is not None:
-                if (
-                    interrupt_current_if_possible
-                    and self._validated_speech.allow_interruptions
-                ):
-                    logger.debug("_start_speech - interrupting current speech")
-                    self._validated_speech.interrupted = True
+        async with self._start_speech_lock:
+            # interrupt the current speech if possible, otherwise wait before playing the new speech
+            if self._play_atask is not None:
+                if self._validated_speech is not None:
+                    if (
+                        interrupt_current_if_possible
+                        and self._validated_speech.allow_interruptions
+                    ):
+                        logger.debug("_start_speech - interrupting current speech")
+                        self._validated_speech.interrupted = True
 
-            else:
-                # pending speech isn't validated yet, OK to cancel
-                self._play_atask.cancel()
+                else:
+                    # pending speech isn't validated yet, OK to cancel
+                    self._play_atask.cancel()
 
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._play_atask
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._play_atask
 
-        self._play_atask = asyncio.create_task(
-            self._play_speech_if_validated_task(data)
-        )
+            self._play_atask = asyncio.create_task(
+                self._play_speech_if_validated_task(data)
+            )
 
     @utils.log_exceptions(logger=logger)
     async def _play_speech_if_validated_task(self, data: _SpeechData) -> None:
@@ -647,7 +649,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 room=self._start_args.room,
                 participant=self._start_args.room.local_participant,
                 track=self._pub.sid,
-                auto_playout=False,
                 sentence_tokenizer=self._opts.sentence_tokenizer,
                 word_tokenizer=self._opts.word_tokenizer,
                 hyphenate_word=self._opts.hyphenate_word,
@@ -698,6 +699,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             # make sure that _synthesize_task is finished before closing the transcription
             # forwarder. pushing text/audio to the forwarder after closing it will raise an exception
             await tts_forwarder.aclose()
+            self._log_debug("play_speech_if_validated_task finished")
 
     async def _synthesize_speech_co(
         self,
@@ -714,21 +716,24 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         start_time = time.time()
         first_frame = True
         audio_duration = 0.0
-        async for audio in self._tts.synthesize(text):
-            if first_frame:
-                first_frame = False
-                dt = time.time() - start_time
-                self._log_debug(f"tts first frame in {dt:.2f}s")
 
-            frame = audio.data
-            audio_duration += frame.samples_per_channel / frame.sample_rate
+        try:
+            async for audio in self._tts.synthesize(text):
+                if first_frame:
+                    first_frame = False
+                    dt = time.time() - start_time
+                    self._log_debug(f"tts first frame in {dt:.2f}s")
 
-            po_tx.send_nowait(frame)
-            tts_forwarder.push_audio(frame)
+                frame = audio.data
+                audio_duration += frame.samples_per_channel / frame.sample_rate
 
-        tts_forwarder.mark_audio_segment_end()
-        po_tx.close()
-        self._log_debug(f"tts finished synthesising {audio_duration:.2f}s of audio")
+                po_tx.send_nowait(frame)
+                tts_forwarder.push_audio(frame)
+
+        finally:
+            tts_forwarder.mark_audio_segment_end()
+            po_tx.close()
+            self._log_debug(f"tts finished synthesising {audio_duration:.2f}s of audio")
 
     async def _synthesize_streamed_speech_co(
         self,
@@ -756,26 +761,30 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     tts_forwarder.push_audio(frame)
                     po_tx.send_nowait(frame)
 
-            tts_forwarder.mark_audio_segment_end()
-            po_tx.close()
             self._log_debug(
                 f"tts finished synthesising {audio_duration:.2f}s audio (streamed)"
             )
 
-        # otherwise, stream the text to the TTS..
+        # otherwise, stream the text to the TTS
         tts_stream = self._tts.stream()
-        forward_task = asyncio.create_task(_read_generated_audio_task())
+        read_task = asyncio.create_task(_read_generated_audio_task())
 
-        async for seg in streamed_text:
-            data.collected_text += seg
-            tts_forwarder.push_text(seg)
-            tts_stream.push_text(seg)
+        try:
+            async for seg in streamed_text:
+                data.collected_text += seg
+                tts_forwarder.push_text(seg)
+                tts_stream.push_text(seg)
 
-        tts_forwarder.mark_text_segment_end()
-        tts_stream.mark_segment_end()
+        finally:
+            tts_forwarder.mark_text_segment_end()
+            tts_stream.mark_segment_end()
 
-        await tts_stream.aclose()
-        await forward_task
+            await tts_stream.aclose()
+            await read_task
+
+            tts_forwarder.mark_audio_segment_end()
+            po_tx.close()
+
 
     @utils.log_exceptions(logger=logger)
     async def _synthesize_task(
@@ -839,6 +848,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             )
 
         first_frame = True
+        early_break = False
 
         async for frame in playout_rx:
             if first_frame:
@@ -850,6 +860,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 first_frame = False
 
             if _should_break():
+                early_break = True
                 break
 
             # divide the frame by chunks of 20ms
@@ -879,10 +890,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         if not first_frame:
             self._log_debug("agent stopped speaking")
+            if not early_break:
+                tts_forwarder.segment_playout_finished()
+
             self._plotter.plot_event("agent_stopped_speaking")
             self._agent_speaking = False
             self.emit("agent_stopped_speaking")
-            tts_forwarder.segment_playout_finished()
+
 
     def _log_debug(self, msg: str, **kwargs) -> None:
         if self._opts.debug:
