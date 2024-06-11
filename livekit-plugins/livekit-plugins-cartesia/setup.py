@@ -20,14 +20,14 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, "livekit", "plugins", "silero", "version.py"), "r") as f:
+with open(os.path.join(here, "livekit", "plugins", "cartesia", "version.py"), "r") as f:
     exec(f.read(), about)
 
 
 setuptools.setup(
-    name="livekit-plugins-silero",
+    name="livekit-plugins-cartesia",
     version=about["__version__"],
-    description="Agent Framework Plugin for Silero",
+    description="LiveKit Agents Plugin for Cartesia",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",
@@ -51,12 +51,7 @@ setuptools.setup(
     install_requires=[
         "livekit ~= 0.11",
         "livekit-agents~=0.7",
-        "torch >= 2, < 3",
-        "torchaudio >= 2",
-        "numpy >= 1, < 2",
-        "onnxruntime~=1.17.0",
     ],
-    package_data={"livekit.plugins.silero": ["files/silero_vad.jit"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

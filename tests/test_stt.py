@@ -20,7 +20,7 @@ TEST_AUDIO_TRANSCRIPT = pathlib.Path(
 
 
 def read_mp3_file(filename: str) -> rtc.AudioFrame:
-    mp3 = agents.codecs.Mp3StreamDecoder()
+    mp3 = agents.utils.codecs.Mp3StreamDecoder()
     frames: list[rtc.AudioFrame] = []
     with open(filename, "rb") as file:
         while True:

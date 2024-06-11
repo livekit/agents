@@ -12,4 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.6.dev0"
+from .tts import TTS, ChunkedStream
+from .version import __version__
+
+__all__ = ["TTS", "ChunkedStream", "__version__"]
+
+from livekit.agents import Plugin
+
+
+class CartesiaPlugin(Plugin):
+    def __init__(self):
+        super().__init__(__name__, __version__, __package__)
+
+    def download_files(self):
+        pass
+
+
+Plugin.register_plugin(CartesiaPlugin())

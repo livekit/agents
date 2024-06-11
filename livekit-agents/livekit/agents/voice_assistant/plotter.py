@@ -160,4 +160,7 @@ class AssistantPlotter:
         asyncio.ensure_future(self._plot_tx.write(PlotEventMessage(which=which, x=ts)))
 
     def terminate(self):
+        if not self._started:
+            return
+
         self._plot_proc.terminate()
