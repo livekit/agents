@@ -17,7 +17,7 @@ class ExtraLogFormatter(logging.Formatter):
         return message + extra_txt
 
 
-def setup_logging(log_level: str, production: bool) -> None:
+def setup_logging(log_level: str, production: bool = True) -> None:
     h = logging.StreamHandler()
 
     if production:
@@ -32,24 +32,18 @@ def setup_logging(log_level: str, production: bool) -> None:
         f = CustomJsonFormatter("%(asctime)s %(level)s %(name)s %(message)s")
         h.setFormatter(f)
     else:
-        # dev mode, colored logs
+        # dev mode, colored logs & show all extra
         import colorlog
 
-        for lger in [
-            "watchfiles.main",
-            "httpcore.http11",
-            "httpcore.connection",
-            "openai._base_client",
-        ]:
-            watch_logger = logging.getLogger(lger)
-            watch_logger.level = logging.WARN
+        watch_logger = logging.getLogger("watchfiles.main")
+        watch_logger.level = logging.WARN
 
         f = ExtraLogFormatter(
             colorlog.ColoredFormatter(
                 "%(asctime)s %(log_color)s%(levelname)-4s %(bold_white)s %(name)s %(reset)s %(message)s",
                 log_colors={
                     **colorlog.default_log_colors,
-                    "DEBUG": "cyan",
+                    "DEBUG": "blue",
                 },
             )
         )
