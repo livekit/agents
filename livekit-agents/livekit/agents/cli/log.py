@@ -7,8 +7,7 @@ import traceback
 from collections import OrderedDict
 from datetime import date, datetime, time, timezone
 from inspect import istraceback
-from typing import Any, Dict, List, Tuple
-
+from typing import Any, Dict, Tuple
 
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
@@ -179,7 +178,6 @@ class ColoredFormatter(logging.Formatter):
             args["extra"] = json.dumps(
                 extra, cls=JsonFormatter.JsonEncoder, ensure_ascii=True
             )
-
 
         for field in self._required_fields:
             if field in extra:
