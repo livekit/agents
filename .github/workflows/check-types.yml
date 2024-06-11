@@ -37,6 +37,7 @@ jobs:
                     ./livekit-plugins/livekit-plugins-nltk \
                     ./livekit-plugins/livekit-plugins-silero \
                     ./livekit-plugins/livekit-plugins-elevenlabs \
+                    ./livekit-plugins/livekit-plugins-cartesia
   # find . -name setup.py | xargs -n 1 dirname | xargs -n 1 python -m pip install
 
     - name: Check Types 
@@ -47,6 +48,7 @@ jobs:
              -p livekit.plugins.nltk \
              -p livekit.plugins.silero \
              -p livekit.plugins.elevenlabs \
+             -p livekit.plugins.cartesia
  #     run: |
  #       for d in $(find . -name setup.py | xargs -n 1 dirname | xargs -n 1 basename); do
  #         echo "Checking types for package: $d"
