@@ -89,7 +89,7 @@ class SynthesizeStream(ABC):
     async def __anext__(self) -> SynthesisEvent:
         pass
 
-    def __aiter__(self) -> "SynthesizeStream":
+    def __aiter__(self) -> AsyncIterator[SynthesisEvent]:
         return self
 
 

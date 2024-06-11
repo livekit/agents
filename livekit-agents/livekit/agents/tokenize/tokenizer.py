@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import AsyncIterator, Protocol
 
 
 class TokenEventType(Enum):
@@ -24,13 +24,13 @@ class TokenStream(Protocol):
     def mark_segment_end(self) -> None:
         self.push_text(None)
 
-    async def aclose(self, *, wait: bool = True) -> None: ...
+    async def aclose(self) -> None: ...
 
     @abstractmethod
     async def __anext__(self) -> TokenEvent:
         pass
 
-    def __aiter__(self) -> "TokenStream":
+    def __aiter__(self) -> AsyncIterator[TokenEvent]:
         return self
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections import deque
-from typing import Generic, Protocol, Tuple, TypeVar
+from typing import AsyncIterator, Generic, Protocol, Tuple, TypeVar
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
@@ -46,7 +46,7 @@ class ChanReceiver(Protocol[T_co]):
 
     def close(self) -> None: ...
 
-    def __aiter__(self) -> "ChanReceiver": ...
+    def __aiter__(self) -> AsyncIterator[T_co]: ...
 
     async def __anext__(self) -> T_co: ...
 
@@ -169,7 +169,7 @@ class Chan(Generic[T]):
     def empty(self) -> bool:
         return not self._queue
 
-    def __aiter__(self) -> "Chan":
+    def __aiter__(self) -> AsyncIterator[T]:
         return self
 
     async def __anext__(self) -> T:

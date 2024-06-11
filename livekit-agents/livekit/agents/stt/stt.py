@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List
+from typing import AsyncIterator, List
 
 from livekit import rtc
 
@@ -92,5 +92,5 @@ class SpeechStream(ABC):
     async def __anext__(self) -> SpeechEvent:
         pass
 
-    def __aiter__(self) -> "SpeechStream":
+    def __aiter__(self) -> AsyncIterator[SpeechEvent]:
         return self

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import abc
-from typing import Callable
+from typing import AsyncIterator, Callable
 
 from attrs import define
 
@@ -55,7 +55,7 @@ class LLMStream(abc.ABC):
         return self._called_functions
 
     @abc.abstractmethod
-    def __aiter__(self) -> "LLMStream": ...
+    def __aiter__(self) -> AsyncIterator[ChatChunk]: ...
 
     @abc.abstractmethod
     async def __anext__(self) -> ChatChunk: ...

@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List
+from typing import AsyncIterator, List
 
 from livekit import rtc
 
@@ -72,5 +72,5 @@ class VADStream(ABC):
     async def __anext__(self) -> VADEvent:
         raise StopAsyncIteration
 
-    def __aiter__(self) -> "VADStream":
+    def __aiter__(self) -> AsyncIterator[VADEvent]:
         return self
