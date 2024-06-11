@@ -30,7 +30,7 @@ class TokenStream(Protocol):
     async def __anext__(self) -> TokenEvent:
         pass
 
-    def __aiter__(self) -> "WordStream":
+    def __aiter__(self) -> "TokenStream":
         return self
 
 

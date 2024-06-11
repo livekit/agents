@@ -114,8 +114,10 @@ async def test_stream(stt: agents.stt.STT):
 
             assert recv_start, "START_OF_SPEECH should be sent before any other event"
 
-            if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
+            if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
                 text += event.alternatives[0].text
+
+            if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
                 recv_start = False
                 recv_end = True
 

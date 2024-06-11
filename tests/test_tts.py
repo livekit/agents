@@ -65,7 +65,7 @@ STREAM_TTS = [
     agents.tts.StreamAdapter(
         tts=google.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
-    azure.TTS(),
+    agents.tts.StreamAdapter(tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER),
 ]
 
 
