@@ -1,11 +1,13 @@
-# LiveKit Plugins Silero
+# LiveKit Plugins Cartesia
 
-Agent Framework Plugin for Silero. Currently supports Voice Activity Detection.
+Agent Framework plugin for voice synthesis with [Cartesia](https://cartesia.ai/) API.
 
 ## Installation
 
 ```bash
-pip install livekit-plugins-silero
+pip install livekit-plugins-cartesia
 ```
 
-This plugin contains model files that would need to be downloaded prior to use.
+## Pre-requisites
+
+You'll need an API key from Cartesia. It can be set as an environment variable: `CARTESIA_API_KEY`
