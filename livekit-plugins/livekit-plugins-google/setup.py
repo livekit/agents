@@ -39,8 +39,6 @@ setuptools.setup(
         "Topic :: Multimedia :: Video",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3 :: Only",
@@ -48,7 +46,7 @@ setuptools.setup(
     keywords=["webrtc", "realtime", "audio", "video", "livekit"],
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
-    python_requires=">=3.7.0",
+    python_requires=">=3.9.0",
     install_requires=[
         "google-cloud-speech >= 2, < 3",
         "google-cloud-texttospeech >= 2, < 3",
