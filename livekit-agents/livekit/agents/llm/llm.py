@@ -1,27 +1,26 @@
 from __future__ import annotations
 
 import abc
+from dataclasses import dataclass
 from typing import AsyncIterator, Callable
-
-from attrs import define
 
 from .chat_context import ChatContext, ChatRole
 from .function_context import FunctionContext
 
 
-@define
+@dataclass
 class ChoiceDelta:
     role: ChatRole
     content: str | None = None
 
 
-@define
+@dataclass
 class Choice:
     delta: ChoiceDelta
     index: int = 0
 
 
-@define
+@dataclass
 class ChatChunk:
     choices: list[Choice] = []
 
@@ -37,7 +36,7 @@ class LLM(abc.ABC):
     ) -> "LLMStream": ...
 
 
-@define
+@dataclass
 class CalledFunction:
     fnc_name: str
     fnc: Callable

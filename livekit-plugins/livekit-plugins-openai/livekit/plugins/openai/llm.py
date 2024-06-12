@@ -20,9 +20,9 @@ import enum
 import functools
 import inspect
 import json
+from dataclasses import dataclass
 from typing import Any, Dict, List, MutableSet, Tuple
 
-from attrs import define
 from livekit import rtc
 from livekit.agents import llm
 from livekit.agents.utils import images
@@ -40,7 +40,7 @@ IMAGE_DETAIL_DIMENSIONS: List[Tuple[int, str]] = [
 ]
 
 
-@define
+@dataclass
 class LLMOptions:
     model: str | ChatModels
 

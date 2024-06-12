@@ -14,14 +14,15 @@
 
 from __future__ import annotations
 
-from attrs import define
+from dataclasses import dataclass
+
 from livekit import rtc
 from livekit.protocol import agent
 
 from . import aio
 
 
-@define(kw_only=True)
+@dataclass
 class _ShutdownInfo:
     reason: str = ""
 

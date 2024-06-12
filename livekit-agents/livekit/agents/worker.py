@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from dataclasses import dataclass
 from typing import (
     Callable,
     Coroutine,
@@ -26,7 +27,6 @@ from urllib.parse import urlparse
 
 import aiohttp
 import psutil
-from attr import define
 from livekit import api
 from livekit.protocol import agent, models
 
@@ -43,7 +43,7 @@ def cpu_load_fnc() -> float:
     return psutil.cpu_percent() / 100
 
 
-@define(kw_only=True)
+@dataclass
 class WorkerPermissions:
     can_publish: bool = True
     can_subscribe: bool = True
@@ -54,7 +54,7 @@ class WorkerPermissions:
 
 
 # NOTE: this object must be pickle-able
-@define
+@dataclass
 class WorkerOptions:
     request_fnc: JobRequestFnc
     load_fnc: LoadFnc = cpu_load_fnc
@@ -70,7 +70,7 @@ class WorkerOptions:
     port: int = 8081
 
 
-@define(kw_only=True)
+@dataclass
 class ActiveJob:
     job: agent.Job
     accept_data: AcceptData
