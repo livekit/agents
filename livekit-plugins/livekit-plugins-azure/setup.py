@@ -46,8 +46,7 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "livekit >= 0.9.0",
-        "livekit-agents >= 0.3.0",
+        "livekit-agents~=0.7",
         "azure-cognitiveservices-speech >= 1.35.0",
     ],
     package_data={},

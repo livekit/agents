@@ -27,7 +27,7 @@ with open(os.path.join(here, "livekit", "plugins", "deepgram", "version.py"), "r
 setuptools.setup(
     name="livekit-plugins-deepgram",
     version=about["__version__"],
-    description="Agent Framework plugin for services using DeepGram's API.",
+    description="Agent Framework plugin for services using Deepgram's API.",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",
@@ -48,9 +48,7 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "livekit ~= 0.11",
         "livekit-agents~=0.7",
-        "aiohttp >= 3.7.4",
     ],
     package_data={
         "livekit.plugins.deepgram": ["py.typed"],

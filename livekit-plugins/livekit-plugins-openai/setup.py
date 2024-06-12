@@ -48,11 +48,8 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "livekit ~= 0.11",
-        "livekit-agents[codecs, images]~=0.7",
+        "livekit-agents[codecs, images]>=0.7.2",
         "openai ~= 1.30.0",
-        "pillow ~= 10.3.0",
-        "requests >= 2, < 3",
     ],
     package_data={
         "livekit.plugins.openai": ["py.typed"],

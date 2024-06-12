@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, tokenize, tts
+from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
 from livekit.agents.llm import (
     ChatContext,
     ChatMessage,
@@ -21,19 +21,11 @@ async def entrypoint(ctx: JobContext):
         ]
     )
 
-    # Since OpenAI does not support streaming TTS, we'll use it with a StreamAdapter
-    # to make it compatible with the VoiceAssistant
-    # TODO: this can be removed in the next version
-    openai_tts = tts.StreamAdapter(
-        tts=openai.TTS(voice="alloy"),
-        sentence_tokenizer=tokenize.basic.SentenceTokenizer(),
-    )
-
     assistant = VoiceAssistant(
         vad=silero.VAD(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
-        tts=openai_tts,
+        tts=openai.TTS(voice="alloy"),
         chat_ctx=initial_ctx,
     )
     assistant.start(ctx.room)

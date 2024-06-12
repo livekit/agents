@@ -50,15 +50,8 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.7.0",
     install_requires=[
-        "numpy >= 1, < 2",
-        "google-api-core >= 2, < 3",
-        "google-auth >= 2, < 3",
-        "google-cloud-core >= 2, < 3",
         "google-cloud-speech >= 2, < 3",
         "google-cloud-texttospeech >= 2, < 3",
-        "google-cloud-translate >= 3, < 4",
-        "googleapis-common-protos >= 1, < 2",
-        "livekit ~= 0.11",
         "livekit-agents~=0.7",
     ],
     package_data={
