@@ -60,7 +60,7 @@ class WorkerOptions:
     load_fnc: LoadFnc = cpu_load_fnc
     load_threshold: float = 0.8
     namespace: str = "default"
-    permissions: WorkerPermissions = WorkerPermissions()
+    permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     worker_type: agent.JobType = agent.JobType.JT_ROOM
     max_retry: int = consts.MAX_RECONNECT_ATTEMPTS
     ws_url: str = "ws://localhost:7880"

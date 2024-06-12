@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 from livekit.protocol import agent
@@ -22,7 +22,7 @@ class JobMainArgs:
 @dataclass
 class StartJobRequest:
     MSG_ID: ClassVar[int] = 0
-    job: agent.Job = agent.Job()
+    job: agent.Job = field(default_factory=agent.Job)
 
     def write(self, b: io.BytesIO) -> None:
         ipc_enc._write_bytes(b, self.job.SerializeToString())
