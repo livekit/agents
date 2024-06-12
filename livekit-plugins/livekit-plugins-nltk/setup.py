@@ -47,9 +47,8 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "livekit~=0.11",
-        "nltk >= 3, < 4",
         "livekit-agents~=0.7",
+        "nltk >= 3, < 4",
     ],
     package_data={
         "livekit.plugins.nltk": ["py.typed"],
