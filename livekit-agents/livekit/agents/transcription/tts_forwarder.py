@@ -4,9 +4,9 @@ import asyncio
 import contextlib
 import time
 from collections import deque
+from dataclasses import dataclass
 from typing import Callable, Optional
 
-from attrs import define
 from livekit import rtc
 
 from .. import aio, tokenize, utils
@@ -14,7 +14,7 @@ from ..log import logger
 from . import _utils
 
 
-@define
+@dataclass
 class _TTSOptions:
     room: rtc.Room
     participant_identity: str
@@ -27,7 +27,7 @@ class _TTSOptions:
     new_sentence_delay: float
 
 
-@define
+@dataclass
 class _SegmentData:
     segment_index: int
     sentence_stream: tokenize.SentenceStream
@@ -40,7 +40,7 @@ class _SegmentData:
     forward_start_time: float | None = 0.0
 
 
-@define
+@dataclass
 class _FormingSegments:
     audio: _SegmentData
     text: _SegmentData

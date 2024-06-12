@@ -5,9 +5,9 @@ import contextlib
 import contextvars
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, AsyncIterable, Callable, Literal
 
-from attrs import define
 from livekit import rtc
 
 from .. import aio, tokenize, transcription, utils
@@ -20,7 +20,7 @@ from . import plotter
 logger = logging.getLogger("livekit.agents.voice_assistant")
 
 
-@define(kw_only=True)
+@dataclass
 class _SpeechData:
     source: str | allm.LLMStream | AsyncIterable[str]
     allow_interruptions: bool
@@ -37,7 +37,7 @@ class _SpeechData:
             self.validation_future.set_result(None)
 
 
-@define(kw_only=True, frozen=True)
+@dataclass(frozen=True)
 class _AssistantOptions:
     plotting: bool
     debug: bool
@@ -53,7 +53,7 @@ class _AssistantOptions:
     transcription_speed: float
 
 
-@define(kw_only=True, frozen=True)
+@dataclass(frozen=True)
 class _StartArgs:
     room: rtc.Room
     participant: rtc.RemoteParticipant | str | None

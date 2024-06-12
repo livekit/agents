@@ -18,9 +18,8 @@ import abc
 import enum
 import inspect
 import typing
+from dataclasses import dataclass
 from typing import Any, Callable
-
-from attrs import define
 
 METADATA_ATTR = "__livekit_ai_metadata__"
 
@@ -44,7 +43,7 @@ def ai_callable(
     return deco
 
 
-@define(frozen=True)
+@dataclass(frozen=True)
 class TypeInfo:
     desc: str = ""
 
@@ -115,14 +114,14 @@ def _find_param_type_info(annotation: type) -> TypeInfo | None:
 
 
 # internal metadata
-@define(kw_only=True, frozen=True)
+@dataclass(frozen=True)
 class AIFncMetadata:
     name: str = ""
     desc: str = ""
     auto_retry: bool = True
 
 
-@define(kw_only=True, frozen=True)
+@dataclass(frozen=True)
 class AIFncArg:
     name: str
     desc: str
@@ -130,7 +129,7 @@ class AIFncArg:
     default: Any
 
 
-@define(kw_only=True, frozen=True)
+@dataclass(frozen=True)
 class AIFunction:
     metadata: AIFncMetadata
     fnc: Callable

@@ -15,10 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Coroutine
 
-from attr import define
 from livekit.protocol import agent, models
 
 from . import aio
@@ -34,7 +34,7 @@ AutoSubscribe = Enum(
 AgentEntry = Callable[[JobContext], Coroutine]
 
 
-@define(kw_only=True)
+@dataclass
 class AcceptData:
     entry: AgentEntry
     auto_subscribe: AutoSubscribe
@@ -44,7 +44,7 @@ class AcceptData:
     metadata: str
 
 
-@define(kw_only=True)
+@dataclass
 class AvailRes:
     avail: bool
     data: AcceptData | None = None

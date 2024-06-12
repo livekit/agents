@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from dataclasses import dataclass, field
 from typing import (
     Callable,
     Coroutine,
@@ -26,7 +27,6 @@ from urllib.parse import urlparse
 
 import aiohttp
 import psutil
-from attr import define
 from livekit import api
 from livekit.protocol import agent, models
 
@@ -43,24 +43,24 @@ def cpu_load_fnc() -> float:
     return psutil.cpu_percent() / 100
 
 
-@define(kw_only=True)
+@dataclass
 class WorkerPermissions:
     can_publish: bool = True
     can_subscribe: bool = True
     can_publish_data: bool = True
     can_update_metadata: bool = True
-    can_publish_sources: list[models.TrackSource] = []
+    can_publish_sources: list[models.TrackSource] = field(default_factory=list)
     hidden: bool = False
 
 
 # NOTE: this object must be pickle-able
-@define
+@dataclass
 class WorkerOptions:
     request_fnc: JobRequestFnc
     load_fnc: LoadFnc = cpu_load_fnc
     load_threshold: float = 0.8
     namespace: str = "default"
-    permissions: WorkerPermissions = WorkerPermissions()
+    permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     worker_type: agent.JobType = agent.JobType.JT_ROOM
     max_retry: int = consts.MAX_RECONNECT_ATTEMPTS
     ws_url: str = "ws://localhost:7880"
@@ -70,7 +70,7 @@ class WorkerOptions:
     port: int = 8081
 
 
-@define(kw_only=True)
+@dataclass
 class ActiveJob:
     job: agent.Job
     accept_data: AcceptData

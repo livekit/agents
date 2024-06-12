@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass, field
 from typing import ClassVar
 
-from attrs import define
 from livekit.protocol import agent
 
 from .. import ipc_enc
 from ..job_request import AcceptData
 
 
-@define
+@dataclass
 class JobMainArgs:
     job_id: str
     url: str
@@ -19,10 +19,10 @@ class JobMainArgs:
     asyncio_debug: bool
 
 
-@define(kw_only=True)
+@dataclass
 class StartJobRequest:
     MSG_ID: ClassVar[int] = 0
-    job: agent.Job = agent.Job()
+    job: agent.Job = field(default_factory=agent.Job)
 
     def write(self, b: io.BytesIO) -> None:
         ipc_enc._write_bytes(b, self.job.SerializeToString())
@@ -31,7 +31,7 @@ class StartJobRequest:
         self.job.ParseFromString(ipc_enc._read_bytes(b))
 
 
-@define(kw_only=True)
+@dataclass
 class StartJobResponse:
     MSG_ID: ClassVar[int] = 1
     error: str = ""
@@ -43,7 +43,7 @@ class StartJobResponse:
         self.error = ipc_enc._read_string(b)
 
 
-@define(kw_only=True)
+@dataclass
 class Log:
     MSG_ID: ClassVar[int] = 2
     level: int = 0  # logging._Level
@@ -61,7 +61,7 @@ class Log:
         self.message = ipc_enc._read_string(b)
 
 
-@define(kw_only=True)
+@dataclass
 class Ping:
     MSG_ID: ClassVar[int] = 3
     timestamp: int = 0
@@ -73,7 +73,7 @@ class Ping:
         self.timestamp = int.from_bytes(b.read(8), "big")
 
 
-@define(kw_only=True)
+@dataclass
 class Pong:
     MSG_ID: ClassVar[int] = 4
     last_timestamp: int = 0
@@ -88,7 +88,7 @@ class Pong:
         self.timestamp = ipc_enc._read_long(b)
 
 
-@define(kw_only=True)
+@dataclass
 class ShutdownRequest:
     MSG_ID: ClassVar[int] = 5
 
@@ -99,7 +99,7 @@ class ShutdownRequest:
         pass
 
 
-@define(kw_only=True)
+@dataclass
 class ShutdownResponse:
     MSG_ID: ClassVar[int] = 6
 
@@ -110,7 +110,7 @@ class ShutdownResponse:
         pass
 
 
-@define(kw_only=True)
+@dataclass
 class UserExit:
     MSG_ID: ClassVar[int] = 7
     reason: str = ""

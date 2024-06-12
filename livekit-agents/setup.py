@@ -53,7 +53,6 @@ setuptools.setup(
         "livekit-protocol~=0.4",
         "protobuf>=3",
         "types-protobuf>=4,<5",
-        "attrs~=23.0",
         "watchfiles~=0.22",
         "psutil~=5.9",
     ],

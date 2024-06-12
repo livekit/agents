@@ -3,9 +3,8 @@ import io
 import multiprocessing as mp
 import struct
 import time
+from dataclasses import dataclass
 from typing import ClassVar, Literal, Tuple
-
-from attrs import define
 
 from .. import apipe, ipc_enc
 
@@ -18,7 +17,7 @@ EventType = Literal[
 ]
 
 
-@define(kw_only=True)
+@dataclass
 class PlotMessage:
     MSG_ID: ClassVar[int] = 1
 
@@ -39,7 +38,7 @@ class PlotMessage:
         self.y = struct.unpack("d", b.read(8))[0]
 
 
-@define(kw_only=True)
+@dataclass
 class PlotEventMessage:
     MSG_ID: ClassVar[int] = 2
 
