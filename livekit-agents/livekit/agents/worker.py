@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     Callable,
     Coroutine,
@@ -49,7 +49,7 @@ class WorkerPermissions:
     can_subscribe: bool = True
     can_publish_data: bool = True
     can_update_metadata: bool = True
-    can_publish_sources: list[models.TrackSource] = []
+    can_publish_sources: list[models.TrackSource] = field(default_factory=list)
     hidden: bool = False
 
 

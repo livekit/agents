@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncIterator, Callable
 
 from .chat_context import ChatContext, ChatRole
@@ -22,7 +22,7 @@ class Choice:
 
 @dataclass
 class ChatChunk:
-    choices: list[Choice] = []
+    choices: list[Choice] = field(default_factory=list)
 
 
 class LLM(abc.ABC):
