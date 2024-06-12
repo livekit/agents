@@ -37,7 +37,7 @@ class _SpeechData:
             self.validation_future.set_result(None)
 
 
-@dataclass
+@dataclass(frozen=True)
 class _AssistantOptions:
     plotting: bool
     debug: bool
@@ -53,7 +53,7 @@ class _AssistantOptions:
     transcription_speed: float
 
 
-@dataclass
+@dataclass(frozen=True)
 class _StartArgs:
     room: rtc.Room
     participant: rtc.RemoteParticipant | str | None
