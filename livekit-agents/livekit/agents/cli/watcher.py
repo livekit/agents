@@ -51,7 +51,7 @@ class WatchServer:
                 # TODO(theomonnom): distribution isn't found on Python 3.9
                 pass
 
-        paths: list[str | pathlib.Path] = [self._main_file.absolute()]
+        paths: list[pathlib.Path] = [self._main_file.absolute()]
         for p in packages:
             # https://packaging.python.org/en/latest/specifications/direct-url/
             durl = p.read_text("direct_url.json")
@@ -63,7 +63,7 @@ class WatchServer:
             if dir_info.get("editable", False):
                 path = durl.get("url")
                 if path.startswith("file://"):
-                    paths.append(path[7:])
+                    paths.append(pathlib.Path(path[8:]))
 
         for p in paths:
             logger.info(f"Watching {p}")
