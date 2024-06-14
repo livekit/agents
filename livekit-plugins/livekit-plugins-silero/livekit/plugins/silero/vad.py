@@ -17,155 +17,187 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+import numpy as np
+
 from collections import deque
+from dataclasses import dataclass
 from typing import List, Optional
 
-import numpy as np
-import torch
 from livekit import agents, rtc
 
 from .log import logger
+from . import onnx_model
+
+
+@dataclass
+class _VADOptions:
+    min_speech_duration: float
+    min_silence_duration: float
+    padding_duration: float
+    max_buffered_speech: float
+    window_size_samples: int
+    activation_threshold: float
+    sample_rate: int
 
 
 class VAD(agents.vad.VAD):
-    def __init__(self, *, model_path: str | None = None, use_onnx: bool = True) -> None:
-        if model_path:
-            model = torch.jit.load(model_path)
-            model.eval()
-        else:
-            model, _ = torch.hub.load(
-                repo_or_dir="snakers4/silero-vad",
-                model="silero_vad",
-                onnx=use_onnx,
-            )
-        self._model = model
+    def __init__(
+        self,
+        *,
+        min_speech_duration: float = 0.25,  # 250ms
+        min_silence_duration: float = 0.1,  # 100ms
+        padding_duration: float = 0.1,
+        max_buffered_speech: float = 60.0,
+        activation_threshold: float = 0.5,
+        sample_rate: int = 16000,
+        window_size_samples: int = 1024,
+        force_cpu: bool = True,
+    ) -> None:
+        """
+        Initialize the Silero VAD with the given options.
+        The options are already set to strong defaults.
+
+        Args:
+            min_speech_duration: minimum duration of speech to start a new speech chunk
+            min_silence_duration: In the end of each speech, wait min_silence_duration before ending the speech
+            padding_duration: pad the chunks with this duration on both sides
+            max_buffered_speech: maximum duration of speech to keep in the buffer (in seconds)
+            activation_threshold: threshold to consider a frame as speech
+            sample_rate: sample rate for the inference (only 8KHz and 16KHz are supported)
+            window_size_samples: audio chunk size to use for the inference
+                512, 1024, 1536 samples for 16000 sample rate and 256, 512, 768 samples for 8000 sample rate
+            force_cpu: force to use CPU for inference
+        """
+
+        if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
+            raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
+
+        if sample_rate == 8000 and window_size_samples not in [256, 512, 768]:
+            raise ValueError("window_size_samples must be 256, 512, or 768 for 8KHz")
+
+        if sample_rate == 16000 and window_size_samples not in [512, 1024, 1536]:
+            raise ValueError("window_size_samples must be 512, 1024, or 1536 for 16KHz")
+
+        self._onnx_session = onnx_model.new_inference_session(force_cpu)
+        self._opts = _VADOptions(
+            min_speech_duration=min_speech_duration,
+            min_silence_duration=min_silence_duration,
+            padding_duration=padding_duration,
+            max_buffered_speech=max_buffered_speech,
+            activation_threshold=activation_threshold,
+            sample_rate=sample_rate,
+            window_size_samples=window_size_samples,
+        )
 
     def stream(
         self,
-        *,
-        min_speaking_duration: float = 0.2,
-        min_silence_duration: float = 0.8,
-        padding_duration: float = 0.1,
-        sample_rate: int = 16000,
-        max_buffered_speech: float = 45.0,
-        threshold: float = 0.2,
     ) -> "VADStream":
         return VADStream(
-            self._model,
-            min_speaking_duration=min_speaking_duration,
-            min_silence_duration=min_silence_duration,
-            padding_duration=padding_duration,
-            sample_rate=sample_rate,
-            max_buffered_speech=max_buffered_speech,
-            threshold=threshold,
+            self._opts,
+            onnx_model.OnnxModel(
+                onnx_session=self._onnx_session, sample_rate=self._opts.sample_rate
+            ),
         )
 
 
-# Based on https://github.com/snakers4/silero-vad/blob/94504ece54c8caeebb808410b08ae55ee82dba82/utils_vad.py#L428
+@dataclass
+class _WindowData:
+    inference_data: np.ndarray
+    # data returned to the user are the original frames (int16)
+    original_data: np.ndarray
+
+
 class VADStream(agents.vad.VADStream):
     def __init__(
         self,
-        model,
-        *,
-        min_speaking_duration: float,
-        min_silence_duration: float,
-        padding_duration: float,
-        sample_rate: int,
-        max_buffered_speech: float,
-        threshold: float,
+        opts: _VADOptions,
+        model: onnx_model.OnnxModel,
     ) -> None:
-        self._min_speaking_duration = min_speaking_duration
-        self._min_silence_duration = min_silence_duration
-        self._padding_duration = padding_duration
-        self._sample_rate = sample_rate
-        self._max_buffered_speech = max_buffered_speech
-        self._threshold = threshold
+        super().__init__()
+        self._opts, self._model = opts, model
+        self._main_atask = asyncio.create_task(self._main_task())
 
-        if sample_rate not in [8000, 16000]:
-            raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
+        self._window_data: _WindowData | None = None
+        self._window_index = 0
+        self._pushed_sample_rate: int | None = None
 
-        self._queue = asyncio.Queue[Optional[rtc.AudioFrame]]()
-        self._event_queue = asyncio.Queue[Optional[agents.vad.VADEvent]]()
-        self._model = model
-
-        self._closed = False
-        self._speaking = False
-        self._waiting_start = False
-        self._waiting_end = False
-        self._current_sample = 0
-        self._filter = agents.utils.ExpFilter(0.8)
-        self._min_speaking_samples = min_speaking_duration * sample_rate
-        self._min_silence_samples = min_silence_duration * sample_rate
-        self._padding_duration_samples = padding_duration * sample_rate
-        self._max_buffered_samples = max_buffered_speech * sample_rate
-
-        self._queued_frames: deque[rtc.AudioFrame] = deque()
-        self._original_frames: deque[rtc.AudioFrame] = deque()
-        self._buffered_frames: List[rtc.AudioFrame] = []
-        self._main_task = asyncio.create_task(self._run())
+        self._input_q = asyncio.Queue[Optional[_WindowData]]()
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
-        if self._closed:
-            raise ValueError("cannot push frame to closed stream")
+        """
+        Push frame to the VAD stream for processing.
+        The frames are split into chunks of the given window size and processed.
+        (Buffered if the window size is not reached yet)
+        """
+        super().push_frame(frame)
 
-        self._queue.put_nowait(frame)
+        if frame.sample_rate != 8000 and frame.sample_rate % 16000 != 0:
+            raise ValueError("only 8KHz and 16KHz*X sample rates are supported")
 
-    async def aclose(self, *, wait: bool = True) -> None:
-        self._closed = True
-        if not wait:
-            self._main_task.cancel()
+        if (
+            self._pushed_sample_rate is not None
+            and self._pushed_sample_rate != frame.sample_rate
+        ):
+            raise ValueError("a frame with another sample rate was already pushed")
 
-        self._queue.put_nowait(None)
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
+        self._pushed_sample_rate = frame.sample_rate
+        step = frame.sample_rate // 16000
 
-    async def _run(self):
-        try:
-            while True:
-                frame = await self._queue.get()
-                if frame is None:
-                    break  # None is sent inside aclose
+        if self._window_data is None:
+            self._window_data = _WindowData(
+                inference_data=np.zeros(
+                    self._opts.window_size_samples, dtype=np.float32
+                ),
+                original_data=np.zeros(
+                    self._opts.window_size_samples * step, dtype=np.int16
+                ),
+            )
 
-                self._queue.task_done()
+        if frame.num_channels != 1
+            raise ValueError("vad currently only supports mono audio frames")
 
-                # resample to silero's sample rate
-                resampled_frame = frame.remix_and_resample(
-                    self._sample_rate, 1
-                )  # TODO: This is technically wrong, fix when we have a better resampler
-                self._original_frames.append(frame)
-                self._queued_frames.append(resampled_frame)
+        ndata = np.frombuffer(frame.data, dtype=np.int16)
 
-                # run inference by chunks of 40ms until we run out of data
-                while True:
-                    available_length = sum(
-                        f.samples_per_channel for f in self._queued_frames
-                    )
+        rem_samples = len(ndata)
+        while rem_samples > 0:
+            window_index = self._window_index
+            window_size = self._opts.window_size_samples
 
-                    samples_40ms = self._sample_rate // 1000 * 40
-                    if available_length < samples_40ms:
-                        break
+            to_copy = min(rem_samples, window_size - window_index)
+            self._window_data.original_frame[window_index : window_index + to_copy] = (
+                ndata[:to_copy]
+            )
+            self._window_data.inference_frame[window_index : window_index + to_copy] = (
+                ndata[:to_copy].astype(np.float32) / np.iinfo(np.int16).max
+            )
 
-                    await asyncio.shield(self._run_inference())
+            rem_samples -= to_copy
+            self._window_index += to_copy
 
-        except Exception:
-            logger.exception("silero stream failed")
-        finally:
-            self._event_queue.put_nowait(None)
+            if self._window_index == window_size:
+                self._input_q.put_nowait(self._window_data)
+                self._window_data = _WindowData(
+                    inference_frame=np.zeros(window_size, dtype=np.float32),
+                    original_frame=np.zeros(window_size, dtype=np.int16),
+                )
+                self._window_index = 0
+
+    async def aclose(self) -> None:
+        super().aclose()
+        await self._main_atask
+
+    async def _main_task(self):
+        while True:
+            data = await self._input_q.get()
+            if data is None:
+                break
+
+            window = data.inference_frame
+            raw_prob = await asyncio.to_thread(lambda: self._model(window))
+
+            print(raw_prob)
 
     async def _run_inference(self) -> None:
-        # merge the first 4 frames (we know each is 10ms)
-        if len(self._queued_frames) < 4:
-            return
-
-        original_frames = [self._original_frames.popleft() for _ in range(4)]
-        merged_frame = agents.utils.merge_frames(
-            [self._queued_frames.popleft() for _ in range(4)]
-        )
-
-        # convert data_40ms to tensor & f32
-        tensor = torch.from_numpy(np.frombuffer(merged_frame.data, dtype=np.int16))
-        tensor = tensor.to(torch.float32) / 32768.0
-
         # run inference
         start_time = time.time()
         raw_prob = await asyncio.to_thread(
@@ -201,29 +233,10 @@ class VADStream(agents.vad.VADStream):
             original_frames: original frames of the current inference
         """
 
-        samples_10ms = self._sample_rate / 100
-        padding_count = int(
-            self._padding_duration_samples // samples_10ms
-        )  # number of frames to keep for the padding (one side)
-
         self._buffered_frames.extend(original_frames)
-        if (
-            not self._speaking
-            and not self._waiting_start
-            and len(self._buffered_frames) > padding_count
-        ):
-            self._buffered_frames = self._buffered_frames[
-                len(self._buffered_frames) - padding_count :
-            ]
 
-        max_buffer_len = padding_count + max(
-            int(self._max_buffered_samples // samples_10ms),
-            int(self._min_speaking_samples // samples_10ms),
-        )
-        if len(self._buffered_frames) > max_buffer_len:
-            self._buffered_frames = self._buffered_frames[
-                len(self._buffered_frames) - max_buffer_len :
-            ]
+        if len(self._buffered_frames) > max_buffer_count:
+            self._buffered_frames = self._buffered_frames[-max_buffer_count:]
 
         if probability >= self._threshold:
             # speaking, wait for min_speaking_duration to trigger START_OF_SPEECH
@@ -240,19 +253,21 @@ class VADStream(agents.vad.VADStream):
 
                 # since we're waiting for the min_spaking_duration to trigger START_OF_SPEECH,
                 # put the speech that were used to trigger the start here
+                print("START OF SPEECH")
                 event = agents.vad.VADEvent(
                     type=agents.vad.VADEventType.START_OF_SPEECH,
                     samples_index=self._start_speech,
-                    frames=self._buffered_frames[padding_count:],
+                    frames=[],
                     speaking=True,
                 )
+                self._buffered_frames = []
                 self._event_queue.put_nowait(event)
 
         # we don't check the speech_prob here
         event = agents.vad.VADEvent(
             type=agents.vad.VADEventType.INFERENCE_DONE,
             samples_index=self._current_sample,
-            frames=original_frames,
+            frames=original_frames.copy(),
             probability=probability,
             raw_inference_prob=raw_inference_prob,
             inference_duration=inference_duration,
@@ -273,12 +288,13 @@ class VADStream(agents.vad.VADStream):
             ):
                 self._waiting_end = False
                 self._speaking = False
+                print("END OF SPEECH")
                 event = agents.vad.VADEvent(
                     type=agents.vad.VADEventType.END_OF_SPEECH,
                     samples_index=self._end_speech,
                     duration=(self._end_speech - self._start_speech)
                     / self._sample_rate,
-                    frames=self._buffered_frames,
+                    frames=self._buffered_frames.copy(),
                     speaking=False,
                 )
                 self._event_queue.put_nowait(event)
