@@ -22,7 +22,7 @@ __all__ = [
     "STT",
     "TTS",
     "LLM",
-    "LLMStream,
+    "LLMStream",
     "WhisperModels",
     "TTSModels",
     "TTSVoices",
