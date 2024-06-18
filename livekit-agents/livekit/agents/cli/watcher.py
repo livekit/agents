@@ -6,11 +6,11 @@ import json
 import multiprocessing
 import pathlib
 import threading
+import urllib.parse
 from importlib.metadata import Distribution, PackageNotFoundError
 from typing import Any, Callable, Set
 
 import watchfiles
-import urllib.parse
 
 from .. import apipe, ipc_enc
 from ..log import logger
