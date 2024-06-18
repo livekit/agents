@@ -4,6 +4,7 @@ from enum import Enum
 from typing import AsyncIterator, List
 
 from livekit import rtc
+
 from . import aio
 
 
@@ -25,8 +26,6 @@ class VADEvent:
     """list of audio frames of the speech"""
     probability: float = 0.0
     """smoothed probability of the speech (only for INFERENCE_DONE event)"""
-    raw_inference_prob: float = 0.0
-    """raw probability of the speech (only for INFERENCE_DONE event)"""
     inference_duration: float = 0.0
     """duration of the inference in seconds (only for INFERENCE_DONE event)"""
     speaking: bool = False
@@ -43,21 +42,18 @@ class VAD(ABC):
 
 class VADStream(ABC):
     def __init__(self) -> None:
-        self._event_ch = aio.Chan[VADEvent]()
-        self._closed = False
+        pass
 
     @abstractmethod
     def push_frame(self, frame: rtc.AudioFrame) -> None:
-        if self._closed:
-            raise ValueError("VADStream is closed")
+        pass
 
     @abstractmethod
     async def aclose(self) -> None:
-        self._closed = True
+        pass
 
     @abstractmethod
-    async def __anext__(self) -> VADEvent:
-        return await self._event_ch.__anext__()
+    async def __anext__(self) -> VADEvent: ...
 
-    def __aiter__(self) -> AsyncIterator[VADEvent]:
-        return self._event_ch
+    @abstractmethod
+    def __aiter__(self) -> AsyncIterator[VADEvent]: ...

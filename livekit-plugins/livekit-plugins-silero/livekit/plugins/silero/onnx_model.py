@@ -1,12 +1,9 @@
-import asyncio
-import importlib.resources
 import atexit
-import onnxruntime
-import numpy as np
-
-from typing import Any
+import importlib.resources
 from contextlib import ExitStack
-from .log import logger
+
+import numpy as np
+import onnxruntime
 
 _resource_files = ExitStack()
 atexit.register(_resource_files.close)
