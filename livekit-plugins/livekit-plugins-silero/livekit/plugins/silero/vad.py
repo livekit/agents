@@ -206,6 +206,8 @@ class VADStream(agents.vad.VADStream):
         min_speech_samples = self._opts.min_speech_duration * self._opts.sample_rate
         min_silence_samples = self._opts.min_silence_duration * self._opts.sample_rate
 
+        current_sample = 0
+
         while True:
             window_data = await self._input_q.get()
             if window_data is None:
@@ -215,7 +217,8 @@ class VADStream(agents.vad.VADStream):
 
             inference_data = window_data.inference_data
             start_time = time.time()
-            probability = await asyncio.to_thread(lambda: self._model(inference_data))
+            raw_prob = await asyncio.to_thread(lambda: self._model(inference_data))
+            raw_speaking = raw_prob >= self._opts.activation_threshold
             inference_duration = time.time() - start_time
 
             window_duration = self._opts.window_size_samples / self._opts.sample_rate
@@ -229,12 +232,13 @@ class VADStream(agents.vad.VADStream):
             self._event_ch.send_nowait(
                 agents.vad.VADEvent(
                     type=agents.vad.VADEventType.INFERENCE_DONE,
-                    samples_index=self._current_sample,
-                    probability=probability,
+                    samples_index=current_sample,
+                    probability=raw_prob,
                     inference_duration=inference_duration,
+                    speaking=raw_speaking,
                 )
             )
-            self._current_sample += self._opts.window_size_samples
+            current_sample += self._opts.window_size_samples
 
             # append new data to current speech buffer
             pub_speech_buf = np.append(pub_speech_buf, window_data.original_data)
@@ -249,18 +253,19 @@ class VADStream(agents.vad.VADStream):
                 pub_speech_buf = pub_speech_buf[-cl:]
 
             # dispatch start/end when needed
-            if probability >= self._opts.activation_threshold:
+            if raw_speaking:
                 may_end_at_sample = -1
 
                 if may_start_at_sample == -1:
-                    may_start_at_sample = self._current_sample + min_speech_samples
+                    may_start_at_sample = current_sample + min_speech_samples
 
-                if may_start_at_sample <= self._current_sample and not pub_speaking:
+                if may_start_at_sample <= current_sample and not pub_speaking:
                     pub_speaking = True
                     self._event_ch.send_nowait(
                         agents.vad.VADEvent(
                             type=agents.vad.VADEventType.START_OF_SPEECH,
-                            samples_index=self._current_sample,
+                            samples_index=current_sample,
+                            speaking=True,
                         )
                     )
 
@@ -268,9 +273,9 @@ class VADStream(agents.vad.VADStream):
                 may_start_at_sample = -1
 
                 if may_end_at_sample == -1:
-                    may_end_at_sample = self._current_sample + min_silence_samples
+                    may_end_at_sample = current_sample + min_silence_samples
 
-                if may_end_at_sample <= self._current_sample and pub_speaking:
+                if may_end_at_sample <= current_sample and pub_speaking:
                     pub_speaking = False
 
                     frame = rtc.AudioFrame(
@@ -283,11 +288,16 @@ class VADStream(agents.vad.VADStream):
                     self._event_ch.send_nowait(
                         agents.vad.VADEvent(
                             type=agents.vad.VADEventType.END_OF_SPEECH,
-                            samples_index=self._current_sample,
+                            samples_index=current_sample,
                             duration=len(pub_speech_buf) / self._original_sample_rate,
                             frames=[frame],
+                            speaking=False,
                         )
                     )
+
+                    pub_speech_buf = np.array([], dtype=np.int16)
+
+        self._event_ch.close()
 
     async def __anext__(self) -> agents.vad.VADEvent:
         return await self._event_ch.__anext__()

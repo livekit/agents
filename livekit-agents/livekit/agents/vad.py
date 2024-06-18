@@ -41,9 +41,6 @@ class VAD(ABC):
 
 
 class VADStream(ABC):
-    def __init__(self) -> None:
-        pass
-
     @abstractmethod
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         pass
