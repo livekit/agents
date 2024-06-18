@@ -17,7 +17,6 @@ from .version import __version__
 
 __all__ = ["VAD", "VADStream", "__version__"]
 
-import torch
 from livekit.agents import Plugin
 
 
@@ -26,9 +25,7 @@ class SileroPlugin(Plugin):
         super().__init__(__name__, __version__, __package__)
 
     def download_files(self):
-        _ = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad", model="silero_vad", onnx=True
-        )
+        pass
 
 
 Plugin.register_plugin(SileroPlugin())

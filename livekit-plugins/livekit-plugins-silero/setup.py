@@ -49,12 +49,11 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents~=0.7",
-        "torch >= 2, < 3",
-        "torchaudio >= 2",
-        "numpy >= 1, < 2",
-        "onnxruntime~=1.17.0",
+        "onnxruntime~=1.18",
+        "numpy~=1.26",
     ],
     package_data={
+        "livekit.plugins.silero.resources": ["silero_vad.onnx"],
         "livekit.plugins.silero": ["py.typed"],
     },
     project_urls={

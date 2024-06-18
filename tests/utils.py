@@ -1,21 +1,23 @@
-import jiwer
+import jiwer as tr
 
 
 def wer(hypothesis: str, reference: str) -> float:
-    transformers = jiwer.Compose(
+    wer_standardize_contiguous = tr.Compose(
         [
-            jiwer.ExpandCommonEnglishContractions(),
-            jiwer.RemoveEmptyStrings(),
-            jiwer.ToLowerCase(),
-            jiwer.RemoveMultipleSpaces(),
-            jiwer.Strip(),
-            jiwer.RemovePunctuation(),
-            jiwer.ReduceToListOfListOfWords(),
+            tr.ToLowerCase(),
+            tr.ExpandCommonEnglishContractions(),
+            tr.RemoveKaldiNonWords(),
+            tr.RemoveWhiteSpace(replace_by_space=True),
+            tr.RemoveMultipleSpaces(),
+            tr.Strip(),
+            tr.ReduceToSingleSentence(),
+            tr.ReduceToListOfListOfWords(),
         ]
     )
-    return jiwer.wer(
+
+    return tr.wer(
         reference,
         hypothesis,
-        reference_transform=transformers,
-        hypothesis_transform=transformers,
+        reference_transform=wer_standardize_contiguous,
+        hypothesis_transform=wer_standardize_contiguous,
     )

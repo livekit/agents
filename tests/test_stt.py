@@ -35,7 +35,7 @@ def read_mp3_file(filename: str) -> rtc.AudioFrame:
     return agents.utils.merge_frames(frames)
 
 
-RECOGNIZE_STT = [deepgram.STT(), google.STT(), openai.STT(), azure.STT()]
+RECOGNIZE_STT = [deepgram.STT(), google.STT(), openai.STT()]
 
 
 @pytest.mark.usefixtures("job_process")

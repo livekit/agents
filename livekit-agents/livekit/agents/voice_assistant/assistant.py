@@ -375,9 +375,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 if speaking_avg_validation.get_avg() <= 0.05:
                     self._validate_answer_if_needed()
 
-            if self._opts.plotting:
-                self._plotter.plot_value("raw_t_vol", self._target_volume)
-                self._plotter.plot_value("vol", self._vol_filter.filtered())
+            self._plotter.plot_value("raw_vol", self._target_volume)
+            self._plotter.plot_value("vad_probability", self._speech_prob)
 
     def _link_participant(self, identity: str) -> None:
         p = self._start_args.room.participants_by_identity.get(identity)
@@ -483,10 +482,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     self._user_speaking = True
                     self.emit("user_started_speaking")
                 elif ev.type == avad.VADEventType.INFERENCE_DONE:
-                    self._plotter.plot_value("vad_raw", ev.raw_inference_prob)
-                    self._plotter.plot_value("vad_smoothed", ev.probability)
-                    self._plotter.plot_value("vad_dur", ev.inference_duration * 1000)
-                    self._speech_prob = ev.raw_inference_prob
+                    self._speech_prob = ev.probability
                 elif ev.type == avad.VADEventType.END_OF_SPEECH:
                     self._log_debug(f"user stopped speaking {ev.duration:.2f}s")
                     self._plotter.plot_event("user_started_speaking")
@@ -517,7 +513,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             await asyncio.gather(
                 stt_forwarder.aclose(wait=False),
                 stt_stream.aclose(wait=False),
-                vad_stream.aclose(wait=False),
+                vad_stream.aclose(),
             )
 
     def _on_final_transcript(self, text: str) -> None:
