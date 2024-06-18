@@ -80,9 +80,6 @@ class StreamAdapterWrapper(SpeechStream):
                     event = await self._stt.recognize(
                         buffer=merged_frames, *self._args, **self._kwargs
                     )
-                    self._event_queue.put_nowait(event)
-
-                    print(event)
 
                     final_event = SpeechEvent(
                         type=SpeechEventType.FINAL_TRANSCRIPT,

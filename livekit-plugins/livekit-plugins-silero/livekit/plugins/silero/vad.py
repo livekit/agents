@@ -15,20 +15,16 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
-import numpy as np
-
-from collections import deque
 from dataclasses import dataclass
-from typing import AsyncIterator, List, Optional
+from typing import AsyncIterator, Optional
 
+import numpy as np
 from livekit import agents, rtc
-
 from livekit.agents import aio
 
-from .log import logger
 from . import onnx_model
+from .log import logger
 
 
 @dataclass
@@ -47,7 +43,7 @@ class VAD(agents.vad.VAD):
         self,
         *,
         min_speech_duration: float = 0.25,  # 250ms
-        min_silence_duration: float = 0.1,  # 100ms
+        min_silence_duration: float = 2,  # 100ms
         padding_duration: float = 0.1,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,

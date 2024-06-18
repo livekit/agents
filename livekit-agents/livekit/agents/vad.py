@@ -5,8 +5,6 @@ from typing import AsyncIterator, List
 
 from livekit import rtc
 
-from . import aio
-
 
 class VADEventType(Enum):
     START_OF_SPEECH = 1
