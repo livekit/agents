@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .llm import LLM
+from .llm import LLM, LLMStream
 from .models import TTSModels, TTSVoices, WhisperModels
 from .stt import STT
 from .tts import TTS
@@ -22,6 +22,7 @@ __all__ = [
     "STT",
     "TTS",
     "LLM",
+    "LLMStream",
     "WhisperModels",
     "TTSModels",
     "TTSVoices",
