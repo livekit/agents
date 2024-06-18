@@ -1,14 +1,13 @@
 import asyncio
 import io
 import multiprocessing as mp
-import struct
 import time
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Tuple
 
 from .. import apipe, ipc_enc
 
-PlotType = Literal["vad_raw", "vad_smoothed", "vad_dur", "raw_t_vol", "vol"]
+PlotType = Literal["vad_probability", "raw_vol", "smoothed_vol"]
 EventType = Literal[
     "user_started_speaking",
     "user_stopped_speaking",
@@ -21,21 +20,19 @@ EventType = Literal[
 class PlotMessage:
     MSG_ID: ClassVar[int] = 1
 
-    which: PlotType = "vad_raw"
+    which: PlotType = "vad_probability"
     x: float = 0.0
     y: float = 0.0
 
     def write(self, b: io.BytesIO) -> None:
-        b.write(len(self.which).to_bytes(4, byteorder="big"))
-        b.write(self.which.encode())
-        b.write(struct.pack("d", self.x))
-        b.write(struct.pack("d", self.y))
+        ipc_enc._write_string(b, self.which)
+        ipc_enc._write_float(b, self.x)
+        ipc_enc._write_float(b, self.y)
 
     def read(self, b: io.BytesIO) -> None:
-        which_len = int.from_bytes(b.read(4), byteorder="big")
-        self.which = b.read(which_len).decode()  # type: ignore
-        self.x = struct.unpack("d", b.read(8))[0]
-        self.y = struct.unpack("d", b.read(8))[0]
+        self.which = ipc_enc._read_string(b)  # type: ignore
+        self.x = ipc_enc._read_float(b)
+        self.y = ipc_enc._read_float(b)
 
 
 @dataclass
@@ -46,14 +43,12 @@ class PlotEventMessage:
     x: float = 0.0
 
     def write(self, b: io.BytesIO) -> None:
-        b.write(len(self.which).to_bytes(4, byteorder="big"))
-        b.write(self.which.encode())
-        b.write(struct.pack("d", self.x))
+        ipc_enc._write_string(b, self.which)
+        ipc_enc._write_float(b, self.x)
 
     def read(self, b: io.BytesIO) -> None:
-        which_len = int.from_bytes(b.read(4), byteorder="big")
-        self.which = b.read(which_len).decode()  # type: ignore
-        self.x = struct.unpack("d", b.read(8))[0]
+        self.which = ipc_enc._read_string(b)  # type: ignore
+        self.x = ipc_enc._read_float(b)
 
 
 PLT_MESSAGES: dict = {
@@ -63,62 +58,72 @@ PLT_MESSAGES: dict = {
 
 
 def _draw_plot(reader: ipc_enc.ProcessPipeReader):
-    import matplotlib as mpl
-    import matplotlib.pyplot as plt
+    try:
+        import matplotlib as mpl
+        import matplotlib.pyplot as plt
+    except ImportError:
+        raise ImportError(
+            "matplotlib is required to run use the VoiceAssistant plotter"
+        )
 
     plt.style.use("ggplot")
     mpl.rcParams["toolbar"] = "None"
 
     plot_data: dict[str, Tuple[list[float], list[float]]] = {}
-    reader = reader
+    plot_events: dict[str, list[float]] = {}
 
     fig, (pv, sp) = plt.subplots(2, sharex="all")
     fig.canvas.manager.set_window_title("Voice Assistant")  # type: ignore
 
-    # not really accurate
-    max_vad_points = 500
-    max_vol_points = 1000
+    max_points = 750  # 7.5s (we send samples every 10ms)
 
     def _draw_cb(sp, pv):
-        nonlocal max_vol_points, max_vad_points
         while reader.poll():
             msg = ipc_enc.read_msg(reader, PLT_MESSAGES)
             if isinstance(msg, PlotMessage):
                 data = plot_data.setdefault(msg.which, ([], []))
                 data[0].append(msg.x)
                 data[1].append(msg.y)
-
-                max_points = (
-                    max_vad_points if msg.which.startswith("vad") else max_vol_points
-                )
                 data[0][:] = data[0][-max_points:]
                 data[1][:] = data[1][-max_points:]
 
-        vad_raw = plot_data.setdefault("vad_raw", ([], []))
-        vad_smoothed = plot_data.get("vad_smoothed", ([], []))
-        # vad_dur = plot_data.get("vad_dur", ([], []))
-        raw_t_vol = plot_data.get("raw_t_vol", ([], []))
+                # remove old events older than 7.5s
+                for events in plot_events.values():
+                    while events and events[0] < msg.x - 7.5:
+                        events.pop(0)
+
+            elif isinstance(msg, PlotEventMessage):
+                events = plot_events.setdefault(msg.which, [])
+                events.append(msg.x)
+
+        vad_raw = plot_data.setdefault("vad_probability", ([], []))
+        raw_vol = plot_data.get("raw_vol", ([], []))
         vol = plot_data.get("vol", ([], []))
 
         pv.clear()
         pv.set_ylim(0, 1)
         pv.set(ylabel="assistant volume")
-        pv.plot(vol[0], vol[1], label="vol")
-        pv.plot(raw_t_vol[0], raw_t_vol[1], label="raw")
+        pv.plot(vol[0], vol[1], label="volume")
+        pv.plot(raw_vol[0], raw_vol[1], label="target_volume")
         pv.legend()
 
         sp.clear()
         sp.set_ylim(0, 1)
         sp.set(xlabel="time (s)", ylabel="speech probability")
-        sp.plot(vad_smoothed[0], vad_smoothed[1], label="prob")
         sp.plot(vad_raw[0], vad_raw[1], label="raw")
         sp.legend()
 
-        # sd.clear()
-        # sd.grid()
-        # sd.set(xlabel="time (s)", ylabel="vad inference time (ms)")
-        # sd.plot(vad_dur[0], vad_dur[1], label="inference_duration")
-        # sd.legend()
+        for start in plot_events.get("agent_started_speaking", []):
+            pv.axvline(x=start, color="r", linestyle="--")
+
+        for stop in plot_events.get("agent_stopped_speaking", []):
+            pv.axvline(x=stop, color="r", linestyle="--")
+
+        for start in plot_events.get("user_started_speaking", []):
+            sp.axvline(x=start, color="r", linestyle="--")
+
+        for stop in plot_events.get("user_stopped_speaking", []):
+            sp.axvline(x=stop, color="r", linestyle="--")
 
         fig.canvas.draw()
 
