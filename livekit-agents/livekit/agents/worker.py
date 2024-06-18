@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import os
 from dataclasses import dataclass, field
 from functools import reduce
@@ -27,6 +28,7 @@ from typing import (
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
+import jwt
 import psutil
 from livekit import api
 from livekit.protocol import agent, models
@@ -418,7 +420,19 @@ class Worker(utils.EventEmitter[EventTypes]):
             # reloading jobs isn't supported on third-party workers, using ws_url of the local worker
             # is OK
             url = self._opts.ws_url
-            self._start_process(aj.job, url, aj.token, aj.accept_data)
+
+            # Take the original jwt token and extend it while
+            # keeping all of the same data that was generated
+            # by the SFU for the original join token.
+            original_token = aj.token
+            decoded = jwt.decode(
+                original_token, self._opts.api_secret, algorithms=["HS256"]
+            )
+            decoded["exp"] = (
+                int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 3600
+            )
+            extended = jwt.encode(decoded, self._opts.api_secret, algorithm="HS256")
+            self._start_process(aj.job, url, extended, aj.accept_data)
 
     def _start_process(
         self, job: agent.Job, url: str, token: str, accept_data: AcceptData

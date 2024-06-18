@@ -52,6 +52,7 @@ setuptools.setup(
         "livekit-api~=0.4",
         "livekit-protocol~=0.4",
         "protobuf>=3",
+        "pyjwt>=2.0.0",
         "types-protobuf>=4,<5",
         "watchfiles~=0.22",
         "psutil~=5.9",
