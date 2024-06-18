@@ -6,7 +6,8 @@ import json
 import multiprocessing
 import pathlib
 import threading
-from importlib.metadata import Distribution
+import urllib.parse
+from importlib.metadata import Distribution, PackageNotFoundError
 from typing import Any, Callable, Set
 
 import watchfiles
@@ -43,15 +44,24 @@ class WatchServer:
         if self._watch_plugins:
             # also watch plugins that are installed in editable mode
             # this is particulary useful when developing plugins
-            try:
-                packages.append(Distribution.from_name("livekit.agents"))
-                for p in Plugin.registered_plugins:
-                    packages.append(Distribution.from_name(p.package))
-            except Exception:
-                # TODO(theomonnom): distribution isn't found on Python 3.9
-                pass
 
-        paths: list[str | pathlib.Path] = [self._main_file.absolute()]
+            def _try_add(name: str) -> bool:
+                nonlocal packages
+                try:
+                    dist = Distribution.from_name(name)
+                    packages.append(dist)
+                    return True
+                except PackageNotFoundError:
+                    return False
+
+            if not _try_add("livekit.agents"):
+                _try_add("livekit-agents")
+
+            for p in Plugin.registered_plugins:
+                if not _try_add(p.package):
+                    _try_add(p.package.replace(".", "-"))
+
+        paths: list[pathlib.Path] = [self._main_file.absolute()]
         for p in packages:
             # https://packaging.python.org/en/latest/specifications/direct-url/
             durl = p.read_text("direct_url.json")
@@ -63,7 +73,9 @@ class WatchServer:
             if dir_info.get("editable", False):
                 path = durl.get("url")
                 if path.startswith("file://"):
-                    paths.append(path[7:])
+                    parsed_url = urllib.parse.urlparse(path)
+                    file_path = pathlib.Path(urllib.parse.unquote(parsed_url.path))
+                    paths.append(file_path)
 
         for p in paths:
             logger.info(f"Watching {p}")
