@@ -3,7 +3,7 @@ import importlib.resources
 from contextlib import ExitStack
 
 import numpy as np
-import onnxruntime # type: ignore
+import onnxruntime  # type: ignore
 
 _resource_files = ExitStack()
 atexit.register(_resource_files.close)
