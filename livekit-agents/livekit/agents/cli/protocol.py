@@ -47,6 +47,7 @@ class ActiveJobsResponse:
             ipc_enc._write_bytes(b, job_s)
             accept_s = pickle.dumps(aj.accept_data)
             ipc_enc._write_bytes(b, accept_s)
+            ipc_enc._write_string(b, aj.token)
 
     def read(self, b: io.BytesIO) -> None:
         job_count = ipc_enc._read_int(b)
@@ -56,7 +57,8 @@ class ActiveJobsResponse:
             job.ParseFromString(job_s)
             accept_s = ipc_enc._read_bytes(b)
             accept_data = pickle.loads(accept_s)
-            self.jobs.append(ActiveJob(job=job, accept_data=accept_data))
+            token = ipc_enc._read_string(b)
+            self.jobs.append(ActiveJob(job=job, accept_data=accept_data, token=token))
 
 
 @dataclass
@@ -83,6 +85,7 @@ class ReloadJobsResponse:
             accept_s = pickle.dumps(aj.accept_data)
             b.write(len(accept_s).to_bytes(4, "big"))
             b.write(accept_s)
+            ipc_enc._write_string(b, aj.token)
 
     def read(self, b: io.BytesIO) -> None:
         job_count = int.from_bytes(b.read(4), "big")
@@ -92,7 +95,8 @@ class ReloadJobsResponse:
             job.ParseFromString(b.read(job_len))
             accept_len = int.from_bytes(b.read(4), "big")
             accept_data = pickle.loads(b.read(accept_len))
-            self.jobs.append(ActiveJob(job=job, accept_data=accept_data))
+            token = ipc_enc._read_string(b)
+            self.jobs.append(ActiveJob(job=job, accept_data=accept_data, token=token))
 
 
 @dataclass
