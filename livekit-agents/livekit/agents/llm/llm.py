@@ -2,28 +2,28 @@ from __future__ import annotations
 
 import abc
 import enum
-
-from attrs import define
+from typing import AsyncIterator, Callable
+from .chat_context import ChatContext, ChatRole
+from dataclasses import dataclass, field
 
 from . import function_context
 
 
-class ChatRole(enum.Enum):
-    SYSTEM = "system"
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
-
-
-@define
-class ChatMessage:
+@dataclass
+class ChoiceDelta:
     role: ChatRole
-    text: str
+    content: str | None = None
 
 
-@define
-class ChatContext:
-    messages: list[ChatMessage] = []
+@dataclass
+class Choice:
+    delta: ChoiceDelta
+    index: int = 0
+
+
+@dataclass
+class ChatChunk:
+    choices: list[Choice] = field(default_factory=list)
 
 
 class LLM(abc.ABC):
@@ -35,28 +35,7 @@ class LLM(abc.ABC):
         fnc_ctx: function_context.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = None,
-    ) -> "LLMStream":
-        """
-        Usage::
-            stream = await model.chat(
-                chat_ctx=ChatContext(
-                    messages=[
-                        ChatMessage(
-                            role=ChatRole.USER,
-                            text=request,
-                        ),
-                    ]
-                ),
-                fnc_ctx=fnc_ctx,
-            )
-
-            async for chunk in stream:
-                # do something with the chunk
-
-            await stream.gather_function_results()
-            await stream.aclose()
-        """
-        ...
+    ) -> "LLMStream": ...
 
 
 class LLMStream(abc.ABC):
@@ -74,27 +53,10 @@ class LLMStream(abc.ABC):
     ) -> list[function_context.CalledFunction]: ...
 
     @abc.abstractmethod
-    def __aiter__(self) -> "LLMStream": ...
+    def __aiter__(self) -> AsyncIterator[ChatChunk]: ...
 
     @abc.abstractmethod
     async def __anext__(self) -> ChatChunk: ...
 
     @abc.abstractmethod
     async def aclose(self) -> None: ...
-
-
-@define
-class ChoiceDelta:
-    content: str | None = None
-    role: ChatRole | None = None
-
-
-@define
-class Choice:
-    delta: ChoiceDelta
-    index: int = 0
-
-
-@define
-class ChatChunk:
-    choices: list[Choice] = []

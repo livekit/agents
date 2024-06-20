@@ -26,8 +26,7 @@ from livekit.agents import stt, utils
 from livekit.agents.utils import AudioBuffer
 
 from .models import WhisperModels
-
-OPENAI_ENPOINT = "https://api.openai.com/v1/audio/transcriptions"
+from .utils import get_base_url
 
 
 @dataclass
@@ -36,6 +35,7 @@ class _STTOptions:
     detect_language: bool
     model: WhisperModels
     api_key: str
+    endpoint: str
 
 
 class STT(stt.STT):
@@ -46,6 +46,7 @@ class STT(stt.STT):
         detect_language: bool = False,
         model: WhisperModels = "whisper-1",
         api_key: str | None = None,
+        base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ):
         super().__init__(streaming_supported=False)
@@ -61,6 +62,7 @@ class STT(stt.STT):
             detect_language=detect_language,
             model=model,
             api_key=api_key,
+            endpoint=os.path.join(get_base_url(base_url), "audio/transcriptions"),
         )
         self._session = http_session
 
@@ -105,7 +107,7 @@ class STT(stt.STT):
         form.add_field("response_format", "json")
 
         async with self._ensure_session().post(
-            OPENAI_ENPOINT,
+            self._opts.endpoint,
             headers={"Authorization": f"Bearer {config.api_key}"},
             data=form,
         ) as resp:

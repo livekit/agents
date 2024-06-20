@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 from collections import deque
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Awaitable,
@@ -11,11 +12,9 @@ from typing import (
     Union,
 )
 
-from attr import define, field
-
 
 class SelectLoop:
-    @define(kw_only=True)
+    @dataclass
     class Completed:
         selected: Awaitable = field(repr=False)
         index: int
@@ -27,12 +26,12 @@ class SelectLoop:
                 raise self.exc
             return self.value
 
-    @define(kw_only=True)
+    @dataclass
     class GenData:
         gen: AsyncIterator
         next_task: asyncio.Task | None = None
 
-    @define(kw_only=True)
+    @dataclass
     class CoroData:
         coro: Awaitable
         task: asyncio.Task | None = None

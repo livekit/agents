@@ -14,7 +14,6 @@
 
 from . import (
     aio,
-    codecs,
     ipc,
     llm,
     stt,
@@ -43,7 +42,6 @@ __all__ = [
     "JobContext",
     "Plugin",
     "ipc",
-    "codecs",
     "stt",
     "vad",
     "utils",

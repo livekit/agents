@@ -1,3 +1,9 @@
+from .chat_context import (
+    ChatContext,
+    ChatImage,
+    ChatMessage,
+    ChatRole,
+)
 from .function_context import (
     USE_DOCSTRING,
     FunctionArgInfo,
@@ -10,9 +16,6 @@ from .function_context import (
 from .llm import (
     LLM,
     ChatChunk,
-    ChatContext,
-    ChatMessage,
-    ChatRole,
     Choice,
     ChoiceDelta,
     LLMStream,
@@ -24,6 +27,7 @@ __all__ = [
     "ChatContext",
     "ChatRole",
     "ChatMessage",
+    "ChatImage",
     "ChatContext",
     "ChoiceDelta",
     "Choice",

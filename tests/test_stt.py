@@ -9,7 +9,7 @@ import time
 
 import pytest
 from livekit import agents, rtc
-from livekit.plugins import deepgram, google, openai, silero
+from livekit.plugins import azure, deepgram, google, openai, silero
 
 from .utils import wer
 
@@ -20,7 +20,7 @@ TEST_AUDIO_TRANSCRIPT = pathlib.Path(
 
 
 def read_mp3_file(filename: str) -> rtc.AudioFrame:
-    mp3 = agents.codecs.Mp3StreamDecoder()
+    mp3 = agents.utils.codecs.Mp3StreamDecoder()
     frames: list[rtc.AudioFrame] = []
     with open(filename, "rb") as file:
         while True:
@@ -58,6 +58,7 @@ STREAM_STT = [
     deepgram.STT(),
     google.STT(),
     agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
+    azure.STT(),
 ]
 
 
@@ -108,8 +109,10 @@ async def test_stream(stt: agents.stt.STT):
 
             assert recv_start, "START_OF_SPEECH should be sent before any other event"
 
-            if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
+            if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
                 text += event.alternatives[0].text
+
+            if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
                 recv_start = False
                 recv_end = True
 

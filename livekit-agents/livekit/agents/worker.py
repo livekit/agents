@@ -16,17 +16,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import os
+from dataclasses import dataclass, field
+from functools import reduce
 from typing import (
     Callable,
     Coroutine,
     Literal,
 )
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
+import jwt
 import psutil
-from attr import define
 from livekit import api
 from livekit.protocol import agent, models
 
@@ -43,24 +46,24 @@ def cpu_load_fnc() -> float:
     return psutil.cpu_percent() / 100
 
 
-@define(kw_only=True)
+@dataclass
 class WorkerPermissions:
     can_publish: bool = True
     can_subscribe: bool = True
     can_publish_data: bool = True
     can_update_metadata: bool = True
-    can_publish_sources: list[models.TrackSource] = []
+    can_publish_sources: list[models.TrackSource] = field(default_factory=list)
     hidden: bool = False
 
 
 # NOTE: this object must be pickle-able
-@define
+@dataclass
 class WorkerOptions:
     request_fnc: JobRequestFnc
     load_fnc: LoadFnc = cpu_load_fnc
     load_threshold: float = 0.8
     namespace: str = "default"
-    permissions: WorkerPermissions = WorkerPermissions()
+    permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     worker_type: agent.JobType = agent.JobType.JT_ROOM
     max_retry: int = consts.MAX_RECONNECT_ATTEMPTS
     ws_url: str = "ws://localhost:7880"
@@ -70,10 +73,11 @@ class WorkerOptions:
     port: int = 8081
 
 
-@define(kw_only=True)
+@dataclass
 class ActiveJob:
     job: agent.Job
     accept_data: AcceptData
+    token: str
 
 
 EventTypes = Literal["worker_registered"]
@@ -263,7 +267,12 @@ class Worker(utils.EventEmitter[EventTypes]):
                 if scheme.startswith("http"):
                     scheme = scheme.replace("http", "ws")
 
-                agent_url = f"{scheme}://{parse.netloc}/{parse.path.rstrip('/')}/agent"
+                path_parts = [
+                    f"{scheme}://{parse.netloc}",
+                    parse.path,
+                    "/agent",
+                ]
+                agent_url = reduce(urljoin, path_parts)
 
                 ws = await self._session.ws_connect(
                     agent_url, headers=headers, autoping=True
@@ -412,24 +421,27 @@ class Worker(utils.EventEmitter[EventTypes]):
             # is OK
             url = self._opts.ws_url
 
-            jwt = (
-                api.AccessToken(self._opts.api_key, self._opts.api_secret)
-                .with_grants(
-                    api.VideoGrants(agent=True, room_join=True, room=aj.job.room.name)
-                )
-                .with_name(aj.accept_data.name)
-                .with_metadata(aj.accept_data.metadata)
-                .with_identity(aj.accept_data.identity)
-                .to_jwt()
+            # Take the original jwt token and extend it while
+            # keeping all of the same data that was generated
+            # by the SFU for the original join token.
+            original_token = aj.token
+            decoded = jwt.decode(
+                original_token, self._opts.api_secret, algorithms=["HS256"]
             )
-
-            self._start_process(aj.job, url, jwt, aj.accept_data)
+            decoded["exp"] = (
+                int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 3600
+            )
+            extended = jwt.encode(decoded, self._opts.api_secret, algorithm="HS256")
+            self._start_process(aj.job, url, extended, aj.accept_data)
 
     def _start_process(
         self, job: agent.Job, url: str, token: str, accept_data: AcceptData
     ):
         proc = ipc.JobProcess(job, url, token, accept_data)
-        self._processes[job.id] = (proc, ActiveJob(job=job, accept_data=accept_data))
+        self._processes[job.id] = (
+            proc,
+            ActiveJob(job=job, accept_data=accept_data, token=token),
+        )
 
         async def _run_proc():
             try:

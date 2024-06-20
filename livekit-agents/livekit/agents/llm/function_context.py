@@ -1,12 +1,26 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import enum
 import asyncio
 import inspect
 import typing
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from attrs import define, field
 from ..log import logger
 
 
@@ -18,13 +32,13 @@ METADATA_ATTR = "__livekit_ai_metadata__"
 USE_DOCSTRING = _UseDocMarker()
 
 
-@define(kw_only=True, frozen=True)
+@dataclass(frozen=True)
 class TypeInfo:
     description: str = ""
-    choices: list[Any] = field(factory=list)
+    choices: list[Any] = field(default_factory=list)
 
 
-@define(kw_only=True, frozen=True)
+@dataclass(frozen=True)
 class FunctionArgInfo:
     name: str
     description: str
@@ -33,7 +47,7 @@ class FunctionArgInfo:
     choices: list[Any] | None
 
 
-@define(kw_only=True, frozen=True)
+@dataclass(frozen=True)
 class FunctionInfo:
     name: str
     description: str
@@ -42,7 +56,7 @@ class FunctionInfo:
     arguments: dict[str, FunctionArgInfo]
 
 
-@define(kw_only=True, frozen=True)
+@dataclass(frozen=True)
 class CalledFunction:
     info: FunctionInfo
     arguments: dict[str, Any]
@@ -143,7 +157,7 @@ class FunctionContext:
         return self._fncs
 
 
-@define(kw_only=True, frozen=True)
+@dataclass(frozen=True)
 class _AIFncMetadata:
     name: str
     description: str

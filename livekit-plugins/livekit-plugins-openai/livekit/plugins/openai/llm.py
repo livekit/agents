@@ -1,23 +1,46 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import asyncio
+import base64
 import enum
 import functools
 import inspect
 import json
-import typing
-from typing import Any, MutableSet
+from dataclasses import dataclass
+from typing import Any, Dict, List, MutableSet, Tuple
 
-from attrs import define
+from livekit import rtc
 from livekit.agents import llm
+from livekit.agents.utils import images
 
 import openai
 
 from .log import logger
 from .models import ChatModels
+from .utils import get_base_url
+
+IMAGE_DETAIL_DIMENSIONS: List[Tuple[int, str]] = [
+    (512, "low"),
+    (768, "medium"),
+    (2048, "high"),
+]
 
 
-@define
+@dataclass
 class LLMOptions:
     model: str | ChatModels
 
@@ -27,10 +50,11 @@ class LLM(llm.LLM):
         self,
         *,
         model: str | ChatModels = "gpt-4o",
+        base_url: str | None = None,
         client: openai.AsyncClient | None = None,
     ) -> None:
         self._opts = LLMOptions(model=model)
-        self._client = client or openai.AsyncClient()
+        self._client = client or openai.AsyncClient(base_url=get_base_url(base_url))
         self._running_fncs: MutableSet[asyncio.Task] = set()
 
     async def chat(
@@ -39,14 +63,15 @@ class LLM(llm.LLM):
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
-        n: int | None = None,
+        n: int | None = 1,
     ) -> "LLMStream":
         opts = dict()
         if fnc_ctx:
             opts["tools"] = _to_openai_tools(fnc_ctx)
 
+        messages = _to_openai_ctx(history)
         cmp = await self._client.chat.completions.create(
-            messages=_to_openai_ctx(chat_ctx),
+            messages=messages,
             model=self._opts.model,
             n=n,
             temperature=temperature,
@@ -241,14 +266,13 @@ class LLMStream(llm.LLMStream):
         await asyncio.gather(*self._running_tasks, return_exceptions=True)
 
 
-def _to_openai_ctx(chat_ctx: llm.ChatContext) -> list:
-    return [
-        {
-            "role": msg.role.value,
-            "content": msg.text,
-        }
-        for msg in chat_ctx.messages
+def image_detail_from_dimensions(width: int, height: int) -> str:
+    deltas = [
+        (min(abs(width - d[0]), abs(height - d[0])), d[1])
+        for d in IMAGE_DETAIL_DIMENSIONS
     ]
+    smallest_delta = min(deltas, key=lambda d: d[0])
+    return smallest_delta[1]
 
 
 def _to_openai_tools(fnc_ctx: llm.FunctionContext):
@@ -294,6 +318,62 @@ def _to_openai_tools(fnc_ctx: llm.FunctionContext):
         )
 
     return tools_desc
+
+
+def _to_openai_ctx(history: llm.ChatContext):
+    res = []
+
+    for msg in history.messages:
+        content: List[Dict[str, Any]] = [{"type": "text", "text": msg.text}]
+        for img in msg.images:
+            if isinstance(img.image, str):
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": img.image,
+                            "detail": image_detail_from_dimensions(
+                                img.inference_width or 512,
+                                img.inference_height or 512,
+                            ),
+                        },
+                    }
+                )
+            elif isinstance(img.image, rtc.VideoFrame):
+                if self not in img._cache:
+                    w, h = img.inference_width, img.inference_height
+                    encode_options = images.EncodeOptions(
+                        format="JPEG",
+                        resize_options=images.ResizeOptions(
+                            width=w or 128,
+                            height=h or 128,
+                            strategy="center_aspect_fit",
+                        ),
+                    )
+                    jpg_bytes = images.encode(img.image, encode_options)
+                    b64 = base64.b64encode(jpg_bytes).decode("utf-8")
+                    img._cache[self] = b64
+
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{img._cache[self]}"
+                        },
+                    }
+                )
+            else:
+                logger.error(f"unknown image type {type(img)}")
+                continue
+
+        res.append(
+            {
+                "role": msg.role.value,
+                "content": content,
+            }
+        )
+
+    return res
 
 
 def _to_openai_items(dst: dict, ty: type, choices: list | None):

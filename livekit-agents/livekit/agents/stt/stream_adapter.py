@@ -80,7 +80,6 @@ class StreamAdapterWrapper(SpeechStream):
                     event = await self._stt.recognize(
                         buffer=merged_frames, *self._args, **self._kwargs
                     )
-                    self._event_queue.put_nowait(event)
 
                     final_event = SpeechEvent(
                         type=SpeechEventType.FINAL_TRANSCRIPT,
@@ -109,7 +108,7 @@ class StreamAdapterWrapper(SpeechStream):
         if not wait:
             self._main_task.cancel()
 
-        await self._vad_stream.aclose(wait=wait)
+        await self._vad_stream.aclose()
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
 

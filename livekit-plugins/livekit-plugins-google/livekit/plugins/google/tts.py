@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 from livekit import rtc
-from livekit.agents import codecs, tts
+from livekit.agents import tts
+from livekit.agents.utils import codecs
 
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import (

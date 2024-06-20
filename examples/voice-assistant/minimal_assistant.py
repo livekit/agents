@@ -8,7 +8,7 @@ from livekit.agents.llm import (
     ChatRole,
 )
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import deepgram, elevenlabs, openai, silero
+from livekit.plugins import deepgram, openai, silero
 
 
 async def entrypoint(ctx: JobContext):
@@ -28,12 +28,12 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
-        tts=elevenlabs.TTS(),
+        tts=openai.TTS(voice="alloy"),
         chat_ctx=initial_ctx,
     )
     assistant.start(ctx.room)
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(1)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
 

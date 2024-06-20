@@ -9,7 +9,7 @@ import pathlib
 import pytest
 from livekit import agents
 from livekit.agents.utils import AudioBuffer, merge_frames
-from livekit.plugins import elevenlabs, google, nltk, openai
+from livekit.plugins import azure, cartesia, elevenlabs, google, nltk, openai
 
 from .utils import wer
 
@@ -36,9 +36,11 @@ async def _assert_valid_synthesized_audio(
 
 SYNTHESIZE_TTS = [
     elevenlabs.TTS(),
-    elevenlabs.TTS(output_format="pcm_44100"),
+    elevenlabs.TTS(encoding="pcm_44100"),
     openai.TTS(),
     google.TTS(),
+    azure.TTS(),
+    cartesia.TTS(),
 ]
 
 
@@ -57,12 +59,16 @@ async def test_synthetize(tts: agents.tts.TTS):
 STREAM_SENT_TOKENIZER = nltk.SentenceTokenizer(min_sentence_len=20)
 STREAM_TTS = [
     elevenlabs.TTS(),
-    elevenlabs.TTS(output_format="pcm_44100"),
+    elevenlabs.TTS(encoding="pcm_44100"),
     agents.tts.StreamAdapter(
         tts=openai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
     agents.tts.StreamAdapter(
         tts=google.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    ),
+    agents.tts.StreamAdapter(tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER),
+    agents.tts.StreamAdapter(
+        tts=cartesia.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
 ]
 
