@@ -6,10 +6,10 @@ from .chat_context import (
 )
 from .function_context import (
     USE_DOCSTRING,
-    FunctionArgInfo,
-    FunctionInfo,
     CalledFunction,
+    FunctionArgInfo,
     FunctionContext,
+    FunctionInfo,
     TypeInfo,
     ai_callable,
 )

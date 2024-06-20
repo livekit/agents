@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import abc
-import enum
-from typing import AsyncIterator, Callable
-from .chat_context import ChatContext, ChatRole
 from dataclasses import dataclass, field
+from typing import AsyncIterator
 
 from . import function_context
+from .chat_context import ChatContext, ChatRole
 
 
 @dataclass

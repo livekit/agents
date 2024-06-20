@@ -14,8 +14,8 @@
 
 from __future__ import annotations
 
-import enum
 import asyncio
+import enum
 import inspect
 import typing
 from dataclasses import dataclass, field

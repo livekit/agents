@@ -20,6 +20,7 @@ import enum
 import functools
 import inspect
 import json
+import typing
 from dataclasses import dataclass
 from typing import Any, Dict, List, MutableSet, Tuple
 
@@ -69,7 +70,8 @@ class LLM(llm.LLM):
         if fnc_ctx:
             opts["tools"] = _to_openai_tools(fnc_ctx)
 
-        messages = _to_openai_ctx(history)
+        cache_key = id(self)
+        messages = _to_openai_ctx(chat_ctx, cache_key)
         cmp = await self._client.chat.completions.create(
             messages=messages,
             model=self._opts.model,
@@ -320,10 +322,10 @@ def _to_openai_tools(fnc_ctx: llm.FunctionContext):
     return tools_desc
 
 
-def _to_openai_ctx(history: llm.ChatContext):
+def _to_openai_ctx(chat_ctx: llm.ChatContext, cache_key: Any):
     res = []
 
-    for msg in history.messages:
+    for msg in chat_ctx.messages:
         content: List[Dict[str, Any]] = [{"type": "text", "text": msg.text}]
         for img in msg.images:
             if isinstance(img.image, str):
@@ -340,7 +342,7 @@ def _to_openai_ctx(history: llm.ChatContext):
                     }
                 )
             elif isinstance(img.image, rtc.VideoFrame):
-                if self not in img._cache:
+                if cache_key not in img._cache:
                     w, h = img.inference_width, img.inference_height
                     encode_options = images.EncodeOptions(
                         format="JPEG",
@@ -352,13 +354,13 @@ def _to_openai_ctx(history: llm.ChatContext):
                     )
                     jpg_bytes = images.encode(img.image, encode_options)
                     b64 = base64.b64encode(jpg_bytes).decode("utf-8")
-                    img._cache[self] = b64
+                    img._cache[cache_key] = b64
 
                 content.append(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/jpeg;base64,{img._cache[self]}"
+                            "url": f"data:image/jpeg;base64,{img._cache[cache_key]}"
                         },
                     }
                 )
