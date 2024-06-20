@@ -315,7 +315,7 @@ def _to_openai_ctx(chat_ctx: llm.ChatContext, cache_key: Any):
                     },
                 }
                 content.append(oai_img)
-            else
+            else:
                 logger.warning(f"unknown image type {type(img)}")
                 continue
 
