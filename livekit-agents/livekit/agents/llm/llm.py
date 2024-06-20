@@ -51,8 +51,8 @@ class LLMStream(abc.ABC):
         self,
     ) -> list[function_context.CalledFunction]: ...
 
-    @abc.abstractmethod
-    def __aiter__(self) -> AsyncIterator[ChatChunk]: ...
+    def __aiter__(self) -> AsyncIterator[ChatChunk]:
+        return self
 
     @abc.abstractmethod
     async def __anext__(self) -> ChatChunk: ...

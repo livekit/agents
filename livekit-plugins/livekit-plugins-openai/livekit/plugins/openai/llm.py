@@ -34,7 +34,7 @@ from .log import logger
 from .models import ChatModels
 from .utils import get_base_url
 
-IMAGE_DETAIL_DIMENSIONS: List[Tuple[int, str]] = [
+IMAGE_DETAIL_DIMENSIONS: list[tuple[int, str]] = [
     (512, "low"),
     (768, "medium"),
     (2048, "high"),
@@ -93,8 +93,17 @@ class LLMStream(llm.LLMStream):
         self._fnc_ctx = fnc_ctx
         self._running_tasks: MutableSet[asyncio.Task] = set()
 
-    def __aiter__(self) -> "LLMStream":
-        return self
+    async def gather_function_results(self) -> list[llm.CalledFunction]:
+        await asyncio.gather(*self._running_tasks, return_exceptions=True)
+        return self._called_functions
+
+    async def aclose(self) -> None:
+        await self._oai_stream.close()
+
+        for task in self._running_tasks:
+            task.cancel()
+
+        await asyncio.gather(*self._running_tasks, return_exceptions=True)
 
     async def __anext__(self) -> llm.ChatChunk:
         fnc_name = None
@@ -255,26 +264,86 @@ class LLMStream(llm.LLMStream):
         task.add_done_callback(_task_done)
         self._running_tasks.add(task)
 
-    async def gather_function_results(self) -> list[llm.CalledFunction]:
-        await asyncio.gather(*self._running_tasks, return_exceptions=True)
-        return self._called_functions
 
-    async def aclose(self) -> None:
-        await self._oai_stream.close()
-
-        for task in self._running_tasks:
-            task.cancel()
-
-        await asyncio.gather(*self._running_tasks, return_exceptions=True)
+def _image_detail_from_dimensions(width: int, height: int) -> str:
+    for dim, detail in IMAGE_DETAIL_DIMENSIONS:
+        if width <= dim and height <= dim:
+            return detail
+    return "high"
 
 
-def image_detail_from_dimensions(width: int, height: int) -> str:
-    deltas = [
-        (min(abs(width - d[0]), abs(height - d[0])), d[1])
-        for d in IMAGE_DETAIL_DIMENSIONS
-    ]
-    smallest_delta = min(deltas, key=lambda d: d[0])
-    return smallest_delta[1]
+def _to_openai_ctx(chat_ctx: llm.ChatContext, cache_key: Any):
+    oai_context = []
+
+    for msg in chat_ctx.messages:
+        content = [{"type": "text", "text": msg.text}]
+        for img in msg.images:
+            if isinstance(img.image, str):
+                oai_img = {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": img.image,
+                        "detail": _image_detail_from_dimensions(
+                            img.inference_width or 512,
+                            img.inference_height or 512,
+                        ),
+                    },
+                }
+                content.append(oai_img)
+            elif isinstance(img.image, rtc.VideoFrame):
+                if cache_key not in img._cache:
+                    # encode the VideoFrame to jpeg and cache the result for later use
+                    # of the ChatContext.
+                    jpg_bytes = images.encode(
+                        img.image,
+                        images.EncodeOptions(
+                            format="JPEG",
+                            resize_options=images.ResizeOptions(
+                                width=img.inference_width or 512,
+                                height=img.inference_height or 512,
+                                strategy="center_aspect_fit",
+                            ),
+                        ),
+                    )
+                    b64 = base64.b64encode(jpg_bytes).decode("utf-8")
+                    img._cache[cache_key] = b64
+
+                oai_img = {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{img._cache[cache_key]}"
+                    },
+                }
+                content.append(oai_img)
+            else
+                logger.warning(f"unknown image type {type(img)}")
+                continue
+
+        oai_context.append(
+            {
+                "role": msg.role.value,
+                "content": content,
+            }
+        )
+
+    return oai_context
+
+
+def _to_openai_items(dst: dict, ty: type, choices: list | None):
+    if ty is str:
+        dst["type"] = "string"
+    elif ty in (int, float):
+        dst["type"] = "number"
+    elif ty is bool:
+        dst["type"] = "boolean"
+    elif issubclass(ty, enum.Enum):
+        dst["type"] = "string"
+        dst["enum"] = [e.value for e in ty]
+    else:
+        raise ValueError(f"unsupported type {ty}")
+
+    if choices:
+        dst["enum"] = choices
 
 
 def _to_openai_tools(fnc_ctx: llm.FunctionContext):
@@ -320,79 +389,6 @@ def _to_openai_tools(fnc_ctx: llm.FunctionContext):
         )
 
     return tools_desc
-
-
-def _to_openai_ctx(chat_ctx: llm.ChatContext, cache_key: Any):
-    res = []
-
-    for msg in chat_ctx.messages:
-        content: List[Dict[str, Any]] = [{"type": "text", "text": msg.text}]
-        for img in msg.images:
-            if isinstance(img.image, str):
-                content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": img.image,
-                            "detail": image_detail_from_dimensions(
-                                img.inference_width or 512,
-                                img.inference_height or 512,
-                            ),
-                        },
-                    }
-                )
-            elif isinstance(img.image, rtc.VideoFrame):
-                if cache_key not in img._cache:
-                    w, h = img.inference_width, img.inference_height
-                    encode_options = images.EncodeOptions(
-                        format="JPEG",
-                        resize_options=images.ResizeOptions(
-                            width=w or 128,
-                            height=h or 128,
-                            strategy="center_aspect_fit",
-                        ),
-                    )
-                    jpg_bytes = images.encode(img.image, encode_options)
-                    b64 = base64.b64encode(jpg_bytes).decode("utf-8")
-                    img._cache[cache_key] = b64
-
-                content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{img._cache[cache_key]}"
-                        },
-                    }
-                )
-            else:
-                logger.error(f"unknown image type {type(img)}")
-                continue
-
-        res.append(
-            {
-                "role": msg.role.value,
-                "content": content,
-            }
-        )
-
-    return res
-
-
-def _to_openai_items(dst: dict, ty: type, choices: list | None):
-    if ty is str:
-        dst["type"] = "string"
-    elif ty in (int, float):
-        dst["type"] = "number"
-    elif ty is bool:
-        dst["type"] = "boolean"
-    elif issubclass(ty, enum.Enum):
-        dst["type"] = "string"
-        dst["enum"] = [e.value for e in ty]
-    else:
-        raise ValueError(f"unsupported type {ty}")
-
-    if choices:
-        dst["enum"] = choices
 
 
 def _sanitize_primitive(ty: type, value: Any) -> Any:

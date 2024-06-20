@@ -19,10 +19,6 @@ from typing import TYPE_CHECKING, Any, Dict, List
 
 from livekit import rtc
 
-if TYPE_CHECKING:
-    from livekit.agents.llm import LLM
-
-
 class ChatRole(enum.Enum):
     SYSTEM = "system"
     USER = "user"
@@ -35,9 +31,9 @@ class ChatImage:
     image: str | rtc.VideoFrame
     inference_width: int | None = None
     inference_height: int | None = None
-    _cache: Dict[LLM, Any] = field(default_factory=dict, repr=False, init=False)
+    _cache: Dict[Any, Any] = field(default_factory=dict, repr=False, init=False)
     """_cache is used  by LLM implementations to store a processed version of the image
-    for later use during inference. It is not intended to be used by the user code.
+    for later use.
     """
 
 
