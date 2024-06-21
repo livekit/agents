@@ -159,7 +159,8 @@ async def test_cancelled_calls():
     stream = await _request_fnc_call(
         llm, "Turn off the lights in the Theo's bedroom", fnc_ctx
     )
-    await stream.gather_function_results()
+
+    # don't wait for gather_function_results and directly close
     await stream.aclose()
 
     assert fnc_ctx._toggle_light_calls == 1

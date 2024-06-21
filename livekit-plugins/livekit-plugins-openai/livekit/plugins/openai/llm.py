@@ -245,7 +245,7 @@ class LLMStream(llm.LLMStream):
                     )
                     return
 
-            if arg_info.choices is not None:
+            if arg_info.choices:
                 if val not in arg_info.choices:
                     logger.error(
                         f"{name}: invalid arg {arg_info.name}", extra={"value": val}
@@ -351,7 +351,7 @@ def _to_openai_tool_calls(called_function: llm.CalledFunction):
 def _to_openai_text_content(text: str):
     return {
         "type": "text",
-        "content": text,
+        "text": text,
     }
 
 
