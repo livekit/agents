@@ -56,9 +56,11 @@ class FunctionInfo:
     arguments: dict[str, FunctionArgInfo]
 
 
-@dataclass(frozen=True)
+@dataclass
 class CalledFunction:
-    info: FunctionInfo
+    id: str
+    function_info: FunctionInfo
+    raw_arguments: str
     arguments: dict[str, Any]
     task: asyncio.Task
     result: Any | None = None

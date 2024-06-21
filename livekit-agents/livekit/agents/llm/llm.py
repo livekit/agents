@@ -12,6 +12,7 @@ from .chat_context import ChatContext, ChatRole
 class ChoiceDelta:
     role: ChatRole
     content: str | None = None
+    tool_calls: list[function_context.CalledFunction] | None = None
 
 
 @dataclass

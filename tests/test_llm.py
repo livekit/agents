@@ -32,31 +32,35 @@ class FncCtx(FunctionContext):
         self._selected_currencies = None
         self._selected_volume = None
 
-    @ai_callable(desc="Get the current weather in a given location", auto_retry=True)
+    @ai_callable(
+        description="Get the current weather in a given location", auto_retry=True
+    )
     def get_weather(
         self,
         location: Annotated[
-            str, TypeInfo(desc="The city and state, e.g. San Francisco, CA")
+            str, TypeInfo(description="The city and state, e.g. San Francisco, CA")
         ],
         unit: Annotated[
             Unit,
-            TypeInfo(desc="The temperature unit to use."),
+            TypeInfo(description="The temperature unit to use."),
         ] = Unit.CELSIUS,
     ) -> None:
         self._get_weather_calls += 1
 
-    @ai_callable(desc="Play a music")
+    @ai_callable(description="Play a music")
     def play_music(
         self,
-        name: Annotated[str, TypeInfo(desc="The artist and the name of the song")],
+        name: Annotated[
+            str, TypeInfo(description="The artist and the name of the song")
+        ],
     ) -> None:
         self._play_music_calls += 1
 
     # test for cancelled calls
-    @ai_callable(desc="Turn on/off the lights in a room")
+    @ai_callable(description="Turn on/off the lights in a room")
     async def toggle_light(
         self,
-        room: Annotated[str, TypeInfo(desc="The room to control")],
+        room: Annotated[str, TypeInfo(description="The room to control")],
         on: bool = True,
     ) -> None:
         self._toggle_light_calls += 1
@@ -66,13 +70,13 @@ class FncCtx(FunctionContext):
             self._toggle_light_cancelled = True
 
     # used to test arrays as arguments
-    @ai_callable(desc="Currencies of a specific country")
+    @ai_callable(description="Currencies of a specific country")
     def select_currencies(
         self,
         currencies: Annotated[
             list[str],
             TypeInfo(
-                desc="The currency to select",
+                description="The currency to select",
                 choices=["usd", "eur", "gbp", "jpy", "sek"],
             ),
         ],
@@ -81,11 +85,11 @@ class FncCtx(FunctionContext):
         self._selected_currencies = currencies
 
     # test choices on int
-    @ai_callable(desc="Change the volume")
+    @ai_callable(description="Change the volume")
     def change_volume(
         self,
         volume: Annotated[
-            int, TypeInfo(desc="The volume level", choices=[0, 11, 30, 83, 99])
+            int, TypeInfo(description="The volume level", choices=[0, 11, 30, 83, 99])
         ],
     ) -> None:
         self._change_volume_calls += 1
@@ -95,16 +99,8 @@ class FncCtx(FunctionContext):
 async def test_chat():
     llm = openai.LLM(model="gpt-4o")
 
-    chat_ctx = ChatContext(
-        messages=[
-            ChatMessage(
-                role=ChatRole.SYSTEM,
-                text=(
-                    'You are an assistant at a drive-thru restaurant "Live-Burger". '
-                    "Ask the customer what they would like to order."
-                ),
-            ),
-        ]
+    chat_ctx = ChatContext().append(
+        text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.',
     )
 
     stream = await llm.chat(chat_ctx=chat_ctx)
@@ -124,6 +120,7 @@ async def test_fnc_calls():
     stream = await _request_fnc_call(
         llm, "What's the weather in San Francisco and Paris?", fnc_ctx
     )
+    await stream.gather_function_results()
     await stream.aclose()
 
     assert fnc_ctx._get_weather_calls == 2, "get_weather should be called twice"
@@ -134,12 +131,12 @@ async def test_fnc_calls_runtime_addition():
     llm = openai.LLM(model="gpt-4o")
     called_msg = ""
 
-    @fnc_ctx.ai_callable(desc="Show a message on the screen")
+    @fnc_ctx.ai_callable(description="Show a message on the screen")
     async def show_message(
         message: Annotated[
             str,
             TypeInfo(
-                desc="The message to show",
+                description="The message to show",
             ),
         ],
     ):
@@ -149,6 +146,7 @@ async def test_fnc_calls_runtime_addition():
     stream = await _request_fnc_call(
         llm, "Can you show 'Hello LiveKit!' on the screen?", fnc_ctx
     )
+    await stream.gather_function_results()
     await stream.aclose()
 
     assert called_msg == "Hello LiveKit!", "send_message should be called"
@@ -161,7 +159,8 @@ async def test_cancelled_calls():
     stream = await _request_fnc_call(
         llm, "Turn off the lights in the Theo's bedroom", fnc_ctx
     )
-    await stream.aclose(wait=False)
+    await stream.gather_function_results()
+    await stream.aclose()
 
     assert fnc_ctx._toggle_light_calls == 1
     assert fnc_ctx._toggle_light_cancelled, "toggle_light should be cancelled"
@@ -174,7 +173,8 @@ async def test_calls_arrays():
     stream = await _request_fnc_call(
         llm, "Can you select all currencies in Europe?", fnc_ctx
     )
-    await stream.aclose()
+    #await stream.gather_function_results()
+    #await stream.aclose()
 
     assert fnc_ctx._select_currency_calls == 1
     assert fnc_ctx._selected_currencies is not None
@@ -200,14 +200,7 @@ async def _request_fnc_call(
     model: llm.LLM, request: str, fnc_ctx: FncCtx
 ) -> llm.LLMStream:
     stream = await model.chat(
-        chat_ctx=ChatContext(
-            messages=[
-                ChatMessage(
-                    role=ChatRole.USER,
-                    text=request,
-                ),
-            ]
-        ),
+        chat_ctx=ChatContext().append(text=request, role="user"),
         fnc_ctx=fnc_ctx,
     )
 

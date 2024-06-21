@@ -22,19 +22,22 @@ import inspect
 import json
 import typing
 from dataclasses import dataclass
-from typing import Any, Dict, List, MutableSet, Tuple
+from typing import Any, MutableSet
 
 from livekit import rtc
 from livekit.agents import llm
+from livekit.agents.llm import function_context
 from livekit.agents.utils import images
 
 import openai
+from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import ChoiceDelta
 
 from .log import logger
 from .models import ChatModels
 from .utils import get_base_url
 
-IMAGE_DETAIL_DIMENSIONS: list[tuple[int, str]] = [
+_IMAGE_DETAIL_DIMENSIONS: list[tuple[int, str]] = [
     (512, "low"),
     (768, "medium"),
     (2048, "high"),
@@ -86,7 +89,9 @@ class LLM(llm.LLM):
 
 class LLMStream(llm.LLMStream):
     def __init__(
-        self, oai_stream: openai.AsyncStream, fnc_ctx: llm.FunctionContext | None
+        self,
+        oai_stream: openai.AsyncStream[ChatCompletionChunk],
+        fnc_ctx: llm.FunctionContext | None,
     ) -> None:
         super().__init__()
         self._oai_stream = oai_stream
@@ -106,42 +111,43 @@ class LLMStream(llm.LLMStream):
         await asyncio.gather(*self._running_tasks, return_exceptions=True)
 
     async def __anext__(self) -> llm.ChatChunk:
-        fnc_name = None
-        fnc_args = None
-        fnc_idx = None
+        fnc_name, fnc_args, fnc_id = None, None, None
+        tool_idx = None
 
         async for chunk in self._oai_stream:
             for i, choice in enumerate(chunk.choices):
                 delta = choice.delta
-
                 if delta.tool_calls:
                     for tool in delta.tool_calls:
-                        finfo = tool.function
-                        assert finfo is not None
+                        assert tool.function is not None
 
-                        if tool.index != fnc_idx and fnc_idx is not None:
-                            await self._call_function(fnc_name, fnc_args)
+                        if tool.index != tool_idx and tool_idx is not None:
+                            tool_chunk = await self._call_function("assistant", i, fnc_id, fnc_name, fnc_args)
+                            if tool_chunk is not None:
+                                return tool_chunk
+
                             fnc_name = fnc_args = fnc_idx = None
 
-                        if finfo.name:
-                            if fnc_idx is not None:
+                        if tool.function.name:
+                            if tool_idx is not None:
                                 logger.warning(
                                     "new fnc call while previous call is still running"
                                 )
-                            fnc_name = finfo.name
-                            fnc_args = finfo.arguments
-                            fnc_idx = tool.index
-                        else:
-                            assert fnc_name is not None
-                            assert fnc_args is not None
-                            assert fnc_idx is not None
 
-                            if finfo.arguments:
-                                fnc_args += finfo.arguments
+                            fnc_name = tool.function.name
+                            fnc_args = tool.function.arguments
+                            fnc_id = tool.id
+                        else:
+                            if tool.function.arguments:
+                                fnc_args += tool.function.arguments # type: ignore
+
                     continue
 
                 if choice.finish_reason == "tool_calls":
-                    await self._call_function(fnc_name, fnc_args)
+                    tool_chunk = await self._call_function("assistant", i, fnc_id, fnc_name, fnc_args)
+                    if tool_chunk is not None:
+                        return tool_chunk
+
                     continue
 
                 return llm.ChatChunk(
@@ -149,7 +155,7 @@ class LLMStream(llm.LLMStream):
                         llm.Choice(
                             delta=llm.ChoiceDelta(
                                 content=delta.content,
-                                role=delta.role,
+                                role="assistant",
                             ),
                             index=i,
                         )
@@ -160,10 +166,17 @@ class LLMStream(llm.LLMStream):
 
     async def _call_function(
         self,
+        role: llm.ChatRole,
+        choice_idx: int,
+        id: str | None = None,
         name: str | None = None,
         arguments: str | None = None,
-    ) -> None:
-        assert self._fnc_ctx
+    ) -> llm.ChatChunk | None:
+        assert self._fnc_ctx is not None
+
+        if id is None:
+            logger.error("received tool call but no function id")
+            return
 
         if name is None:
             logger.error("received tool call but no function name")
@@ -183,14 +196,11 @@ class LLMStream(llm.LLMStream):
             try:
                 args = json.loads(arguments)
             except json.JSONDecodeError:
-                # TODO(theomonnom): try to recover from invalid json
                 logger.exception(
                     f"{name}: failed to decode json", extra={"arguments": arguments}
                 )
                 return
 
-        # validate/sanitize args before calling any ai function
-        # TODO(theomonnom): try to recover from invalid args
         fnc_info = fncs[name]
         for arg_info in fnc_info.arguments.values():
             if arg_info.name not in args:
@@ -244,7 +254,7 @@ class LLMStream(llm.LLMStream):
 
             args[arg_info.name] = val  # sanitized value
 
-        logger.debug(f"calling function {name} with arguments {args}")
+        logger.info(f"calling function {name} with arguments {args}")
 
         func = functools.partial(fnc_info.callable, **args)
         if asyncio.iscoroutinefunction(fnc_info.callable):
@@ -252,23 +262,46 @@ class LLMStream(llm.LLMStream):
         else:
             task = asyncio.create_task(asyncio.to_thread(func))
 
-        self._called_functions.append(
-            llm.CalledFunction(info=fnc_info, arguments=args, task=task)
+        called_fnc = llm.CalledFunction(
+            id=id,
+            raw_arguments=arguments,
+            function_info=fnc_info,
+            arguments=args,
+            task=task,
         )
+        self._called_functions.append(called_fnc)
 
         def _task_done(task: asyncio.Task) -> None:
-            if not task.cancelled() and task.exception():
-                logger.error("ai_callable task failed", exc_info=task.exception())
+            if not task.cancelled():
+                if task.exception():
+                    logger.error("ai_callable task failed", exc_info=task.exception())
+                    called_fnc.exception = task.exception()
+                else:
+                    called_fnc.result = task.result()
+
             self._running_tasks.discard(task)
 
         task.add_done_callback(_task_done)
         self._running_tasks.add(task)
 
+        return llm.ChatChunk(
+            choices=[
+                llm.Choice(
+                    delta=llm.ChoiceDelta(
+                        role=role,
+                        tool_calls=[called_fnc]
+                    ),
+                    index=choice_idx,
+                )
+            ]
+        )
+
 
 def _image_detail_from_dimensions(width: int, height: int) -> str:
-    for dim, detail in IMAGE_DETAIL_DIMENSIONS:
+    for dim, detail in _IMAGE_DETAIL_DIMENSIONS:
         if width <= dim and height <= dim:
             return detail
+
     return "high"
 
 
@@ -276,57 +309,85 @@ def _to_openai_ctx(chat_ctx: llm.ChatContext, cache_key: Any):
     oai_context = []
 
     for msg in chat_ctx.messages:
-        content = [{"type": "text", "text": msg.text}]
-        for img in msg.images:
-            if isinstance(img.image, str):
-                oai_img = {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": img.image,
-                        "detail": _image_detail_from_dimensions(
-                            img.inference_width or 512,
-                            img.inference_height or 512,
-                        ),
-                    },
-                }
-                content.append(oai_img)
-            elif isinstance(img.image, rtc.VideoFrame):
-                if cache_key not in img._cache:
-                    # encode the VideoFrame to jpeg and cache the result for later use
-                    # of the ChatContext.
-                    jpg_bytes = images.encode(
-                        img.image,
-                        images.EncodeOptions(
-                            format="JPEG",
-                            resize_options=images.ResizeOptions(
-                                width=img.inference_width or 512,
-                                height=img.inference_height or 512,
-                                strategy="center_aspect_fit",
-                            ),
-                        ),
-                    )
-                    b64 = base64.b64encode(jpg_bytes).decode("utf-8")
-                    img._cache[cache_key] = b64
+        content = []
+        if isinstance(msg.content, list):
+            for cnt in msg.content:
+                if isinstance(cnt, str):
+                    content.append(_to_openai_text_content(cnt))
+                elif isinstance(cnt, llm.ChatImage):
+                    oai_image = _to_openai_image(cnt, cache_key)
+                    if oai_image is not None:
+                        content.append(oai_image)
+        elif isinstance(msg.content, str):
+            content.append(_to_openai_text_content(msg.content))
 
-                oai_img = {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{img._cache[cache_key]}"
-                    },
-                }
-                content.append(oai_img)
-            else:
-                logger.warning(f"unknown image type {type(img)}")
-                continue
+        tool_calls = []
+        if msg.tool_calls is not None:
+            for tool in msg.tool_calls:
+                tool_calls.append(_to_openai_tool_calls(tool))
+                pass
 
         oai_context.append(
             {
-                "role": msg.role.value,
+                "role": msg.role,
                 "content": content,
+                "tool_calls": tool_calls or None,
             }
         )
 
     return oai_context
+
+
+def _to_openai_tool_calls(called_function: llm.CalledFunction):
+    return {
+        "id": called_function.id,
+        "type": "function",
+        "function": {
+            "name": called_function.function_info.name,
+            "arguments": called_function.raw_arguments,
+        }
+    }
+
+def _to_openai_text_content(text: str):
+    return {
+        "type": "text",
+        "content": text,
+    }
+
+
+def _to_openai_image(image: llm.ChatImage, cache_key: Any):
+    if isinstance(image.image, str):  # image url
+        return {
+            "type": "image_url",
+            "image_url": {
+                "url": image.image,
+                "detail": _image_detail_from_dimensions(
+                    image.inference_width or 512,
+                    image.inference_height or 512,
+                ),
+            },
+        }
+    elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
+        if cache_key not in image._cache:
+            encoded_data = images.encode(
+                image.image,
+                images.EncodeOptions(
+                    resize_options=images.ResizeOptions(
+                        width=image.inference_width or 512,
+                        height=image.inference_height or 512,
+                        strategy="center_aspect_fit",
+                    ),
+                ),
+            )
+            image._cache[cache_key] = base64.b64encode(encoded_data).decode("utf-8")
+
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{image._cache[cache_key]}"},
+        }
+
+    logger.warning(f"unknown image type {type(image.image)}")
+    return None
 
 
 def _to_openai_items(dst: dict, ty: type, choices: list | None):
