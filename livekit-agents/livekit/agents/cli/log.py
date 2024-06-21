@@ -38,10 +38,7 @@ _RESERVED_ATTRS: Tuple[str, ...] = (
 )
 
 
-def _merge_record_extra(
-    record: logging.LogRecord,
-    target: Dict,
-):
+def _merge_record_extra(record: logging.LogRecord, target: Dict[Any, Any]):
     for key, value in record.__dict__.items():
         if key not in _RESERVED_ATTRS and not (
             hasattr(key, "startswith") and key.startswith("_")
@@ -68,7 +65,7 @@ def _parse_style(formatter: logging.Formatter) -> list[str]:
 
 class JsonFormatter(logging.Formatter):
     class JsonEncoder(json.JSONEncoder):
-        def default(self, o):
+        def default(self, o: Any):
             if isinstance(o, (date, datetime, time)):
                 return o.isoformat()
             elif istraceback(o):

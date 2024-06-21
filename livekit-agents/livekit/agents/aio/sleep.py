@@ -45,7 +45,7 @@ class Sleep:
 
     async def _sleep(self) -> None:
         if self._delay <= 0:
-            self._fut = asyncio.Future()
+            self._fut = asyncio.Future[None]()
             self._fut.set_result(None)
             return
 

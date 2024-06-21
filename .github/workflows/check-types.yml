@@ -47,5 +47,6 @@ jobs:
              -p livekit.plugins.nltk \
              -p livekit.plugins.silero \
              -p livekit.plugins.elevenlabs \
-             -p livekit.plugins.cartesia
+             -p livekit.plugins.cartesia \
+             -p livekit.plugins.azure
 

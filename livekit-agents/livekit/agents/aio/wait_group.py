@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 
 
 class WaitGroup:
     def __init__(self) -> None:
         self._count = 0
-        self._waiters = []
+        self._waiters: list[asyncio.Future[None]] = []
 
     def add(self, delta: int) -> None:
         self._count += delta
