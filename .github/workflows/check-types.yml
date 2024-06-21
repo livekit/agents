@@ -44,6 +44,7 @@ jobs:
       #        -p livekit.plugins.cartesia
       run: |
         for d in $(find . -name setup.py | xargs -n 1 dirname | xargs -n 1 basename); do
-          echo "Checking types for package: $d"
-          mypy -p $d
+          PACKAGE_NAME=$(echo $d | tr '-' '.')
+          echo "Checking types for package: $PACKAGE_NAME"
+          mypy -p $PACKAGE_NAME
         done
