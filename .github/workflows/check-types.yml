@@ -30,21 +30,22 @@ jobs:
 
     - name: Install all packages
       run: |
-        find . -name setup.py | xargs -n 1 dirname | xargs -n 1 python -m pip install
-
+        pip install ./livekit-agents \
+                    ./livekit-plugins/livekit-plugins-openai \
+                    ./livekit-plugins/livekit-plugins-deepgram \
+                    ./livekit-plugins/livekit-plugins-google \
+                    ./livekit-plugins/livekit-plugins-nltk \
+                    ./livekit-plugins/livekit-plugins-silero \
+                    ./livekit-plugins/livekit-plugins-elevenlabs \
+                    ./livekit-plugins/livekit-plugins-cartesia
     - name: Check Types 
-      # run : |
-      #   mypy -p livekit.agents \
-      #        -p livekit.plugins.openai \
-      #        -p livekit.plugins.deepgram \
-      #        -p livekit.plugins.google \
-      #        -p livekit.plugins.nltk \
-      #        -p livekit.plugins.silero \
-      #        -p livekit.plugins.elevenlabs \
-      #        -p livekit.plugins.cartesia
-      run: |
-        for d in $(find . -name setup.py | xargs -n 1 dirname | xargs -n 1 basename); do
-          PACKAGE_NAME=$(echo $d | tr '-' '.')
-          echo "Checking types for package: $PACKAGE_NAME"
-          mypy -p $PACKAGE_NAME
-        done
+      run : |
+        mypy -p livekit.agents \
+             -p livekit.plugins.openai \
+             -p livekit.plugins.deepgram \
+             -p livekit.plugins.google \
+             -p livekit.plugins.nltk \
+             -p livekit.plugins.silero \
+             -p livekit.plugins.elevenlabs \
+             -p livekit.plugins.cartesia
+
