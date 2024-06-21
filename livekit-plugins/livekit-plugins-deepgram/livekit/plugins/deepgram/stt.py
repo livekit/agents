@@ -42,6 +42,7 @@ class STTOptions:
     punctuate: bool
     model: DeepgramModels
     smart_format: bool
+    no_delay: bool
     endpointing: int | None
 
 
@@ -54,6 +55,7 @@ class STT(stt.STT):
         interim_results: bool = True,
         punctuate: bool = True,
         smart_format: bool = True,
+        no_delay: bool = False,
         model: DeepgramModels = "nova-2-general",
         api_key: str | None = None,
         min_silence_duration: int = 0,
@@ -72,6 +74,7 @@ class STT(stt.STT):
             punctuate=punctuate,
             model=model,
             smart_format=smart_format,
+            no_delay=no_delay,
             endpointing=min_silence_duration,
         )
         self._session = http_session
@@ -212,6 +215,7 @@ class SpeechStream(stt.SpeechStream):
                         "model": self._opts.model,
                         "punctuate": self._opts.punctuate,
                         "smart_format": self._opts.smart_format,
+                        "no_delay": self._opts.no_delay,
                         "interim_results": self._opts.interim_results,
                         "encoding": "linear16",
                         "sample_rate": self._sample_rate,
