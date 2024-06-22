@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 
-def _finish_fut(fut: asyncio.Future):
+def _finish_fut(fut: asyncio.Future[Any]):
     if fut.cancelled():
         return
     fut.set_result(None)

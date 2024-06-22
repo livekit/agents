@@ -160,7 +160,7 @@ class ColoredFormatter(logging.Formatter):
     def formatMessage(self, record: logging.LogRecord) -> str:
         """Formats a log record with colors"""
 
-        extra = {}
+        extra: Dict[Any, Any] = {}
         _merge_record_extra(record, extra)
 
         args = {}
@@ -189,14 +189,14 @@ def setup_logging(log_level: str, production: bool = True) -> None:
 
     if not production:
         # colorful logs for dev (improves readability)
-        formatter = ColoredFormatter(
+        colored_formatter = ColoredFormatter(
             "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(extra)s",
         )
-        handler.setFormatter(formatter)
+        handler.setFormatter(colored_formatter)
     else:
         # production logs (serialized of json)
-        formatter = JsonFormatter()
-        handler.setFormatter(formatter)
+        json_formatter = JsonFormatter()
+        handler.setFormatter(json_formatter)
 
     root = logging.getLogger()
     root.addHandler(handler)

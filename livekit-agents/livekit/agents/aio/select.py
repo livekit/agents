@@ -73,10 +73,10 @@ class SelectLoop:
         if self._done():
             raise StopAsyncIteration
 
-        for g in self._gens:
-            if g.next_task is None:
-                g.next_task = asyncio.ensure_future(g.gen.__anext__())
-                self._pending_tasks.append(g.next_task)
+        for gen_data in self._gens:
+            if gen_data.next_task is None:
+                gen_data.next_task = asyncio.ensure_future(gen_data.gen.__anext__())
+                self._pending_tasks.append(gen_data.next_task)
 
         done, pending = await asyncio.wait(
             self._pending_tasks, return_when=asyncio.FIRST_COMPLETED
@@ -85,15 +85,15 @@ class SelectLoop:
         self._pending_tasks = list(pending)
         for t in done:
             g = None
-            for y in self._gens:
-                if y.next_task == t:
-                    g = y
+            for g_data in self._gens:
+                if g_data.next_task == t:
+                    g = g_data
                     break
 
             c = None
-            for y in self._coros:
-                if y.task == t:
-                    c = y
+            for c_data in self._coros:
+                if c_data.task == t:
+                    c = c_data
                     break
 
             if g is not None:

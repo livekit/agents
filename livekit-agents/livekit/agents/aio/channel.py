@@ -27,7 +27,7 @@ class ChanEmpty(Exception):
 def channel(
     maxsize: int = 0, loop: asyncio.AbstractEventLoop | None = None
 ) -> Tuple["ChanSender[T]", "ChanReceiver[T]"]:
-    chan = Chan(maxsize, loop)
+    chan = Chan[T](maxsize, loop)
     return chan, chan
 
 
@@ -60,11 +60,11 @@ class Chan(Generic[T]):
         #        self._finished_ev = asyncio.Event()
         self._close_ev = asyncio.Event()
         self._closed = False
-        self._gets = deque()
-        self._puts = deque()
-        self._queue = deque()
+        self._gets = deque[asyncio.Future[T | None]]()
+        self._puts = deque[asyncio.Future[T | None]]()
+        self._queue = deque[T]()
 
-    def _wakeup_next(self, waiters):
+    def _wakeup_next(self, waiters: deque[asyncio.Future[T | None]]):
         while waiters:
             waiter = waiters.popleft()
             if not waiter.done():

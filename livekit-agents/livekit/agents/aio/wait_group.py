@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 
 class WaitGroup:
@@ -22,6 +23,6 @@ class WaitGroup:
         if self._count == 0:
             return
 
-        f = asyncio.Future()
+        f = asyncio.Future[Any]()
         self._waiters.append(f)
         await f
