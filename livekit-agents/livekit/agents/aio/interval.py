@@ -14,7 +14,7 @@ def _finish_fut(fut: asyncio.Future[Any]):
 class Interval:
     def __init__(self, interval: float) -> None:
         self._interval = interval
-        self._last_sleep = 0
+        self._last_sleep = 0.0
         self._i = 0
         self._handler: asyncio.TimerHandle | None = None
 

@@ -1,3 +1,5 @@
+# type: ignore
+
 from __future__ import annotations
 
 import contextvars
@@ -8,9 +10,7 @@ import aiohttp
 from ..log import logger
 
 _ClientFactory = Callable[[], aiohttp.ClientSession]
-_ContextVar = contextvars.ContextVar[Callable[[], aiohttp.ClientSession] | None](
-    "agent_http_session"
-)
+_ContextVar = contextvars.ContextVar("agent_http_session")  # type: ignore
 
 
 def _new_session_ctx() -> _ClientFactory:

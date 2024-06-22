@@ -41,7 +41,8 @@ jobs:
                     ./livekit-plugins/livekit-plugins-azure
     - name: Check Types 
       run : |
-        mypy -p livekit.agents \
+        mypy --install-types \
+             -p livekit.agents \
              -p livekit.plugins.openai \
              -p livekit.plugins.deepgram \
              -p livekit.plugins.google \
