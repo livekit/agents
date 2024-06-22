@@ -5,7 +5,7 @@ import contextlib
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Deque, Optional
 
 from livekit import rtc
 
@@ -105,14 +105,14 @@ class TTSSegmentsForwarder:
         )
         self._closed = False
         self._loop = loop or asyncio.get_event_loop()
-        self._close_future = asyncio.Future()
+        self._close_future = asyncio.Future[None]()
 
         self._next_segment_index = 0
         self._playing_seg_index = -1
         self._finshed_seg_index = -1
 
         first_segment = self._create_segment()
-        segments_q = deque()
+        segments_q: Deque[_SegmentData] = deque()
         segments_q.append(first_segment)
 
         self._forming_segments = _FormingSegments(

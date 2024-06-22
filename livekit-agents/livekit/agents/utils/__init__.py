@@ -1,12 +1,10 @@
-from . import http_context, _noop  # noqa
+from . import codecs, images
 from .event_emitter import EventEmitter
 from .exp_filter import ExpFilter
 from .http_context import http_session
+from .log import log_exceptions
 from .misc import AudioBuffer, merge_frames, time_ms
 from .moving_average import MovingAverage
-from .log import log_exceptions
-from . import codecs
-from . import images
 
 __all__ = [
     "AudioBuffer",
