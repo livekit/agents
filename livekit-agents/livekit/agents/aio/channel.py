@@ -24,13 +24,6 @@ class ChanEmpty(Exception):
     pass
 
 
-def channel(
-    maxsize: int = 0, loop: asyncio.AbstractEventLoop | None = None
-) -> Tuple["ChanSender[T]", "ChanReceiver[T]"]:
-    chan = Chan[T](maxsize, loop)
-    return chan, chan
-
-
 class ChanSender(Protocol[T_contra]):
     async def send(self, value: T_contra) -> None: ...
 
