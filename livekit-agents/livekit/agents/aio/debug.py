@@ -21,4 +21,4 @@ def hook_slow_callbacks(slow_duration: float) -> None:
             )
         return val
 
-    asyncio.events.Handle._run = instrumented
+    asyncio.events.Handle._run = instrumented  # type: ignore
