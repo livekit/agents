@@ -19,8 +19,8 @@ class AsyncPipe:
         self._p = pipe
         self._messages = messages
 
-        self._read_ch = aio.Chan(32, loop=self._loop)
-        self._write_q = queue.Queue(32)
+        self._read_ch = aio.Chan[ipc_enc.Message](32, loop=self._loop)
+        self._write_q = queue.Queue[ipc_enc.Message](32)
 
         self._exit_ev = threading.Event()
         self._read_t = threading.Thread(target=self._read_thread, daemon=True)
@@ -33,7 +33,7 @@ class AsyncPipe:
             try:
                 msg = ipc_enc.read_msg(self._p, self._messages)
 
-                def _put_msg(msg):
+                def _put_msg(msg: ipc_enc.Message):
                     _ = asyncio.ensure_future(self._read_ch.send(msg))
 
                 self._loop.call_soon_threadsafe(_put_msg, msg)

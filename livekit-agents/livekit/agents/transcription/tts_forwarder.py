@@ -275,7 +275,7 @@ class TTSSegmentsForwarder:
             elapsed_time = time.time() - seg.forward_start_time
             text = self._opts.word_tokenizer.format_words(processed_words)
 
-            delay = 0
+            delay = 0.0
             speed = self._opts.speed
             if seg.real_speed is not None:
                 speed = seg.real_speed
