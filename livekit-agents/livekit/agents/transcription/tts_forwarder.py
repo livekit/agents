@@ -255,7 +255,7 @@ class TTSSegmentsForwarder:
         # put each sentence in a different transcription segment
         seg_id = _utils.segment_uuid()
         words = self._opts.word_tokenizer.tokenize(text=tokenized_sentence)
-        processed_words = []
+        processed_words: list[str] = []
 
         text = ""
         for word in words:
@@ -323,7 +323,7 @@ class TTSSegmentsForwarder:
             await asyncio.wait([self._close_future], timeout=delay)
 
     def _calc_hyphens(self, text: str) -> list[str]:
-        hyphenes = []
+        hyphenes: list[str] = []
         words = self._opts.word_tokenizer.tokenize(text=text)
         for word in words:
             new = self._opts.hyphenate_word(word)
