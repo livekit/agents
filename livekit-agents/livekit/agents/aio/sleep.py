@@ -19,7 +19,7 @@ class Sleep:
 
     def __init__(self, delay: float) -> None:
         self._delay = delay
-        self._handler = None
+        self._handler: asyncio.TimerHandle | None = None
 
     def reset(self, new_delay: float | None = None) -> None:
         if new_delay is None:
