@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import time
 from asyncio.base_events import _format_handle  # type: ignore
