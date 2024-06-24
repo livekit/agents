@@ -46,8 +46,10 @@ class LogHandler(logging.Handler):
 async def _start(
     pipe: apipe.AsyncPipe, args: protocol.JobMainArgs, room: rtc.Room
 ) -> None:
-    utils.http_context._new_session_ctx()
-    close_tx, close_rx = aio.channel()  # used by the JobContext to signal shutdown
+    utils.http_context.new_session_ctx()
+    close_tx = close_rx = aio.Chan[
+        _ShutdownInfo
+    ]()  # used by the JobContext to signal shutdown
 
     auto_subscribe = args.accept_data.auto_subscribe
     opts = rtc.RoomOptions(auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL)
@@ -149,7 +151,7 @@ async def _start(
         if usertask is not None:
             await usertask  # type: ignore
 
-    await utils.http_context._close_http_ctx()
+    await utils.http_context.close_http_ctx()
 
     if shutting_down:
         await pipe.write(protocol.ShutdownResponse())
