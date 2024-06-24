@@ -1,5 +1,3 @@
-# type: ignore
-
 from __future__ import annotations
 
 import contextvars
@@ -23,7 +21,7 @@ def _new_session_ctx() -> _ClientFactory:
             g_session = aiohttp.ClientSession()
         return g_session
 
-    _ContextVar.set(_new_session)
+    _ContextVar.set(_new_session)  # type: ignore
     return _new_session
 
 
@@ -32,16 +30,16 @@ def http_session() -> aiohttp.ClientSession:
     On job processes, this http session will be bound to the main event loop.
     """
 
-    val = _ContextVar.get(None)
+    val = _ContextVar.get(None)  # type: ignore
     if val is None:
         raise RuntimeError("no http_session() context available")
 
-    return val()
+    return val()  # type: ignore
 
 
 async def _close_http_ctx():
-    val = _ContextVar.get(None)
+    val = _ContextVar.get(None)  # type: ignore
     if val is not None:
         logger.debug("http_session(): closing the httpclient ctx")
-        await val().close()
-        _ContextVar.set(None)
+        await val().close()  # type: ignore
+        _ContextVar.set(None)  # type: ignore
