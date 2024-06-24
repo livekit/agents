@@ -462,7 +462,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected 11labs message type %s", msg.type)
                     continue
 
-                data: dict[str, Any] = json.loads(msg.data)
+                data = json.loads(msg.data)
                 audio = data.get("audio")
 
                 if data.get("error"):

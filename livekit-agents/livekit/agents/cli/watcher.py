@@ -57,9 +57,9 @@ class WatchServer:
             if not _try_add("livekit.agents"):
                 _try_add("livekit-agents")
 
-            for p in Plugin.registered_plugins:
-                if not _try_add(p.package):
-                    _try_add(p.package.replace(".", "-"))
+            for plugin in Plugin.registered_plugins:
+                if not _try_add(plugin.package):
+                    _try_add(plugin.package.replace(".", "-"))
 
         paths: list[pathlib.Path] = [self._main_file.absolute()]
         for p in packages:
