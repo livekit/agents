@@ -38,7 +38,7 @@ class JobProcess:
         self._pipe = apipe.AsyncPipe(
             pch, loop=self._loop, messages=protocol.IPC_MESSAGES
         )
-        self._close_future = asyncio.Future()
+        self._close_future = asyncio.Future[None]()
 
     async def run(self) -> None:
         self._process.start()

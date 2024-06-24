@@ -27,7 +27,10 @@ class LogHandler(logging.Handler):
             try:
                 msg = record.getMessage()
             except TypeError:
-                msg = record.msg.format(*record.args)
+                if record.args:
+                    msg = record.msg.format(*record.args)
+                else:
+                    msg = record.msg
 
             if record.exc_info:
                 type, value, tb = record.exc_info

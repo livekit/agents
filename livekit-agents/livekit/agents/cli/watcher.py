@@ -39,7 +39,7 @@ class WatchServer:
         self._worker_valid = True
 
     def run(self) -> None:
-        packages = []
+        packages: list[Distribution] = []
 
         if self._watch_plugins:
             # also watch plugins that are installed in editable mode
