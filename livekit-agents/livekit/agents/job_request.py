@@ -105,7 +105,7 @@ class JobRequest:
         if not identity:
             identity = "agent-" + self.id
 
-        assign_tx, assign_rx = aio.channel(1)
+        assign_tx = assign_rx = aio.Chan[BaseException | None](1)
         data = AcceptData(
             entry=entry,
             auto_subscribe=auto_subscribe,
