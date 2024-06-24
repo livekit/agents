@@ -13,7 +13,7 @@ _ClientFactory = Callable[[], aiohttp.ClientSession]
 _ContextVar = contextvars.ContextVar("agent_http_session")  # type: ignore
 
 
-def new_session_ctx() -> _ClientFactory:
+def _new_session_ctx() -> _ClientFactory:
     g_session: aiohttp.ClientSession | None = None
 
     def _new_session() -> aiohttp.ClientSession:
@@ -39,7 +39,7 @@ def http_session() -> aiohttp.ClientSession:
     return val()
 
 
-async def close_http_ctx():
+async def _close_http_ctx():
     val = _ContextVar.get(None)
     if val is not None:
         logger.debug("http_session(): closing the httpclient ctx")
