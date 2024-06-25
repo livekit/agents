@@ -35,7 +35,7 @@ Agents integrates seamlessly with [LiveKit server](https://github.com/livekit/li
 
 ## Examples
 
-- [KITT](https://github.com/livekit/agents/tree/main/examples/voice-assistant): An voice assistant with STT, LLM, and TTS. [Demo](https://kitt.livekit.io)
+- [KITT](https://github.com/livekit/agents/tree/main/examples/voice-assistant): A voice assistant with STT, LLM, and TTS. [Demo](https://kitt.livekit.io)
 - [Video publishing](https://github.com/livekit/agents/tree/main/examples/simple-color): A demonstration of publishing RGB frames to a LiveKit Room
 - [STT](https://github.com/livekit/agents/tree/main/examples/speech-to-text): An agent that transcribes a participant's audio into text
 - [TTS](https://github.com/livekit/agents/tree/main/examples/text-to-speech): An agent that publishes synthesized speech to a LiveKit Room
