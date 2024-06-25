@@ -105,12 +105,12 @@ class LLMStream(llm.LLMStream):
 
         await asyncio.gather(*self._running_tasks, return_exceptions=True)
 
-    async def __anext__(self) -> llm.ChatChunk:
+    async def __anext__(self):
         async for chunk in self._oai_stream:
             for choice in chunk.choices:
-                chunk = self._parse_choice(choice)
-                if chunk is not None:
-                    return chunk
+                chat_chunk = self._parse_choice(choice)
+                if chat_chunk is not None:
+                    return chat_chunk
 
         raise StopAsyncIteration
 
