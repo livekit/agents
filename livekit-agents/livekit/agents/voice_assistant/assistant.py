@@ -6,7 +6,7 @@ import contextvars
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncIterable, Callable, Literal
+from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, Union
 
 from livekit import rtc
 
@@ -51,6 +51,7 @@ class _AssistantOptions:
     sentence_tokenizer: tokenize.SentenceTokenizer
     hyphenate_word: Callable[[str], list[str]]
     transcription_speed: float
+    will_create_llm_stream: WillCreateLLMStream
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,12 @@ class AssistantCallContext:
         return self._llm_stream
 
 
+async def _default_will_create_llm_stream(
+    assistant: VoiceAssistant, chat_ctx: allm.ChatContext
+) -> allm.LLMStream:
+    return await assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
+
+
 EventTypes = Literal[
     "user_started_speaking",
     "user_stopped_speaking",
@@ -96,6 +103,11 @@ EventTypes = Literal[
     "agent_speech_interrupted",
     "function_calls_collected",
     "function_calls_finished",
+]
+
+WillCreateLLMStream = Callable[
+    ["VoiceAssistant", allm.ChatContext],
+    Union[Optional[allm.LLMStream], Awaitable[Optional[allm.LLMStream]]],
 ]
 
 
@@ -113,15 +125,16 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         interrupt_speech_duration: float = 0.65,
         interrupt_min_words: int = 3,
         base_volume: float = 1.0,
-        debug: bool = False,
-        plotting: bool = False,
         preemptive_synthesis: bool = True,
-        loop: asyncio.AbstractEventLoop | None = None,
         transcription: bool = True,
+        will_create_llm_stream: WillCreateLLMStream = _default_will_create_llm_stream,
         sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
         transcription_speed: float = 3.83,
+        debug: bool = False,
+        plotting: bool = False,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
@@ -138,6 +151,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             word_tokenizer=word_tokenizer,
             hyphenate_word=hyphenate_word,
             transcription_speed=transcription_speed,
+            will_create_llm_stream=will_create_llm_stream,
         )
 
         # wrap with adapter automatically with default options
@@ -183,12 +197,32 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._ready_future = asyncio.Future()
 
     @property
-    def chat_context(self) -> allm.ChatContext:
+    def fnc_ctx(self) -> allm.FunctionContext | None:
+        return self._current_fnc_ctx
+
+    @fnc_ctx.setter
+    def fnc_ctx(self, fnc_ctx: allm.FunctionContext | None) -> None:
+        self._current_fnc_ctx = fnc_ctx
+
+    @property
+    def chat_ctx(self) -> allm.ChatContext:
         return self._chat_ctx
 
     @property
-    def started(self) -> bool:
-        return self._started
+    def llm(self) -> allm.LLM:
+        return self._llm
+
+    @property
+    def tts(self) -> atts.TTS:
+        return self._tts
+
+    @property
+    def stt(self) -> astt.STT:
+        return self._stt
+
+    @property
+    def vad(self) -> avad.VAD:
+        return self._vad
 
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
@@ -200,7 +234,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             participant: the participant to listen to, can either be a participant or a participant identity
                 If None, the first participant found in the room will be selected
         """
-        if self.started:
+        if self._started:
             raise RuntimeError("voice assistant already started")
 
         self._started = True
@@ -269,7 +303,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         Args:
             wait: whether to wait for the current speech to finish before closing
         """
-        if not self.started:
+        if not self._started:
             return
 
         self._ready_future.cancel()
@@ -535,10 +569,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         # of our context to add the new user message
         copied_ctx = self._chat_ctx.copy()
         copied_ctx.messages.append(
-            allm.ChatMessage(
-                text=self._transcribed_text,
-                role=allm.ChatRole.USER,
-            )
+            allm.ChatMessage.create(text=text, role="user")
         )
 
         if self._maybe_answer_task is not None:
@@ -546,7 +577,15 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         async def _answer_task(ctx: allm.ChatContext, data: _SpeechData) -> None:
             try:
-                data.source = await self._llm.chat(ctx, fnc_ctx=self._fnc_ctx)
+                custom_stream = self._opts.will_create_llm_stream(self, ctx)
+                if asyncio.iscoroutine(custom_stream):
+                    custom_stream = await custom_stream
+
+                # fallback to default impl if no custom/user stream is returned
+                if custom_stream is None:
+                    custom_stream = await _default_will_create_llm_stream(self, ctx)
+
+                data.source = custom_stream # type: ignore
                 await self._start_speech(data, interrupt_current_if_possible=False)
             except Exception:
                 logger.exception("error while answering")
@@ -666,17 +705,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._playout_start_time = time.time()
 
             if data.user_question is not None:
-                msg = allm.ChatMessage(text=data.user_question, role=allm.ChatRole.USER)
+                msg = allm.ChatMessage.create(text=data.user_question, role="user")
                 self._chat_ctx.messages.append(msg)
                 self.emit("user_speech_committed", self._chat_ctx, msg)
 
             self._log_debug("starting playout")
             await self._playout_co(playout_rx, tts_forwarder)
 
-            msg = allm.ChatMessage(
-                text=data.collected_text,
-                role=allm.ChatRole.ASSISTANT,
-            )
+            msg = allm.ChatMessage.create(text=data.collected_text, role="assistant")
 
             if data.add_to_ctx:
                 self._chat_ctx.messages.append(msg)
