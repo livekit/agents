@@ -46,7 +46,7 @@ class LLM(llm.LLM):
     ) -> None:
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient(base_url=get_base_url(base_url))
-        self._running_fncs: MutableSet[asyncio.Task] = set()
+        self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
     async def chat(
         self,
@@ -56,7 +56,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
     ) -> "LLMStream":
-        opts = dict()
+        opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
             for fnc in fnc_ctx.ai_functions.values():
@@ -86,7 +86,7 @@ class LLMStream(llm.LLMStream):
         super().__init__()
         self._oai_stream = oai_stream
         self._fnc_ctx = fnc_ctx
-        self._running_tasks: MutableSet[asyncio.Task] = set()
+        self._running_tasks: MutableSet[asyncio.Task[Any]] = set()
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id = None
