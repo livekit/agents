@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class EncodeOptions:
-    format: Literal["JPEG", "PNG"]
+    format: Literal["JPEG", "PNG"] = "JPEG"
     resize_options: Optional["ResizeOptions"] = None
 
 
