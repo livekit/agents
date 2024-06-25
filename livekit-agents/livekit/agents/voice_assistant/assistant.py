@@ -62,14 +62,14 @@ class _StartArgs:
 _ContextVar = contextvars.ContextVar("voice_assistant_contextvar")
 
 
-class AssistantContext:
+class AssistantCallContext:
     def __init__(self, assistant: "VoiceAssistant", llm_stream: allm.LLMStream) -> None:
         self._assistant = assistant
         self._metadata = dict()
         self._llm_stream = llm_stream
 
     @staticmethod
-    def get_current() -> "AssistantContext":
+    def get_current() -> "AssistantCallContext":
         return _ContextVar.get()
 
     @property
@@ -795,7 +795,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             )
         elif isinstance(data.source, allm.LLMStream):
             llm_stream = data.source
-            assistant_ctx = AssistantContext(self, llm_stream)
+            assistant_ctx = AssistantCallContext(self, llm_stream)
             token = _ContextVar.set(assistant_ctx)
 
             async def _forward_llm_chunks():
