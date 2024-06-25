@@ -6,4 +6,4 @@ from livekit.agents import utils
 def job_process(event_loop):
     utils.http_context._new_session_ctx()
     yield
-    event_loop.run_until_complete(utils.http_context.close_http_ctx())
+    event_loop.run_until_complete(utils.http_context._close_http_ctx())
