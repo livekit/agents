@@ -64,7 +64,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
     ) -> "LLMStream":
-        opts = dict()
+        opts: dict[str, Any] = dict()
         if fnc_ctx:
             opts["tools"] = to_openai_tools(fnc_ctx)
 
@@ -81,7 +81,7 @@ class LLM(llm.LLM):
         return LLMStream(cmp, fnc_ctx)
 
     def _to_openai_ctx(self, history: llm.ChatContext):
-        res = []
+        res: list[dict[str, Any]] = []
 
         for msg in history.messages:
             content: List[Dict[str, Any]] = [{"type": "text", "text": msg.text}]
