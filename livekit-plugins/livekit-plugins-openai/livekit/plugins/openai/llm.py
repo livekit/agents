@@ -89,9 +89,9 @@ class LLMStream(llm.LLMStream):
         self._running_tasks: MutableSet[asyncio.Task[Any]] = set()
 
         # current function call that we're waiting for full completion (args are streamed)
-        self._tool_call_id = None
-        self._fnc_name = None
-        self._fnc_raw_arguments = None
+        self._tool_call_id: str | None = None
+        self._fnc_name: str | None = None
+        self._fnc_raw_arguments: str | None = None
 
     async def gather_function_results(self) -> list[llm.CalledFunction]:
         await asyncio.gather(*self._running_tasks, return_exceptions=True)
