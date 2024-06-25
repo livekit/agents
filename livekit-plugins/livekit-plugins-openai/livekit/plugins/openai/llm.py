@@ -227,7 +227,7 @@ def _build_oai_message(msg: llm.ChatMessage, cache_key: Any):
     # make sure to provide when function has been called inside the context
     # (+ raw_arguments)
     if msg.tool_calls is not None:
-        tool_calls = []
+        tool_calls: list[dict[str, Any]] = []
         oai_msg["tool_calls"] = tool_calls
         for fnc in msg.tool_calls:
             tool_calls.append(
