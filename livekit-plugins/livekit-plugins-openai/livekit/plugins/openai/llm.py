@@ -16,32 +16,19 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import enum
-import functools
-import inspect
-import json
-import typing
 from dataclasses import dataclass
 from typing import Any, MutableSet
 
 from livekit import rtc
-from livekit.agents import llm
-from livekit.agents.llm import function_context
-from livekit.agents.utils import images
+from livekit.agents import llm, utils
 
 import openai
-from openai.types.chat import ChatCompletionChunk
-from openai.types.chat.chat_completion_chunk import ChoiceDelta
+from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
+from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
 from .models import ChatModels
 from .utils import get_base_url
-
-_IMAGE_DETAIL_DIMENSIONS: list[tuple[int, str]] = [
-    (512, "low"),
-    (768, "medium"),
-    (2048, "high"),
-]
 
 
 @dataclass
@@ -70,11 +57,14 @@ class LLM(llm.LLM):
         n: int | None = 1,
     ) -> "LLMStream":
         opts = dict()
-        if fnc_ctx:
-            opts["tools"] = _to_openai_tools(fnc_ctx)
+        if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
+            fncs_desc = []
+            for fnc in fnc_ctx.ai_functions.values():
+                fncs_desc.append(llm._oai_api.build_oai_function_description(fnc))
 
-        cache_key = id(self)
-        messages = _to_openai_ctx(chat_ctx, cache_key)
+            opts["tools"] = fncs_desc
+
+        messages = _build_oai_context(chat_ctx, id(self))
         cmp = await self._client.chat.completions.create(
             messages=messages,
             model=self._opts.model,
@@ -98,6 +88,11 @@ class LLMStream(llm.LLMStream):
         self._fnc_ctx = fnc_ctx
         self._running_tasks: MutableSet[asyncio.Task] = set()
 
+        # current function call that we're waiting for full completion (args are streamed)
+        self._tool_call_id = None
+        self._fnc_name = None
+        self._fnc_raw_arguments = None
+
     async def gather_function_results(self) -> list[llm.CalledFunction]:
         await asyncio.gather(*self._running_tasks, return_exceptions=True)
         return self._called_functions
@@ -111,274 +106,171 @@ class LLMStream(llm.LLMStream):
         await asyncio.gather(*self._running_tasks, return_exceptions=True)
 
     async def __anext__(self) -> llm.ChatChunk:
-        fnc_name, fnc_args, fnc_id = None, None, None
-        tool_idx = None
-
         async for chunk in self._oai_stream:
-            for i, choice in enumerate(chunk.choices):
-                delta = choice.delta
-                if delta.tool_calls:
-                    for tool in delta.tool_calls:
-                        assert tool.function is not None
-
-                        if tool.index != tool_idx and tool_idx is not None:
-                            tool_chunk = await self._call_function("assistant", i, fnc_id, fnc_name, fnc_args)
-                            if tool_chunk is not None:
-                                return tool_chunk
-
-                            fnc_name = fnc_args = fnc_idx = None
-
-                        if tool.function.name:
-                            if tool_idx is not None:
-                                logger.warning(
-                                    "new fnc call while previous call is still running"
-                                )
-
-                            fnc_name = tool.function.name
-                            fnc_args = tool.function.arguments
-                            fnc_id = tool.id
-                        else:
-                            if tool.function.arguments:
-                                fnc_args += tool.function.arguments # type: ignore
-
-                    continue
-
-                if choice.finish_reason == "tool_calls":
-                    tool_chunk = await self._call_function("assistant", i, fnc_id, fnc_name, fnc_args)
-                    if tool_chunk is not None:
-                        return tool_chunk
-
-                    continue
-
-                return llm.ChatChunk(
-                    choices=[
-                        llm.Choice(
-                            delta=llm.ChoiceDelta(
-                                content=delta.content,
-                                role="assistant",
-                            ),
-                            index=i,
-                        )
-                    ]
-                )
+            for choice in chunk.choices:
+                chunk = self._parse_choice(choice)
+                if chunk is not None:
+                    return chunk
 
         raise StopAsyncIteration
 
-    async def _call_function(
-        self,
-        role: llm.ChatRole,
-        choice_idx: int,
-        id: str | None = None,
-        name: str | None = None,
-        arguments: str | None = None,
-    ) -> llm.ChatChunk | None:
-        assert self._fnc_ctx is not None
+    def _parse_choice(self, choice: Choice) -> llm.ChatChunk | None:
+        delta = choice.delta
 
-        if id is None:
-            logger.error("received tool call but no function id")
-            return
+        if delta.tool_calls:
+            # check if we have functions to calls
+            for tool in delta.tool_calls:
+                if not tool.function:
+                    continue  # oai may add other tools in the future
 
-        if name is None:
-            logger.error("received tool call but no function name")
-            return
+                call_chunk = None
+                if self._tool_call_id and tool.id and tool.id != self._tool_call_id:
+                    call_chunk = self._try_run_function(choice)
 
-        fncs = self._fnc_ctx.ai_functions
-        if name not in fncs:
-            logger.warning(f"ai_function {name} not found, ignoring..")
-            return
+                if tool.function.name:
+                    self._tool_call_id = tool.id
+                    self._fnc_name = tool.function.name
+                    self._fnc_raw_arguments = tool.function.arguments or ""
+                elif tool.function.arguments:
+                    self._fnc_raw_arguments += tool.function.arguments  # type: ignore
 
-        if arguments is None:
-            logger.warning(f"{name} no arguments, ignoring..")
-            return
+                if call_chunk is not None:
+                    return call_chunk
 
-        args = {}
-        if arguments:
-            try:
-                args = json.loads(arguments)
-            except json.JSONDecodeError:
-                logger.exception(
-                    f"{name}: failed to decode json", extra={"arguments": arguments}
-                )
-                return
-
-        fnc_info = fncs[name]
-        for arg_info in fnc_info.arguments.values():
-            if arg_info.name not in args:
-                if arg_info.default is inspect.Parameter.empty:
-                    logger.error(f"{name}: missing required arg {arg_info.name}")
-                    return
-                continue
-
-            val = args[arg_info.name]
-            try:
-                val = _sanitize_primitive(arg_info.type, val)
-            except ValueError:
-                logger.exception(
-                    f"{name}: invalid arg {arg_info.name}", extra={"value": val}
-                )
-                return
-
-            if typing.get_origin(arg_info.type) is list:
-                if not isinstance(val, list):
-                    logger.error(
-                        f"{name}: invalid arg {arg_info.name}", extra={"value": val}
-                    )
-                    return
-
-                # validate all list items
-                in_type = typing.get_args(arg_info.type)[0]
-                for i in range(len(val)):
-                    try:
-                        val[i] = _sanitize_primitive(in_type, val[i])
-                    except ValueError:
-                        logger.exception(
-                            f"{name}: invalid arg {arg_info.name}",
-                            extra={"value": val},
-                        )
-                        return
-
-            if issubclass(arg_info.type, enum.Enum):
-                enum_values = set(item.value for item in arg_info.type)
-                if val not in enum_values:
-                    logger.error(
-                        f"{name}: invalid arg {arg_info.name}", extra={"value": val}
-                    )
-                    return
-
-            if arg_info.choices:
-                if val not in arg_info.choices:
-                    logger.error(
-                        f"{name}: invalid arg {arg_info.name}", extra={"value": val}
-                    )
-                    return
-
-            args[arg_info.name] = val  # sanitized value
-
-        logger.info(f"calling function {name} with arguments {args}")
-
-        func = functools.partial(fnc_info.callable, **args)
-        if asyncio.iscoroutinefunction(fnc_info.callable):
-            task = asyncio.create_task(func())
-        else:
-            task = asyncio.create_task(asyncio.to_thread(func))
-
-        called_fnc = llm.CalledFunction(
-            id=id,
-            raw_arguments=arguments,
-            function_info=fnc_info,
-            arguments=args,
-            task=task,
-        )
-        self._called_functions.append(called_fnc)
-
-        def _task_done(task: asyncio.Task) -> None:
-            if not task.cancelled():
-                if task.exception():
-                    logger.error("ai_callable task failed", exc_info=task.exception())
-                    called_fnc.exception = task.exception()
-                else:
-                    called_fnc.result = task.result()
-
-            self._running_tasks.discard(task)
-
-        task.add_done_callback(_task_done)
-        self._running_tasks.add(task)
+        if choice.finish_reason == "tool_calls":
+            # we're done with the tool calls, run the last one
+            return self._try_run_function(choice)
 
         return llm.ChatChunk(
             choices=[
                 llm.Choice(
                     delta=llm.ChoiceDelta(
-                        role=role,
-                        tool_calls=[called_fnc]
+                        content=delta.content,
+                        role="assistant",
                     ),
-                    index=choice_idx,
+                    index=choice.index,
+                )
+            ]
+        )
+
+    def _try_run_function(self, choice: Choice) -> llm.ChatChunk | None:
+        if not self._fnc_ctx:
+            logger.warning("oai stream tried to run function without function context")
+            return None
+
+        if self._tool_call_id is None:
+            logger.warning(
+                "oai stream tried to run function but tool_call_id is not set"
+            )
+            return None
+
+        if self._fnc_name is None or self._fnc_raw_arguments is None:
+            logger.warning(
+                "oai stream tried to call a function but raw_arguments and fnc_name are not set"
+            )
+            return None
+
+        task, called_function = llm._oai_api.create_ai_function_task(
+            self._fnc_ctx, self._tool_call_id, self._fnc_name, self._fnc_raw_arguments
+        )
+        self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
+
+        self._running_tasks.add(task)
+        task.add_done_callback(self._running_tasks.remove)
+        self._called_functions.append(called_function)
+
+        return llm.ChatChunk(
+            choices=[
+                llm.Choice(
+                    delta=llm.ChoiceDelta(
+                        role="assistant",
+                        tool_calls=[called_function],
+                    ),
+                    index=choice.index,
                 )
             ]
         )
 
 
-def _image_detail_from_dimensions(width: int, height: int) -> str:
-    for dim, detail in _IMAGE_DETAIL_DIMENSIONS:
-        if width <= dim and height <= dim:
-            return detail
-
-    return "high"
+def _build_oai_context(
+    chat_ctx: llm.ChatContext, cache_key: Any
+) -> list[ChatCompletionMessageParam]:
+    return [_build_oai_message(msg, cache_key) for msg in chat_ctx.messages]  # type: ignore
 
 
-def _to_openai_ctx(chat_ctx: llm.ChatContext, cache_key: Any):
-    oai_context = []
+def _build_oai_message(msg: llm.ChatMessage, cache_key: Any):
+    oai_msg: dict = {
+        "role": msg.role,
+    }
 
-    for msg in chat_ctx.messages:
-        content = []
-        if isinstance(msg.content, list):
-            for cnt in msg.content:
-                if isinstance(cnt, str):
-                    content.append(_to_openai_text_content(cnt))
-                elif isinstance(cnt, llm.ChatImage):
-                    oai_image = _to_openai_image(cnt, cache_key)
-                    if oai_image is not None:
-                        content.append(oai_image)
-        elif isinstance(msg.content, str):
-            content.append(_to_openai_text_content(msg.content))
+    if msg.name:
+        oai_msg["name"] = msg.name
 
+    # add content if provided
+    if isinstance(msg.content, str):
+        oai_msg["content"] = msg.content
+    elif isinstance(msg.content, list):
+        oai_content = []
+        for cnt in msg.content:
+            if isinstance(cnt, str):
+                oai_content.append(
+                    {
+                        "type": "text",
+                        "text": cnt,
+                    }
+                )
+            elif isinstance(cnt, llm.ChatImage):
+                oai_content.append(_build_oai_image_content(cnt, cache_key))
+
+        oai_msg["content"] = oai_content
+
+    # make sure to provide when function has been called inside the context
+    # (+ raw_arguments)
+    if msg.tool_calls is not None:
         tool_calls = []
-        if msg.tool_calls is not None:
-            for tool in msg.tool_calls:
-                tool_calls.append(_to_openai_tool_calls(tool))
-                pass
+        oai_msg["tool_calls"] = tool_calls
+        for fnc in msg.tool_calls:
+            tool_calls.append(
+                {
+                    "id": fnc.tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": fnc.function_info.name,
+                        "arguments": fnc.raw_arguments,
+                    },
+                }
+            )
 
-        oai_context.append(
-            {
-                "role": msg.role,
-                "content": content,
-                "tool_calls": tool_calls or None,
-            }
-        )
+    # tool_call_id is set when the message is a response/result to a function call
+    # (content is a string in this case)
+    if msg.tool_call_id:
+        oai_msg["tool_call_id"] = msg.tool_call_id
 
-    return oai_context
-
-
-def _to_openai_tool_calls(called_function: llm.CalledFunction):
-    return {
-        "id": called_function.id,
-        "type": "function",
-        "function": {
-            "name": called_function.function_info.name,
-            "arguments": called_function.raw_arguments,
-        }
-    }
-
-def _to_openai_text_content(text: str):
-    return {
-        "type": "text",
-        "text": text,
-    }
+    return oai_msg
 
 
-def _to_openai_image(image: llm.ChatImage, cache_key: Any):
+def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):
     if isinstance(image.image, str):  # image url
         return {
             "type": "image_url",
             "image_url": {
                 "url": image.image,
-                "detail": _image_detail_from_dimensions(
-                    image.inference_width or 512,
-                    image.inference_height or 512,
-                ),
+                "detail": "auto",
             },
         }
     elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
         if cache_key not in image._cache:
-            encoded_data = images.encode(
-                image.image,
-                images.EncodeOptions(
-                    resize_options=images.ResizeOptions(
-                        width=image.inference_width or 512,
-                        height=image.inference_height or 512,
-                        strategy="center_aspect_fit",
-                    ),
-                ),
-            )
+            # inside our internal implementation, we allow to put extra metadata to
+            # each ChatImage (avoid to reencode each time we do a chatcompletion request)
+            opts = utils.images.EncodeOptions()
+            if image.inference_width and image.inference_height:
+                opts.resize_options = utils.images.ResizeOptions(
+                    width=image.inference_width,
+                    height=image.inference_height,
+                    strategy="center_aspect_fit",
+                )
+
+            encoded_data = utils.images.encode(image.image, opts)
             image._cache[cache_key] = base64.b64encode(encoded_data).decode("utf-8")
 
         return {
@@ -386,93 +278,4 @@ def _to_openai_image(image: llm.ChatImage, cache_key: Any):
             "image_url": {"url": f"data:image/jpeg;base64,{image._cache[cache_key]}"},
         }
 
-    logger.warning(f"unknown image type {type(image.image)}")
-    return None
-
-
-def _to_openai_items(dst: dict, ty: type, choices: list | None):
-    if ty is str:
-        dst["type"] = "string"
-    elif ty in (int, float):
-        dst["type"] = "number"
-    elif ty is bool:
-        dst["type"] = "boolean"
-    elif issubclass(ty, enum.Enum):
-        dst["type"] = "string"
-        dst["enum"] = [e.value for e in ty]
-    else:
-        raise ValueError(f"unsupported type {ty}")
-
-    if choices:
-        dst["enum"] = choices
-
-
-def _to_openai_tools(fnc_ctx: llm.FunctionContext):
-    tools_desc = []
-    for fnc_info in fnc_ctx.ai_functions.values():
-        properties = {}
-        required_properties = []
-
-        # build the properties for the function
-        for arg_info in fnc_info.arguments.values():
-            if arg_info.default is inspect.Parameter.empty:
-                # property is required when there is no default value
-                required_properties.append(arg_info.name)
-
-            p = {}
-            if arg_info.description:
-                p["description"] = arg_info.description
-
-            if typing.get_origin(arg_info.type) is list:
-                in_type = typing.get_args(arg_info.type)[0]
-                items = {}
-                _to_openai_items(items, in_type, arg_info.choices)
-                p["type"] = "array"
-                p["items"] = items
-            else:
-                _to_openai_items(p, arg_info.type, arg_info.choices)
-
-            properties[arg_info.name] = p
-
-        tools_desc.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": fnc_info.name,
-                    "description": fnc_info.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": properties,
-                        "required": required_properties,
-                    },
-                },
-            }
-        )
-
-    return tools_desc
-
-
-def _sanitize_primitive(ty: type, value: Any) -> Any:
-    if ty is str:
-        if not isinstance(value, str):
-            raise ValueError(f"expected str, got {type(value)}")
-        return value
-
-    if ty in (int, float):
-        if not isinstance(value, (int, float)):
-            raise ValueError(f"expected number, got {type(value)}")
-
-        if ty is int:
-            if value % 1 != 0:
-                raise ValueError("expected int, got float")
-
-            return int(value)
-
-        return float(value)
-
-    if ty is bool:
-        if not isinstance(value, bool):
-            raise ValueError(f"expected bool, got {type(value)}")
-        return value
-
-    raise ValueError(f"unsupported type {ty}, not a primitive")
+    raise ValueError(f"unknown image type {type(image.image)}")

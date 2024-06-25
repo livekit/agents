@@ -58,13 +58,11 @@ class FunctionInfo:
 
 @dataclass
 class CalledFunction:
-    id: str
+    tool_call_id: str
     function_info: FunctionInfo
     raw_arguments: str
     arguments: dict[str, Any]
     task: asyncio.Task
-    result: Any | None = None
-    exception: BaseException | None = None
 
 
 def ai_callable(
@@ -128,7 +126,6 @@ class FunctionContext:
                 )
 
             th = type_hints[name]
-
             if not is_type_supported(th):
                 raise ValueError(
                     f"{fnc_name}: unsupported type {th} for parameter {name}"
@@ -137,6 +134,12 @@ class FunctionContext:
             type_info = _find_param_type_info(param.annotation)
             desc = type_info.description if type_info else ""
             choices = type_info.choices if type_info else None
+
+            if issubclass(th, enum.Enum) and not choices:
+                # the enum must be a str or int (and at least one value)
+                # this is verified by is_type_supported
+                choices = [item.value for item in th]
+                th = type(choices[0])
 
             args[name] = FunctionArgInfo(
                 name=name,
@@ -212,6 +215,13 @@ def is_type_supported(t: type) -> bool:
         return in_type in (str, int, float, bool)
 
     if issubclass(t, enum.Enum):
-        return all(isinstance(e.value, str) for e in t)
+        initial_type = None
+        for e in t:
+            if initial_type is None:
+                initial_type = type(e.value)
+            if type(e.value) != initial_type:
+                return False
+
+        return initial_type in (str, int)
 
     return False

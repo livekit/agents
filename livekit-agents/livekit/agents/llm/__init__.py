@@ -1,3 +1,4 @@
+from . import _oai_api
 from .chat_context import (
     ChatContext,
     ChatImage,
@@ -39,4 +40,5 @@ __all__ = [
     "FunctionInfo",
     "CalledFunction",
     "USE_DOCSTRING",
+    "_oai_api",
 ]

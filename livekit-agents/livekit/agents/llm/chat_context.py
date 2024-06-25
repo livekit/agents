@@ -13,16 +13,13 @@
 # limitations under the License.
 from __future__ import annotations
 
-from typing_extensions import Literal, Required, TypedDict
-
-import enum
 from dataclasses import dataclass, field
 from typing import Any
 
 from livekit import rtc
+from typing_extensions import Literal
 
 from . import function_context
-
 
 ChatRole = Literal["system", "user", "assistant", "tool"]
 
@@ -47,7 +44,7 @@ class ChatMessage:
     tool_call_id: str | None = None
 
     @staticmethod
-    def from_called_function(
+    def create_tool_from_called_function(
         called_function: function_context.CalledFunction,
     ) -> "ChatMessage":
         if not called_function.task.done():
@@ -65,18 +62,32 @@ class ChatMessage:
         )
 
     @staticmethod
-    def create(*, text: str = "", images: list[ChatImage] = [], role: ChatRole = "system") -> "ChatMessage":
-        content = []
-        if text:
-            content.append(text)
-
-        if len(images) > 0:
-            content.extend(images)
-
+    def create_tool_calls(
+        called_functions: list[function_context.CalledFunction],
+    ) -> "ChatMessage":
         return ChatMessage(
-            role=role,
-            content=content,
+            role="assistant",
+            tool_calls=called_functions,
         )
+
+    @staticmethod
+    def create(
+        *, text: str = "", images: list[ChatImage] = [], role: ChatRole = "system"
+    ) -> "ChatMessage":
+        if len(images) == 0:
+            return ChatMessage(role=role, content=text)
+        else:
+            content = []
+            if text:
+                content.append(text)
+
+            if len(images) > 0:
+                content.extend(images)
+
+            return ChatMessage(
+                role=role,
+                content=content,
+            )
 
     def copy(self):
         content = self.content
@@ -100,8 +111,9 @@ class ChatMessage:
 class ChatContext:
     messages: list[ChatMessage] = field(default_factory=list)
 
-    def append(self, *, text: str="", images: list[ChatImage] = [], role: ChatRole = "system") -> ChatContext:
-        message = ChatMessage(role=role, content=text)
+    def append(
+        self, *, text: str = "", images: list[ChatImage] = [], role: ChatRole = "system"
+    ) -> ChatContext:
         self.messages.append(ChatMessage.create(text=text, images=images, role=role))
         return self
 

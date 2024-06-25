@@ -5,8 +5,6 @@ from typing import Annotated
 from livekit.agents import llm
 from livekit.agents.llm import (
     ChatContext,
-    ChatMessage,
-    ChatRole,
     FunctionContext,
     TypeInfo,
     ai_callable,
@@ -174,8 +172,8 @@ async def test_calls_arrays():
     stream = await _request_fnc_call(
         llm, "Can you select all currencies in Europe?", fnc_ctx
     )
-    #await stream.gather_function_results()
-    #await stream.aclose()
+    await stream.gather_function_results()
+    await stream.aclose()
 
     assert fnc_ctx._select_currency_calls == 1
     assert fnc_ctx._selected_currencies is not None
@@ -191,6 +189,7 @@ async def test_calls_choices():
     llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(llm, "Set the volume to 30", fnc_ctx)
+    await stream.gather_function_results()
     await stream.aclose()
 
     assert fnc_ctx._change_volume_calls == 1
