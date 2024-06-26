@@ -50,15 +50,15 @@ class ChatMessage:
         if not called_function.task.done():
             raise ValueError("cannot create a tool result from a running ai function")
 
-        content = called_function.result
-        if called_function.exception is not None:
-            content = f"Error: {called_function.exception}"
+        content = called_function.task.result()
+        if called_function.task.exception() is not None:
+            content = f"Error: {called_function.task.exception}"
 
         return ChatMessage(
             role="tool",
             name=called_function.function_info.name,
             content=content,
-            tool_call_id=called_function.id,
+            tool_call_id=called_function.tool_call_id,
         )
 
     @staticmethod
@@ -77,7 +77,7 @@ class ChatMessage:
         if len(images) == 0:
             return ChatMessage(role=role, content=text)
         else:
-            content = []
+            content: list[str | ChatImage] = []
             if text:
                 content.append(text)
 

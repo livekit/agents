@@ -46,7 +46,7 @@ class LLM(llm.LLM):
     ) -> None:
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient(base_url=get_base_url(base_url))
-        self._running_fncs: MutableSet[asyncio.Task] = set()
+        self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
     async def chat(
         self,
@@ -56,7 +56,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
     ) -> "LLMStream":
-        opts = dict()
+        opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
             for fnc in fnc_ctx.ai_functions.values():
@@ -86,12 +86,12 @@ class LLMStream(llm.LLMStream):
         super().__init__()
         self._oai_stream = oai_stream
         self._fnc_ctx = fnc_ctx
-        self._running_tasks: MutableSet[asyncio.Task] = set()
+        self._running_tasks: MutableSet[asyncio.Task[Any]] = set()
 
         # current function call that we're waiting for full completion (args are streamed)
-        self._tool_call_id = None
-        self._fnc_name = None
-        self._fnc_raw_arguments = None
+        self._tool_call_id: str | None = None
+        self._fnc_name: str | None = None
+        self._fnc_raw_arguments: str | None = None
 
     async def gather_function_results(self) -> list[llm.CalledFunction]:
         await asyncio.gather(*self._running_tasks, return_exceptions=True)
@@ -105,12 +105,12 @@ class LLMStream(llm.LLMStream):
 
         await asyncio.gather(*self._running_tasks, return_exceptions=True)
 
-    async def __anext__(self) -> llm.ChatChunk:
+    async def __anext__(self):
         async for chunk in self._oai_stream:
             for choice in chunk.choices:
-                chunk = self._parse_choice(choice)
-                if chunk is not None:
-                    return chunk
+                chat_chunk = self._parse_choice(choice)
+                if chat_chunk is not None:
+                    return chat_chunk
 
         raise StopAsyncIteration
 
@@ -227,7 +227,7 @@ def _build_oai_message(msg: llm.ChatMessage, cache_key: Any):
     # make sure to provide when function has been called inside the context
     # (+ raw_arguments)
     if msg.tool_calls is not None:
-        tool_calls = []
+        tool_calls: list[dict[str, Any]] = []
         oai_msg["tool_calls"] = tool_calls
         for fnc in msg.tool_calls:
             tool_calls.append(

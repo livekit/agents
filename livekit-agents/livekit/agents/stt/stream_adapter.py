@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from livekit import rtc
 
@@ -51,13 +51,7 @@ class StreamAdapter(STT):
 
 
 class StreamAdapterWrapper(SpeechStream):
-    def __init__(
-        self,
-        vad: VAD,
-        stt: STT,
-        *args,
-        **kwargs,
-    ) -> None:
+    def __init__(self, vad: VAD, stt: STT, *args: Any, **kwargs: Any) -> None:
         super().__init__()
         self._vad = vad
         self._stt = stt
@@ -77,19 +71,19 @@ class StreamAdapterWrapper(SpeechStream):
                     self._event_queue.put_nowait(start_event)
                 elif event.type == VADEventType.END_OF_SPEECH:
                     merged_frames = merge_frames(event.frames)
-                    event = await self._stt.recognize(
+                    t_event = await self._stt.recognize(
                         buffer=merged_frames, *self._args, **self._kwargs
                     )
 
                     final_event = SpeechEvent(
                         type=SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=[event.alternatives[0]],
+                        alternatives=[t_event.alternatives[0]],
                     )
                     self._event_queue.put_nowait(final_event)
 
                     end_event = SpeechEvent(
                         type=SpeechEventType.END_OF_SPEECH,
-                        alternatives=[event.alternatives[0]],
+                        alternatives=[t_event.alternatives[0]],
                     )
                     self._event_queue.put_nowait(end_event)
         except Exception:

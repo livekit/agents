@@ -16,7 +16,7 @@ from typing import (
 class SelectLoop:
     @dataclass
     class Completed:
-        selected: Awaitable = field(repr=False)
+        selected: AsyncIterator[Any] | Awaitable[Any] = field(repr=False)
         index: int
         exc: BaseException | None
         value: Any
@@ -28,34 +28,34 @@ class SelectLoop:
 
     @dataclass
     class GenData:
-        gen: AsyncIterator
-        next_task: asyncio.Task | None = None
+        gen: AsyncIterator[Any]
+        next_task: asyncio.Task[Any] | None = None
 
     @dataclass
     class CoroData:
-        coro: Awaitable
-        task: asyncio.Task | None = None
+        coro: Awaitable[Any]
+        task: asyncio.Task[Any] | None = None
 
-    def __init__(self, aw: Iterable[Union[Awaitable, AsyncIterator]]) -> None:
-        self._og = []
-        self._pending_tasks = []
+    def __init__(self, aw: Iterable[Union[Awaitable[Any], AsyncIterator[Any]]]) -> None:
+        self._og: list[Any] = []
+        self._pending_tasks: list[asyncio.Task[Any] | asyncio.Future[Any]] = []
 
-        self._coros = []
-        self._gens = []
+        self._coros: list[SelectLoop.CoroData] = []
+        self._gens: list[SelectLoop.GenData] = []
 
         for a in aw:
             if isinstance(a, AsyncIterator):
-                self._gens.append(__class__.GenData(gen=a))
+                self._gens.append(SelectLoop.GenData(gen=a))
             elif asyncio.isfuture(a):
                 self._pending_tasks.append(a)
             else:
                 t = asyncio.ensure_future(a)
-                self._coros.append(__class__.CoroData(coro=a, task=t))
+                self._coros.append(SelectLoop.CoroData(coro=a, task=t))
                 self._pending_tasks.append(t)
 
             self._og.append(a)
 
-        self._q = deque()
+        self._q = deque[Any]()
 
     def __aiter__(self) -> "SelectLoop":
         return self
@@ -73,10 +73,10 @@ class SelectLoop:
         if self._done():
             raise StopAsyncIteration
 
-        for g in self._gens:
-            if g.next_task is None:
-                g.next_task = asyncio.ensure_future(g.gen.__anext__())
-                self._pending_tasks.append(g.next_task)
+        for gen_data in self._gens:
+            if gen_data.next_task is None:
+                gen_data.next_task = asyncio.ensure_future(gen_data.gen.__anext__())
+                self._pending_tasks.append(gen_data.next_task)
 
         done, pending = await asyncio.wait(
             self._pending_tasks, return_when=asyncio.FIRST_COMPLETED
@@ -85,15 +85,15 @@ class SelectLoop:
         self._pending_tasks = list(pending)
         for t in done:
             g = None
-            for y in self._gens:
-                if y.next_task == t:
-                    g = y
+            for g_data in self._gens:
+                if g_data.next_task == t:
+                    g = g_data
                     break
 
             c = None
-            for y in self._coros:
-                if y.task == t:
-                    c = y
+            for c_data in self._coros:
+                if c_data.task == t:
+                    c = c_data
                     break
 
             if g is not None:
@@ -101,7 +101,7 @@ class SelectLoop:
                 try:
                     v = t.result()
                     self._q.append(
-                        __class__.Completed(
+                        SelectLoop.Completed(
                             selected=g.gen, index=ogi, exc=None, value=v
                         )
                     )
@@ -111,7 +111,7 @@ class SelectLoop:
                         self._og.pop(ogi)
 
                     self._q.append(
-                        __class__.Completed(
+                        SelectLoop.Completed(
                             selected=g.gen, index=ogi, exc=e, value=None
                         )
                     )
@@ -122,13 +122,13 @@ class SelectLoop:
                 try:
                     v = t.result()
                     self._q.append(
-                        __class__.Completed(
+                        SelectLoop.Completed(
                             selected=c.coro, index=ogi, exc=None, value=v
                         )
                     )
                 except Exception as e:
                     self._q.append(
-                        __class__.Completed(
+                        SelectLoop.Completed(
                             selected=c.coro, index=ogi, exc=e, value=None
                         )
                     )
@@ -139,11 +139,11 @@ class SelectLoop:
                 try:
                     v = t.result()
                     self._q.append(
-                        __class__.Completed(selected=t, index=ogi, exc=None, value=v)
+                        SelectLoop.Completed(selected=t, index=ogi, exc=None, value=v)
                     )
                 except Exception as e:
                     self._q.append(
-                        __class__.Completed(selected=t, index=ogi, exc=e, value=None)
+                        SelectLoop.Completed(selected=t, index=ogi, exc=e, value=None)
                     )
 
         return self._q.popleft()
@@ -155,5 +155,5 @@ class SelectLoop:
                 await t
 
 
-def select(aw: Iterable[Union[Awaitable, AsyncIterator]]) -> SelectLoop:
+def select(aw: Iterable[Union[Awaitable[Any], AsyncIterator[Any]]]) -> SelectLoop:
     return SelectLoop(aw)

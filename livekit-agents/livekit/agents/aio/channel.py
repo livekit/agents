@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections import deque
-from typing import AsyncIterator, Generic, Protocol, Tuple, TypeVar
+from typing import AsyncIterator, Deque, Generic, Protocol, TypeVar
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
@@ -22,13 +22,6 @@ class ChanFull(Exception):
 
 class ChanEmpty(Exception):
     pass
-
-
-def channel(
-    maxsize: int = 0, loop: asyncio.AbstractEventLoop | None = None
-) -> Tuple["ChanSender[T]", "ChanReceiver[T]"]:
-    chan = Chan(maxsize, loop)
-    return chan, chan
 
 
 class ChanSender(Protocol[T_contra]):
@@ -60,11 +53,11 @@ class Chan(Generic[T]):
         #        self._finished_ev = asyncio.Event()
         self._close_ev = asyncio.Event()
         self._closed = False
-        self._gets = deque()
-        self._puts = deque()
-        self._queue = deque()
+        self._gets: Deque[asyncio.Future[T | None]] = deque()
+        self._puts: Deque[asyncio.Future[T | None]] = deque()
+        self._queue: Deque[T] = deque()
 
-    def _wakeup_next(self, waiters):
+    def _wakeup_next(self, waiters: deque[asyncio.Future[T | None]]):
         while waiters:
             waiter = waiters.popleft()
             if not waiter.done():

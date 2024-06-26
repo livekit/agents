@@ -37,20 +37,18 @@ jobs:
                     ./livekit-plugins/livekit-plugins-nltk \
                     ./livekit-plugins/livekit-plugins-silero \
                     ./livekit-plugins/livekit-plugins-elevenlabs \
-                    ./livekit-plugins/livekit-plugins-cartesia
-  # find . -name setup.py | xargs -n 1 dirname | xargs -n 1 python -m pip install
-
+                    ./livekit-plugins/livekit-plugins-cartesia \
+                    ./livekit-plugins/livekit-plugins-azure
     - name: Check Types 
       run : |
-        mypy -p livekit.plugins.openai \
+        mypy --install-types --non-interactive \
+             -p livekit.agents \
+             -p livekit.plugins.openai \
              -p livekit.plugins.deepgram \
              -p livekit.plugins.google \
              -p livekit.plugins.nltk \
              -p livekit.plugins.silero \
              -p livekit.plugins.elevenlabs \
-             -p livekit.plugins.cartesia
- #     run: |
- #       for d in $(find . -name setup.py | xargs -n 1 dirname | xargs -n 1 basename); do
- #         echo "Checking types for package: $d"
- #         python -m mypy --non-interactive --install-type -p '$d'
- #       done
+             -p livekit.plugins.cartesia \
+             -p livekit.plugins.azure
+

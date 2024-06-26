@@ -70,7 +70,7 @@ class TTS(tts.TTS):
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
-            self._session = utils.http_session()
+            self._session = utils.http_context.http_session()
 
         return self._session
 
@@ -89,7 +89,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._text = text
         self._session = session
         self._decoder = codecs.Mp3StreamDecoder()
-        self._main_task: asyncio.Task | None = None
+        self._main_task: asyncio.Task[None] | None = None
         self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
 
     async def _run(self):

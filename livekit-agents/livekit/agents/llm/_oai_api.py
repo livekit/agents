@@ -34,11 +34,11 @@ def create_ai_function_task(
     tool_call_id: str,
     fnc_name: str,
     raw_arguments: str,  # JSON string
-) -> tuple[asyncio.Task, function_context.CalledFunction]:
+) -> tuple[asyncio.Task[Any], function_context.CalledFunction]:
     if fnc_name not in fnc_ctx.ai_functions:
         raise ValueError(f"AI function {fnc_name} not found")
 
-    parsed_arguments = {}
+    parsed_arguments: dict[str, Any] = {}
     try:
         if raw_arguments:  # ignore empty string
             parsed_arguments = json.loads(raw_arguments)
@@ -50,7 +50,7 @@ def create_ai_function_task(
     fnc_info = fnc_ctx.ai_functions[fnc_name]
 
     # Ensure all necessary arguments are present and of the correct type.
-    sanitized_arguments = {}
+    sanitized_arguments: dict[str, Any] = {}
     for arg_info in fnc_info.arguments.values():
         if arg_info.name not in parsed_arguments:
             if arg_info.default is inspect.Parameter.empty:
@@ -98,8 +98,10 @@ def create_ai_function_task(
     )
 
 
-def build_oai_function_description(fnc_info: function_context.FunctionInfo) -> dict:
-    def build_oai_property(arg_info: function_context.FunctionArgInfo) -> dict:
+def build_oai_function_description(
+    fnc_info: function_context.FunctionInfo,
+) -> dict[str, Any]:
+    def build_oai_property(arg_info: function_context.FunctionArgInfo):
         def type2str(t: type) -> str:
             if t is str:
                 return "string"
@@ -110,7 +112,7 @@ def build_oai_function_description(fnc_info: function_context.FunctionInfo) -> d
 
             raise ValueError(f"unsupported type {t} for ai_property")
 
-        p = {}
+        p: dict[str, Any] = {}
 
         if arg_info.description:
             p["description"] = arg_info.description
@@ -130,7 +132,7 @@ def build_oai_function_description(fnc_info: function_context.FunctionInfo) -> d
 
         return p
 
-    properties_info: dict[str, dict] = {}
+    properties_info: dict[str, dict[str, Any]] = {}
     required_properties: list[str] = []
 
     for arg_info in fnc_info.arguments.values():

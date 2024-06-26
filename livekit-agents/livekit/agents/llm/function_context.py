@@ -62,7 +62,7 @@ class CalledFunction:
     function_info: FunctionInfo
     raw_arguments: str
     arguments: dict[str, Any]
-    task: asyncio.Task
+    task: asyncio.Task[Any]
 
 
 def ai_callable(

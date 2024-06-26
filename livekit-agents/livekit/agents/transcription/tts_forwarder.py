@@ -5,7 +5,7 @@ import contextlib
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Deque, Optional
 
 from livekit import rtc
 
@@ -105,14 +105,14 @@ class TTSSegmentsForwarder:
         )
         self._closed = False
         self._loop = loop or asyncio.get_event_loop()
-        self._close_future = asyncio.Future()
+        self._close_future = asyncio.Future[None]()
 
         self._next_segment_index = 0
         self._playing_seg_index = -1
         self._finshed_seg_index = -1
 
         first_segment = self._create_segment()
-        segments_q = deque()
+        segments_q: Deque[_SegmentData] = deque()
         segments_q.append(first_segment)
 
         self._forming_segments = _FormingSegments(
@@ -255,7 +255,7 @@ class TTSSegmentsForwarder:
         # put each sentence in a different transcription segment
         seg_id = _utils.segment_uuid()
         words = self._opts.word_tokenizer.tokenize(text=tokenized_sentence)
-        processed_words = []
+        processed_words: list[str] = []
 
         text = ""
         for word in words:
@@ -275,7 +275,7 @@ class TTSSegmentsForwarder:
             elapsed_time = time.time() - seg.forward_start_time
             text = self._opts.word_tokenizer.format_words(processed_words)
 
-            delay = 0
+            delay = 0.0
             speed = self._opts.speed
             if seg.real_speed is not None:
                 speed = seg.real_speed
@@ -323,7 +323,7 @@ class TTSSegmentsForwarder:
             await asyncio.wait([self._close_future], timeout=delay)
 
     def _calc_hyphens(self, text: str) -> list[str]:
-        hyphenes = []
+        hyphenes: list[str] = []
         words = self._opts.word_tokenizer.tokenize(text=text)
         for word in words:
             new = self._opts.hyphenate_word(word)
@@ -342,3 +342,29 @@ class TTSSegmentsForwarder:
     def _check_not_closed(self) -> None:
         if self._closed:
             raise RuntimeError("TTSForwarder is closed")
+
+
+class NoopTTSSegmentsForwarder(TTSSegmentsForwarder):
+    def __init__(self):
+        pass
+
+    def segment_playout_started(self):
+        pass
+
+    def segment_playout_finished(self):
+        pass
+
+    def push_audio(self, frame: rtc.AudioFrame):
+        pass
+
+    def mark_audio_segment_end(self):
+        pass
+
+    def push_text(self, text: str):
+        pass
+
+    def mark_text_segment_end(self):
+        pass
+
+    async def aclose(self):
+        pass
