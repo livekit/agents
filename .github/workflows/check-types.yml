@@ -49,6 +49,8 @@ jobs:
             types-cffi \
             types-psutil \
             types-pyOpenSSL \
+            types-requests \
+            types-openpyxl \
             types-requests
 
       - name: Check Types
