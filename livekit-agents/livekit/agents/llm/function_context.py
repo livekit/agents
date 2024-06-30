@@ -219,7 +219,7 @@ def is_type_supported(t: type) -> bool:
         for e in t:
             if initial_type is None:
                 initial_type = type(e.value)
-            if type(e.value) != initial_type:
+            if type(e.value) is not initial_type:
                 return False
 
         return initial_type in (str, int)
