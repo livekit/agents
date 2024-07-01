@@ -70,7 +70,7 @@ class JsonFormatter(logging.Formatter):
                 return o.isoformat()
             elif istraceback(o):
                 return "".join(traceback.format_tb(o)).strip()
-            elif type(o) == Exception or isinstance(o, Exception) or type(o) == type:
+            elif type(o) is Exception or isinstance(o, Exception) or type(o) is type:
                 return str(o)
 
             # extra values are formatted as str() if the encoder raises TypeError

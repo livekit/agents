@@ -1,4 +1,4 @@
-name: Check Types 
+name: Check Types
 
 on:
   push:
@@ -16,39 +16,52 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
-      with:
-        submodules: recursive
-    
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.9'
-        cache: 'pip'
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
 
-    - name: Install mypy 
-      run: python -m pip install --upgrade mypy 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: "pip"
 
-    - name: Install all packages
-      run: |
-        pip install ./livekit-agents \
-                    ./livekit-plugins/livekit-plugins-openai \
-                    ./livekit-plugins/livekit-plugins-deepgram \
-                    ./livekit-plugins/livekit-plugins-google \
-                    ./livekit-plugins/livekit-plugins-nltk \
-                    ./livekit-plugins/livekit-plugins-silero \
-                    ./livekit-plugins/livekit-plugins-elevenlabs \
-                    ./livekit-plugins/livekit-plugins-cartesia \
-                    ./livekit-plugins/livekit-plugins-azure
-    - name: Check Types 
-      run : |
-        mypy --install-types --non-interactive \
-             -p livekit.agents \
-             -p livekit.plugins.openai \
-             -p livekit.plugins.deepgram \
-             -p livekit.plugins.google \
-             -p livekit.plugins.nltk \
-             -p livekit.plugins.silero \
-             -p livekit.plugins.elevenlabs \
-             -p livekit.plugins.cartesia \
-             -p livekit.plugins.azure
+      - name: Install mypy
+        run: python -m pip install --upgrade mypy
 
+      - name: Install all packages
+        run: |
+          pip install ./livekit-agents \
+                      ./livekit-plugins/livekit-plugins-openai \
+                      ./livekit-plugins/livekit-plugins-deepgram \
+                      ./livekit-plugins/livekit-plugins-google \
+                      ./livekit-plugins/livekit-plugins-nltk \
+                      ./livekit-plugins/livekit-plugins-silero \
+                      ./livekit-plugins/livekit-plugins-elevenlabs \
+                      ./livekit-plugins/livekit-plugins-cartesia \
+                      ./livekit-plugins/livekit-plugins-azure
+
+      - name: Install stub packages
+        run: |
+          pip install \
+            pandas-stubs \
+            types-Pygments \
+            types-cachetools \
+            types-cffi \
+            types-psutil \
+            types-pyOpenSSL \
+            types-requests \
+            types-openpyxl \
+            types-requests
+
+      - name: Check Types
+        run: |
+          mypy --install-types --non-interactive \
+               -p livekit.agents \
+               -p livekit.plugins.openai \
+               -p livekit.plugins.deepgram \
+               -p livekit.plugins.google \
+               -p livekit.plugins.nltk \
+               -p livekit.plugins.silero \
+               -p livekit.plugins.elevenlabs \
+               -p livekit.plugins.cartesia \
+               -p livekit.plugins.azure
