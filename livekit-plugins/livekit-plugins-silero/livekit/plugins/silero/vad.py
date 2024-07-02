@@ -34,7 +34,7 @@ class VAD(agents.vad.VAD):
             model.eval()
         else:
             model, _ = torch.hub.load(
-                repo_or_dir="snakers4/silero-vad",
+                repo_or_dir="snakers4/silero-vad:v4.0",
                 model="silero_vad",
                 onnx=use_onnx,
             )
