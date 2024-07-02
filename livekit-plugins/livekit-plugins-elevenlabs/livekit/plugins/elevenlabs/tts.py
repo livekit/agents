@@ -21,7 +21,7 @@ import dataclasses
 import json
 import os
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 import aiohttp
 from livekit import rtc
@@ -137,7 +137,7 @@ class TTS(tts.TTS):
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
-            self._session = utils.http_session()
+            self._session = utils.http_context.http_session()
 
         return self._session
 
@@ -169,7 +169,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = opts
         self._text = text
         self._session = session
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
         self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
 
     def _synthesize_url(self) -> str:
@@ -267,7 +267,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     @dataclass
     class _SegmentConnection:
         audio_rx: aio.ChanReceiver[tts.SynthesizedAudio]
-        task: asyncio.Task
+        task: asyncio.Task[None]
 
     def __init__(
         self,
@@ -349,10 +349,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             token_tx: aio.ChanSender[str] | None = None
             async for ev in self._word_stream:
                 if ev.type == tokenize.TokenEventType.STARTED:
-                    token_tx, token_rx = aio.channel()
-                    audio_tx: aio.ChanSender[tts.SynthesizedAudio]
-                    audio_rx: aio.ChanReceiver[tts.SynthesizedAudio]
-                    audio_tx, audio_rx = aio.channel()
+                    token_tx = token_rx = aio.Chan[str]()
+                    audio_tx = audio_rx = aio.Chan[tts.SynthesizedAudio]()
                     task = asyncio.create_task(
                         self._run_ws(max_retry_per_segment, audio_tx, token_rx)
                     )
@@ -464,7 +462,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected 11labs message type %s", msg.type)
                     continue
 
-                data: dict = json.loads(msg.data)
+                data = json.loads(msg.data)
                 audio = data.get("audio")
 
                 if data.get("error"):
@@ -514,8 +512,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         return evt
 
 
-def _dict_to_voices_list(data: dict) -> List[Voice]:
-    voices = []
+def _dict_to_voices_list(data: dict[str, Any]):
+    voices: List[Voice] = []
     for voice in data["voices"]:
         voices.append(
             Voice(

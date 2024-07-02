@@ -1,35 +1,35 @@
-from typing import Callable, Dict, Generic, Optional, Set, TypeVar
+from typing import Any, Callable, Dict, Generic, Optional, Set, TypeVar
 
 T = TypeVar("T")
 
 
 class EventEmitter(Generic[T]):
     def __init__(self) -> None:
-        self._events: Dict[T, Set[Callable]] = dict()
+        self._events: Dict[T, Set[Callable[[Any], None]]] = dict()
 
-    def emit(self, event: T, *args, **kwargs) -> None:
+    def emit(self, event: T, *args: Any, **kwargs: Any) -> None:
         if event in self._events:
             callables = self._events[event].copy()
             for callback in callables:
                 callback(*args, **kwargs)
 
-    def once(self, event: T, callback: Optional[Callable] = None) -> Callable:
+    def once(self, event: T, callback: Optional[Callable[[Any], None]] = None):
         if callback is not None:
 
-            def once_callback(*args, **kwargs):
+            def once_callback(*args: Any, **kwargs: Any):
                 self.off(event, once_callback)
                 callback(*args, **kwargs)
 
             return self.on(event, once_callback)
         else:
 
-            def decorator(callback: Callable) -> Callable:
+            def decorator(callback: Callable[[Any], None]):
                 self.once(event, callback)
                 return callback
 
             return decorator
 
-    def on(self, event: T, callback: Optional[Callable] = None) -> Callable:
+    def on(self, event: T, callback: Optional[Callable[[Any], None]] = None):
         if callback is not None:
             if event not in self._events:
                 self._events[event] = set()
@@ -37,12 +37,12 @@ class EventEmitter(Generic[T]):
             return callback
         else:
 
-            def decorator(callback: Callable) -> Callable:
+            def decorator(callback: Callable[[Any], None]):
                 self.on(event, callback)
                 return callback
 
             return decorator
 
-    def off(self, event: T, callback: Callable) -> None:
+    def off(self, event: T, callback: Callable[[Any], None]) -> None:
         if event in self._events:
             self._events[event].remove(callback)

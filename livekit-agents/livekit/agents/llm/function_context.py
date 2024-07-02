@@ -62,7 +62,7 @@ class CalledFunction:
     function_info: FunctionInfo
     raw_arguments: str
     arguments: dict[str, Any]
-    task: asyncio.Task
+    task: asyncio.Task[Any]
 
 
 def ai_callable(
@@ -219,7 +219,7 @@ def is_type_supported(t: type) -> bool:
         for e in t:
             if initial_type is None:
                 initial_type = type(e.value)
-            if type(e.value) != initial_type:
+            if type(e.value) is not initial_type:
                 return False
 
         return initial_type in (str, int)

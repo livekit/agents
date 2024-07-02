@@ -60,13 +60,13 @@ class _StartArgs:
     participant: rtc.RemoteParticipant | str | None
 
 
-_ContextVar = contextvars.ContextVar("voice_assistant_contextvar")
+_ContextVar = contextvars.ContextVar["AssistantContext"]("voice_assistant_contextvar")
 
 
 class AssistantCallContext:
     def __init__(self, assistant: "VoiceAssistant", llm_stream: allm.LLMStream) -> None:
         self._assistant = assistant
-        self._metadata = dict()
+        self._metadata = dict[str, Any]()
         self._llm_stream = llm_stream
 
     @staticmethod
@@ -175,12 +175,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._pending_validation = False
 
         # tasks
-        self._recognize_atask: asyncio.Task | None = None
-        self._play_atask: asyncio.Task | None = None
-        self._tasks = set[asyncio.Task]()
+        self._recognize_atask: asyncio.Task[None] | None = None
+        self._play_atask: asyncio.Task[None] | None = None
+        self._tasks = set[asyncio.Task[Any]]()
 
         # playout state
-        self._maybe_answer_task: asyncio.Task | None = None
+        self._maybe_answer_task: asyncio.Task[None] | None = None
         self._validated_speech: _SpeechData | None = None
         self._answer_speech: _SpeechData | None = None
         self._playout_start_time: float | None = None
@@ -194,7 +194,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._vol_filter.apply(1.0, self._opts.base_volume)
         self._speech_prob = 0.0
         self._transcribed_text, self._interim_text = "", ""
-        self._ready_future = asyncio.Future()
+        self._ready_future = asyncio.Future[None]()
 
     @property
     def fnc_ctx(self) -> allm.FunctionContext | None:
@@ -278,7 +278,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         assert self._play_atask is not None
         await self._play_atask
 
-    def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
+    def on(self, event: EventTypes, callback: Callable[[Any], None] | None = None):
         """Register a callback for an event
 
         Args:
@@ -495,7 +495,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
 
-        stt_forwarder = utils._noop.Nop()
+        stt_forwarder: transcription.STTSegmentsForwarder = (
+            transcription.NoopSTTSegmentsForwarder()
+        )
         if self._opts.transcription:
             stt_forwarder = transcription.STTSegmentsForwarder(
                 room=self._start_args.room,
@@ -676,9 +678,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         # reset volume before starting a new speech
         self._vol_filter.reset()
-        playout_tx, playout_rx = aio.channel()  # playout channel
+        playout_tx = playout_rx = aio.Chan[rtc.AudioFrame]()  # playout channel
 
-        tts_forwarder = utils._noop.Nop()
+        tts_forwarder: transcription.TTSSegmentsForwarder = (
+            transcription.NoopTTSSegmentsForwarder()
+        )
         if self._opts.transcription:
             tts_forwarder = transcription.TTSSegmentsForwarder(
                 room=self._start_args.room,
@@ -738,7 +742,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         data: _SpeechData,
         playout_tx: aio.ChanSender[rtc.AudioFrame],
         text: str,
-        tts_forwarder: transcription.TTSSegmentsForwarder | utils._noop.Nop,
+        tts_forwarder: transcription.TTSSegmentsForwarder,
     ) -> None:
         """synthesize speech from a string"""
         data.collected_text += text
@@ -772,7 +776,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         data: _SpeechData,
         playout_tx: aio.ChanSender[rtc.AudioFrame],
         streamed_text: AsyncIterable[str],
-        tts_forwarder: transcription.TTSSegmentsForwarder | utils._noop.Nop,
+        tts_forwarder: transcription.TTSSegmentsForwarder,
     ) -> None:
         """synthesize speech from streamed text"""
 
@@ -822,7 +826,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self,
         data: _SpeechData,
         playout_tx: aio.ChanSender[rtc.AudioFrame],
-        tts_forwarder: transcription.TTSSegmentsForwarder | utils._noop.Nop,
+        tts_forwarder: transcription.TTSSegmentsForwarder,
     ) -> None:
         """Synthesize speech from the source. Also run LLM inference when needed"""
         if isinstance(data.source, str):
@@ -862,7 +866,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     async def _playout_co(
         self,
         playout_rx: aio.ChanReceiver[rtc.AudioFrame],
-        tts_forwarder: transcription.TTSSegmentsForwarder | utils._noop.Nop,
+        tts_forwarder: transcription.TTSSegmentsForwarder,
     ) -> None:
         """
         Playout audio with the current volume.
@@ -930,7 +934,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._agent_speaking = False
             self.emit("agent_stopped_speaking")
 
-    def _log_debug(self, msg: str, **kwargs) -> None:
+    def _log_debug(self, msg: str, **kwargs: Any) -> None:
         if self._opts.debug:
             logger.debug(msg, **kwargs)
 
