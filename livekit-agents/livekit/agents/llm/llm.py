@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import abc
 from dataclasses import dataclass, field
 from typing import AsyncIterator
@@ -12,7 +13,7 @@ from .chat_context import ChatContext, ChatRole
 class ChoiceDelta:
     role: ChatRole
     content: str | None = None
-    tool_calls: list[function_context.CalledFunction] | None = None
+    tool_calls: list[function_context.FunctionCallInfo] | None = None
 
 
 @dataclass
@@ -28,7 +29,7 @@ class ChatChunk:
 
 class LLM(abc.ABC):
     @abc.abstractmethod
-    async def chat(
+    def chat(
         self,
         *,
         chat_ctx: ChatContext,
@@ -39,24 +40,48 @@ class LLM(abc.ABC):
 
 
 class LLMStream(abc.ABC):
-    def __init__(self) -> None:
-        self._called_functions: list[function_context.CalledFunction] = []
+    def __init__(
+        self, *, chat_ctx: ChatContext, fnc_ctx: function_context.FunctionContext | None
+    ) -> None:
+        self._function_calls_info: list[function_context.FunctionCallInfo] = []
+        self._tasks = set[asyncio.Task]()
+        self._chat_ctx = chat_ctx
+        self._fnc_ctx = fnc_ctx
 
     @property
-    def called_functions(self) -> list[function_context.CalledFunction]:
+    def function_calls(self) -> list[function_context.FunctionCallInfo]:
         """List of called functions from this stream."""
-        return self._called_functions
+        return self._function_calls_info
 
-    @abc.abstractmethod
-    async def gather_function_results(
+    @property
+    def chat_ctx(self) -> ChatContext:
+        """The initial chat context of this stream."""
+        return self._chat_ctx
+
+    @property
+    def fnc_ctx(self) -> function_context.FunctionContext | None:
+        """The function context of this stream."""
+        return self._fnc_ctx
+
+    def execute_functions(
         self,
-    ) -> list[function_context.CalledFunction]: ...
+    ) -> list[function_context.CalledFunction]:
+        """Run all functions in this stream."""
+        called_functions = []
+        for fnc_info in self._function_calls_info:
+            called_fnc = fnc_info.execute()
+            called_functions.append(called_fnc)
+
+        return called_functions
+
+    async def aclose(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+
+        await asyncio.gather(*self._tasks, return_exceptions=True)
 
     def __aiter__(self) -> AsyncIterator[ChatChunk]:
         return self
 
     @abc.abstractmethod
     async def __anext__(self) -> ChatChunk: ...
-
-    @abc.abstractmethod
-    async def aclose(self) -> None: ...

@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass
-from typing import Any, MutableSet
+from typing import Any, Awaitable, MutableSet
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -48,7 +48,7 @@ class LLM(llm.LLM):
         self._client = client or openai.AsyncClient(base_url=get_base_url(base_url))
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
-    async def chat(
+    def chat(
         self,
         *,
         chat_ctx: llm.ChatContext,
@@ -65,7 +65,7 @@ class LLM(llm.LLM):
             opts["tools"] = fncs_desc
 
         messages = _build_oai_context(chat_ctx, id(self))
-        cmp = await self._client.chat.completions.create(
+        cmp = self._client.chat.completions.create(
             messages=messages,
             model=self._opts.model,
             n=n,
@@ -74,38 +74,36 @@ class LLM(llm.LLM):
             **opts,
         )
 
-        return LLMStream(cmp, fnc_ctx)
+        return LLMStream(oai_stream=cmp, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
 
 
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
-        oai_stream: openai.AsyncStream[ChatCompletionChunk],
+        *,
+        oai_stream: Awaitable[openai.AsyncStream[ChatCompletionChunk]],
+        chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
     ) -> None:
-        super().__init__()
-        self._oai_stream = oai_stream
-        self._fnc_ctx = fnc_ctx
-        self._running_tasks: MutableSet[asyncio.Task[Any]] = set()
+        super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        self._awaitable_oai_stream = oai_stream
+        self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
 
-    async def gather_function_results(self) -> list[llm.CalledFunction]:
-        await asyncio.gather(*self._running_tasks, return_exceptions=True)
-        return self._called_functions
-
     async def aclose(self) -> None:
-        await self._oai_stream.close()
+        if self._oai_stream:
+            await self._oai_stream.close()
 
-        for task in self._running_tasks:
-            task.cancel()
-
-        await asyncio.gather(*self._running_tasks, return_exceptions=True)
+        return await super().aclose()
 
     async def __anext__(self):
+        if not self._oai_stream:
+            self._oai_stream = await self._awaitable_oai_stream
+
         async for chunk in self._oai_stream:
             for choice in chunk.choices:
                 chat_chunk = self._parse_choice(choice)
@@ -170,21 +168,18 @@ class LLMStream(llm.LLMStream):
             )
             return None
 
-        task, called_function = llm._oai_api.create_ai_function_task(
+        fnc_info = llm._oai_api.create_ai_function_info(
             self._fnc_ctx, self._tool_call_id, self._fnc_name, self._fnc_raw_arguments
         )
         self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
-
-        self._running_tasks.add(task)
-        task.add_done_callback(self._running_tasks.remove)
-        self._called_functions.append(called_function)
+        self._function_calls_info.append(fnc_info)
 
         return llm.ChatChunk(
             choices=[
                 llm.Choice(
                     delta=llm.ChoiceDelta(
                         role="assistant",
-                        tool_calls=[called_function],
+                        tool_calls=[fnc_info],
                     ),
                     index=choice.index,
                 )

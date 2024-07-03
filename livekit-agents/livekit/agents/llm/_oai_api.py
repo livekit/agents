@@ -29,12 +29,12 @@ __all__ = [
 ]
 
 
-def create_ai_function_task(
+def create_ai_function_info(
     fnc_ctx: function_context.FunctionContext,
     tool_call_id: str,
     fnc_name: str,
     raw_arguments: str,  # JSON string
-) -> tuple[asyncio.Task[Any], function_context.CalledFunction]:
+) -> function_context.FunctionCallInfo:
     if fnc_name not in fnc_ctx.ai_functions:
         raise ValueError(f"AI function {fnc_name} not found")
 
@@ -80,21 +80,11 @@ def create_ai_function_task(
 
         sanitized_arguments[arg_info.name] = sanitized_value
 
-    func = functools.partial(fnc_info.callable, **sanitized_arguments)
-    if asyncio.iscoroutinefunction(fnc_info.callable):
-        task = asyncio.create_task(func())
-    else:
-        task = asyncio.create_task(asyncio.to_thread(func))
-
-    return (
-        task,
-        function_context.CalledFunction(
-            tool_call_id=tool_call_id,
-            raw_arguments=raw_arguments,
-            function_info=fnc_info,
-            arguments=sanitized_arguments,
-            task=task,
-        ),
+    return function_context.FunctionCallInfo(
+        tool_call_id=tool_call_id,
+        raw_arguments=raw_arguments,
+        function_info=fnc_info,
+        arguments=sanitized_arguments,
     )
 
 

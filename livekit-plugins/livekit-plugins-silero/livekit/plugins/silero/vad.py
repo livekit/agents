@@ -43,7 +43,7 @@ class VAD(agents.vad.VAD):
         self,
         *,
         min_speech_duration: float = 0.260,  # 260ms
-        min_silence_duration: float = 0.15,  # 150ms
+        min_silence_duration: float = 0.5,  # 150ms
         padding_duration: float = 0.1,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.35,
@@ -194,6 +194,7 @@ class VADStream(agents.vad.VADStream):
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self):
         pub_speaking = False
+        pub_duration = 0.0
         pub_speech_buf = np.array([], dtype=np.int16)
 
         may_start_at_sample = -1
@@ -214,42 +215,30 @@ class VADStream(agents.vad.VADStream):
             inference_data = window_data.inference_data
             start_time = time.time()
             raw_prob = await asyncio.to_thread(lambda: self._model(inference_data))
-            raw_speaking = raw_prob >= self._opts.activation_threshold
             inference_duration = time.time() - start_time
 
             window_duration = self._opts.window_size_samples / self._opts.sample_rate
             if inference_duration > window_duration:
                 # slower than realtime
                 logger.warning(
-                    "vad inference took too long — slower than realtime: %f",
+                    "vad inference took too long - slower than realtime: %f",
                     inference_duration,
                 )
 
-            self._event_ch.send_nowait(
-                agents.vad.VADEvent(
-                    type=agents.vad.VADEventType.INFERENCE_DONE,
-                    samples_index=current_sample,
-                    probability=raw_prob,
-                    inference_duration=inference_duration,
-                    speaking=raw_speaking,
-                )
-            )
-            current_sample += self._opts.window_size_samples
-
             # append new data to current speech buffer
             pub_speech_buf = np.append(pub_speech_buf, window_data.original_data)
-            cl = self._opts.padding_duration
+            max_data_s = self._opts.padding_duration
             if not pub_speaking:
-                cl += self._opts.min_speech_duration
+                max_data_s += self._opts.min_speech_duration
             else:
-                cl += self._opts.max_buffered_speech
+                max_data_s += self._opts.max_buffered_speech
 
-            cl = int(cl) * self._original_sample_rate
+            cl = int(max_data_s) * self._original_sample_rate
             if len(pub_speech_buf) > cl:
                 pub_speech_buf = pub_speech_buf[-cl:]
 
             # dispatch start/end when needed
-            if raw_speaking:
+            if raw_prob >= self._opts.activation_threshold:
                 may_end_at_sample = -1
 
                 if may_start_at_sample == -1:
@@ -260,12 +249,27 @@ class VADStream(agents.vad.VADStream):
                     self._event_ch.send_nowait(
                         agents.vad.VADEvent(
                             type=agents.vad.VADEventType.START_OF_SPEECH,
+                            duration=0.0,
                             samples_index=current_sample,
                             speaking=True,
                         )
                     )
 
-            else:
+            if pub_speaking:
+                pub_duration += window_duration
+
+            self._event_ch.send_nowait(
+                agents.vad.VADEvent(
+                    type=agents.vad.VADEventType.INFERENCE_DONE,
+                    samples_index=current_sample,
+                    duration=pub_duration,
+                    probability=raw_prob,
+                    inference_duration=inference_duration,
+                    speaking=pub_speaking,
+                )
+            )
+
+            if raw_prob < self._opts.activation_threshold:
                 may_start_at_sample = -1
 
                 if may_end_at_sample == -1:
@@ -285,13 +289,16 @@ class VADStream(agents.vad.VADStream):
                         agents.vad.VADEvent(
                             type=agents.vad.VADEventType.END_OF_SPEECH,
                             samples_index=current_sample,
-                            duration=len(pub_speech_buf) / self._original_sample_rate,
+                            duration=pub_duration,
                             frames=[frame],
                             speaking=False,
                         )
                     )
 
                     pub_speech_buf = np.array([], dtype=np.int16)
+                    pub_duration = 0
+
+            current_sample += self._opts.window_size_samples
 
         self._event_ch.close()
 
