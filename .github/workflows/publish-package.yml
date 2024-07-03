@@ -74,6 +74,27 @@ jobs:
         name: python-package-distributions
         path: dist/
 
+    - uses: pnpm/action-setup@v2
+      with:
+        version: 9
+
+    - name: Use Node.js 20
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: "pnpm"
+
+    - name: Install pnpm dependencies
+      run: pnpm install
+
+    - name: Create Release Pull Request
+      uses: changesets/action@v1
+      with:
+        version: pnpm ci:version ${{ inputs.package_name }} ${{ inputs.package_module }}
+        publish: pnpm ci:publish
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Publish package
       uses: pypa/gh-action-pypi-publish@27b31702a0e7fc50959f5ad993c78deac1bdfc29
       with:

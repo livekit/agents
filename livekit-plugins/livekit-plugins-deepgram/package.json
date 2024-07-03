@@ -1,0 +1,5 @@
+{
+  "name": "@livekit/agents-py-plugin-deepgram",
+  "private": true,
+  "version": "0.5.1"
+}
