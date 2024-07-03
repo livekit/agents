@@ -1,5 +1,5 @@
 {
-  "name": "@livekit/agents-py-plugin-cartesia",
+  "name": "livekit-plugins-cartesia",
   "private": true,
   "version": "0.1.1"
 }

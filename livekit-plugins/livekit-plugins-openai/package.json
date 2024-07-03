@@ -1,5 +1,5 @@
 {
-  "name": "@livekit/agents-py-plugin-openai",
+  "name": "livekit-plugins-openai",
   "private": true,
   "version": "0.6.0"
 }
