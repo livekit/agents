@@ -75,9 +75,6 @@ jobs:
         path: dist/
 
     - uses: pnpm/action-setup@v2
-      with:
-        version: 9
-
     - name: Use Node.js 20
       uses: actions/setup-node@v4
       with:
