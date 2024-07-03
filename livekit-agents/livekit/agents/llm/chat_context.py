@@ -40,7 +40,7 @@ class ChatMessage:
     role: ChatRole
     name: str | None = None
     content: str | list[str | ChatImage] | None = None
-    tool_calls: list[function_context.CalledFunction] | None = None
+    tool_calls: list[function_context.FunctionCallInfo] | None = None
     tool_call_id: str | None = None
 
     @staticmethod
@@ -50,20 +50,21 @@ class ChatMessage:
         if not called_function.task.done():
             raise ValueError("cannot create a tool result from a running ai function")
 
-        content = called_function.task.result()
-        if called_function.task.exception() is not None:
-            content = f"Error: {called_function.task.exception}"
+        try:
+            content = called_function.task.result()
+        except BaseException as e:
+            content = f"Error: {e}"
 
         return ChatMessage(
             role="tool",
-            name=called_function.function_info.name,
+            name=called_function.call_info.function_info.name,
             content=content,
-            tool_call_id=called_function.tool_call_id,
+            tool_call_id=called_function.call_info.tool_call_id,
         )
 
     @staticmethod
     def create_tool_calls(
-        called_functions: list[function_context.CalledFunction],
+        called_functions: list[function_context.FunctionCallInfo],
     ) -> "ChatMessage":
         return ChatMessage(
             role="assistant",
