@@ -71,7 +71,7 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
             self._playout_task(self._playout_atask, handle)
         )
         return handle
-    
+
     @utils.log_exceptions(logger=logger)
     async def _playout_task(
         self,
@@ -108,7 +108,9 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
                         cancelled = True
                         break
 
-                    print("frame.data", frame.data, "volume", self._vol_filter.filtered())
+                    print(
+                        "frame.data", frame.data, "volume", self._vol_filter.filtered()
+                    )
 
                     rem = min(ms20, len(frame.data) - i)
                     data = frame.data[i : i + rem]

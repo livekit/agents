@@ -26,3 +26,7 @@ ChatModels = Literal[
     "gpt-3.5-turbo-1106",
     "gpt-3.5-turbo-16k-0613",
 ]
+
+EmbeddingModels = Literal[
+    "text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large"
+]
