@@ -5,7 +5,7 @@
   "scripts": {
     "changeset": "changeset",
     "ci:publish": "changeset publish",
-    "ci:version": "changeset version && .github/bump_version"
+    "ci:version": "changeset version"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.1",

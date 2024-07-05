@@ -17,6 +17,22 @@ importers:
 
   livekit-agents: {}
 
+  livekit-plugins/livekit-plugins-azure: {}
+
+  livekit-plugins/livekit-plugins-cartesia: {}
+
+  livekit-plugins/livekit-plugins-deepgram: {}
+
+  livekit-plugins/livekit-plugins-elevenlabs: {}
+
+  livekit-plugins/livekit-plugins-google: {}
+
+  livekit-plugins/livekit-plugins-nltk: {}
+
+  livekit-plugins/livekit-plugins-openai: {}
+
+  livekit-plugins/livekit-plugins-silero: {}
+
 packages:
 
   '@babel/runtime@7.24.7':
