@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from livekit.protocol.agent import JobType
+
 from . import (
     aio,
     ipc,
@@ -31,7 +33,6 @@ from .job_request import AutoDisconnect, AutoSubscribe, JobRequest
 from .plugin import Plugin
 from .version import __version__
 from .worker import Worker, WorkerOptions
-from livekit.protocol.agent import JobType
 
 __all__ = [
     "__version__",
