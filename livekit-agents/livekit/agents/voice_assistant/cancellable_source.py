@@ -40,14 +40,14 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
     def __init__(self, *, source: rtc.AudioSource, alpha: float = 0.95) -> None:
         super().__init__()
         self._source = source
-        self._target_volume, self._smoothed_volume = 1.0, 1.0
+        self._target_volume = 1.0
         self._vol_filter = utils.ExpFilter(alpha=alpha)
         self._playout_atask: asyncio.Task[None] | None = None
         self._closed = False
 
     @property
     def target_volume(self) -> float:
-        return self._target_volume
+        return self._vol_filter.filtered()
 
     @target_volume.setter
     def target_volume(self, value: float) -> None:
