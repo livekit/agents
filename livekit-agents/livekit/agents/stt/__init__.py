@@ -1,11 +1,11 @@
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .stt import (
     STT,
-    STTCapabilities,
     SpeechData,
     SpeechEvent,
     SpeechEventType,
     SpeechStream,
+    STTCapabilities,
 )
 
 __all__ = [
