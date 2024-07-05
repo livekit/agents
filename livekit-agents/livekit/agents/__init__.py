@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from livekit.protocol.agent import JobType
+
 from . import (
     aio,
     ipc,
@@ -40,6 +42,7 @@ __all__ = [
     "AutoSubscribe",
     "AutoDisconnect",
     "JobContext",
+    "JobType",
     "Plugin",
     "ipc",
     "stt",
