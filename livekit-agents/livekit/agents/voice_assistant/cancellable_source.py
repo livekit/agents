@@ -53,6 +53,10 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
     def target_volume(self, value: float) -> None:
         self._target_volume = value
 
+    @property
+    def smoothed_volume(self) -> float:
+        return self._smoothed_volume
+
     async def aclose(self) -> None:
         if self._closed:
             return

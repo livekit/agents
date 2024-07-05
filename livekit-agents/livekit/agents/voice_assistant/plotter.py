@@ -75,7 +75,7 @@ def _draw_plot(reader: ipc_enc.ProcessPipeReader):
     fig, (pv, sp) = plt.subplots(2, sharex="all")
     fig.canvas.manager.set_window_title("Voice Assistant")  # type: ignore
 
-    max_points = 750  # 7.5s (we send samples every 10ms)
+    max_points = 750 * 3
 
     def _draw_cb(sp, pv):
         while reader.poll():

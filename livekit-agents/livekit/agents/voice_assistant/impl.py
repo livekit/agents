@@ -74,6 +74,7 @@ class AssistantImpl:
         self._plotter = AssistantPlotter(self._loop)
 
         self._human_input: HumanInput | None = None
+        self._audio_source: CancellableAudioSource | None = None
         self._agent_output: AgentOutput | None = None
         self._ready_future = asyncio.Future()
 
@@ -164,18 +165,21 @@ class AssistantImpl:
 
         def _on_human_vad_updated(ev: vad.VADEvent) -> None:
             tv = max(0, 1 - ev.probability)
-            self._audio_source.target_volume = tv
 
-            self._plotter.plot_value("raw_vol", tv)
+            if self._audio_source is not None:
+                self._audio_source.target_volume = tv
+                smoothed_tv = self._audio_source.smoothed_volume
+                self._plotter.plot_value("raw_vol", tv)
+                self._plotter.plot_value("smoothed_vol", smoothed_tv)
+
             self._plotter.plot_value("vad_probability", ev.probability)
-
             if ev.duration >= self._opts.int_speech_duration:
                 self._interrupt_if_needed()
 
         def _on_human_end_of_speech(ev: vad.VADEvent) -> None:
-            self._validate_answer_if_needed()
-            self._plotter.plot_event("user_started_speaking")
             self._emitter.emit("user_stopped_speaking")
+            self._plotter.plot_event("user_started_speaking")
+            self._validate_answer_if_needed()
 
         def _on_human_interim_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_interim_text = ev.alternatives[0].text
@@ -192,6 +196,9 @@ class AssistantImpl:
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        if self._opts.plotting:
+            self._plotter.start()
+
         audio_source = rtc.AudioSource(self._tts.sample_rate, self._tts.num_channels)
         track = rtc.LocalAudioTrack.create_audio_track("assistant_voice", audio_source)
         self._agent_publication = await self._room.local_participant.publish_track(
@@ -220,20 +227,8 @@ class AssistantImpl:
                     await self._play_speech(speech)
                     self._agent_playing_speech = None
 
-        async def _plotter_co():
-            # plot volume and vad probability
 
-            interval_s = AssistantImpl.UPDATE_INTERVAL_S
-            interval = aio.interval(interval_s)
-            while True:
-                await interval.tick()
-
-        coros = []
-        coros.append(_update_loop_co())
-        if self._opts.plotting:
-            coros.append(_plotter_co())
-
-        await asyncio.gather(*coros)
+        await _update_loop_co()
 
     def _interrupt_if_needed(self) -> None:
         """
