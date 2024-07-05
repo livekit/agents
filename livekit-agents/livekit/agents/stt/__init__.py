@@ -1,6 +1,7 @@
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .stt import (
     STT,
+    STTCapabilities,
     SpeechData,
     SpeechEvent,
     SpeechEventType,
@@ -13,6 +14,7 @@ __all__ = [
     "SpeechData",
     "SpeechStream",
     "STT",
+    "STTCapabilities",
     "StreamAdapter",
     "StreamAdapterWrapper",
 ]
