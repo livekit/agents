@@ -173,7 +173,6 @@ class AssistantImpl:
                 self._interrupt_if_needed()
 
         def _on_human_end_of_speech(ev: vad.VADEvent) -> None:
-            print("END")
             self._validate_answer_if_needed()
             self._plotter.plot_event("user_started_speaking")
             self._emitter.emit("user_stopped_speaking")
@@ -183,9 +182,6 @@ class AssistantImpl:
 
         def _on_human_final_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_text += ev.alternatives[0].text
-
-            print("received final transcript", self._transcribed_text)
-            # logger.debug(f"received final transcript: {self._transcribed_text}")
             self._synthesize_answer(user_transcript=self._transcribed_text)
 
         self._human_input.on("start_of_speech", _on_human_start_of_speech)
@@ -289,8 +285,6 @@ class AssistantImpl:
         self._agent_answer_speech = None
         self._transcribed_text, self._transcribed_interim_text = "", ""
         self._queued_playouts.append(self._agent_playing_synthesis)
-
-        print("validate answer")
 
     def _synthesize_answer(self, *, user_transcript: str):
         """

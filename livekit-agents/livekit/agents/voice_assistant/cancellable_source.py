@@ -108,10 +108,6 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
                         cancelled = True
                         break
 
-                    print(
-                        "frame.data", frame.data, "volume", self._vol_filter.filtered()
-                    )
-
                     rem = min(ms20, len(frame.data) - i)
                     data = frame.data[i : i + rem]
                     i += rem
