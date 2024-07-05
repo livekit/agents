@@ -9,7 +9,7 @@ import time
 
 import pytest
 from livekit import agents, rtc
-from livekit.plugins import azure, deepgram, google, openai, silero
+from livekit.plugins import assemblyai, azure, deepgram, google, openai, silero
 
 from .utils import wer
 
@@ -55,6 +55,7 @@ async def test_recognize(stt: agents.stt.STT):
 
 STREAM_VAD = silero.VAD()
 STREAM_STT = [
+    assemblyai.STT(),
     deepgram.STT(),
     google.STT(),
     agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
@@ -80,6 +81,7 @@ async def test_stream(stt: agents.stt.STT):
             )
         )
 
+    is_assemblyai_stt = isinstance(stt, assemblyai.STT)
     stream = stt.stream()
 
     async def _stream_input():
@@ -107,7 +109,9 @@ async def test_stream(stt: agents.stt.STT):
                 recv_start = True
                 continue
 
-            assert recv_start, "START_OF_SPEECH should be sent before any other event"
+            # Assembly AI only sends one START_OF_SPEECH per connection
+            if not is_assemblyai_stt:
+                assert recv_start, "START_OF_SPEECH should be sent before any other event"
 
             if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
                 text += event.alternatives[0].text
