@@ -45,22 +45,42 @@ class OnnxModel:
         if sample_rate not in SUPPORTED_SAMPLE_RATES:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
 
+        if sample_rate == 8000:
+            self._window_size_samples = 256
+            self._context_size = 32
+        elif sample_rate == 16000:
+            self._window_size_samples = 512
+            self._context_size = 64
+
         self.reset_states()
 
+    @property
+    def window_size_samples(self) -> int:
+        return self._window_size_samples
+
+    @property
+    def context_size(self) -> int:
+        return self._context_size
+
     def reset_states(self) -> None:
-        self._h = np.zeros((2, 1, 64)).astype(np.float32)
-        self._c = np.zeros((2, 1, 64)).astype(np.float32)
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros((1, self._context_size), dtype=np.float32)
 
     def __call__(self, x: np.ndarray) -> float:
         if x.ndim == 1:
             x = np.expand_dims(x, axis=0)
 
+        if x.shape[1] != self._window_size_samples:
+            raise ValueError(
+                f"Input shape must be (N, {self._window_size_samples}), got {x.shape}"
+            )
+
+        x = np.concatenate([self._context, x], axis=1)
         ort_inputs = {
             "input": x,
-            "h": self._h,
-            "c": self._c,
+            "state": self._state,
             "sr": np.array(self._sample_rate, dtype=np.int64),
         }
-        ort_outputs = self._sess.run(None, ort_inputs)
-        out, self._h, self._c = ort_outputs
+        out, self._state = self._sess.run(None, ort_inputs)
+        self._context = x[..., -self._context_size :]
         return out.item()
