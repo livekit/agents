@@ -1,8 +1,9 @@
-from dataclasses import dataclass
-from typing import Any, Iterable, Literal
-import annoy
 import pathlib
 import pickle
+from dataclasses import dataclass
+from typing import Any, Iterable, Literal
+
+import annoy
 
 # https://github.com/spotify/annoy
 

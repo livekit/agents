@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .version import __version__
-from .chunking import SentenceChunker
 from . import annoy
+from .chunking import SentenceChunker
+from .version import __version__
 
 __all__ = [
     "SentenceChunker",

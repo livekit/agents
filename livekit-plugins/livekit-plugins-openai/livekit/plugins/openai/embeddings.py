@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-
+import base64
+import os
+import struct
 from dataclasses import dataclass
-from . import models
 
+import aiohttp
 from livekit.agents import utils
 
-import struct
-import base64
-import aiohttp
-import os
+from . import models
 
 
 @dataclass

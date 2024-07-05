@@ -1,55 +1,52 @@
 import asyncio
-import uuid
-import aiohttp
 import pickle
-from tqdm import tqdm
-from livekit.plugins import rag, openai
-from livekit.agents import tokenize
+import uuid
 
+import aiohttp
+from livekit.agents import tokenize
+from livekit.plugins import openai, rag
+from tqdm import tqdm
+
+# from this blog https://openai.com/index/new-embedding-models-and-api-updates/
+# 512 seems to provide good MTEB score with text-embedding-3-small
+embeddings_dimension = 512
 raw_data = open("raw_data.txt", "r").read()
 
 
+async def _create_embeddings(
+    input: str,
+    http_session: aiohttp.ClientSession,
+) -> openai.EmbeddingData:
+    results = await openai.create_embeddings(
+        input=input,
+        model="text-embedding-3-small",
+        dimensions=embeddings_dimension,
+        http_session=http_session,
+    )
+    return results[0]
+
+
 async def main() -> None:
-    http_session = aiohttp.ClientSession()
-    paragraphs = tokenize.basic.tokenize_paragraphs(raw_data)
+    async with aiohttp.ClientSession() as http_session:
+        idx_builder = rag.annoy.IndexBuilder(f=embeddings_dimension, metric="euclidean")
 
-    sentence_chunker = rag.SentenceChunker()
-    indexed_paragraphs = {}
-    embeddings_n = 0
-    for paragraph in paragraphs:
-        p_uuid = uuid.uuid4()
-        chunks = sentence_chunker.chunk(text=paragraph)
-        indexed_paragraphs[p_uuid] = {
-            "text": paragraph,
-            "chunks": chunks,  # use smaller chunks for searching a paragraph
-        }
-        embeddings_n += len(chunks)
+        # split our raw_data by paragraphs, we know each paragraph is talking about a separate topic.
+        # the data are also small enough so we don't need to chunk them in this example.
+        paragraphs_by_uuid = {}
+        for p in tokenize.basic.tokenize_paragraphs(raw_data):
+            p_uuid = uuid.uuid4()
+            paragraphs_by_uuid[p_uuid] = p
 
-    # from this blog https://openai.com/index/new-embedding-models-and-api-updates/
-    # 512 seems to provide good MTEB score with text-embedding-3-small
-    index_builder = rag.annoy.IndexBuilder(f=512, metric="euclidean")
-    pbar = tqdm(total=embeddings_n)
+        for p_uuid, paragraph in tqdm(paragraphs_by_uuid.items()):
+            resp = await _create_embeddings(paragraph, http_session)
+            idx_builder.add_item(resp.embedding, p_uuid)
 
-    for data_uuid, paragraph_data in indexed_paragraphs.items():
-        for chunk in paragraph_data["chunks"]:
-            results = await openai.create_embeddings(
-                input=chunk,
-                model="text-embedding-3-small",
-                dimensions=512,
-                http_session=http_session,
-            )
+        idx_builder.build()
+        idx_builder.save("vdb_data")
 
-            index_builder.add_item(results[0].embedding, data_uuid)
-            pbar.update()
-
-    index_builder.build()
-    index_builder.save("vdb_data")
-
-    # save data with pickle
-    with open("my_data.pkl", "wb") as f:
-        pickle.dump(indexed_paragraphs, f)
-
-    await http_session.close()
+        # save data with pickle
+        with open("my_data.pkl", "wb") as f:
+            pickle.dump(paragraphs_by_uuid, f)
 
 
 if __name__ == "__main__":

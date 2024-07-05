@@ -5,9 +5,9 @@ from dataclasses import dataclass
 
 from . import (
     _basic_hyphenator,
+    _basic_paragraph,
     _basic_sent,
     _basic_word,
-    _basic_paragraph,
     token_stream,
     tokenizer,
 )
