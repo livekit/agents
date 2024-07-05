@@ -70,6 +70,11 @@ class OnnxModel:
         if x.ndim == 1:
             x = np.expand_dims(x, axis=0)
 
+        if x.shape[1] != self._window_size_samples:
+            raise ValueError(
+                f"Input shape must be (N, {self._window_size_samples}), got {x.shape}"
+            )
+
         x = np.concatenate([self._context, x], axis=1)
         ort_inputs = {
             "input": x,
