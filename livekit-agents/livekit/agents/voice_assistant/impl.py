@@ -35,7 +35,7 @@ class ImplOptions:
     int_speech_duration: float
     int_min_words: int
     preemptive_synthesis: bool
-    will_create_llm_stream: WillCreateLLMStream
+    will_synthesize_assistant_answer: WillCreateLLMStream
     plotting: bool
     debug: bool
 
@@ -173,7 +173,6 @@ class AssistantImpl:
                 self._interrupt_if_needed()
 
         def _on_human_end_of_speech(ev: vad.VADEvent) -> None:
-            print("END")
             self._validate_answer_if_needed()
             self._plotter.plot_event("user_started_speaking")
             self._emitter.emit("user_stopped_speaking")
@@ -183,9 +182,6 @@ class AssistantImpl:
 
         def _on_human_final_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_text += ev.alternatives[0].text
-
-            print("received final transcript", self._transcribed_text)
-            # logger.debug(f"received final transcript: {self._transcribed_text}")
             self._synthesize_answer(user_transcript=self._transcribed_text)
 
         self._human_input.on("start_of_speech", _on_human_start_of_speech)
@@ -193,7 +189,7 @@ class AssistantImpl:
         self._human_input.on("end_of_speech", _on_human_end_of_speech)
         self._human_input.on("interim_transcript", _on_human_interim_transcript)
         self._human_input.on("final_transcript", _on_human_final_transcript)
-    
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         audio_source = rtc.AudioSource(self._tts.sample_rate, self._tts.num_channels)
@@ -290,17 +286,10 @@ class AssistantImpl:
         self._transcribed_text, self._transcribed_interim_text = "", ""
         self._queued_playouts.append(self._agent_playing_synthesis)
 
-        print("validate answer")
-
     def _synthesize_answer(self, *, user_transcript: str):
         """
         Synthesize the answer to the user question and make sure only one answer is synthesized at a time
         """
-        copied_ctx = self._chat_ctx.copy()
-        copied_ctx.messages.append(
-            llm.ChatMessage.create(text=user_transcript, role="user")
-        )
-
         if self._agent_answer_speech is not None:
             self._agent_answer_speech.synthesis_handle.interrupt()
 
@@ -319,7 +308,11 @@ class AssistantImpl:
                     old_task.cancel()
                     await old_task
 
-            llm_stream = self._opts.will_create_llm_stream(self, copied_ctx)
+            user_msg = llm.ChatMessage.create(text=user_transcript, role="user")
+            copied_ctx = self._chat_ctx.copy()
+            copied_ctx.messages.append(user_msg)
+
+            llm_stream = self._opts.will_synthesize_assistant_answer(self, copied_ctx)
             if asyncio.iscoroutine(llm_stream):
                 llm_stream = await llm_stream
 
@@ -359,9 +352,7 @@ class AssistantImpl:
         # Wait for the playout of the speech to finish (interrupted or done)
         # When the LLM is calling a tool, it doesn't generate any "speech"/"text" to play
         # so awaiting the play_handle will end immediately.
-        print("play_handle", play_handle)
         await play_handle
-        print("end", play_handle)
 
         collected_text = speech_info.synthesis_handle.collected_text
         interrupted = speech_info.synthesis_handle.interrupted

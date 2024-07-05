@@ -14,8 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import functools
 import inspect
 import json
 import typing
@@ -24,7 +22,6 @@ from typing import Any
 from . import function_context
 
 __all__ = [
-    "create_ai_function_task",
     "build_oai_function_description",
 ]
 

@@ -12,30 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .embeddings import EmbeddingData, create_embeddings
-from .llm import LLM, LLMStream
-from .models import TTSModels, TTSVoices, WhisperModels
-from .stt import STT
-from .tts import TTS
+from . import annoy
+from .chunking import SentenceChunker
 from .version import __version__
 
 __all__ = [
-    "STT",
-    "TTS",
-    "LLM",
-    "LLMStream",
-    "WhisperModels",
-    "TTSModels",
-    "TTSVoices",
-    "create_embeddings",
-    "EmbeddingData",
+    "SentenceChunker",
+    "annoy",
     "__version__",
 ]
 
 from livekit.agents import Plugin
 
 
-class OpenAIPlugin(Plugin):
+class RAGPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__)
 
@@ -43,4 +33,4 @@ class OpenAIPlugin(Plugin):
         pass
 
 
-Plugin.register_plugin(OpenAIPlugin())
+Plugin.register_plugin(RAGPlugin())
