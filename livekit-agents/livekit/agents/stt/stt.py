@@ -21,10 +21,7 @@ class SpeechEventType(Enum):
     """inal transcript, emitted when the STT is confident enough that a certain
     portion of speech will not change"""
     END_OF_SPEECH = "end_of_speech"
-    """indicate the end of speech, emitted when the user stops speaking
-    the first alternative is a combination of all the previous FINAL_TRANSCRIPT events"""
-    END_OF_UTTERANCE = "end_of_utterance"
-    """indicate the end of an utterance"""
+    """indicate the end of speech, emitted when the user stops speaking"""
 
 
 @dataclass
@@ -46,7 +43,6 @@ class SpeechEvent:
 class STTCapabilities:
     streaming_supported: bool
     interim_results: bool
-    end_of_utterance: bool
 
 
 class STT(ABC):

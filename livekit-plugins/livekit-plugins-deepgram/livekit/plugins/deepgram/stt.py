@@ -44,7 +44,6 @@ class STTOptions:
     smart_format: bool
     no_delay: bool
     endpointing_ms: int
-    utterance_end_ms: int
     filler_words: bool
     sample_rate: int
     num_channels: int
@@ -62,7 +61,6 @@ class STT(stt.STT):
         smart_format: bool = True,
         no_delay: bool = False,
         endpointing_ms: int = 50,
-        utterance_end_ms: int = 1000,
         filler_words: bool = False,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -71,7 +69,6 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming_supported=True,
                 interim_results=interim_results,
-                end_of_utterance=True,
             )
         )
 
@@ -90,7 +87,6 @@ class STT(stt.STT):
             smart_format=smart_format,
             no_delay=no_delay,
             endpointing_ms=endpointing_ms,
-            utterance_end_ms=utterance_end_ms,
             filler_words=filler_words,
             sample_rate=48000,
             num_channels=1,
@@ -244,7 +240,6 @@ class SpeechStream(stt.SpeechStream):
                     "sample_rate": self._opts.sample_rate,
                     "channels": self._opts.num_channels,
                     "endpointing": self._opts.endpointing_ms,
-                    "utterance_end_ms": self._opts.utterance_end_ms,
                     "filler_words": self._opts.filler_words,
                 }
 
@@ -307,7 +302,7 @@ class SpeechStream(stt.SpeechStream):
                     # TODO(theomonnom): The remix_and_resample method is low quality
                     # and should be replaced with a continuous resampling
                     frame = data.remix_and_resample(
-                        self._sample_rate, self._num_channels
+                        self._opts.sample_rate, self._opts.num_channels
                     )
 
                     await ws.send_bytes(frame.data.tobytes())
@@ -356,10 +351,6 @@ class SpeechStream(stt.SpeechStream):
             self._speaking = True
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
             self._event_queue.put_nowait(start_event)
-
-        elif data["type"] == "UtteranceEnd":
-            utterance_end = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_UTTERANCE)
-            self._event_queue.put_nowait(utterance_end)
 
         # see this page:
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
