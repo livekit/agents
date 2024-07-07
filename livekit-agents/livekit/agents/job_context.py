@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from livekit import rtc
 from livekit.protocol import agent
 
-from . import aio
+from . import utils
 
 
 @dataclass
@@ -33,7 +33,7 @@ class JobContext:
 
     def __init__(
         self,
-        close_tx: aio.ChanSender[_ShutdownInfo],
+        close_tx: utils.aio.ChanSender[_ShutdownInfo],
         job: agent.Job,
         room: rtc.Room,
         publisher: rtc.RemoteParticipant | None = None,

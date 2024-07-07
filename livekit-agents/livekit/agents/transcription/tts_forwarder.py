@@ -9,7 +9,7 @@ from typing import Callable, Deque, Optional
 
 from livekit import rtc
 
-from .. import aio, tokenize, utils
+from .. import tokenize, utils
 from ..log import logger
 from . import _utils
 
@@ -124,7 +124,7 @@ class TTSSegmentsForwarder:
         self._seg_queue = asyncio.Queue[Optional[_SegmentData]]()
         self._seg_queue.put_nowait(first_segment)
         self._main_atask = self._loop.create_task(self._main_task())
-        self._task_set = aio.TaskSet(loop)
+        self._task_set = utils.aio.TaskSet(loop)
 
     def segment_playout_started(self) -> None:
         """

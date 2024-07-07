@@ -1,6 +1,6 @@
 import asyncio
 
-from livekit.agents import aio
+from livekit.agents.aio import aio
 
 
 async def test_channel():

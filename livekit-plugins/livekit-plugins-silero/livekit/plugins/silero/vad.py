@@ -21,7 +21,7 @@ from typing import AsyncIterator, Optional
 
 import numpy as np
 from livekit import agents, rtc
-from livekit.agents import aio
+from livekit.agents import utils
 
 from . import onnx_model
 from .log import logger
@@ -109,7 +109,7 @@ class VADStream(agents.vad.VADStream):
         self._remaining_samples = model.window_size_samples
 
         self._input_q = asyncio.Queue[Optional[_WindowData]]()
-        self._event_ch = aio.Chan[agents.vad.VADEvent]()
+        self._event_ch = utils.aio.Chan[agents.vad.VADEvent]()
         self._closed = False
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
