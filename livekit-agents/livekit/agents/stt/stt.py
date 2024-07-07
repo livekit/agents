@@ -41,7 +41,7 @@ class SpeechEvent:
 
 @dataclass
 class STTCapabilities:
-    streaming_supported: bool
+    streaming: bool
     interim_results: bool
 
 
