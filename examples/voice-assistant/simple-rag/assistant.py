@@ -4,11 +4,11 @@ import pickle
 
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import cartesia, deepgram, openai, rag, silero
+from livekit.plugins import deepgram, openai, rag, silero, cartesia
 
 annoy_index = rag.annoy.AnnoyIndex.load("vdb_data")  # see build_data.py
 
-embeddings_dimension = 512
+embeddings_dimension = 1536
 with open("my_data.pkl", "rb") as f:
     paragraphs_by_uuid = pickle.load(f)
 
@@ -26,18 +26,32 @@ async def entrypoint(ctx: JobContext):
             dimensions=embeddings_dimension,
         )
 
-        uuid = annoy_index.query(user_embedding[0].embedding, n=1)[0]
-        paragraph = paragraphs_by_uuid[uuid]
+        result = annoy_index.query(user_embedding[0].embedding, n=1)[0]
 
-        user_msg.content = paragraph + "\n\n" + user_msg.content
+        print(result.distance)
+        paragraph = paragraphs_by_uuid[result.userdata]
+        user_msg.content = (
+            "Context:\n" + paragraph + "\n\nUser question: " + user_msg.content
+        )
+        print(user_msg)
         return assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
 
+    initial_ctx = llm.ChatContext().append(
+        role="system",
+        text=(
+            "You are a voice assistant created by LiveKit. Your interface with users will be voice. "
+            "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
+        ),
+    )
+
     assistant = VoiceAssistant(
+        chat_ctx=initial_ctx,
         vad=silero.VAD(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=cartesia.TTS(),
         will_synthesize_assistant_reply=_will_synthesize_assistant_answer,
+        plotting=True,
     )
     assistant.start(ctx.room)
 

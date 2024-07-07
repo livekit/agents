@@ -47,7 +47,7 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
 
     @property
     def target_volume(self) -> float:
-        return self._vol_filter.filtered()
+        return self._target_volume
 
     @target_volume.setter
     def target_volume(self, value: float) -> None:
@@ -55,7 +55,7 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
 
     @property
     def smoothed_volume(self) -> float:
-        return self._smoothed_volume
+        return self._vol_filter.filtered()
 
     async def aclose(self) -> None:
         if self._closed:

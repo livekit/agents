@@ -29,6 +29,12 @@ class _FileData:
     userdata: dict[int, Any]
 
 
+@dataclass
+class QueryResult:
+    userdata: Any
+    distance: float
+
+
 class AnnoyIndex:
     def __init__(self, index: annoy.AnnoyIndex, filedata: _FileData) -> None:
         self._index = index
@@ -62,11 +68,14 @@ class AnnoyIndex:
 
     def query(
         self, vector: list[float], n: int, search_k: int = -1
-    ) -> list[tuple[Any, float]]:
+    ) -> list[QueryResult]:
         ids = self._index.get_nns_by_vector(
             vector, n, search_k=search_k, include_distances=True
         )
-        return [(self._filedata.userdata[i], distance) for i, distance in zip(*ids)]
+        return [
+            QueryResult(userdata=self._filedata.userdata[i], distance=distance)
+            for i, distance in zip(*ids)
+        ]
 
 
 class IndexBuilder:
