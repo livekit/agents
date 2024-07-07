@@ -1,6 +1,7 @@
 import contextvars
-from .. import llm
 from typing import Any
+
+from .. import llm
 
 _ContextVar = contextvars.ContextVar("voice_assistant_contextvar")
 

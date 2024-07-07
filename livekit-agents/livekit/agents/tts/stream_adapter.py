@@ -5,7 +5,7 @@ import contextlib
 from dataclasses import dataclass
 from typing import Optional, Union
 
-from .. import utils, tokenize
+from .. import tokenize, utils
 from ..log import logger
 from .tts import (
     TTS,

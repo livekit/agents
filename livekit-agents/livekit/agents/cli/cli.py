@@ -11,8 +11,8 @@ from .. import utils
 from ..log import logger
 from ..plugin import Plugin
 from ..worker import Worker, WorkerOptions
-from .log import setup_logging
 from . import protocol
+from .log import setup_logging
 
 
 def shared_args(func):

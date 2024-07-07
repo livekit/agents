@@ -9,7 +9,7 @@ import threading
 
 from livekit.protocol import agent
 
-from .. import utils, apipe
+from .. import apipe, utils
 from ..job_request import AcceptData
 from ..log import logger
 from ..utils import time_ms

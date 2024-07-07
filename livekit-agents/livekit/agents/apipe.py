@@ -2,7 +2,7 @@ import asyncio
 import queue
 import threading
 
-from . import utils, ipc_enc
+from . import ipc_enc, utils
 
 
 # TODO(theomonnom): More efficient implementation without additional threads
