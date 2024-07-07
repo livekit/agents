@@ -15,7 +15,6 @@
 from livekit.protocol.agent import JobType
 
 from . import (
-    aio,
     ipc,
     llm,
     stt,
@@ -49,7 +48,6 @@ __all__ = [
     "vad",
     "utils",
     "tts",
-    "aio",
     "tokenize",
     "llm",
     "voice_assistant",

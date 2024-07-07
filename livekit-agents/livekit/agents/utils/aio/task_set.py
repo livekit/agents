@@ -27,5 +27,5 @@ class TaskSet:
 
     async def aclose(self) -> None:
         self._closed = True
-        await asyncio.gather(*self._set)
+        await asyncio.gather(*self._set, return_exceptions=True)
         self._set.clear()

@@ -75,7 +75,7 @@ def _draw_plot(reader: ipc_enc.ProcessPipeReader):
     fig, (pv, sp) = plt.subplots(2, sharex="all")
     fig.canvas.manager.set_window_title("Voice Assistant")  # type: ignore
 
-    max_points = 750 * 3
+    max_points = 250
 
     def _draw_cb(sp, pv):
         while reader.poll():
@@ -98,7 +98,7 @@ def _draw_plot(reader: ipc_enc.ProcessPipeReader):
 
         vad_raw = plot_data.setdefault("vad_probability", ([], []))
         raw_vol = plot_data.get("raw_vol", ([], []))
-        vol = plot_data.get("vol", ([], []))
+        vol = plot_data.get("smoothed_vol", ([], []))
 
         pv.clear()
         pv.set_ylim(0, 1)

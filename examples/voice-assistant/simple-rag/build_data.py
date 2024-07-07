@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 # from this blog https://openai.com/index/new-embedding-models-and-api-updates/
 # 512 seems to provide good MTEB score with text-embedding-3-small
-embeddings_dimension = 512
+embeddings_dimension = 1536
 raw_data = open("raw_data.txt", "r").read()
 
 
@@ -28,7 +28,7 @@ async def _create_embeddings(
 
 async def main() -> None:
     async with aiohttp.ClientSession() as http_session:
-        idx_builder = rag.annoy.IndexBuilder(f=embeddings_dimension, metric="euclidean")
+        idx_builder = rag.annoy.IndexBuilder(f=embeddings_dimension, metric="angular")
 
         # split our raw_data by paragraphs, we know each paragraph is talking about a separate topic.
         # the data are also small enough so we don't need to chunk them in this example.

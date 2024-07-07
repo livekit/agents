@@ -67,7 +67,7 @@ class STT(stt.STT):
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming_supported=True,
+                streaming=True,
                 interim_results=interim_results,
             )
         )

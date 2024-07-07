@@ -41,11 +41,11 @@ class VAD(agents.vad.VAD):
     def __init__(
         self,
         *,
-        min_speech_duration: float = 0.26,  # 260ms
-        min_silence_duration: float = 0.15,  # 150ms
+        min_speech_duration: float = 0.15,
+        min_silence_duration: float = 0.15,
         padding_duration: float = 0.1,
         max_buffered_speech: float = 60.0,
-        activation_threshold: float = 0.35,
+        activation_threshold: float = 0.25,
         sample_rate: int = 16000,
         force_cpu: bool = True,
     ) -> None:
@@ -184,7 +184,8 @@ class VADStream(agents.vad.VADStream):
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self):
         pub_speaking = False
-        pub_duration = 0.0
+        pub_speech_duration = 0.0
+        pub_silence_duration = 0.0
         pub_speech_buf = np.array([], dtype=np.int16)
 
         may_start_at_sample = -1
@@ -239,20 +240,26 @@ class VADStream(agents.vad.VADStream):
                     self._event_ch.send_nowait(
                         agents.vad.VADEvent(
                             type=agents.vad.VADEventType.START_OF_SPEECH,
-                            duration=0.0,
+                            silence_duration=pub_silence_duration,
+                            speech_duration=0.0,
                             samples_index=current_sample,
                             speaking=True,
                         )
                     )
 
+                    pub_silence_duration = 0
+
             if pub_speaking:
-                pub_duration += window_duration
+                pub_speech_duration += window_duration
+            else:
+                pub_silence_duration = 0
 
             self._event_ch.send_nowait(
                 agents.vad.VADEvent(
                     type=agents.vad.VADEventType.INFERENCE_DONE,
                     samples_index=current_sample,
-                    duration=pub_duration,
+                    silence_duration=0.0,
+                    speech_duration=pub_speech_duration,
                     probability=raw_prob,
                     inference_duration=inference_duration,
                     speaking=pub_speaking,
@@ -279,14 +286,15 @@ class VADStream(agents.vad.VADStream):
                         agents.vad.VADEvent(
                             type=agents.vad.VADEventType.END_OF_SPEECH,
                             samples_index=current_sample,
-                            duration=pub_duration,
+                            silence_duration=0.0,
+                            speech_duration=pub_speech_duration,
                             frames=[frame],
                             speaking=False,
                         )
                     )
 
                     pub_speech_buf = np.array([], dtype=np.int16)
-                    pub_duration = 0
+                    pub_speech_duration = 0
 
             current_sample += self._model.window_size_samples
 

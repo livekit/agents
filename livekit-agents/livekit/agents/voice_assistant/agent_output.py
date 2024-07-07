@@ -80,6 +80,10 @@ class AgentOutput:
         self._room, self._source, self._llm, self._tts = room, source, llm, tts
         self._tasks = set()
 
+    @property
+    def audio_source(self) -> CancellableAudioSource:
+        return self._source
+
     async def aclose(self) -> None:
         for task in self._tasks:
             task.cancel()
