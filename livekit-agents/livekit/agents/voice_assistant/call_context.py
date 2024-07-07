@@ -1,8 +1,13 @@
+import contextvars
+from typing import Any
+
+from .. import llm
+
 _ContextVar = contextvars.ContextVar("voice_assistant_contextvar")
 
 
 class AssistantCallContext:
-    def __init__(self, assistant: "VoiceAssistant", llm_stream: allm.LLMStream) -> None:
+    def __init__(self, assistant: "VoiceAssistant", llm_stream: llm.LLMStream) -> None:
         self._assistant = assistant
         self._metadata = dict()
         self._llm_stream = llm_stream
@@ -21,5 +26,5 @@ class AssistantCallContext:
     def get_metadata(self, key: str, default: Any = None) -> Any:
         return self._metadata.get(key, default)
 
-    def llm_stream(self) -> allm.LLMStream:
+    def llm_stream(self) -> llm.LLMStream:
         return self._llm_stream

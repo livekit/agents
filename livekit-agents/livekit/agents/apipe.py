@@ -2,7 +2,7 @@ import asyncio
 import queue
 import threading
 
-from . import aio, ipc_enc
+from . import ipc_enc, utils
 
 
 # TODO(theomonnom): More efficient implementation without additional threads
@@ -19,7 +19,7 @@ class AsyncPipe:
         self._p = pipe
         self._messages = messages
 
-        self._read_ch = aio.Chan[ipc_enc.Message](32, loop=self._loop)
+        self._read_ch = utils.aio.Chan[ipc_enc.Message](32, loop=self._loop)
         self._write_q = queue.Queue[ipc_enc.Message](32)
 
         self._exit_ev = threading.Event()

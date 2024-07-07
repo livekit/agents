@@ -19,8 +19,10 @@ class VADEvent:
     """type of the event"""
     samples_index: int
     """index of the samples when the event was fired"""
-    duration: float
+    speech_duration: float
     """duration of the speech in seconds"""
+    silence_duration: float
+    """duration of the silence in seconds"""
     frames: List[rtc.AudioFrame] = field(default_factory=list)
     """list of audio frames of the speech"""
     probability: float = 0.0
@@ -31,14 +33,18 @@ class VADEvent:
     """whether speech was detected in the frames"""
 
 
+@dataclass
+class VADCapabilities:
+    update_interval: float
+
+
 class VAD(ABC):
-    def __init__(self, *, update_interval: float) -> None:
-        self._update_interval = update_interval
+    def __init__(self, *, capatiilities: VADCapabilities) -> None:
+        self._capabilities = capatiilities
 
     @property
-    def update_interval(self) -> float:
-        """interval in seconds to update the VAD model"""
-        return self._update_interval
+    def capabilities(self) -> VADCapabilities:
+        return self._capabilities
 
     @abstractmethod
     def stream(

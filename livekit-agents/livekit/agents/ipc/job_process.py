@@ -9,7 +9,7 @@ import threading
 
 from livekit.protocol import agent
 
-from .. import aio, apipe
+from .. import apipe, utils
 from ..job_request import AcceptData
 from ..log import logger
 from ..utils import time_ms
@@ -44,13 +44,15 @@ class JobProcess:
         self._process.start()
 
         start_timeout = asyncio.sleep(consts.START_TIMEOUT)
-        ping_interval = aio.interval(consts.PING_INTERVAL)
-        pong_timeout = aio.sleep(consts.PING_TIMEOUT)
+        ping_interval = utils.aio.interval(consts.PING_INTERVAL)
+        pong_timeout = utils.aio.sleep(consts.PING_TIMEOUT)
 
         start_res: protocol.StartJobResponse | None = None
 
         await self._pipe.write(protocol.StartJobRequest(job=self._job))
-        select = aio.select([self._pipe, start_timeout, ping_interval, pong_timeout])
+        select = utils.aio.select(
+            [self._pipe, start_timeout, ping_interval, pong_timeout]
+        )
         try:
             while True:
                 s = await select()
@@ -77,7 +79,7 @@ class JobProcess:
 
                 try:
                     res = s.result()
-                except aio.ChanClosed:
+                except utils.aio.ChanClosed:
                     logger.error(
                         "pipe closed, exiting job",
                         extra=self.logging_extra(),
@@ -98,7 +100,7 @@ class JobProcess:
                             extra={"delay": delay, **self.logging_extra()},
                         )
 
-                    with contextlib.suppress(aio.SleepFinished):
+                    with contextlib.suppress(utils.aio.SleepFinished):
                         pong_timeout.reset()
 
                 if isinstance(res, protocol.UserExit) or isinstance(

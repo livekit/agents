@@ -5,7 +5,7 @@ import contextlib
 from dataclasses import dataclass
 from typing import Optional, Union
 
-from .. import aio, tokenize
+from .. import tokenize, utils
 from ..log import logger
 from .tts import (
     TTS,
@@ -48,7 +48,7 @@ class StreamAdapter(TTS):
 @dataclass
 class _SynthTask:
     sentence: str
-    audio_rx: aio.ChanReceiver[SynthesizedAudio]
+    audio_rx: utils.aio.ChanReceiver[SynthesizedAudio]
 
 
 class _SegmentStart: ...
@@ -117,7 +117,7 @@ class StreamAdapterWrapper(SynthesizeStream):
                 )
 
     async def _synthesize(
-        self, sentence: str, audio_tx: aio.ChanSender[SynthesizedAudio]
+        self, sentence: str, audio_tx: utils.aio.ChanSender[SynthesizedAudio]
     ) -> None:
         async with self._sem:
             stream = self._tts.synthesize(text=sentence)
@@ -135,7 +135,7 @@ class StreamAdapterWrapper(SynthesizeStream):
                 self._sync_q.put_nowait(_SegmentStart())
 
             elif ev.type == tokenize.TokenEventType.TOKEN:
-                audio_rx = audio_tx = aio.Chan[SynthesizedAudio]()
+                audio_rx = audio_tx = utils.aio.Chan[SynthesizedAudio]()
                 task = asyncio.create_task(self._synthesize(ev.token, audio_tx))
                 self._synth_tasks.add(task)
                 task.add_done_callback(self._synth_tasks.discard)

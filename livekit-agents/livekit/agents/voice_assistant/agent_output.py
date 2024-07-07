@@ -6,8 +6,7 @@ from typing import AsyncIterable, Union
 
 from livekit import rtc
 
-from .. import aio, transcription, utils
-from .. import llm as llm
+from .. import llm, transcription, utils
 from .. import tts as text_to_speech
 from .cancellable_source import CancellableAudioSource, PlayoutHandle
 from .log import logger
@@ -30,7 +29,7 @@ class SynthesisHandle:
             tts,
             transcription_fwd,
         )
-        self._buf_ch = aio.Chan[rtc.AudioFrame]()
+        self._buf_ch = utils.aio.Chan[rtc.AudioFrame]()
         self._play_handle: PlayoutHandle | None = None
         self._interrupt_fut = asyncio.Future()
         self._collected_text = ""  # collected text from the async stream
