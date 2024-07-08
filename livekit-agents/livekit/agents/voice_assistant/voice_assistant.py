@@ -455,7 +455,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         await play_handle
 
         collected_text = speech_info.synthesis_handle.collected_text
-        interrupted = speech_info.synthesis_handle.interrupted
+        interrupted: bool = speech_info.synthesis_handle.interrupted
         if (
             isinstance(speech_info.source, llm.LLMStream)
             and len(speech_info.source.function_calls) > 0

@@ -4,7 +4,7 @@ from typing import Any
 from .. import llm
 from .voice_assistant import VoiceAssistant
 
-_ContextVar: "AssistantCallContext" = contextvars.ContextVar(
+_ContextVar = contextvars.ContextVar["AssistantCallContext"](
     "voice_assistant_contextvar"
 )
 
