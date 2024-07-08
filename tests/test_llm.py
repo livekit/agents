@@ -101,7 +101,7 @@ async def test_chat():
         text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.',
     )
 
-    stream = await llm.chat(chat_ctx=chat_ctx)
+    stream = llm.chat(chat_ctx=chat_ctx)
     text = ""
     async for chunk in stream:
         content = chunk.choices[0].delta.content
@@ -199,7 +199,7 @@ async def test_calls_choices():
 async def _request_fnc_call(
     model: llm.LLM, request: str, fnc_ctx: FncCtx
 ) -> llm.LLMStream:
-    stream = await model.chat(
+    stream = model.chat(
         chat_ctx=ChatContext().append(text=request, role="user"),
         fnc_ctx=fnc_ctx,
     )
