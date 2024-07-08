@@ -4,7 +4,7 @@ import pickle
 
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import deepgram, openai, rag, silero, cartesia
+from livekit.plugins import cartesia, deepgram, openai, rag, silero
 
 annoy_index = rag.annoy.AnnoyIndex.load("vdb_data")  # see build_data.py
 
