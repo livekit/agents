@@ -32,7 +32,7 @@ class _SpeechInfo:
 
 WillSynthesizeAssistantReply = Callable[
     ["VoiceAssistant", ChatContext],
-    Optional[LLMStream] | Awaitable[Optional[LLMStream]],
+    Union[Optional[LLMStream], Awaitable[Optional[LLMStream]]],
 ]
 
 EventTypes = Literal[
