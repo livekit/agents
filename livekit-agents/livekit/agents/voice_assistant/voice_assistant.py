@@ -531,7 +531,14 @@ class _DeferredAnswerValidation:
         return self._validating_task is not None and not self._validating_task.done()
 
     def on_new_synthesis(self, user_msg: llm.ChatMessage) -> None:
-        self._last_final_transcript = user_msg.content
+        str_content: str = ""
+        if isinstance(user_msg.content, str):
+            str_content = user_msg.content
+        elif isinstance(user_msg.content, list):
+            str_items = [item for item in user_msg.content if isinstance(item, str)]
+            str_content = " ".join(str_items)
+
+        self._last_final_transcript = str_content
 
         if self.validating:
             self._run(self.DEFER_DELAY)  # debounce
