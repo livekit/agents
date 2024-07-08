@@ -60,7 +60,7 @@ jobs:
     - bump
     strategy:
       matrix:
-        package: ${{ needs.bump.outputs.packages }}
+        package: ${{ fromJson(needs.bump.outputs.packages) }}
     defaults:
       run:
         working-directory: ${{ package.name }}
