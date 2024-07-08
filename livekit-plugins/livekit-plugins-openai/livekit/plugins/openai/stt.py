@@ -49,7 +49,9 @@ class STT(stt.STT):
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ):
-        super().__init__(streaming_supported=False)
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=False, interim_results=False)
+        )
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY must be set")
