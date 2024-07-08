@@ -25,7 +25,7 @@ from livekit import rtc
 from livekit.agents import tts, utils
 
 from .log import logger
-from .models import TTSDefaultVoiceEmbedding, TTSEncoding, TTSModels
+from .models import TTSDefaultVoiceId, TTSEncoding, TTSModels
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
@@ -39,15 +39,17 @@ class _TTSOptions:
     sample_rate: int
     voice: str | list[float]
     api_key: str
+    language: str
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels = "upbeat-moon",
+        model: TTSModels = "sonic-english",
+        language: str = "en",
         encoding: TTSEncoding = "pcm_s16le",
-        voice: str | list[float] = TTSDefaultVoiceEmbedding,
+        voice: str | list[float] = TTSDefaultVoiceId,
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -64,6 +66,7 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(
             model=model,
+            language=language,
             encoding=encoding,
             sample_rate=sample_rate,
             voice=voice,
@@ -120,6 +123,7 @@ class ChunkedStream(tts.ChunkedStream):
                         "encoding": self._opts.encoding,
                         "sample_rate": self._opts.sample_rate,
                     },
+                    "language": self._opts.language,
                 },
             ) as resp:
                 bytes_per_frame = (self._opts.sample_rate // 100) * 2
