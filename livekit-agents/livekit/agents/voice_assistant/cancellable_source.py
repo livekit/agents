@@ -16,7 +16,7 @@ class PlayoutHandle:
     def __init__(self, playout_source: AsyncIterable[rtc.AudioFrame]) -> None:
         self._playout_source = playout_source
         self._interrupted = False
-        self._done_fut = asyncio.Future()
+        self._done_fut = asyncio.Future[None]()
 
     @property
     def interrupted(self) -> bool:

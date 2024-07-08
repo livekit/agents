@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import AsyncIterable, Union
+from typing import Any, AsyncIterable, Union
 
 from livekit import rtc
 
@@ -31,7 +31,7 @@ class SynthesisHandle:
         )
         self._buf_ch = utils.aio.Chan[rtc.AudioFrame]()
         self._play_handle: PlayoutHandle | None = None
-        self._interrupt_fut = asyncio.Future()
+        self._interrupt_fut = asyncio.Future[None]()
         self._collected_text = ""  # collected text from the async stream
 
     @property
@@ -78,7 +78,7 @@ class AgentOutput:
         tts: text_to_speech.TTS,
     ) -> None:
         self._room, self._source, self._llm, self._tts = room, source, llm, tts
-        self._tasks = set()
+        self._tasks = set[asyncio.Task[Any]]()
 
     @property
     def audio_source(self) -> CancellableAudioSource:

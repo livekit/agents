@@ -119,7 +119,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._human_input: HumanInput | None = None
         self._agent_output: AgentOutput | None = None
-        self._track_published_fut = asyncio.Future()
+        self._track_published_fut = asyncio.Future[None]()
 
         self._agent_answer_speech: _SpeechInfo | None = None
         self._agent_playing_speech: _SpeechInfo | None = None
@@ -471,21 +471,18 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             self.emit("function_calls_finished", called_fncs)
 
-            tool_calls = []
-            tool_calls_results = []
+            tool_calls_results: list[llm.ChatMessage] = []
 
             for called_fnc in called_fncs:
                 # ignore the function calls that returns None
                 if called_fnc.result is None:
                     continue
 
-                tool_calls.append(called_fnc.call_info)
                 tool_calls_results.append(
                     llm.ChatMessage.create_tool_from_called_function(called_fnc)
                 )
 
             chat_ctx = speech_info.source.chat_ctx.copy()
-            chat_ctx.messages.extend(tool_calls)
             chat_ctx.messages.extend(tool_calls_results)
 
             answer_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self._fnc_ctx)
