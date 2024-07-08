@@ -56,7 +56,7 @@ class SynthesisHandle:
             raise RuntimeError("synthesis was interrupted")
 
         self._play_handle = self._audio_source.play(
-            self._buf_ch,
+            self._buf_ch, transcription_fwd=self._tr_fwd
         )
         return self._play_handle
 

@@ -75,8 +75,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         chat_ctx: llm.ChatContext = llm.ChatContext(),
         fnc_ctx: llm.FunctionContext | None = None,
         allow_interruptions: bool = True,
-        interrupt_speech_duration: float = 0.65,
-        interrupt_min_words: int = 2,
+        interrupt_speech_duration: float = 0.6,
+        interrupt_min_words: int = 0,
         preemptive_synthesis: bool = True,
         transcription: bool = True,
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply = _default_will_synthesize_assistant_reply,
@@ -327,6 +327,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             tts=self._tts,
         )
 
+        def _on_playout_started() -> None:
+            self._plotter.plot_event("agent_started_speaking")
+            self.emit("agent_started_speaking")
+
+        def _on_playout_stopped(cancelled: bool) -> None:
+            self._plotter.plot_event("agent_stopped_speaking")
+            self.emit("agent_stopped_speaking")
+
+        cancellable_audio_source.on("playout_started", _on_playout_started)
+        cancellable_audio_source.on("playout_stopped", _on_playout_stopped)
+
         self._track_published_fut.set_result(None)
 
         # play validated speeches
@@ -369,16 +380,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if self._opts.int_min_words != 0:
             # check the final/interim transcribed text for the minimum word count
             # to interrupt the agent speech
-            final_words = self._opts.word_tokenizer.tokenize(
-                text=self._transcribed_text
-            )
             interim_words = self._opts.word_tokenizer.tokenize(
                 text=self._transcribed_interim_text
             )
-            if (
-                len(final_words) <= self._opts.int_min_words
-                and len(interim_words) <= self._opts.int_min_words
-            ):
+            if len(interim_words) < self._opts.int_min_words:
                 return
 
         self._agent_playing_speech.synthesis_handle.interrupt()

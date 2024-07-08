@@ -42,7 +42,7 @@ class VAD(agents.vad.VAD):
         self,
         *,
         min_speech_duration: float = 0.15,
-        min_silence_duration: float = 0.15,
+        min_silence_duration: float = 0.2,
         padding_duration: float = 0.1,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.25,
@@ -248,6 +248,7 @@ class VADStream(agents.vad.VADStream):
                     )
 
                     pub_silence_duration = 0
+                    pub_speech_duration += self._opts.min_speech_duration
 
             if pub_speaking:
                 pub_speech_duration += window_duration
@@ -295,6 +296,7 @@ class VADStream(agents.vad.VADStream):
 
                     pub_speech_buf = np.array([], dtype=np.int16)
                     pub_speech_duration = 0
+                    pub_silence_duration += self._opts.min_silence_duration
 
             current_sample += self._model.window_size_samples
 
