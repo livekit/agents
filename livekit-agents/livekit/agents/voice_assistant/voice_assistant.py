@@ -191,7 +191,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     async def say(
         self,
-        source: str | llm.LLMStream | AsyncIterable[str],
+        source: "str | llm.LLMStream | AsyncIterable[str]",
         *,
         allow_interruptions: bool = True,
         add_to_chat_ctx: bool = True,
