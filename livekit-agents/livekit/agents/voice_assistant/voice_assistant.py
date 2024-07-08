@@ -7,8 +7,14 @@ from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, U
 
 from livekit import rtc
 
-from .. import llm, stt, tokenize, tts, utils, vad
-from ..llm import LLMStream
+from .. import stt, tokenize, tts, utils, vad
+from ..llm import (
+    LLM,
+    ChatContext,
+    ChatMessage,
+    FunctionContext,
+    LLMStream,
+)
 from .agent_output import AgentOutput, SynthesisHandle
 from .cancellable_source import CancellableAudioSource
 from .human_input import HumanInput
@@ -18,15 +24,15 @@ from .plotter import AssistantPlotter
 
 @dataclass
 class _SpeechInfo:
-    source: str | llm.LLMStream | AsyncIterable[str]
+    source: str | LLMStream | AsyncIterable[str]
     allow_interruptions: bool
     add_to_chat_ctx: bool
     synthesis_handle: SynthesisHandle
 
 
 WillSynthesizeAssistantReply = Callable[
-    ["VoiceAssistant", llm.ChatContext],
-    Union[Optional[llm.LLMStream], Awaitable[Optional[llm.LLMStream]]],
+    ["VoiceAssistant", ChatContext],
+    Optional[LLMStream] | Awaitable[Optional[LLMStream]],
 ]
 
 EventTypes = Literal[
@@ -43,8 +49,8 @@ EventTypes = Literal[
 
 
 def _default_will_synthesize_assistant_reply(
-    assistant: VoiceAssistant, chat_ctx: llm.ChatContext
-) -> llm.LLMStream:
+    assistant: VoiceAssistant, chat_ctx: ChatContext
+) -> LLMStream:
     return assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
 
 
@@ -71,10 +77,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         *,
         vad: vad.VAD,
         stt: stt.STT,
-        llm: llm.LLM,
+        llm: LLM,
         tts: tts.TTS,
-        chat_ctx: llm.ChatContext = llm.ChatContext(),
-        fnc_ctx: llm.FunctionContext | None = None,
+        chat_ctx: ChatContext = ChatContext(),
+        fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
         interrupt_speech_duration: float = 0.65,
         interrupt_min_words: int = 2,
@@ -134,19 +140,19 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         )
 
     @property
-    def fnc_ctx(self) -> llm.FunctionContext | None:
+    def fnc_ctx(self) -> FunctionContext | None:
         return self._fnc_ctx
 
     @fnc_ctx.setter
-    def fnc_ctx(self, fnc_ctx: llm.FunctionContext | None) -> None:
+    def fnc_ctx(self, fnc_ctx: FunctionContext | None) -> None:
         self._fnc_ctx = fnc_ctx
 
     @property
-    def chat_ctx(self) -> llm.ChatContext:
+    def chat_ctx(self) -> ChatContext:
         return self._chat_ctx
 
     @property
-    def llm(self) -> llm.LLM:
+    def llm(self) -> LLM:
         return self._llm
 
     @property
@@ -212,7 +218,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         ), "agent output should be initialized when ready"
 
         speech_source = source
-        if isinstance(speech_source, llm.LLMStream):
+        if isinstance(speech_source, LLMStream):
             speech_source = _llm_stream_to_str_iterable(speech_source)
 
         synthesis_handle = self._agent_output.synthesize(transcript=speech_source)
@@ -347,7 +353,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         # validate the answer & queue it for playout, also add the user question to the chat context
-        user_msg = llm.ChatMessage.create(text=self._transcribed_text, role="user")
+        user_msg = ChatMessage.create(text=self._transcribed_text, role="user")
         self._chat_ctx.messages.append(user_msg)
         self.emit("user_speech_committed", self._chat_ctx, user_msg)
 
@@ -407,7 +413,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     old_task.cancel()
                     await old_task
 
-            user_msg = llm.ChatMessage.create(text=user_transcript, role="user")
+            user_msg = ChatMessage.create(text=user_transcript, role="user")
             copied_ctx = self._chat_ctx.copy()
             copied_ctx.messages.append(user_msg)
 
@@ -420,7 +426,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 llm_stream = self._llm.chat(chat_ctx=copied_ctx, fnc_ctx=self._fnc_ctx)
 
             assert isinstance(
-                llm_stream, llm.LLMStream
+                llm_stream, LLMStream
             ), "will_create_llm_stream should be a LLMStream"
 
             synthesis = self._agent_output.synthesize(
@@ -458,7 +464,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         collected_text = speech_info.synthesis_handle.collected_text
         interrupted: bool = speech_info.synthesis_handle.interrupted
         if (
-            isinstance(speech_info.source, llm.LLMStream)
+            isinstance(speech_info.source, LLMStream)
             and len(speech_info.source.function_calls) > 0
             and not interrupted
         ):
@@ -472,7 +478,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             self.emit("function_calls_finished", called_fncs)
 
-            tool_calls_results: list[llm.ChatMessage] = []
+            tool_calls_results: list[ChatMessage] = []
 
             for called_fnc in called_fncs:
                 # ignore the function calls that returns None
@@ -480,7 +486,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     continue
 
                 tool_calls_results.append(
-                    llm.ChatMessage.create_tool_from_called_function(called_fnc)
+                    ChatMessage.create_tool_from_called_function(called_fnc)
                 )
 
             chat_ctx = speech_info.source.chat_ctx.copy()
@@ -496,7 +502,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             interrupted = answer_synthesis.interrupted
 
         if speech_info.add_to_chat_ctx:
-            msg = llm.ChatMessage.create(text=collected_text, role="assistant")
+            msg = ChatMessage.create(text=collected_text, role="assistant")
             self._chat_ctx.messages.append(msg)
 
             if interrupted:
@@ -505,7 +511,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self.emit("agent_speech_committed", self._chat_ctx, msg)
 
 
-async def _llm_stream_to_str_iterable(stream: llm.LLMStream) -> AsyncIterable[str]:
+async def _llm_stream_to_str_iterable(stream: LLMStream) -> AsyncIterable[str]:
     async for chunk in stream:
         content = chunk.choices[0].delta.content
         if content is None:
@@ -531,7 +537,7 @@ class _DeferredAnswerValidation:
     def validating(self) -> bool:
         return self._validating_task is not None and not self._validating_task.done()
 
-    def on_new_synthesis(self, user_msg: llm.ChatMessage) -> None:
+    def on_new_synthesis(self, user_msg: ChatMessage) -> None:
         str_content: str = ""
         if isinstance(user_msg.content, str):
             str_content = user_msg.content
