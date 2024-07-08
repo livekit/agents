@@ -8,6 +8,7 @@ from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, U
 from livekit import rtc
 
 from .. import llm, stt, tokenize, tts, utils, vad
+from ..llm import LLMStream
 from .agent_output import AgentOutput, SynthesisHandle
 from .cancellable_source import CancellableAudioSource
 from .human_input import HumanInput
@@ -191,7 +192,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     async def say(
         self,
-        source: "str | llm.LLMStream | AsyncIterable[str]",
+        source: str | LLMStream | AsyncIterable[str],
         *,
         allow_interruptions: bool = True,
         add_to_chat_ctx: bool = True,
