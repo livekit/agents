@@ -3,7 +3,7 @@ from __future__ import annotations
 import abc
 import asyncio
 from dataclasses import dataclass, field
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from . import function_context
 from .chat_context import ChatContext, ChatRole
@@ -45,7 +45,7 @@ class LLMStream(abc.ABC):
         self, *, chat_ctx: ChatContext, fnc_ctx: function_context.FunctionContext | None
     ) -> None:
         self._function_calls_info: list[function_context.FunctionCallInfo] = []
-        self._tasks = set[asyncio.Task]()
+        self._tasks = set[asyncio.Task[Any]]()
         self._chat_ctx = chat_ctx
         self._fnc_ctx = fnc_ctx
 
@@ -68,9 +68,11 @@ class LLMStream(abc.ABC):
         self,
     ) -> list[function_context.CalledFunction]:
         """Run all functions in this stream."""
-        called_functions = []
+        called_functions: list[function_context.CalledFunction] = []
         for fnc_info in self._function_calls_info:
             called_fnc = fnc_info.execute()
+            self._tasks.add(called_fnc.task)
+            called_fnc.task.add_done_callback(self._tasks.remove)
             called_functions.append(called_fnc)
 
         return called_functions
