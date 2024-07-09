@@ -41,8 +41,8 @@ class VAD(agents.vad.VAD):
     def __init__(
         self,
         *,
-        min_speech_duration: float = 0.15,
-        min_silence_duration: float = 0.2,
+        min_speech_duration: float = 0.05,
+        min_silence_duration: float = 0.1,
         padding_duration: float = 0.1,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.25,

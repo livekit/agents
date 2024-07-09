@@ -59,8 +59,8 @@ class STT(stt.STT):
         interim_results: bool = True,
         punctuate: bool = True,
         smart_format: bool = True,
-        no_delay: bool = False,
-        endpointing_ms: int = 50,
+        no_delay: bool = True,
+        endpointing_ms: int = 25,
         filler_words: bool = False,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -229,6 +229,9 @@ class SpeechStream(stt.SpeechStream):
         retry_count = 0
         while not self._closed:
             try:
+                endpointing = self._opts.endpointing_ms
+                if endpointing == 0:
+                    endpointing = False
                 live_config = {
                     "model": self._opts.model,
                     "punctuate": self._opts.punctuate,
@@ -239,9 +242,10 @@ class SpeechStream(stt.SpeechStream):
                     "vad_events": True,
                     "sample_rate": self._opts.sample_rate,
                     "channels": self._opts.num_channels,
-                    "endpointing": self._opts.endpointing_ms,
+                    "endpointing": endpointing,
                     "filler_words": self._opts.filler_words,
                 }
+                print(live_config)
 
                 if self._opts.language:
                     live_config["language"] = self._opts.language

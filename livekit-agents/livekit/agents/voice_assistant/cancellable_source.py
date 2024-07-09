@@ -21,6 +21,7 @@ class PlayoutHandle:
         self._playout_source = playout_source
         self._tr_fwd = transcription_fwd
         self._interrupted = False
+        self._time_played = 0.0
         self._done_fut = asyncio.Future()
 
     @property
@@ -28,11 +29,14 @@ class PlayoutHandle:
         return self._interrupted
 
     @property
-    def playing(self) -> bool:
-        return not self._done_fut.done()
+    def time_played(self) -> float:
+        return self._time_played
+
+    def done(self) -> bool:
+        return self._done_fut.done()
 
     def interrupt(self) -> None:
-        if not self.playing:
+        if self.done():
             return
 
         self._interrupted = True
@@ -143,6 +147,7 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
                         samples_per_channel=rem,
                     )
                     await self._source.capture_frame(chunk_frame)
+                    handle._time_played += rem / frame.sample_rate
         finally:
             if not first_frame:
                 if handle._tr_fwd is not None:
