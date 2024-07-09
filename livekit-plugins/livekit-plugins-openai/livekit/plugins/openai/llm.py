@@ -28,7 +28,9 @@ from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
 from .models import ChatModels
-from .utils import get_base_url
+from .utils import AsyncAzureADTokenProvider, get_base_url
+
+DEFAULT_MODEL = "gpt-4o"
 
 
 @dataclass
@@ -40,13 +42,51 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "gpt-4o",
+        model: str | ChatModels = DEFAULT_MODEL,
         base_url: str | None = None,
         client: openai.AsyncClient | None = None,
     ) -> None:
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient(base_url=get_base_url(base_url))
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
+
+    @staticmethod
+    def create_azure_client(
+        *,
+        model: str | ChatModels = DEFAULT_MODEL,
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+        organization: str | None = None,
+        project: str | None = None,
+        base_url: str | None = None,
+    ) -> LLM:
+        """
+        This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+        - `api_key` from `AZURE_OPENAI_API_KEY`
+        - `organization` from `OPENAI_ORG_ID`
+        - `project` from `OPENAI_PROJECT_ID`
+        - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
+        - `api_version` from `OPENAI_API_VERSION`
+        - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
+        """
+
+        azure_client = openai.AsyncAzureOpenAI(
+            azure_endpoint=azure_endpoint,
+            azure_deployment=azure_deployment,
+            api_version=api_version,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
+            organization=organization,
+            project=project,
+            base_url=base_url,
+        )  # type: ignore
+
+        return LLM(model=model, client=azure_client)
 
     def chat(
         self,
@@ -55,7 +95,7 @@ class LLM(llm.LLM):
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
-        parallel_tool_calls: bool | None = True,
+        parallel_tool_calls: bool | None = None,
     ) -> "LLMStream":
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
@@ -65,8 +105,8 @@ class LLM(llm.LLM):
 
             opts["tools"] = fncs_desc
 
-        if fnc_ctx:
-            opts["parallel_tool_calls"] = parallel_tool_calls or False
+            if fnc_ctx and parallel_tool_calls is not None:
+                opts["parallel_tool_calls"] = parallel_tool_calls
 
         messages = _build_oai_context(chat_ctx, id(self))
         cmp = self._client.chat.completions.create(

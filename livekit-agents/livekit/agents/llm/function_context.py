@@ -57,7 +57,7 @@ class FunctionInfo:
     arguments: dict[str, FunctionArgInfo]
 
 
-@dataclass
+@dataclass(frozen=True)
 class FunctionCallInfo:
     tool_call_id: str
     function_info: FunctionInfo
