@@ -47,7 +47,9 @@ class STT(stt.STT):
         num_channels: int = 1,
         languages: list[str] = [],  # when empty, auto-detect the language
     ):
-        super().__init__(streaming_supported=True)
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+        )
 
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
         if not speech_key:

@@ -22,7 +22,7 @@ class PlayoutHandle:
         self._tr_fwd = transcription_fwd
         self._interrupted = False
         self._time_played = 0.0
-        self._done_fut = asyncio.Future()
+        self._done_fut = asyncio.Future[None]()
 
     @property
     def interrupted(self) -> bool:

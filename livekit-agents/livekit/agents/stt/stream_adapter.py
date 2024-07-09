@@ -14,6 +14,7 @@ from .stt import (
     SpeechEvent,
     SpeechEventType,
     SpeechStream,
+    STTCapabilities,
 )
 
 
@@ -24,7 +25,9 @@ class StreamAdapter(STT):
         stt: STT,
         vad: VAD,
     ) -> None:
-        super().__init__(streaming_supported=True)
+        super().__init__(
+            capabilities=STTCapabilities(streaming=True, interim_results=False)
+        )
         self._vad = vad
         self._stt = stt
 

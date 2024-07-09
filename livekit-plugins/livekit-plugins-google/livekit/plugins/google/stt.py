@@ -63,7 +63,9 @@ class STT(stt.STT):
         if no credentials is provided, it will use the credentials on the environment
         GOOGLE_APPLICATION_CREDENTIALS (default behavior of Google SpeechAsyncClient)
         """
-        super().__init__(streaming_supported=True)
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+        )
 
         self._client: SpeechAsyncClient | None = None
         self._credentials_info = credentials_info

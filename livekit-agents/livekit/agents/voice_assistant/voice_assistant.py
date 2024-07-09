@@ -9,7 +9,14 @@ from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, U
 
 from livekit import rtc
 
-from .. import llm, stt, tokenize, tts, utils, vad
+from .. import stt, tokenize, tts, utils, vad
+from ..llm import (
+    LLM,
+    ChatContext,
+    ChatMessage,
+    FunctionContext,
+    LLMStream,
+)
 from .agent_output import AgentOutput, SynthesisHandle
 from .cancellable_source import CancellableAudioSource
 from .human_input import HumanInput
@@ -19,7 +26,7 @@ from .plotter import AssistantPlotter
 
 @dataclass
 class _SpeechInfo:
-    source: str | llm.LLMStream | AsyncIterable[str]
+    source: str | LLMStream | AsyncIterable[str]
     user_question: str  # empty when the speech isn't an answer
     allow_interruptions: bool
     add_to_chat_ctx: bool
@@ -27,8 +34,8 @@ class _SpeechInfo:
 
 
 WillSynthesizeAssistantReply = Callable[
-    ["VoiceAssistant", llm.ChatContext],
-    Union[Optional[llm.LLMStream], Awaitable[Optional[llm.LLMStream]]],
+    ["VoiceAssistant", ChatContext],
+    Union[Optional[LLMStream], Awaitable[Optional[LLMStream]]],
 ]
 
 EventTypes = Literal[
@@ -44,13 +51,15 @@ EventTypes = Literal[
 ]
 
 
-_CallContextVar = contextvars.ContextVar("voice_assistant_contextvar")
+_CallContextVar = contextvars.ContextVar["AssistantCallContext"](
+    "voice_assistant_contextvar"
+)
 
 
 class AssistantCallContext:
-    def __init__(self, assistant: "VoiceAssistant", llm_stream: llm.LLMStream) -> None:
+    def __init__(self, assistant: "VoiceAssistant", llm_stream: LLMStream) -> None:
         self._assistant = assistant
-        self._metadata = dict()
+        self._metadata = dict[str, Any]()
         self._llm_stream = llm_stream
 
     @staticmethod
@@ -67,13 +76,13 @@ class AssistantCallContext:
     def get_metadata(self, key: str, default: Any = None) -> Any:
         return self._metadata.get(key, default)
 
-    def llm_stream(self) -> llm.LLMStream:
+    def llm_stream(self) -> LLMStream:
         return self._llm_stream
 
 
 def _default_will_synthesize_assistant_reply(
-    assistant: VoiceAssistant, chat_ctx: llm.ChatContext
-) -> llm.LLMStream:
+    assistant: VoiceAssistant, chat_ctx: ChatContext
+) -> LLMStream:
     return assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
 
 
@@ -100,10 +109,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         *,
         vad: vad.VAD,
         stt: stt.STT,
-        llm: llm.LLM,
+        llm: LLM,
         tts: tts.TTS,
-        chat_ctx: llm.ChatContext = llm.ChatContext(),
-        fnc_ctx: llm.FunctionContext | None = None,
+        chat_ctx: ChatContext = ChatContext(),
+        fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
         interrupt_speech_duration: float = 0.6,
         interrupt_min_words: int = 0,
@@ -149,7 +158,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._human_input: HumanInput | None = None
         self._agent_output: AgentOutput | None = None
-        self._track_published_fut = asyncio.Future()
+        self._track_published_fut = asyncio.Future[None]()
 
         self._agent_answer_speech: _SpeechInfo | None = None
         self._agent_playing_speech: _SpeechInfo | None = None
@@ -163,19 +172,19 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         )
 
     @property
-    def fnc_ctx(self) -> llm.FunctionContext | None:
+    def fnc_ctx(self) -> FunctionContext | None:
         return self._fnc_ctx
 
     @fnc_ctx.setter
-    def fnc_ctx(self, fnc_ctx: llm.FunctionContext | None) -> None:
+    def fnc_ctx(self, fnc_ctx: FunctionContext | None) -> None:
         self._fnc_ctx = fnc_ctx
 
     @property
-    def chat_ctx(self) -> llm.ChatContext:
+    def chat_ctx(self) -> ChatContext:
         return self._chat_ctx
 
     @property
-    def llm(self) -> llm.LLM:
+    def llm(self) -> LLM:
         return self._llm
 
     @property
@@ -221,7 +230,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     async def say(
         self,
-        source: str | llm.LLMStream | AsyncIterable[str],
+        source: str | LLMStream | AsyncIterable[str],
         *,
         allow_interruptions: bool = True,
         add_to_chat_ctx: bool = True,
@@ -241,7 +250,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         ), "agent output should be initialized when ready"
 
         speech_source = source
-        if isinstance(speech_source, llm.LLMStream):
+        if isinstance(speech_source, LLMStream):
             speech_source = _llm_stream_to_str_iterable(speech_source)
 
         synthesis_handle = self._agent_output.synthesize(transcript=speech_source)
@@ -434,7 +443,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     old_task.cancel()
                     await old_task
 
-            user_msg = llm.ChatMessage.create(text=user_transcript, role="user")
+            user_msg = ChatMessage.create(text=user_transcript, role="user")
             copied_ctx = self._chat_ctx.copy()
             copied_ctx.messages.append(user_msg)
 
@@ -443,7 +452,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 llm_stream = await llm_stream
 
             # fallback to default impl if no custom/user stream is returned
-            if not isinstance(llm_stream, llm.LLMStream):
+            if not isinstance(llm_stream, LLMStream):
                 llm_stream = _default_will_synthesize_assistant_reply(
                     self, chat_ctx=copied_ctx
                 )
@@ -458,7 +467,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 add_to_chat_ctx=True,
                 synthesis_handle=synthesis,
             )
-            self._deferred_validation.on_new_synthesis(user_msg)
+            self._deferred_validation.on_new_synthesis(user_transcript)
 
         if self._agent_answer_speech is not None:
             self._agent_answer_speech.synthesis_handle.interrupt()
@@ -498,7 +507,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ):
                 return
 
-            is_using_tools = isinstance(speech_info.source, llm.LLMStream) and len(
+            is_using_tools = isinstance(speech_info.source, LLMStream) and len(
                 speech_info.source.function_calls
             )
 
@@ -511,7 +520,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ):
                 return
 
-            user_msg = llm.ChatMessage.create(text=user_question, role="user")
+            user_msg = ChatMessage.create(text=user_question, role="user")
             self._chat_ctx.messages.append(user_msg)
             self.emit("user_speech_committed", user_msg)
 
@@ -530,14 +539,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         collected_text = speech_info.synthesis_handle.collected_text
         interrupted = speech_info.synthesis_handle.interrupted
-        is_using_tools = isinstance(speech_info.source, llm.LLMStream) and len(
+        is_using_tools = isinstance(speech_info.source, LLMStream) and len(
             speech_info.source.function_calls
         )
 
         # if the answer is using tools, execute the functions and automatically generate
         # a response to the user question from the returned values
         if is_using_tools and not interrupted:
-            assert isinstance(speech_info.source, llm.LLMStream)
+            assert isinstance(speech_info.source, LLMStream)
             assert (
                 user_speech_commited
             ), "user speech should be committed before using tools"
@@ -562,11 +571,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
                 tool_calls.append(called_fnc.call_info)
                 tool_calls_results_msg.append(
-                    llm.ChatMessage.create_tool_from_called_function(called_fnc)
+                    ChatMessage.create_tool_from_called_function(called_fnc)
                 )
 
             chat_ctx = speech_info.source.chat_ctx.copy()
-            tool_msg = llm.ChatMessage.create_tool_calls(tool_calls)
+            tool_msg = ChatMessage.create_tool_calls(tool_calls)
             chat_ctx.messages.append(tool_msg)
             chat_ctx.messages.extend(tool_calls_results_msg)
 
@@ -581,7 +590,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             interrupted = answer_synthesis.interrupted
 
         if speech_info.add_to_chat_ctx and user_speech_commited:
-            msg = llm.ChatMessage.create(text=collected_text, role="assistant")
+            msg = ChatMessage.create(text=collected_text, role="assistant")
             self._chat_ctx.messages.append(msg)
 
             if interrupted:
@@ -590,7 +599,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self.emit("agent_speech_committed", msg)
 
 
-async def _llm_stream_to_str_iterable(stream: llm.LLMStream) -> AsyncIterable[str]:
+async def _llm_stream_to_str_iterable(stream: LLMStream) -> AsyncIterable[str]:
     async for chunk in stream:
         content = chunk.choices[0].delta.content
         if content is None:
@@ -635,8 +644,8 @@ class _DeferredAnswerValidation:
         self._last_final_transcript = ""
         self._last_recv_end_of_speech_time = 0.0
 
-    def on_new_synthesis(self, user_msg: llm.ChatMessage) -> None:
-        self._last_final_transcript = user_msg.content.strip()  # type: ignore
+    def on_new_synthesis(self, user_msg: str) -> None:
+        self._last_final_transcript = user_msg.strip()  # type: ignore
 
         if self.validating:
             self._run(self._get_defer_delay())  # debounce
