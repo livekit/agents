@@ -3,15 +3,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
 from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, Union
 
 from livekit import rtc
 
 from .. import llm, stt, tokenize, tts, utils, vad
 from .agent_output import AgentOutput, SynthesisHandle
-from .cancellable_source import CancellableAudioSource, PlayoutHandle
+from .cancellable_source import CancellableAudioSource
 from .human_input import HumanInput
 from .log import logger
 from .plotter import AssistantPlotter
@@ -375,7 +375,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         # play validated speeches
         async for speech in self._playout_ch:
             self._agent_playing_speech = speech
-            print(f"playing speech", speech.synthesis_handle.collected_text)
+            print("playing speech", speech.synthesis_handle.collected_text)
             await self._play_speech(speech)
             self._agent_playing_speech = None
 
@@ -412,7 +412,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             if len(interim_words) < self._opts.int_min_words:
                 return
 
-        print(f"interrupting agent speech")
+        print("interrupting agent speech")
         self._agent_playing_speech.synthesis_handle.interrupt()
 
     def _synthesize_answer(self, *, user_transcript: str):
@@ -650,14 +650,14 @@ class _DeferredAnswerValidation:
 
     def on_human_start_of_speech(self, ev: vad.VADEvent) -> None:
         if self.validating:
-            print(f"canceling task")
+            print("canceling task")
             assert self._validating_task is not None
             self._validating_task.cancel()
 
     def on_human_end_of_speech(self, ev: vad.VADEvent) -> None:
         self._last_recv_end_of_speech_time = time.time()
 
-        print(f"received_end_of_speech")
+        print("received_end_of_speech")
         if self._last_final_transcript:
             self._run(self._get_defer_delay())
 

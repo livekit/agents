@@ -6,7 +6,7 @@ from typing import AsyncIterable, Literal
 
 from livekit import rtc
 
-from .. import utils, transcription
+from .. import transcription, utils
 from .log import logger
 
 EventTypes = Literal["playout_started", "playout_stopped"]
