@@ -17,8 +17,6 @@ async def entrypoint(ctx: JobContext):
     async def _will_synthesize_assistant_answer(
         assistant: VoiceAssistant, chat_ctx: llm.ChatContext
     ):
-        # copy so we don't edit the original chat_ctx inside the assistant
-        chat_ctx = chat_ctx.copy()
         user_msg = chat_ctx.messages[-1]
         user_embedding = await openai.create_embeddings(
             input=user_msg.content,  # type: ignore
