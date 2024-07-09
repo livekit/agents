@@ -65,7 +65,7 @@ class LLM(llm.LLM):
 
             opts["tools"] = fncs_desc
 
-        parallel_tool_calls = parallel_tool_calls or False
+        parallel_tool_calls = (fnc_ctx and parallel_tool_calls) or False
         messages = _build_oai_context(chat_ctx, id(self))
         cmp = self._client.chat.completions.create(
             messages=messages,
