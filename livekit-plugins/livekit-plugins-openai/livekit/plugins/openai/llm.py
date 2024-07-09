@@ -78,7 +78,6 @@ class LLM(llm.LLM):
         """
 
         azure_client = openai.AsyncAzureOpenAI(
-            azure_endpoint=azure_endpoint,
             azure_deployment=azure_deployment,
             api_version=api_version,
             api_key=api_key,
@@ -86,7 +85,6 @@ class LLM(llm.LLM):
             azure_ad_token_provider=azure_ad_token_provider,
             organization=organization,
             project=project,
-            base_url=base_url,
         )
 
         return LLM(model=model, base_url=base_url, client=azure_client)
