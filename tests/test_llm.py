@@ -164,7 +164,7 @@ async def test_cancelled_calls():
     # TODO (?): need to wait for the task to be scheduled but this might be
     # a design flaw. Users would not be able to respond to cancelled tasks
     # if they are never started.
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0)
 
     # don't wait for gather_function_results and directly close
     await stream.aclose()
