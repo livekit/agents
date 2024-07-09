@@ -36,6 +36,7 @@ class LLM(abc.ABC):
         fnc_ctx: function_context.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> "LLMStream": ...
 
 

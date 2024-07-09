@@ -341,7 +341,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         def _on_final_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_text += ev.alternatives[0].text
             self._synthesize_answer(user_transcript=self._transcribed_text)
-            print(f"final transcript: {self._transcribed_text}")
 
         self._human_input.on("start_of_speech", _on_start_of_speech)
         self._human_input.on("vad_inference_done", _on_vad_updated)
@@ -384,7 +383,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         # play validated speeches
         async for speech in self._playout_ch:
             self._agent_playing_speech = speech
-            print("playing speech", speech.synthesis_handle.collected_text)
             await self._play_speech(speech)
             self._agent_playing_speech = None
 
@@ -421,7 +419,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             if len(interim_words) < self._opts.int_min_words:
                 return
 
-        print("interrupting agent speech")
         self._agent_playing_speech.synthesis_handle.interrupt()
 
     def _synthesize_answer(self, *, user_transcript: str):
@@ -543,6 +540,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             speech_info.source.function_calls
         )
 
+        extra_tools_messages = []  # additonal messages from the functions to add to the context if needed
+
         # if the answer is using tools, execute the functions and automatically generate
         # a response to the user question from the returned values
         if is_using_tools and not interrupted:
@@ -574,22 +573,26 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     ChatMessage.create_tool_from_called_function(called_fnc)
                 )
 
-            chat_ctx = speech_info.source.chat_ctx.copy()
-            tool_msg = ChatMessage.create_tool_calls(tool_calls)
-            chat_ctx.messages.append(tool_msg)
-            chat_ctx.messages.extend(tool_calls_results_msg)
+            if tool_calls:
+                extra_tools_messages.append(ChatMessage.create_tool_calls(tool_calls))
+                extra_tools_messages.extend(tool_calls_results_msg)
 
-            answer_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self._fnc_ctx)
-            answer_synthesis = self._agent_output.synthesize(
-                transcript=_llm_stream_to_str_iterable(answer_stream)
-            )
-            self._playing_synthesis = answer_synthesis
-            await answer_synthesis.play()
+                chat_ctx = speech_info.source.chat_ctx.copy()
+                chat_ctx.messages.extend(extra_tools_messages)
 
-            collected_text = answer_synthesis.collected_text
-            interrupted = answer_synthesis.interrupted
+                answer_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self._fnc_ctx)
+                answer_synthesis = self._agent_output.synthesize(
+                    transcript=_llm_stream_to_str_iterable(answer_stream)
+                )
+                self._playing_synthesis = answer_synthesis
+                await answer_synthesis.play()
 
-        if speech_info.add_to_chat_ctx and user_speech_commited:
+                collected_text = answer_synthesis.collected_text
+                interrupted = answer_synthesis.interrupted
+
+        if speech_info.add_to_chat_ctx and (not user_question or user_speech_commited):
+            self._chat_ctx.messages.extend(extra_tools_messages)
+
             msg = ChatMessage.create(text=collected_text, role="assistant")
             self._chat_ctx.messages.append(msg)
 
@@ -659,14 +662,12 @@ class _DeferredAnswerValidation:
 
     def on_human_start_of_speech(self, ev: vad.VADEvent) -> None:
         if self.validating:
-            print("canceling task")
             assert self._validating_task is not None
             self._validating_task.cancel()
 
     def on_human_end_of_speech(self, ev: vad.VADEvent) -> None:
         self._last_recv_end_of_speech_time = time.time()
 
-        print("received_end_of_speech")
         if self._last_final_transcript:
             self._run(self._get_defer_delay())
 
@@ -686,7 +687,5 @@ class _DeferredAnswerValidation:
     def _run(self, delay: float) -> None:
         if self._validating_task is not None:
             self._validating_task.cancel()
-
-        print(f"running task with delay: {delay}")
 
         self._validating = self._ts.create_task(self._run_task(delay))

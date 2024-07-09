@@ -7,7 +7,7 @@ class SentenceChunker:
     def __init__(
         self,
         *,
-        max_chunk_size: int = 100,
+        max_chunk_size: int = 120,
         chunk_overlap: int = 30,
         paragraph_tokenizer: Callable[
             [str], list[str]

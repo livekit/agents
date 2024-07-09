@@ -49,6 +49,7 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents>=0.7.2",
+        "annoy>=1.17",
     ],
     package_data={
         "livekit.plugins.rag": ["py.typed"],

@@ -30,8 +30,6 @@ async def main() -> None:
     async with aiohttp.ClientSession() as http_session:
         idx_builder = rag.annoy.IndexBuilder(f=embeddings_dimension, metric="angular")
 
-        # split our raw_data by paragraphs, we know each paragraph is talking about a separate topic.
-        # the data are also small enough so we don't need to chunk them in this example.
         paragraphs_by_uuid = {}
         for p in tokenize.basic.tokenize_paragraphs(raw_data):
             p_uuid = uuid.uuid4()

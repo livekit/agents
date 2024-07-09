@@ -4,7 +4,7 @@ import pickle
 
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import cartesia, deepgram, openai, rag, silero
+from livekit.plugins import deepgram, openai, rag, silero
 
 annoy_index = rag.annoy.AnnoyIndex.load("vdb_data")  # see build_data.py
 
@@ -49,7 +49,7 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
-        tts=cartesia.TTS(),
+        tts=openai.TTS(),
         will_synthesize_assistant_reply=_will_synthesize_assistant_answer,
         plotting=True,
     )
