@@ -6,16 +6,22 @@ from typing import AsyncIterable, Literal
 
 from livekit import rtc
 
-from .. import utils
+from .. import transcription, utils
 from .log import logger
 
 EventTypes = Literal["playout_started", "playout_stopped"]
 
 
 class PlayoutHandle:
-    def __init__(self, playout_source: AsyncIterable[rtc.AudioFrame]) -> None:
+    def __init__(
+        self,
+        playout_source: AsyncIterable[rtc.AudioFrame],
+        transcription_fwd: transcription.TTSSegmentsForwarder | None = None,
+    ) -> None:
         self._playout_source = playout_source
+        self._tr_fwd = transcription_fwd
         self._interrupted = False
+        self._time_played = 0.0
         self._done_fut = asyncio.Future()
 
     @property
@@ -23,11 +29,14 @@ class PlayoutHandle:
         return self._interrupted
 
     @property
-    def playing(self) -> bool:
-        return not self._done_fut.done()
+    def time_played(self) -> float:
+        return self._time_played
+
+    def done(self) -> bool:
+        return self._done_fut.done()
 
     def interrupt(self) -> None:
-        if not self.playing:
+        if self.done():
             return
 
         self._interrupted = True
@@ -66,11 +75,17 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
         if self._playout_atask is not None:
             await self._playout_atask
 
-    def play(self, playout_source: AsyncIterable[rtc.AudioFrame]) -> PlayoutHandle:
+    def play(
+        self,
+        playout_source: AsyncIterable[rtc.AudioFrame],
+        transcription_fwd: transcription.TTSSegmentsForwarder | None = None,
+    ) -> PlayoutHandle:
         if self._closed:
             raise ValueError("cancellable source is closed")
 
-        handle = PlayoutHandle(playout_source=playout_source)
+        handle = PlayoutHandle(
+            playout_source=playout_source, transcription_fwd=transcription_fwd
+        )
         self._playout_atask = asyncio.create_task(
             self._playout_task(self._playout_atask, handle)
         )
@@ -83,7 +98,7 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
         handle: PlayoutHandle,
     ) -> None:
         def _should_break():
-            eps = 1e-6
+            eps = 0.1
             return handle.interrupted and self._vol_filter.filtered() <= eps
 
         first_frame = True
@@ -97,6 +112,9 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
 
             async for frame in handle._playout_source:
                 if first_frame:
+                    if handle._tr_fwd is not None:
+                        handle._tr_fwd.segment_playout_started()
+
                     self.emit("playout_started")
                     first_frame = False
 
@@ -129,8 +147,17 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
                         samples_per_channel=rem,
                     )
                     await self._source.capture_frame(chunk_frame)
+                    handle._time_played += rem / frame.sample_rate
         finally:
             if not first_frame:
+                if handle._tr_fwd is not None:
+                    if not cancelled:
+                        handle._tr_fwd.segment_playout_finished()
+
+                    await (
+                        handle._tr_fwd.aclose()
+                    )  # TODO(theomonnom): move this to assistant
+
                 self.emit("playout_stopped", cancelled)
 
             handle._done_fut.set_result(None)
