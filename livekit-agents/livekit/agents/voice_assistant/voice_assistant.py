@@ -465,7 +465,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 add_to_chat_ctx=True,
                 synthesis_handle=synthesis,
             )
-            self._deferred_validation.on_new_synthesis(user_msg)
+            self._deferred_validation.on_new_synthesis(user_transcript)
 
         if self._agent_answer_speech is not None:
             self._agent_answer_speech.synthesis_handle.interrupt()
@@ -642,9 +642,8 @@ class _DeferredAnswerValidation:
         self._last_final_transcript = ""
         self._last_recv_end_of_speech_time = 0.0
 
-    def on_new_synthesis(self, user_msg: ChatMessage) -> None:
-        assert user_msg.content is str
-        self._last_final_transcript = user_msg.content.strip()  # type: ignore
+    def on_new_synthesis(self, user_msg: str) -> None:
+        self._last_final_transcript = user_msg.strip()  # type: ignore
 
         if self.validating:
             self._run(self._get_defer_delay())  # debounce
