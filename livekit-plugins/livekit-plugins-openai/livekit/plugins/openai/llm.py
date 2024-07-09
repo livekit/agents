@@ -56,7 +56,6 @@ class LLM(llm.LLM):
     @staticmethod
     def create_azure_client(
         *,
-        azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
         api_key: str | None = None,
@@ -64,7 +63,6 @@ class LLM(llm.LLM):
         azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
         organization: str | None = None,
         project: str | None = None,
-        base_url: str | None = None,
         model: str | ChatModels = DEFAULT_MODEL,
     ) -> LLM:
         """
@@ -87,7 +85,7 @@ class LLM(llm.LLM):
             project=project,
         )
 
-        return LLM(model=model, base_url=base_url, client=azure_client)
+        return LLM(model=model, client=azure_client)
 
     def chat(
         self,
