@@ -22,7 +22,6 @@ from typing import Any, Awaitable, Callable, MutableSet, Union
 from livekit import rtc
 from livekit.agents import llm, utils
 
-import os
 import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
