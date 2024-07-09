@@ -204,7 +204,7 @@ async def _stream_synthesis_task(
 
     try:
         async for seg in streamed_text:
-            handle._collected_text = seg
+            handle._collected_text += seg
             if handle._tr_fwd is not None:
                 handle._tr_fwd.push_text(seg)
 

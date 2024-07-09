@@ -6,7 +6,7 @@ from livekit.agents.llm import (
     ChatContext,
 )
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import deepgram, openai, silero
 
 
 async def entrypoint(ctx: JobContext):
@@ -22,7 +22,7 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
-        tts=cartesia.TTS(),
+        tts=openai.TTS(),
         chat_ctx=initial_ctx,
     )
     assistant.start(ctx.room)

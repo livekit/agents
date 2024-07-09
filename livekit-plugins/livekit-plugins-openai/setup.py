@@ -49,7 +49,7 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents[codecs, images]>=0.7.2",
-        "openai ~= 1.30.0",
+        "openai ~= 1.35",
     ],
     package_data={
         "livekit.plugins.openai": ["py.typed"],
