@@ -95,7 +95,7 @@ class LLM(llm.LLM):
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
-        parallel_tool_calls: bool | None = True,
+        parallel_tool_calls: bool | None = None,
     ) -> "LLMStream":
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
@@ -105,8 +105,8 @@ class LLM(llm.LLM):
 
             opts["tools"] = fncs_desc
 
-        if fnc_ctx:
-            opts["parallel_tool_calls"] = parallel_tool_calls or False
+            if fnc_ctx and parallel_tool_calls is not None:
+                opts["parallel_tool_calls"] = parallel_tool_calls
 
         messages = _build_oai_context(chat_ctx, id(self))
         cmp = self._client.chat.completions.create(
