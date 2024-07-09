@@ -118,8 +118,8 @@ async def test_fnc_calls():
     stream = await _request_fnc_call(
         llm, "What's the weather in San Francisco and Paris?", fnc_ctx
     )
-    tasks = list(stream._tasks)
-    await asyncio.gather(*tasks)
+    fns = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in fns])
     await stream.aclose()
 
     assert fnc_ctx._get_weather_calls == 2, "get_weather should be called twice"
@@ -145,8 +145,8 @@ async def test_fnc_calls_runtime_addition():
     stream = await _request_fnc_call(
         llm, "Can you show 'Hello LiveKit!' on the screen?", fnc_ctx
     )
-    tasks = list(stream._tasks)
-    await asyncio.gather(*tasks)
+    fns = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in fns])
     await stream.aclose()
 
     assert called_msg == "Hello LiveKit!", "send_message should be called"
@@ -159,6 +159,10 @@ async def test_cancelled_calls():
     stream = await _request_fnc_call(
         llm, "Turn off the lights in the Theo's bedroom", fnc_ctx
     )
+    stream.execute_functions()
+
+    # Need to wait for the task to start
+    await asyncio.sleep(0)
 
     # don't wait for gather_function_results and directly close
     await stream.aclose()
@@ -174,6 +178,8 @@ async def test_calls_arrays():
     stream = await _request_fnc_call(
         llm, "Can you select all currencies in Europe?", fnc_ctx
     )
+    fns = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in fns])
     await stream.aclose()
 
     assert fnc_ctx._select_currency_calls == 1
@@ -190,8 +196,8 @@ async def test_calls_choices():
     llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(llm, "Set the volume to 30", fnc_ctx)
-    tasks = list(stream._tasks)
-    await asyncio.gather(*tasks)
+    fns = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in fns])
     await stream.aclose()
 
     assert fnc_ctx._change_volume_calls == 1
