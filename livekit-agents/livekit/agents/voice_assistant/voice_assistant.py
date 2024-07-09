@@ -55,7 +55,7 @@ _CallContextVar = contextvars.ContextVar("voice_assistant_contextvar")
 
 
 class AssistantCallContext:
-    def __init__(self, assistant: "VoiceAssistant", llm_stream: llm.LLMStream) -> None:
+    def __init__(self, assistant: "VoiceAssistant", llm_stream: LLMStream) -> None:
         self._assistant = assistant
         self._metadata = dict()
         self._llm_stream = llm_stream
@@ -505,7 +505,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ):
                 return
 
-            is_using_tools = isinstance(speech_info.source, llm.LLMStream) and len(
+            is_using_tools = isinstance(speech_info.source, LLMStream) and len(
                 speech_info.source.function_calls
             )
 
@@ -518,7 +518,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ):
                 return
 
-            user_msg = llm.ChatMessage.create(text=user_question, role="user")
+            user_msg = ChatMessage.create(text=user_question, role="user")
             self._chat_ctx.messages.append(user_msg)
             self.emit("user_speech_committed", user_msg)
 
