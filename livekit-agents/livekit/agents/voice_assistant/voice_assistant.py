@@ -51,13 +51,15 @@ EventTypes = Literal[
 ]
 
 
-_CallContextVar = contextvars.ContextVar("voice_assistant_contextvar")
+_CallContextVar = contextvars.ContextVar["AssistantCallContext"](
+    "voice_assistant_contextvar"
+)
 
 
 class AssistantCallContext:
     def __init__(self, assistant: "VoiceAssistant", llm_stream: LLMStream) -> None:
         self._assistant = assistant
-        self._metadata = dict()
+        self._metadata = dict[str, Any]()
         self._llm_stream = llm_stream
 
     @staticmethod
