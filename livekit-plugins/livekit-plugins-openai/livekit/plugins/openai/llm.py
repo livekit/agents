@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, MutableSet, Union
+from typing import Any, Awaitable, MutableSet
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -28,10 +28,7 @@ from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
 from .models import ChatModels
-from .utils import get_base_url
-
-AsyncAzureADTokenProvider = Callable[[], Union[str, Awaitable[str]]]
-
+from .utils import AsyncAzureADTokenProvider, get_base_url
 
 DEFAULT_MODEL = "gpt-4o"
 
@@ -56,6 +53,8 @@ class LLM(llm.LLM):
     @staticmethod
     def create_azure_client(
         *,
+        model: str | ChatModels = DEFAULT_MODEL,
+        azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
         api_key: str | None = None,
@@ -63,7 +62,7 @@ class LLM(llm.LLM):
         azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
         organization: str | None = None,
         project: str | None = None,
-        model: str | ChatModels = DEFAULT_MODEL,
+        base_url: str | None = None,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -76,6 +75,7 @@ class LLM(llm.LLM):
         """
 
         azure_client = openai.AsyncAzureOpenAI(
+            azure_endpoint=azure_endpoint,
             azure_deployment=azure_deployment,
             api_version=api_version,
             api_key=api_key,
@@ -83,7 +83,8 @@ class LLM(llm.LLM):
             azure_ad_token_provider=azure_ad_token_provider,
             organization=organization,
             project=project,
-        )
+            base_url=base_url,
+        )  # type: ignore
 
         return LLM(model=model, client=azure_client)
 
