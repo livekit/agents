@@ -96,8 +96,9 @@ class RetryChunkedStream(ChunkedStream):
             try:
                 assert self._source_cs is not None
                 if not sent_first_audio:
-                    async with asyncio.timeout(self._first_packet_timeout):
-                        item = await self._source_cs.__anext__()
+                    item = await asyncio.wait_for(
+                        self._source_cs.__anext__(), self._first_packet_timeout
+                    )
                 else:
                     item = await self._source_cs.__anext__()
                 if not sent_first_audio:
@@ -153,8 +154,9 @@ class RetrySynthesizeStream(SynthesizeStream):
             try:
                 assert self._source_ss is not None
                 if not sent_first_event:
-                    async with asyncio.timeout(self._first_packet_timeout):
-                        item = await self._source_ss.__anext__()
+                    item = await asyncio.wait_for(
+                        self._source_ss.__anext__(), self._first_packet_timeout
+                    )
                 else:
                     item = await self._source_ss.__anext__()
                 if not sent_first_event:
