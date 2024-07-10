@@ -47,13 +47,8 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=[
-        "livekit-agents>=0.7.2",
-        "annoy>=1.17",
-    ],
-    package_data={
-        "livekit.plugins.rag": ["py.typed"],
-    },
+    install_requires=["livekit-agents>=0.7.2", "annoy>=1.17"],
+    package_data={"livekit.plugins.rag": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

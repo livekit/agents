@@ -46,11 +46,7 @@ class STTCapabilities:
 
 
 class STT(ABC):
-    def __init__(
-        self,
-        *,
-        capabilities: STTCapabilities,
-    ) -> None:
+    def __init__(self, *, capabilities: STTCapabilities) -> None:
         self._capabilities = capabilities
 
     @property
@@ -59,18 +55,11 @@ class STT(ABC):
 
     @abstractmethod
     async def recognize(
-        self,
-        *,
-        buffer: AudioBuffer,
-        language: str | None = None,
+        self, *, buffer: AudioBuffer, language: str | None = None
     ) -> SpeechEvent:
         pass
 
-    def stream(
-        self,
-        *,
-        language: str | None = None,
-    ) -> "SpeechStream":
+    def stream(self, *, language: str | None = None) -> "SpeechStream":
         raise NotImplementedError(
             "streaming is not supported by this STT, please use \
             a different STT or use a StreamAdapter"

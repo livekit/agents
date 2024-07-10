@@ -76,9 +76,7 @@ class VAD(agents.vad.VAD):
             sample_rate=sample_rate,
         )
 
-    def stream(
-        self,
-    ) -> "VADStream":
+    def stream(self) -> "VADStream":
         return VADStream(
             self._opts,
             onnx_model.OnnxModel(
@@ -95,11 +93,7 @@ class _WindowData:
 
 
 class VADStream(agents.vad.VADStream):
-    def __init__(
-        self,
-        opts: _VADOptions,
-        model: onnx_model.OnnxModel,
-    ) -> None:
+    def __init__(self, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
         self._opts, self._model = opts, model
         self._main_atask = asyncio.create_task(self._main_task())
 

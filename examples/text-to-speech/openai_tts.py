@@ -2,22 +2,14 @@ import asyncio
 import logging
 
 from livekit import rtc
-from livekit.agents import (
-    JobContext,
-    JobRequest,
-    WorkerOptions,
-    cli,
-)
+from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
 from livekit.plugins import openai
 
 
 async def entrypoint(job: JobContext):
     logging.info("starting tts example agent")
 
-    tts = openai.TTS(
-        model="tts-1",
-        voice="nova",
-    )
+    tts = openai.TTS(model="tts-1", voice="nova")
 
     source = rtc.AudioSource(tts.sample_rate, tts.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)

@@ -225,9 +225,7 @@ def _set_metadata(
             )
 
     metadata = _AIFncMetadata(
-        name=name or f.__name__,
-        description=desc,
-        auto_retry=auto_retry,
+        name=name or f.__name__, description=desc, auto_retry=auto_retry
     )
 
     setattr(f, METADATA_ATTR, metadata)

@@ -104,9 +104,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         stt_stream = self._stt.stream()
 
         stt_forwarder = transcription.STTSegmentsForwarder(
-            room=self._room,
-            participant=self._participant,
-            track=self._subscribed_track,
+            room=self._room, participant=self._participant, track=self._subscribed_track
         )
 
         async def _audio_stream_co() -> None:
@@ -136,11 +134,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
                     self.emit("interim_transcript", ev)
 
         try:
-            await asyncio.gather(
-                _audio_stream_co(),
-                _vad_stream_co(),
-                _stt_stream_co(),
-            )
+            await asyncio.gather(_audio_stream_co(), _vad_stream_co(), _stt_stream_co())
         finally:
             await asyncio.gather(
                 stt_forwarder.aclose(wait=False),

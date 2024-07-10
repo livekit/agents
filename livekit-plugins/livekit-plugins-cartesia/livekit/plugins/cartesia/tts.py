@@ -55,9 +55,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
-            streaming_supported=False,
-            sample_rate=sample_rate,
-            num_channels=1,
+            streaming_supported=False, sample_rate=sample_rate, num_channels=1
         )
 
         api_key = api_key or os.environ.get("CARTESIA_API_KEY")
@@ -80,10 +78,7 @@ class TTS(tts.TTS):
 
         return self._session
 
-    def synthesize(
-        self,
-        text: str,
-    ) -> "ChunkedStream":
+    def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(text, self._opts, self._ensure_session())
 
 

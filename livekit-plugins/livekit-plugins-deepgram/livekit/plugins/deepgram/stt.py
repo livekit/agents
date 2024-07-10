@@ -67,8 +67,7 @@ class STT(stt.STT):
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True,
-                interim_results=interim_results,
+                streaming=True, interim_results=interim_results
             )
         )
 
@@ -100,10 +99,7 @@ class STT(stt.STT):
         return self._session
 
     async def recognize(
-        self,
-        *,
-        buffer: AudioBuffer,
-        language: DeepgramLanguages | str | None = None,
+        self, *, buffer: AudioBuffer, language: DeepgramLanguages | str | None = None
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 
@@ -146,18 +142,12 @@ class STT(stt.STT):
             )
 
     def stream(
-        self,
-        *,
-        language: DeepgramLanguages | str | None = None,
+        self, *, language: DeepgramLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
         return SpeechStream(config, self._api_key, self._ensure_session())
 
-    def _sanitize_options(
-        self,
-        *,
-        language: str | None = None,
-    ) -> STTOptions:
+    def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
         config.language = language or config.language
 
@@ -377,15 +367,13 @@ class SpeechStream(stt.SpeechStream):
 
                 if is_final_transcript:
                     final_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=alts,
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=alts
                     )
                     self._final_events.append(final_event)
                     self._event_queue.put_nowait(final_event)
                 else:
                     interim_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                        alternatives=alts,
+                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT, alternatives=alts
                     )
                     self._event_queue.put_nowait(interim_event)
 
@@ -411,8 +399,7 @@ class SpeechStream(stt.SpeechStream):
 
 
 def live_transcription_to_speech_data(
-    language: str,
-    data: dict,
+    language: str, data: dict
 ) -> List[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 

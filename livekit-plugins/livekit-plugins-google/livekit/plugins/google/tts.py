@@ -24,10 +24,7 @@ from livekit.agents import tts
 from livekit.agents.utils import codecs
 
 from google.cloud import texttospeech
-from google.cloud.texttospeech_v1.types import (
-    SsmlVoiceGender,
-    SynthesizeSpeechResponse,
-)
+from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
 
 from .log import logger
 from .models import AudioEncoding, Gender, SpeechLanguages
@@ -75,9 +72,7 @@ class TTS(tts.TTS):
             ssml_gender = SsmlVoiceGender.FEMALE
 
         voice = texttospeech.VoiceSelectionParams(
-            name=voice_name,
-            language_code=language,
-            ssml_gender=ssml_gender,
+            name=voice_name, language_code=language, ssml_gender=ssml_gender
         )
 
         if encoding == "linear16" or encoding == "wav":
@@ -117,10 +112,7 @@ class TTS(tts.TTS):
         assert self._client is not None
         return self._client
 
-    def synthesize(
-        self,
-        text: str,
-    ) -> "ChunkedStream":
+    def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(text, self._opts, self._ensure_client())
 
 

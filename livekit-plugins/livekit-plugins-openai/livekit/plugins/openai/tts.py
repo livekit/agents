@@ -106,10 +106,7 @@ class TTS(tts.TTS):
 
         return TTS(model=model, voice=voice, speed=speed, client=azure_client)
 
-    def synthesize(
-        self,
-        text: str,
-    ) -> "ChunkedStream":
+    def synthesize(self, text: str) -> "ChunkedStream":
         stream = self._client.audio.speech.with_streaming_response.create(
             input=text,
             model=self._opts.model,

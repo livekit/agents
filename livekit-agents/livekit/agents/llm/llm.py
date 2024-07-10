@@ -64,9 +64,7 @@ class LLMStream(abc.ABC):
         """The function context of this stream."""
         return self._fnc_ctx
 
-    def execute_functions(
-        self,
-    ) -> list[function_context.CalledFunction]:
+    def execute_functions(self) -> list[function_context.CalledFunction]:
         """Run all functions in this stream."""
         called_functions: list[function_context.CalledFunction] = []
         for fnc_info in self._function_calls_info:

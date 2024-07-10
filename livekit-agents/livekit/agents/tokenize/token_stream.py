@@ -8,11 +8,7 @@ from .tokenizer import TokenEvent, TokenEventType, TokenStream
 
 class BufferedTokenStream(TokenStream):
     def __init__(
-        self,
-        *,
-        tokenizer: Callable[[str], list[str]],
-        min_token_len: int,
-        ctx_len: int,
+        self, *, tokenizer: Callable[[str], list[str]], min_token_len: int, ctx_len: int
     ) -> None:
         self._tokenizer = tokenizer
         self._ctx_len = ctx_len

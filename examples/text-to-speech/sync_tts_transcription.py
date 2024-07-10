@@ -122,9 +122,7 @@ async def _eg_deferred_playout(
 ):
     """example with deferred playout (We have a synthesized audio before starting to play it)"""
     tts_forwarder = transcription.TTSSegmentsForwarder(
-        room=ctx.room,
-        participant=ctx.room.local_participant,
-        auto_playout=False,
+        room=ctx.room, participant=ctx.room.local_participant, auto_playout=False
     )
 
     text = "Hello world, this is a single segment with deferred playout"

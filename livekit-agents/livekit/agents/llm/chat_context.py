@@ -66,10 +66,7 @@ class ChatMessage:
     def create_tool_calls(
         called_functions: list[function_context.FunctionCallInfo],
     ) -> "ChatMessage":
-        return ChatMessage(
-            role="assistant",
-            tool_calls=called_functions,
-        )
+        return ChatMessage(role="assistant", tool_calls=called_functions)
 
     @staticmethod
     def create(
@@ -85,10 +82,7 @@ class ChatMessage:
             if len(images) > 0:
                 content.extend(images)
 
-            return ChatMessage(
-                role=role,
-                content=content,
-            )
+            return ChatMessage(role=role, content=content)
 
     def copy(self):
         content = self.content

@@ -93,9 +93,7 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _playout_task(
-        self,
-        old_task: asyncio.Task[None] | None,
-        handle: PlayoutHandle,
+        self, old_task: asyncio.Task[None] | None, handle: PlayoutHandle
     ) -> None:
         def _should_break():
             eps = 0.1

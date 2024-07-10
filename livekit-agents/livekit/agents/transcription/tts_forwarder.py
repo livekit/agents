@@ -116,9 +116,7 @@ class TTSSegmentsForwarder:
         segments_q.append(first_segment)
 
         self._forming_segments = _FormingSegments(
-            audio=first_segment,
-            text=first_segment,
-            q=segments_q,
+            audio=first_segment, text=first_segment, q=segments_q
         )
 
         self._seg_queue = asyncio.Queue[Optional[_SegmentData]]()
@@ -295,11 +293,7 @@ class TTSSegmentsForwarder:
             await self._sleep_if_not_closed(first_delay)
             rtc_seg_q.put_nowait(
                 rtc.TranscriptionSegment(
-                    id=seg_id,
-                    text=text,
-                    start_time=0,
-                    end_time=0,
-                    final=False,
+                    id=seg_id, text=text, start_time=0, end_time=0, final=False
                 )
             )
             await self._sleep_if_not_closed(delay - first_delay)
@@ -307,11 +301,7 @@ class TTSSegmentsForwarder:
 
         rtc_seg_q.put_nowait(
             rtc.TranscriptionSegment(
-                id=seg_id,
-                text=tokenized_sentence,
-                start_time=0,
-                end_time=0,
-                final=True,
+                id=seg_id, text=tokenized_sentence, start_time=0, end_time=0, final=True
             )
         )
 

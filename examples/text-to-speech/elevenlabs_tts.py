@@ -3,13 +3,7 @@ import logging
 from typing import Optional
 
 from livekit import rtc
-from livekit.agents import (
-    JobContext,
-    JobRequest,
-    WorkerOptions,
-    cli,
-    tts,
-)
+from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, tts
 from livekit.plugins import elevenlabs
 
 
@@ -43,15 +37,10 @@ async def entrypoint(job: JobContext):
     # use another voice for this demo
     # you can get a list of the voices using 'await tts_11labs.list_voices()'
     voice = elevenlabs.Voice(
-        id="ODq5zmih8GrVes37Dizd",
-        name="Patrick",
-        category="premade",
+        id="ODq5zmih8GrVes37Dizd", name="Patrick", category="premade"
     )
 
-    tts_11labs = elevenlabs.TTS(
-        model_id="eleven_multilingual_v2",
-        voice=voice,
-    )
+    tts_11labs = elevenlabs.TTS(model_id="eleven_multilingual_v2", voice=voice)
 
     source = rtc.AudioSource(tts_11labs.sample_rate, tts_11labs.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)

@@ -186,10 +186,7 @@ class LLMStream(llm.LLMStream):
         return llm.ChatChunk(
             choices=[
                 llm.Choice(
-                    delta=llm.ChoiceDelta(
-                        content=delta.content,
-                        role="assistant",
-                    ),
+                    delta=llm.ChoiceDelta(content=delta.content, role="assistant"),
                     index=choice.index,
                 )
             ]
@@ -221,10 +218,7 @@ class LLMStream(llm.LLMStream):
         return llm.ChatChunk(
             choices=[
                 llm.Choice(
-                    delta=llm.ChoiceDelta(
-                        role="assistant",
-                        tool_calls=[fnc_info],
-                    ),
+                    delta=llm.ChoiceDelta(role="assistant", tool_calls=[fnc_info]),
                     index=choice.index,
                 )
             ]
@@ -238,9 +232,7 @@ def _build_oai_context(
 
 
 def _build_oai_message(msg: llm.ChatMessage, cache_key: Any):
-    oai_msg: dict = {
-        "role": msg.role,
-    }
+    oai_msg: dict = {"role": msg.role}
 
     if msg.name:
         oai_msg["name"] = msg.name
@@ -252,12 +244,7 @@ def _build_oai_message(msg: llm.ChatMessage, cache_key: Any):
         oai_content = []
         for cnt in msg.content:
             if isinstance(cnt, str):
-                oai_content.append(
-                    {
-                        "type": "text",
-                        "text": cnt,
-                    }
-                )
+                oai_content.append({"type": "text", "text": cnt})
             elif isinstance(cnt, llm.ChatImage):
                 oai_content.append(_build_oai_image_content(cnt, cache_key))
 
@@ -292,10 +279,7 @@ def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):
     if isinstance(image.image, str):  # image url
         return {
             "type": "image_url",
-            "image_url": {
-                "url": image.image,
-                "detail": "auto",
-            },
+            "image_url": {"url": image.image, "detail": "auto"},
         }
     elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
         if cache_key not in image._cache:

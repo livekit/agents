@@ -170,10 +170,7 @@ def _run_job(cch: ipc_enc.ProcessPipe, args: protocol.JobMainArgs) -> None:
     logging.root.addHandler(LogHandler(cch))
 
     # current process pid
-    logger.debug(
-        "process started",
-        extra={"url": args.url},
-    )
+    logger.debug("process started", extra={"url": args.url})
 
     pipe = apipe.AsyncPipe(cch, loop, protocol.IPC_MESSAGES)
     loop.slow_callback_duration = 0.05  # 50ms

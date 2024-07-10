@@ -14,8 +14,7 @@ raw_data = open("raw_data.txt", "r").read()
 
 
 async def _create_embeddings(
-    input: str,
-    http_session: aiohttp.ClientSession,
+    input: str, http_session: aiohttp.ClientSession
 ) -> openai.EmbeddingData:
     results = await openai.create_embeddings(
         input=input,

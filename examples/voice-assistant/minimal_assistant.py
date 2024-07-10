@@ -2,9 +2,7 @@ import asyncio
 import logging
 
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
-from livekit.agents.llm import (
-    ChatContext,
-)
+from livekit.agents.llm import ChatContext
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
 

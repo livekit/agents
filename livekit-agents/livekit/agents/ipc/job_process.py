@@ -66,8 +66,7 @@ class JobProcess:
 
                 if s.selected is pong_timeout:
                     logger.error(
-                        "job ping timeout, killing job",
-                        extra=self.logging_extra(),
+                        "job ping timeout, killing job", extra=self.logging_extra()
                     )
                     self._sig_kill()
                     break
@@ -80,10 +79,7 @@ class JobProcess:
                 try:
                     res = s.result()
                 except utils.aio.ChanClosed:
-                    logger.error(
-                        "pipe closed, exiting job",
-                        extra=self.logging_extra(),
-                    )
+                    logger.error("pipe closed, exiting job", extra=self.logging_extra())
                     break
 
                 if isinstance(res, protocol.StartJobResponse):
@@ -107,8 +103,7 @@ class JobProcess:
                     res, protocol.ShutdownResponse
                 ):
                     logger.info(
-                        "job exiting",
-                        extra={"exit": res, **self.logging_extra()},
+                        "job exiting", extra={"exit": res, **self.logging_extra()}
                     )
                     break
         finally:
@@ -123,9 +118,7 @@ class JobProcess:
                 self._process.join()
             except Exception as e:
                 logger.error(
-                    "error joining job process",
-                    exc_info=e,
-                    extra=self.logging_extra(),
+                    "error joining job process", exc_info=e, extra=self.logging_extra()
                 )
 
             self._loop.call_soon_threadsafe(self._close_future.set_result, None)

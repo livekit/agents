@@ -2,12 +2,7 @@ import asyncio
 import logging
 
 from livekit import rtc
-from livekit.agents import (
-    JobContext,
-    JobRequest,
-    WorkerOptions,
-    cli,
-)
+from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
 
 WIDTH = 640
 HEIGHT = 480

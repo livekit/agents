@@ -9,22 +9,11 @@ from livekit import rtc
 
 from ..utils import AudioBuffer, merge_frames
 from ..vad import VAD, VADEventType
-from .stt import (
-    STT,
-    SpeechEvent,
-    SpeechEventType,
-    SpeechStream,
-    STTCapabilities,
-)
+from .stt import STT, SpeechEvent, SpeechEventType, SpeechStream, STTCapabilities
 
 
 class StreamAdapter(STT):
-    def __init__(
-        self,
-        *,
-        stt: STT,
-        vad: VAD,
-    ) -> None:
+    def __init__(self, *, stt: STT, vad: VAD) -> None:
         super().__init__(
             capabilities=STTCapabilities(streaming=True, interim_results=False)
         )
@@ -36,21 +25,10 @@ class StreamAdapter(STT):
         return self._stt
 
     async def recognize(self, *, buffer: AudioBuffer, language: str | None = None):
-        return await self._stt.recognize(
-            buffer=buffer,
-            language=language,
-        )
+        return await self._stt.recognize(buffer=buffer, language=language)
 
-    def stream(
-        self,
-        *,
-        language: str | None = None,
-    ) -> SpeechStream:
-        return StreamAdapterWrapper(
-            self._vad,
-            self._stt,
-            language=language,
-        )
+    def stream(self, *, language: str | None = None) -> SpeechStream:
+        return StreamAdapterWrapper(self._vad, self._stt, language=language)
 
 
 class StreamAdapterWrapper(SpeechStream):

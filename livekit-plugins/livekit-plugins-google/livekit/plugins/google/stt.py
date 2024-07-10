@@ -114,11 +114,7 @@ class STT(stt.STT):
         project_id = self._ensure_client().transport._credentials.project_id  # type: ignore
         return f"projects/{project_id}/locations/global/recognizers/_"
 
-    def _sanitize_options(
-        self,
-        *,
-        language: str | None = None,
-    ) -> STTOptions:
+    def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._config)
 
         if language:
@@ -136,10 +132,7 @@ class STT(stt.STT):
         return config
 
     async def recognize(
-        self,
-        *,
-        buffer: AudioBuffer,
-        language: SpeechLanguages | str | None = None,
+        self, *, buffer: AudioBuffer, language: SpeechLanguages | str | None = None
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
         frame = agents.utils.merge_frames(buffer)
@@ -161,24 +154,16 @@ class STT(stt.STT):
 
         raw = await self._ensure_client().recognize(
             cloud_speech.RecognizeRequest(
-                recognizer=self._recognizer,
-                config=config,
-                content=frame.data.tobytes(),
+                recognizer=self._recognizer, config=config, content=frame.data.tobytes()
             )
         )
         return _recognize_response_to_speech_event(raw)
 
     def stream(
-        self,
-        *,
-        language: SpeechLanguages | str | None = None,
+        self, *, language: SpeechLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(
-            self._ensure_client(),
-            self._recognizer,
-            config,
-        )
+        return SpeechStream(self._ensure_client(), self._recognizer, config)
 
 
 class SpeechStream(stt.SpeechStream):
@@ -271,7 +256,7 @@ class SpeechStream(stt.SpeechStream):
                                 self._sample_rate, self._num_channels
                             )
                             yield cloud_speech.StreamingRecognizeRequest(
-                                audio=frame.data.tobytes(),
+                                audio=frame.data.tobytes()
                             )
                     except Exception as e:
                         logger.error(f"an error occurred while streaming inputs: {e}")
@@ -353,9 +338,7 @@ class SpeechStream(stt.SpeechStream):
 
     def _send_bos(self) -> None:
         self._need_bos = False
-        start_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.START_OF_SPEECH,
-        )
+        start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
         self._event_queue.put_nowait(start_event)
 
     def _send_eos(self) -> None:
@@ -394,11 +377,7 @@ class SpeechStream(stt.SpeechStream):
                 type=stt.SpeechEventType.END_OF_SPEECH,
                 alternatives=[
                     stt.SpeechData(
-                        language="",
-                        start_time=0,
-                        end_time=0,
-                        confidence=0,
-                        text="",
+                        language="", start_time=0, end_time=0, confidence=0, text=""
                     )
                 ],
             )
@@ -455,11 +434,7 @@ def _streaming_recognize_response_to_speech_data(
     lg = resp.results[0].language_code
 
     data = stt.SpeechData(
-        language=lg,
-        start_time=0,
-        end_time=0,
-        confidence=confidence,
-        text=text,
+        language=lg, start_time=0, end_time=0, confidence=confidence, text=text
     )
 
     return data

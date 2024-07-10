@@ -61,15 +61,10 @@ class TTS(tts.TTS):
             raise ValueError("AZURE_SPEECH_REGION must be set")
 
         self._opts = _TTSOptions(
-            speech_key=speech_key,
-            speech_region=speech_region,
-            voice=voice,
+            speech_key=speech_key, speech_region=speech_region, voice=voice
         )
 
-    def synthesize(
-        self,
-        text: str,
-    ) -> "ChunkedStream":
+    def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(text, self._opts)
 
 

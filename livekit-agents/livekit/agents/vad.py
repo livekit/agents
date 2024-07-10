@@ -47,9 +47,7 @@ class VAD(ABC):
         return self._capabilities
 
     @abstractmethod
-    def stream(
-        self,
-    ) -> "VADStream":
+    def stream(self) -> "VADStream":
         pass
 
 

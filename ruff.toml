@@ -1,10 +1,13 @@
 line-length = 88
 indent-width = 4
 
-target-version = "py310"
+target-version = "py39"
 
 [lint]
 extend-select = ["I"]
 
 [lint.pydocstyle]
-convention = "google"
+convention = "numpy"
+
+[format]
+docstring-code-format = true

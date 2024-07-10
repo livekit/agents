@@ -20,12 +20,7 @@ import datetime
 import os
 from dataclasses import dataclass, field
 from functools import reduce
-from typing import (
-    Any,
-    Callable,
-    Coroutine,
-    Literal,
-)
+from typing import Any, Callable, Coroutine, Literal
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -86,10 +81,7 @@ EventTypes = Literal["worker_registered"]
 
 class Worker(utils.EventEmitter[EventTypes]):
     def __init__(
-        self,
-        opts: WorkerOptions,
-        *,
-        loop: asyncio.AbstractEventLoop | None = None,
+        self, opts: WorkerOptions, *, loop: asyncio.AbstractEventLoop | None = None
     ) -> None:
         super().__init__()
         opts.ws_url = opts.ws_url or opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
@@ -171,9 +163,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         # exit the queue
         update_worker = agent.WorkerMessage(
-            update_worker=agent.UpdateWorkerStatus(
-                status=(agent.WorkerStatus.WS_FULL),
-            )
+            update_worker=agent.UpdateWorkerStatus(status=(agent.WorkerStatus.WS_FULL))
         )
         await self._queue_msg(update_worker)
 
@@ -268,11 +258,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 if scheme.startswith("http"):
                     scheme = scheme.replace("http", "ws")
 
-                path_parts = [
-                    f"{scheme}://{parse.netloc}",
-                    parse.path,
-                    "/agent",
-                ]
+                path_parts = [f"{scheme}://{parse.netloc}", parse.path, "/agent"]
                 agent_url = reduce(urljoin, path_parts)
 
                 ws = await self._session.ws_connect(
@@ -324,7 +310,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 retry_count += 1
 
                 logger.warning(
-                    f"failed to connect to livekit, retrying in {retry_delay}s: {e}",
+                    f"failed to connect to livekit, retrying in {retry_delay}s: {e}"
                 )
                 await asyncio.sleep(retry_delay)
 
@@ -350,8 +336,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 )
 
                 update = agent.UpdateWorkerStatus(
-                    load=current_load,
-                    status=current_status,
+                    load=current_load, status=current_status
                 )
 
                 # only log if status has changed
@@ -484,8 +469,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 await self._opts.request_fnc(req)
             except Exception:
                 logger.exception(
-                    f"user request handler for job {req.id} failed",
-                    extra={"req": req},
+                    f"user request handler for job {req.id} failed", extra={"req": req}
                 )
 
             if not req.answered:
@@ -529,10 +513,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             await asyncio.wait_for(wait_assignment, consts.ASSIGNMENT_TIMEOUT)
             await av.assignment_tx.send(None)
         except asyncio.TimeoutError as e:
-            logger.warning(
-                f"assignment for job {req.id} timed out",
-                extra={"req": req},
-            )
+            logger.warning(f"assignment for job {req.id} timed out", extra={"req": req})
             await av.assignment_tx.send(e)
             return
         finally:
@@ -553,6 +534,5 @@ class Worker(utils.EventEmitter[EventTypes]):
             fut.set_result(assignment)
         else:
             logger.warning(
-                f"received assignment for unknown job {job.id}",
-                extra={"job": job},
+                f"received assignment for unknown job {job.id}", extra={"job": job}
             )

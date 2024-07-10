@@ -5,12 +5,7 @@ import contextlib
 from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import (
-    Any,
-    Awaitable,
-    Iterable,
-    Union,
-)
+from typing import Any, Awaitable, Iterable, Union
 
 
 class SelectLoop:

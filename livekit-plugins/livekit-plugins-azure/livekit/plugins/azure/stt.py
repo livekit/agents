@@ -68,18 +68,11 @@ class STT(stt.STT):
         )
 
     async def recognize(
-        self,
-        *,
-        buffer: AudioBuffer,
-        language: str | None = None,
+        self, *, buffer: AudioBuffer, language: str | None = None
     ) -> stt.SpeechEvent:
         raise NotImplementedError("Azure STT does not support single frame recognition")
 
-    def stream(
-        self,
-        *,
-        language: str | None = None,
-    ) -> "SpeechStream":
+    def stream(self, *, language: str | None = None) -> "SpeechStream":
         return SpeechStream(self._config)
 
 
@@ -138,15 +131,12 @@ class SpeechStream(stt.SpeechStream):
             return
 
         final_data = stt.SpeechData(
-            language=detected_lg,
-            confidence=1.0,
-            text=evt.result.text,
+            language=detected_lg, confidence=1.0, text=evt.result.text
         )
 
         self._threadsafe_put(
             stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                alternatives=[final_data],
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]
             )
         )
 
@@ -157,15 +147,12 @@ class SpeechStream(stt.SpeechStream):
             return
 
         interim_data = stt.SpeechData(
-            language=detected_lg,
-            confidence=0.0,
-            text=evt.result.text,
+            language=detected_lg, confidence=0.0, text=evt.result.text
         )
 
         self._threadsafe_put(
             stt.SpeechEvent(
-                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                alternatives=[interim_data],
+                type=stt.SpeechEventType.INTERIM_TRANSCRIPT, alternatives=[interim_data]
             )
         )
 

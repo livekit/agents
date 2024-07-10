@@ -3,13 +3,7 @@ import enum
 import logging
 from typing import Annotated
 
-from livekit.agents import (
-    JobContext,
-    JobRequest,
-    WorkerOptions,
-    cli,
-    llm,
-)
+from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
 
@@ -47,9 +41,7 @@ class AssistantFnc(llm.FunctionContext):
         return self._light_status
 
     # Simple demonstration of an AI function that can be called by the user with some arguments.
-    @llm.ai_callable(
-        description="Turn on/off the lights in a room",
-    )
+    @llm.ai_callable(description="Turn on/off the lights in a room")
     async def toggle_light(
         self,
         room: Annotated[Room, llm.TypeInfo(description="The specific room")],

@@ -21,9 +21,7 @@ from typing import Any
 
 from . import function_context
 
-__all__ = [
-    "build_oai_function_description",
-]
+__all__ = ["build_oai_function_description"]
 
 
 def create_ai_function_info(

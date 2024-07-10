@@ -58,16 +58,11 @@ class SentenceTokenizer(agents.tokenize.SentenceTokenizer):
 
         return new_sentences
 
-    def stream(
-        self,
-        *,
-        language: str | None = None,
-    ) -> agents.tokenize.SentenceStream:
+    def stream(self, *, language: str | None = None) -> agents.tokenize.SentenceStream:
         config = self._sanitize_options(language=language)
         return agents.tokenize.BufferedTokenStream(
             tokenizer=functools.partial(
-                nltk.tokenize.sent_tokenize,
-                language=config.language,
+                nltk.tokenize.sent_tokenize, language=config.language
             ),
             min_token_len=self._config.min_sentence_len,
             ctx_len=self._config.stream_context_len,

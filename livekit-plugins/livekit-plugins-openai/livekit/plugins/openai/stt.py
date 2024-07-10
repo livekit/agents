@@ -74,20 +74,13 @@ class STT(stt.STT):
 
         return self._session
 
-    def _sanitize_options(
-        self,
-        *,
-        language: str | None = None,
-    ) -> _STTOptions:
+    def _sanitize_options(self, *, language: str | None = None) -> _STTOptions:
         config = dataclasses.replace(self._opts)
         config.language = language or config.language
         return config
 
     async def recognize(
-        self,
-        *,
-        buffer: AudioBuffer,
-        language: str | None = None,
+        self, *, buffer: AudioBuffer, language: str | None = None
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 

@@ -113,20 +113,13 @@ class JsonFormatter(logging.Formatter):
             log_record[field] = record.__dict__.get(field)
 
         log_record.update(message_dict)
-        _merge_record_extra(
-            record,
-            log_record,
-        )
+        _merge_record_extra(record, log_record)
 
         log_record["timestamp"] = datetime.fromtimestamp(
             record.created, tz=timezone.utc
         )
 
-        return json.dumps(
-            log_record,
-            cls=JsonFormatter.JsonEncoder,
-            ensure_ascii=True,
-        )
+        return json.dumps(log_record, cls=JsonFormatter.JsonEncoder, ensure_ascii=True)
 
 
 class ColoredFormatter(logging.Formatter):
@@ -190,7 +183,7 @@ def setup_logging(log_level: str, production: bool = True) -> None:
     if not production:
         # colorful logs for dev (improves readability)
         colored_formatter = ColoredFormatter(
-            "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(extra)s",
+            "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(extra)s"
         )
         handler.setFormatter(colored_formatter)
     else:

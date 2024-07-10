@@ -28,15 +28,9 @@ from livekit import rtc
 from livekit.agents import tokenize, tts, utils
 
 from .log import logger
-from .models import (
-    TTSEncoding,
-    TTSModels,
-)
+from .models import TTSEncoding, TTSModels
 
-_Encoding = Literal[
-    "mp3",
-    "pcm",
-]
+_Encoding = Literal["mp3", "pcm"]
 
 
 def _sample_rate_from_format(output_format: TTSEncoding) -> int:
@@ -148,15 +142,10 @@ class TTS(tts.TTS):
         ) as resp:
             return _dict_to_voices_list(await resp.json())
 
-    def synthesize(
-        self,
-        text: str,
-    ) -> "ChunkedStream":
+    def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(text, self._opts, self._ensure_session())
 
-    def stream(
-        self,
-    ) -> "SynthesizeStream":
+    def stream(self) -> "SynthesizeStream":
         return SynthesizeStream(self._ensure_session(), self._opts)
 
 
@@ -397,7 +386,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     try_trigger_generation=True,
                     voice_settings=voice_settings,
                     generation_config=dict(
-                        chunk_length_schedule=self._opts.chunk_length_schedule,
+                        chunk_length_schedule=self._opts.chunk_length_schedule
                     ),
                 )
                 await ws_conn.send_str(json.dumps(init_pkt))
@@ -432,9 +421,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await ws_conn.send_str(json.dumps(data_pkt))
 
             # no more token, mark eos
-            flush_pkt = dict(
-                text="",
-            )
+            flush_pkt = dict(text="")
             await ws_conn.send_str(json.dumps(flush_pkt))
 
             nonlocal all_tokens_consumed

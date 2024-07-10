@@ -10,13 +10,7 @@ from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, U
 from livekit import rtc
 
 from .. import stt, tokenize, tts, utils, vad
-from ..llm import (
-    LLM,
-    ChatContext,
-    ChatMessage,
-    FunctionContext,
-    LLMStream,
-)
+from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
 from .agent_output import AgentOutput, SynthesisHandle
 from .cancellable_source import CancellableAudioSource
 from .human_input import HumanInput
@@ -304,10 +298,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         self._human_input = HumanInput(
-            room=self._room,
-            vad=self._vad,
-            stt=self._stt,
-            participant=participant,
+            room=self._room, vad=self._vad, stt=self._stt, participant=participant
         )
 
         def _on_start_of_speech(ev: vad.VADEvent) -> None:

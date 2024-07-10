@@ -3,12 +3,7 @@ from enum import Enum
 from typing import Annotated
 
 from livekit.agents import llm
-from livekit.agents.llm import (
-    ChatContext,
-    FunctionContext,
-    TypeInfo,
-    ai_callable,
-)
+from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
 from livekit.plugins import openai
 
 
@@ -39,8 +34,7 @@ class FncCtx(FunctionContext):
             str, TypeInfo(description="The city and state, e.g. San Francisco, CA")
         ],
         unit: Annotated[
-            Unit,
-            TypeInfo(description="The temperature unit to use."),
+            Unit, TypeInfo(description="The temperature unit to use.")
         ] = Unit.CELSIUS,
     ) -> None:
         self._get_weather_calls += 1
@@ -98,7 +92,7 @@ async def test_chat():
     llm = openai.LLM(model="gpt-4o")
 
     chat_ctx = ChatContext().append(
-        text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.',
+        text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.'
     )
 
     stream = llm.chat(chat_ctx=chat_ctx)
@@ -132,12 +126,7 @@ async def test_fnc_calls_runtime_addition():
 
     @fnc_ctx.ai_callable(description="Show a message on the screen")
     async def show_message(
-        message: Annotated[
-            str,
-            TypeInfo(
-                description="The message to show",
-            ),
-        ],
+        message: Annotated[str, TypeInfo(description="The message to show")],
     ):
         nonlocal called_msg
         called_msg = message
@@ -208,8 +197,7 @@ async def _request_fnc_call(
     model: llm.LLM, request: str, fnc_ctx: FncCtx
 ) -> llm.LLMStream:
     stream = model.chat(
-        chat_ctx=ChatContext().append(text=request, role="user"),
-        fnc_ctx=fnc_ctx,
+        chat_ctx=ChatContext().append(text=request, role="user"), fnc_ctx=fnc_ctx
     )
 
     async for _ in stream:

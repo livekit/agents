@@ -102,20 +102,13 @@ class AgentOutput:
             transcription_fwd=transcription_fwd,
         )
 
-        task = asyncio.create_task(
-            self._synthesize_task(
-                handle,
-            )
-        )
+        task = asyncio.create_task(self._synthesize_task(handle))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.remove)
         return handle
 
     @utils.log_exceptions(logger=logger)
-    async def _synthesize_task(
-        self,
-        handle: SynthesisHandle,
-    ) -> None:
+    async def _synthesize_task(self, handle: SynthesisHandle) -> None:
         """Synthesize speech from the source"""
         if isinstance(handle._speech_source, str):
             co = _str_synthesis_task(handle._speech_source, handle)
@@ -134,10 +127,7 @@ class AgentOutput:
 
 
 @utils.log_exceptions(logger=logger)
-async def _str_synthesis_task(
-    text: str,
-    handle: SynthesisHandle,
-) -> None:
+async def _str_synthesis_task(text: str, handle: SynthesisHandle) -> None:
     """synthesize speech from a string"""
     if handle._tr_fwd is not None:
         handle._tr_fwd.push_text(text)
@@ -171,8 +161,7 @@ async def _str_synthesis_task(
 
 @utils.log_exceptions(logger=logger)
 async def _stream_synthesis_task(
-    streamed_text: AsyncIterable[str],
-    handle: SynthesisHandle,
+    streamed_text: AsyncIterable[str], handle: SynthesisHandle
 ) -> None:
     """synthesize speech from streamed text"""
 

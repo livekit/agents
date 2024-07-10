@@ -16,11 +16,7 @@ from . import annoy
 from .chunking import SentenceChunker
 from .version import __version__
 
-__all__ = [
-    "SentenceChunker",
-    "annoy",
-    "__version__",
-]
+__all__ = ["SentenceChunker", "annoy", "__version__"]
 
 from livekit.agents import Plugin
 
