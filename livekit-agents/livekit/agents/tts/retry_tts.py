@@ -25,12 +25,20 @@ class RetryPolicy:
 
 
 class RetryTTS(TTS):
-    def __init__(self, source_tts: TTS, retry_policy: RetryPolicy) -> None:
+    def __init__(
+        self,
+        source_tts: TTS,
+        first_packet_timeout: float,
+        retry_policy: RetryPolicy = RetryPolicy.exponential_backoff(
+            initial_delay=0.5, max_delay=5, max_retries=3
+        ),
+    ) -> None:
         super().__init__(
             streaming_supported=source_tts.streaming_supported,
             sample_rate=source_tts.sample_rate,
             num_channels=source_tts.num_channels,
         )
+        self._first_packet_timeout = first_packet_timeout
         self._source_tts = source_tts
         self._retry_policy = retry_policy
 
@@ -45,6 +53,7 @@ class RetryTTS(TTS):
     def synthesize(self, text: str) -> ChunkedStream:
         return RetryChunkedStream(
             source_tts=self._source_tts,
+            first_packet_timeout=self._first_packet_timeout,
             text=text,
             retry_policy=RetryPolicy(max_retries=3, delay=0.5),
         )
@@ -52,6 +61,7 @@ class RetryTTS(TTS):
     def stream(self) -> SynthesizeStream:
         return RetrySynthesizeStream(
             source_tts=self._source_tts,
+            first_packet_timeout=self._first_packet_timeout,
             retry_policy=self._retry_policy,
         )
 
@@ -61,10 +71,12 @@ class RetryChunkedStream(ChunkedStream):
         self,
         source_tts: TTS,
         text: str,
+        first_packet_timeout: float,
         retry_policy: RetryPolicy,
     ) -> None:
         super().__init__()
         self._text = text
+        self._first_packet_timeout = first_packet_timeout
         self._source_tts = source_tts
         self._source_cs: ChunkedStream | None
         self._retry_policy = retry_policy
@@ -83,7 +95,11 @@ class RetryChunkedStream(ChunkedStream):
         while True:
             try:
                 assert self._source_cs is not None
-                item = await self._source_cs.__anext__()
+                if not sent_first_audio:
+                    async with asyncio.timeout(self._first_packet_timeout):
+                        item = await self._source_cs.__anext__()
+                else:
+                    item = await self._source_cs.__anext__()
                 if not sent_first_audio:
                     sent_first_audio = True
                 return item
@@ -104,10 +120,12 @@ class RetryChunkedStream(ChunkedStream):
 class RetrySynthesizeStream(SynthesizeStream):
     def __init__(
         self,
+        first_packet_timeout: float,
         source_tts: TTS,
         retry_policy: RetryPolicy,
     ) -> None:
         super().__init__()
+        self._first_packet_timeout = first_packet_timeout
         self._source_tts = source_tts
         self._source_ss: SynthesizeStream | None
         self._retry_policy = retry_policy
@@ -134,7 +152,11 @@ class RetrySynthesizeStream(SynthesizeStream):
         while True:
             try:
                 assert self._source_ss is not None
-                item = await self._source_ss.__anext__()
+                if not sent_first_event:
+                    async with asyncio.timeout(self._first_packet_timeout):
+                        item = await self._source_ss.__anext__()
+                else:
+                    item = await self._source_ss.__anext__()
                 if not sent_first_event:
                     sent_first_event = True
                 return item
