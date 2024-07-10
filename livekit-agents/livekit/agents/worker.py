@@ -70,7 +70,7 @@ class WorkerOptions:
     ws_url: str = "ws://localhost:7880"
     api_key: str | None = None
     api_secret: str | None = None
-    host: str = "localhost"
+    host: str = ""  # default to all interfaces
     port: int = 8081
 
 
