@@ -42,7 +42,7 @@ class ChunkedStream(ABC):
         """
         Utility method to collect every frame in a single call
         """
-        frames = []
+        frames: list[rtc.AudioFrame] = []
         async for ev in self:
             frames.append(ev.data)
 
