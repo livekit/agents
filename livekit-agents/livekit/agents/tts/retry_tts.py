@@ -50,8 +50,10 @@ class RetryTTS(TTS):
         )
 
     def stream(self) -> SynthesizeStream:
-        if self._streaming_supported:
-            return self._source_tts.stream()
+        return RetrySynthesizeStream(
+            source_tts=self._source_tts,
+            retry_policy=self._retry_policy,
+        )
 
 
 class RetryChunkedStream(ChunkedStream):
