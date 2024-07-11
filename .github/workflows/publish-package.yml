@@ -29,11 +29,41 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  bump:
+    runs-on: ubuntu-latest
+    outputs: 
+      packages: ${{ steps.changesets.outputs.publishedPackages }}
 
+    steps:
+    - uses: pnpm/action-setup@v4
+    - name: Use Node.js 20
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: "pnpm"
+
+    - name: Install pnpm dependencies
+      run: pnpm install
+
+    - name: Create Release Pull Request
+      id: changesets
+      uses: changesets/action@v1
+      with:
+        version: pnpm ci:version
+        publish: pnpm ci:publish
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  
+  build:
+    needs:
+    - bump
+    strategy:
+      matrix:
+        package: ${{ fromJson(needs.bump.outputs.packages) }}
     defaults:
       run:
-        working-directory: ${{ inputs.package_name }}
+        working-directory: ${{ package.name }}
 
     runs-on: ubuntu-latest
 
@@ -50,6 +80,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install build
 
+    - name: Bump version.py
+      run: |
+        export module=$(sed 's/^.*\///' <<< ${{ package.name }} | tr '-' '/')
+        sed -i "s/__version__.*/__version__ = \"${{ package.version }}\"/" $module/version.py
+
     - name: Build package
       run: python -m build
 
@@ -57,7 +92,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: python-package-distributions
-        path: ${{ inputs.package_name}}/dist/
+        path: ${{ package.name }}/dist/
 
   publish:
 
@@ -82,9 +117,16 @@ jobs:
 
   docs:
     needs:
+    - bump
     - publish
+    strategy:
+      matrix:
+        package: ${{ needs.bump.outputs.packages }}
 
     runs-on: ubuntu-latest
+    env:
+      package: $(sed 's/^.*\///' <<< ${{ package.name }})
+      module: $(tr '-' '/' <<< $package)
 
     steps:
     - uses: actions/checkout@v3
@@ -93,13 +135,13 @@ jobs:
       run: python -m pip install --upgrade pdoc
 
     - name: Install package
-      run: python -m pip install ${{ inputs.package_name }}/
+      run: python -m pip install $package/
 
     - name: Build Docs
-      run: python -m pdoc ${{ inputs.package_module }} --docformat=google --output-dir docs
+      run: python -m pdoc $module --docformat=google --output-dir docs
 
     - name: S3 Upload
-      run: aws s3 cp docs/ s3://livekit-docs/${{ inputs.package_name }} --recursive
+      run: aws s3 cp docs/ s3://livekit-docs/$package --recursive
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}

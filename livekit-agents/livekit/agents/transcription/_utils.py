@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import uuid
 
 from livekit import rtc
 
 
 def find_micro_track_id(room: rtc.Room, identity: str) -> str:
-    p = room.participants_by_identity.get(identity)
+    p: rtc.RemoteParticipant | rtc.LocalParticipant | None = (
+        room.participants_by_identity.get(identity)
+    )
     if identity == room.local_participant.identity:
         p = room.local_participant
 

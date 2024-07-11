@@ -21,7 +21,7 @@ from typing import AsyncIterator, Optional
 
 import numpy as np
 from livekit import agents, rtc
-from livekit.agents import aio
+from livekit.agents import utils
 
 from . import onnx_model
 from .log import logger
@@ -33,7 +33,6 @@ class _VADOptions:
     min_silence_duration: float
     padding_duration: float
     max_buffered_speech: float
-    window_size_samples: int
     activation_threshold: float
     sample_rate: int
 
@@ -42,13 +41,12 @@ class VAD(agents.vad.VAD):
     def __init__(
         self,
         *,
-        min_speech_duration: float = 0.260,  # 260ms
-        min_silence_duration: float = 0.15,  # 150ms
+        min_speech_duration: float = 0.05,
+        min_silence_duration: float = 0.1,
         padding_duration: float = 0.1,
         max_buffered_speech: float = 60.0,
-        activation_threshold: float = 0.35,
+        activation_threshold: float = 0.25,
         sample_rate: int = 16000,
-        window_size_samples: int = 1024,
         force_cpu: bool = True,
     ) -> None:
         """
@@ -62,19 +60,11 @@ class VAD(agents.vad.VAD):
             max_buffered_speech: maximum duration of speech to keep in the buffer (in seconds)
             activation_threshold: threshold to consider a frame as speech
             sample_rate: sample rate for the inference (only 8KHz and 16KHz are supported)
-            window_size_samples: audio chunk size to use for the inference
-                512, 1024, 1536 samples for 16000 sample rate and 256, 512, 768 samples for 8000 sample rate
             force_cpu: force to use CPU for inference
         """
 
         if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
-
-        if sample_rate == 8000 and window_size_samples not in [256, 512, 768]:
-            raise ValueError("window_size_samples must be 256, 512, or 768 for 8KHz")
-
-        if sample_rate == 16000 and window_size_samples not in [512, 1024, 1536]:
-            raise ValueError("window_size_samples must be 512, 1024, or 1536 for 16KHz")
 
         self._onnx_session = onnx_model.new_inference_session(force_cpu)
         self._opts = _VADOptions(
@@ -84,7 +74,6 @@ class VAD(agents.vad.VAD):
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
             sample_rate=sample_rate,
-            window_size_samples=window_size_samples,
         )
 
     def stream(
@@ -116,10 +105,11 @@ class VADStream(agents.vad.VADStream):
 
         self._original_sample_rate: int | None = None
         self._window_data: _WindowData | None = None
-        self._remaining_samples = opts.window_size_samples
+
+        self._remaining_samples = model.window_size_samples
 
         self._input_q = asyncio.Queue[Optional[_WindowData]]()
-        self._event_ch = aio.Chan[agents.vad.VADEvent]()
+        self._event_ch = utils.aio.Chan[agents.vad.VADEvent]()
         self._closed = False
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
@@ -146,10 +136,10 @@ class VADStream(agents.vad.VADStream):
         if self._window_data is None:
             self._window_data = _WindowData(
                 inference_data=np.zeros(
-                    self._opts.window_size_samples, dtype=np.float32
+                    self._model.window_size_samples, dtype=np.float32
                 ),
                 original_data=np.zeros(
-                    self._opts.window_size_samples * step, dtype=np.int16
+                    self._model.window_size_samples * step, dtype=np.int16
                 ),
             )
 
@@ -161,7 +151,7 @@ class VADStream(agents.vad.VADStream):
 
         remaining_data = len(if_frame)
         while remaining_data > 0:
-            i = self._opts.window_size_samples - self._remaining_samples
+            i = self._model.window_size_samples - self._remaining_samples
             to_copy = min(remaining_data, self._remaining_samples)
             self._remaining_samples -= to_copy
             remaining_data -= to_copy
@@ -175,13 +165,13 @@ class VADStream(agents.vad.VADStream):
                 self._input_q.put_nowait(self._window_data)
                 self._window_data = _WindowData(
                     inference_data=np.zeros(
-                        self._opts.window_size_samples, dtype=np.float32
+                        self._model.window_size_samples, dtype=np.float32
                     ),
                     original_data=np.zeros(
-                        self._opts.window_size_samples * step, dtype=np.int16
+                        self._model.window_size_samples * step, dtype=np.int16
                     ),
                 )
-                self._remaining_samples = self._opts.window_size_samples
+                self._remaining_samples = self._model.window_size_samples
 
     async def aclose(self) -> None:
         if self._closed:
@@ -194,6 +184,8 @@ class VADStream(agents.vad.VADStream):
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self):
         pub_speaking = False
+        pub_speech_duration = 0.0
+        pub_silence_duration = 0.0
         pub_speech_buf = np.array([], dtype=np.int16)
 
         may_start_at_sample = -1
@@ -214,42 +206,30 @@ class VADStream(agents.vad.VADStream):
             inference_data = window_data.inference_data
             start_time = time.time()
             raw_prob = await asyncio.to_thread(lambda: self._model(inference_data))
-            raw_speaking = raw_prob >= self._opts.activation_threshold
             inference_duration = time.time() - start_time
 
-            window_duration = self._opts.window_size_samples / self._opts.sample_rate
+            window_duration = self._model.window_size_samples / self._opts.sample_rate
             if inference_duration > window_duration:
                 # slower than realtime
                 logger.warning(
-                    "vad inference took too long — slower than realtime: %f",
+                    "vad inference took too long - slower than realtime: %f",
                     inference_duration,
                 )
 
-            self._event_ch.send_nowait(
-                agents.vad.VADEvent(
-                    type=agents.vad.VADEventType.INFERENCE_DONE,
-                    samples_index=current_sample,
-                    probability=raw_prob,
-                    inference_duration=inference_duration,
-                    speaking=raw_speaking,
-                )
-            )
-            current_sample += self._opts.window_size_samples
-
             # append new data to current speech buffer
             pub_speech_buf = np.append(pub_speech_buf, window_data.original_data)
-            cl = self._opts.padding_duration
+            max_data_s = self._opts.padding_duration
             if not pub_speaking:
-                cl += self._opts.min_speech_duration
+                max_data_s += self._opts.min_speech_duration
             else:
-                cl += self._opts.max_buffered_speech
+                max_data_s += self._opts.max_buffered_speech
 
-            cl = int(cl) * self._original_sample_rate
+            cl = int(max_data_s) * self._original_sample_rate
             if len(pub_speech_buf) > cl:
                 pub_speech_buf = pub_speech_buf[-cl:]
 
             # dispatch start/end when needed
-            if raw_speaking:
+            if raw_prob >= self._opts.activation_threshold:
                 may_end_at_sample = -1
 
                 if may_start_at_sample == -1:
@@ -260,12 +240,34 @@ class VADStream(agents.vad.VADStream):
                     self._event_ch.send_nowait(
                         agents.vad.VADEvent(
                             type=agents.vad.VADEventType.START_OF_SPEECH,
+                            silence_duration=pub_silence_duration,
+                            speech_duration=0.0,
                             samples_index=current_sample,
                             speaking=True,
                         )
                     )
 
+                    pub_silence_duration = 0
+                    pub_speech_duration += self._opts.min_speech_duration
+
+            if pub_speaking:
+                pub_speech_duration += window_duration
             else:
+                pub_silence_duration = 0
+
+            self._event_ch.send_nowait(
+                agents.vad.VADEvent(
+                    type=agents.vad.VADEventType.INFERENCE_DONE,
+                    samples_index=current_sample,
+                    silence_duration=0.0,
+                    speech_duration=pub_speech_duration,
+                    probability=raw_prob,
+                    inference_duration=inference_duration,
+                    speaking=pub_speaking,
+                )
+            )
+
+            if raw_prob < self._opts.activation_threshold:
                 may_start_at_sample = -1
 
                 if may_end_at_sample == -1:
@@ -285,13 +287,18 @@ class VADStream(agents.vad.VADStream):
                         agents.vad.VADEvent(
                             type=agents.vad.VADEventType.END_OF_SPEECH,
                             samples_index=current_sample,
-                            duration=len(pub_speech_buf) / self._original_sample_rate,
+                            silence_duration=0.0,
+                            speech_duration=pub_speech_duration,
                             frames=[frame],
                             speaking=False,
                         )
                     )
 
                     pub_speech_buf = np.array([], dtype=np.int16)
+                    pub_speech_duration = 0
+                    pub_silence_duration += self._opts.min_silence_duration
+
+            current_sample += self._model.window_size_samples
 
         self._event_ch.close()
 

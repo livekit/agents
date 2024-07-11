@@ -42,7 +42,7 @@ class ChunkedStream(ABC):
         """
         Utility method to collect every frame in a single call
         """
-        frames = []
+        frames: list[rtc.AudioFrame] = []
         async for ev in self:
             frames.append(ev.data)
 
@@ -95,7 +95,11 @@ class SynthesizeStream(ABC):
 
 class TTS(ABC):
     def __init__(
-        self, *, streaming_supported: bool, sample_rate: int, num_channels: int
+        self,
+        *,
+        streaming_supported: bool,
+        sample_rate: int,
+        num_channels: int,
     ) -> None:
         self._streaming_supported = streaming_supported
         self._sample_rate = sample_rate

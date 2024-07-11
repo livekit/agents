@@ -1,0 +1,3 @@
+packages:
+  - "livekit-agents"
+  - "livekit-plugins/*"

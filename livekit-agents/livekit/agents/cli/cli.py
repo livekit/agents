@@ -7,7 +7,7 @@ import sys
 import click
 from livekit.protocol import models
 
-from .. import aio
+from .. import utils
 from ..log import logger
 from ..plugin import Plugin
 from ..worker import Worker, WorkerOptions
@@ -202,7 +202,7 @@ def run_worker(args: protocol.CliArgs) -> None:
 
     loop.set_debug(args.asyncio_debug)
     loop.slow_callback_duration = 0.05  # 50ms
-    aio.debug.hook_slow_callbacks(2)
+    utils.aio.debug.hook_slow_callbacks(2)
 
     if args.room:
         # directly connect to a specific roomj

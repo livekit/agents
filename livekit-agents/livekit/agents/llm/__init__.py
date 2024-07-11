@@ -1,3 +1,4 @@
+from . import _oai_api
 from .chat_context import (
     ChatContext,
     ChatImage,
@@ -5,16 +6,17 @@ from .chat_context import (
     ChatRole,
 )
 from .function_context import (
-    AIFncArg,
-    AIFncMetadata,
-    AIFunction,
+    USE_DOCSTRING,
+    CalledFunction,
+    FunctionArgInfo,
+    FunctionCallInfo,
     FunctionContext,
+    FunctionInfo,
     TypeInfo,
     ai_callable,
 )
 from .llm import (
     LLM,
-    CalledFunction,
     ChatChunk,
     Choice,
     ChoiceDelta,
@@ -35,8 +37,10 @@ __all__ = [
     "FunctionContext",
     "ai_callable",
     "TypeInfo",
-    "AIFncArg",
-    "AIFunction",
-    "AIFncMetadata",
+    "FunctionArgInfo",
+    "FunctionInfo",
+    "FunctionCallInfo",
     "CalledFunction",
+    "USE_DOCSTRING",
+    "_oai_api",
 ]

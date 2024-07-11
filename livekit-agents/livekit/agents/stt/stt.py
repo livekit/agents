@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, unique
 from typing import AsyncIterator, List
 
 from livekit import rtc
@@ -10,18 +10,18 @@ from livekit import rtc
 from ..utils import AudioBuffer
 
 
+@unique
 class SpeechEventType(Enum):
-    # indicate the start of speech
-    # if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT
-    START_OF_SPEECH = 0
-    # interim transcript, useful for real-time transcription
-    INTERIM_TRANSCRIPT = 1
-    # final transcript, emitted when the STT is confident enough that a certain
-    # portion of speech will not change
-    FINAL_TRANSCRIPT = 2
-    # indicate the end of speech, emitted when the user stops speaking
-    # the first alternative is a combination of all the previous FINAL_TRANSCRIPT events
-    END_OF_SPEECH = 3
+    START_OF_SPEECH = "start_of_speech"
+    """indicate the start of speech
+    if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT"""
+    INTERIM_TRANSCRIPT = "interim_transcript"
+    """interim transcript, useful for real-time transcription"""
+    FINAL_TRANSCRIPT = "final_transcript"
+    """inal transcript, emitted when the STT is confident enough that a certain
+    portion of speech will not change"""
+    END_OF_SPEECH = "end_of_speech"
+    """indicate the end of speech, emitted when the user stops speaking"""
 
 
 @dataclass
@@ -39,13 +39,23 @@ class SpeechEvent:
     alternatives: List[SpeechData] = field(default_factory=list)
 
 
+@dataclass
+class STTCapabilities:
+    streaming: bool
+    interim_results: bool
+
+
 class STT(ABC):
     def __init__(
         self,
         *,
-        streaming_supported: bool,
+        capabilities: STTCapabilities,
     ) -> None:
-        self._streaming_supported = streaming_supported
+        self._capabilities = capabilities
+
+    @property
+    def capabilities(self) -> STTCapabilities:
+        return self._capabilities
 
     @abstractmethod
     async def recognize(
@@ -66,9 +76,11 @@ class STT(ABC):
             a different STT or use a StreamAdapter"
         )
 
-    @property
-    def streaming_supported(self) -> bool:
-        return self._streaming_supported
+    async def aclose(self) -> None:
+        """
+        Close the STT, and every stream/requests associated with it
+        """
+        pass
 
 
 class SpeechStream(ABC):

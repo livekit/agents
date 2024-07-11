@@ -1,3 +1,4 @@
+from .retry_tts import RetryTTS
 from .stream_adapter import (
     StreamAdapter,
     StreamAdapterWrapper,
@@ -13,6 +14,7 @@ from .tts import (
 
 __all__ = [
     "TTS",
+    "RetryTTS",
     "SynthesisEvent",
     "SynthesizedAudio",
     "SynthesizeStream",

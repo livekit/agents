@@ -21,6 +21,7 @@ import os
 from dataclasses import dataclass, field
 from functools import reduce
 from typing import (
+    Any,
     Callable,
     Coroutine,
     Literal,
@@ -33,7 +34,7 @@ import psutil
 from livekit import api
 from livekit.protocol import agent, models
 
-from . import aio, consts, http_server, ipc, utils
+from . import consts, http_server, ipc, utils
 from .job_request import AcceptData, AvailRes, JobRequest
 from .log import logger
 from .version import __version__
@@ -69,7 +70,7 @@ class WorkerOptions:
     ws_url: str = "ws://localhost:7880"
     api_key: str | None = None
     api_secret: str | None = None
-    host: str = "localhost"
+    host: str = ""  # default to all interfaces
     port: int = 8081
 
 
@@ -115,12 +116,12 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         self._id = "unregistered"
         self._closed, self._draining, self._connecting = True, False, False
-        self._tasks = set()
+        self._tasks = set[asyncio.Task[Any]]()
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
         self._processes = dict[str, tuple[ipc.JobProcess, ActiveJob]]()
-        self._close_future: asyncio.Future | None = None
+        self._close_future: asyncio.Future[None] | None = None
 
-        self._msg_chan = aio.Chan[agent.WorkerMessage](128, loop=self._loop)
+        self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
 
         # use the same event loop as the main worker task
         #  -> more accurate health checks
@@ -332,7 +333,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         async def _load_task():
             """periodically check load and update worker status"""
-            interval = aio.interval(consts.LOAD_INTERVAL)
+            interval = utils.aio.interval(consts.LOAD_INTERVAL)
             current_status = agent.WorkerStatus.WS_AVAILABLE
             while True:
                 await interval.tick()
@@ -371,7 +372,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                         )
 
                 msg = agent.WorkerMessage(update_worker=update)
-                with contextlib.suppress(aio.ChanClosed):
+                with contextlib.suppress(utils.aio.ChanClosed):
                     await self._queue_msg(msg)
 
         async def _send_task():
@@ -380,7 +381,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 try:
                     msg = await self._msg_chan.recv()
                     await ws.send_bytes(msg.SerializeToString())
-                except aio.ChanClosed:
+                except utils.aio.ChanClosed:
                     closing_ws = True
                     return
 
@@ -475,7 +476,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
-        answer_tx, answer_rx = aio.channel(1)  # wait for the user res
+        answer_tx = answer_rx = utils.aio.Chan[AvailRes](1)  # wait for the user res
         req = JobRequest(msg.job, answer_tx)
 
         async def _user_cb():

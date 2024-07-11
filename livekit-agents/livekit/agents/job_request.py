@@ -17,11 +17,11 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Coroutine
+from typing import Any, Callable, Coroutine, Union
 
 from livekit.protocol import agent, models
 
-from . import aio
+from . import utils
 from .exceptions import AvailabilityAnsweredError
 from .job_context import JobContext
 from .log import logger
@@ -31,7 +31,7 @@ AutoSubscribe = Enum(
     "AutoSubscribe", ["SUBSCRIBE_ALL", "SUBSCRIBE_NONE", "VIDEO_ONLY", "AUDIO_ONLY"]
 )
 
-AgentEntry = Callable[[JobContext], Coroutine]
+AgentEntry = Callable[[JobContext], Coroutine[None, None, Any]]
 
 
 @dataclass
@@ -48,11 +48,13 @@ class AcceptData:
 class AvailRes:
     avail: bool
     data: AcceptData | None = None
-    assignment_tx: aio.ChanSender[BaseException | None] | None = None
+    assignment_tx: utils.aio.ChanSender[Union[BaseException, None]] | None = None
 
 
 class JobRequest:
-    def __init__(self, job: agent.Job, answer_tx: aio.ChanSender[AvailRes]) -> None:
+    def __init__(
+        self, job: agent.Job, answer_tx: utils.aio.ChanSender[AvailRes]
+    ) -> None:
         self._job = job
         self._lock = asyncio.Lock()
         self._answer_tx = answer_tx
@@ -105,7 +107,7 @@ class JobRequest:
         if not identity:
             identity = "agent-" + self.id
 
-        assign_tx, assign_rx = aio.channel(1)
+        assign_tx = assign_rx = utils.aio.Chan[Union[BaseException, None]](1)
         data = AcceptData(
             entry=entry,
             auto_subscribe=auto_subscribe,

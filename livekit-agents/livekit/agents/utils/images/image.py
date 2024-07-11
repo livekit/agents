@@ -15,14 +15,17 @@
 import io
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from livekit import rtc
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 
 @dataclass
 class EncodeOptions:
-    format: Literal["JPEG", "PNG"]
+    format: Literal["JPEG", "PNG"] = "JPEG"
     resize_options: Optional["ResizeOptions"] = None
 
 
@@ -58,7 +61,7 @@ def _image_from_frame(frame: rtc.VideoFrame):
     if frame.type != rtc.VideoBufferType.RGBA:
         converted = frame.convert(rtc.VideoBufferType.RGBA)
 
-    rgb_image = Image.frombytes(  # noqa
+    rgb_image = Image.frombytes(  # type: ignore
         "RGBA", (frame.width, frame.height), converted.data
     ).convert("RGB")
     return rgb_image
@@ -84,7 +87,7 @@ def _resize_image(image: Any, options: EncodeOptions):
             new_height = int(image.height * (resize_opts.width / image.width))
 
         resized = image.resize((new_width, new_height))
-        Image.Image.paste(  # noqa
+        Image.Image.paste(
             result,
             resized,
             (

@@ -97,10 +97,10 @@ To ease the process of building and testing an agent, we've developed a versatil
 
 ### Joining a specific room
 
-To join a LiveKit room that's already active, you can use the `simulate-job` command:
+To join a LiveKit room that's already active, you can use the `connect` command:
 
 ```bash
-python my_agent.py simulate-job --room-name <my-room>
+python my_agent.py connect --room-name <my-room>
 ```
 
 ### What happens when I run my agent?

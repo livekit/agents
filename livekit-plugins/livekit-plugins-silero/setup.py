@@ -49,8 +49,8 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents~=0.7",
-        "onnxruntime~=1.18",
-        "numpy~=1.26",
+        "onnxruntime>=1.18",
+        "numpy>=1.26",
     ],
     package_data={
         "livekit.plugins.silero.resources": ["silero_vad.onnx"],

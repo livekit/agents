@@ -39,7 +39,7 @@ class WatchServer:
         self._worker_valid = True
 
     def run(self) -> None:
-        packages = []
+        packages: list[Distribution] = []
 
         if self._watch_plugins:
             # also watch plugins that are installed in editable mode
@@ -57,28 +57,28 @@ class WatchServer:
             if not _try_add("livekit.agents"):
                 _try_add("livekit-agents")
 
-            for p in Plugin.registered_plugins:
-                if not _try_add(p.package):
-                    _try_add(p.package.replace(".", "-"))
+            for plugin in Plugin.registered_plugins:
+                if not _try_add(plugin.package):
+                    _try_add(plugin.package.replace(".", "-"))
 
         paths: list[pathlib.Path] = [self._main_file.absolute()]
-        for p in packages:
+        for pkg in packages:
             # https://packaging.python.org/en/latest/specifications/direct-url/
-            durl = p.read_text("direct_url.json")
+            durl = pkg.read_text("direct_url.json")
             if not durl:
                 continue
 
-            durl = json.loads(durl)
-            dir_info = durl.get("dir_info", {})
+            durl_json: dict[str, Any] = json.loads(durl)
+            dir_info = durl_json.get("dir_info", {})
             if dir_info.get("editable", False):
-                path = durl.get("url")
-                if path.startswith("file://"):
+                path: str | None = durl_json.get("url")
+                if path and path.startswith("file://"):
                     parsed_url = urllib.parse.urlparse(path)
                     file_path = pathlib.Path(urllib.parse.unquote(parsed_url.path))
                     paths.append(file_path)
 
-        for p in paths:
-            logger.info(f"Watching {p}")
+        for pth in paths:
+            logger.info(f"Watching {pth}")
 
         self._read_thread.start()
         watchfiles.run_process(
@@ -104,7 +104,6 @@ class WatchServer:
                     ipc_enc.write_msg(
                         self._pch, protocol.ReloadJobsResponse(jobs=active_jobs)
                     )
-                    self._jobs = []
                 elif isinstance(msg, protocol.Reloaded):
                     with self._lock:
                         self._worker_valid = True

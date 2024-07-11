@@ -1,10 +1,10 @@
 import asyncio
 
-from livekit.agents import aio
+from livekit.agents.utils import aio
 
 
 async def test_channel():
-    tx, rx = aio.channel()
+    tx = rx = aio.Chan[int]()
     sum = 0
 
     async def test_task():
@@ -45,7 +45,7 @@ async def test_select():
 
     task = asyncio.create_task(task_f())
 
-    future = asyncio.Future()
+    future = asyncio.Future[str]()
 
     async def mark_future():
         await asyncio.sleep(0.2)

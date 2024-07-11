@@ -4,7 +4,7 @@ from __future__ import annotations
 class MovingAverage:
     def __init__(self, window_size: int) -> None:
         self._hist: list[float] = [0] * window_size
-        self._sum = 0
+        self._sum: float = 0
         self._count: int = 0
 
     def add_sample(self, sample: float) -> None:
