@@ -58,6 +58,8 @@ The following plugins are available today:
 
 | Plugin                                                                             | Features                        |
 | ---------------------------------------------------------------------------------- | ------------------------------- |
+| [livekit-plugins-azure](https://pypi.org/project/livekit-plugins-azure/)           | STT, TTS                        |
+| [livekit-plugins-cartesia](https://pypi.org/project/livekit-plugins-cartesia/)     | TTS                             |
 | [livekit-plugins-deepgram](https://pypi.org/project/livekit-plugins-deepgram/)     | STT                             |
 | [livekit-plugins-elevenlabs](https://pypi.org/project/livekit-plugins-elevenlabs/) | TTS                             |
 | [livekit-plugins-google](https://pypi.org/project/livekit-plugins-google/)         | STT, TTS                        |
