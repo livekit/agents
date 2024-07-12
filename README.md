@@ -99,10 +99,10 @@ To ease the process of building and testing an agent, we've developed a versatil
 
 ### Joining a specific room
 
-To join a LiveKit room that's already active, you can use the `simulate-job` command:
+To join a LiveKit room that's already active, you can use the `connect` command:
 
 ```bash
-python my_agent.py simulate-job --room-name <my-room>
+python my_agent.py connect --room <my-room>
 ```
 
 ### What happens when I run my agent?
@@ -117,7 +117,7 @@ If a notified worker rejects the job or does not accept within a predetermined t
 
 ### What happens when I SIGTERM a worker?
 
-The orchestration system was designed for production use cases. Unlike the typical web server, an agent is a stateful program, so it's important that a worker can't be terminated while it's managing any active agents.
+The orchestration system was designed for production use cases. Unlike the typical web server, an agent is a stateful program, so it's important that a worker isn't terminated while active sessions are ongoing.
 
 When calling SIGTERM on a worker, the worker will signal to LiveKit server that it no longer wants additional jobs. It will also auto-reject any new job requests that get through before the server signal is received. The worker will remain alive while it manages any agents connected to rooms.
 
