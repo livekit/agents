@@ -1,4 +1,4 @@
-# LiveKit Plugins Cartesia
+# LiveKit Plugins AWS
 
 Agent Framework plugin for services from AWS Services. Currently supports TTS.
 
