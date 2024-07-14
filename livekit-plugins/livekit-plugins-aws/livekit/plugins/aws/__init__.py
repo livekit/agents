@@ -20,7 +20,7 @@ __all__ = ["TTS", "ChunkedStream", "__version__"]
 from livekit.agents import Plugin
 
 
-class PollyPlugin(Plugin):
+class AWSPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__)
 
@@ -28,4 +28,4 @@ class PollyPlugin(Plugin):
         pass
 
 
-Plugin.register_plugin(PollyPlugin())
+Plugin.register_plugin(AWSPlugin())
