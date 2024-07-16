@@ -27,7 +27,10 @@ class LogHandler(logging.Handler):
             try:
                 msg = record.getMessage()
             except TypeError:
-                msg = record.msg.format(*record.args)
+                if record.args:
+                    msg = record.msg.format(*record.args)
+                else:
+                    msg = record.msg
 
             if record.exc_info:
                 type, value, tb = record.exc_info
@@ -47,7 +50,9 @@ async def _start(
     pipe: apipe.AsyncPipe, args: protocol.JobMainArgs, room: rtc.Room
 ) -> None:
     utils.http_context._new_session_ctx()
-    close_tx, close_rx = aio.channel()  # used by the JobContext to signal shutdown
+    close_tx = close_rx = aio.Chan[
+        _ShutdownInfo
+    ]()  # used by the JobContext to signal shutdown
 
     auto_subscribe = args.accept_data.auto_subscribe
     opts = rtc.RoomOptions(auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL)

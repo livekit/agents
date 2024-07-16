@@ -38,6 +38,7 @@ class _TTSOptions:
     voice: TTSVoices
     api_key: str
     endpoint: str
+    speed: float
 
 
 class TTS(tts.TTS):
@@ -49,6 +50,7 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        speed: float = 1.0,
     ) -> None:
         super().__init__(
             streaming_supported=False,
@@ -65,12 +67,13 @@ class TTS(tts.TTS):
             voice=voice,
             api_key=api_key,
             endpoint=os.path.join(get_base_url(base_url), "audio/speech"),
+            speed=speed,
         )
         self._session = http_session
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
-            self._session = utils.http_session()
+            self._session = utils.http_context.http_session()
 
         return self._session
 
@@ -89,7 +92,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._text = text
         self._session = session
         self._decoder = codecs.Mp3StreamDecoder()
-        self._main_task: asyncio.Task | None = None
+        self._main_task: asyncio.Task[None] | None = None
         self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
 
     async def _run(self):
@@ -102,6 +105,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "model": self._opts.model,
                     "voice": self._opts.voice,
                     "response_format": "mp3",
+                    "speed": self._opts.speed,
                 },
             ) as resp:
                 async for data, _ in resp.content.iter_chunks():

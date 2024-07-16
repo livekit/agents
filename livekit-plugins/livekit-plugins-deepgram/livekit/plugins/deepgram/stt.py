@@ -81,7 +81,7 @@ class STT(stt.STT):
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
-            self._session = utils.http_session()
+            self._session = utils.http_context.http_session()
 
         return self._session
 
