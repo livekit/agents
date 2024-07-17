@@ -15,6 +15,7 @@
 import io
 import json
 import os
+import time
 import wave
 from typing import Optional, Union
 
@@ -37,14 +38,12 @@ class STT(stt.STT):
         secret: Optional[str] = None,
         invoke_url: Optional[str] = None,
         http_session: Optional[aiohttp.ClientSession] = None,
-        use_grpc: bool = False,
     ):
         super().__init__(streaming_supported=False)
         self._secret = secret or os.environ.get("CLOVA_STT_SECRET_KEY")
         self._invoke_url = invoke_url or os.environ.get("CLOVA_STT_INVOKE_URL")
         self._language = language
         self._session = http_session
-        self._use_grpc = use_grpc
         if self._secret is None:
             raise ValueError(
                 "Clova STT secret key is required. It should be set with env CLOVA_STT_SECRET_KEY"
@@ -89,11 +88,13 @@ class STT(stt.STT):
             form_data.add_field(
                 "media", io_buffer, filename="audio.wav", content_type="audio/wav"
             )
-
+            start = time.time()
             async with self._ensure_session().post(
-                    url, data=form_data, headers=headers
+                url, data=form_data, headers=headers
             ) as response:
                 response_data = await response.json()
+                end = time.time()
+                logger.info(f"{url} -> total_seconds: {end - start}")
                 text = response_data.get("text")
 
                 if not text or "error" in response_data:
@@ -103,10 +104,15 @@ class STT(stt.STT):
                 return self._transcription_to_speech_event(text=text)
         except Exception as ex:
             logger.error(f"Error occurred when recognizing speech: {ex}")
-            return self._transcription_to_speech_event(event_type=stt.SpeechEventType.END_OF_SPEECH, text="")
+            return self._transcription_to_speech_event(
+                event_type=stt.SpeechEventType.END_OF_SPEECH, text=""
+            )
 
-    def _transcription_to_speech_event(self, event_type: SpeechEventType=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                                       text: str = None) -> stt.SpeechEvent:
+    def _transcription_to_speech_event(
+        self,
+        event_type: SpeechEventType = stt.SpeechEventType.INTERIM_TRANSCRIPT,
+        text: str = None,
+    ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=event_type,
             alternatives=[stt.SpeechData(text=text, language=self._language)],
