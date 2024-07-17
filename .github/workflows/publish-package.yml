@@ -29,9 +29,6 @@ on:
       DOCS_DEPLOY_AWS_API_SECRET:
         required: true
 
-permissions:
-  contents: read
-
 jobs:
   bump:
     runs-on: ubuntu-latest
