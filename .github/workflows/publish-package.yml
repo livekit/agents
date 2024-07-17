@@ -66,7 +66,7 @@ jobs:
         package: ${{ fromJson(needs.bump.outputs.packages) }}
     defaults:
       run:
-        working-directory: ${{ package.name }}
+        working-directory: ${{ matrix.package.name }}
 
     runs-on: ubuntu-latest
 
@@ -85,8 +85,8 @@ jobs:
 
       - name: Bump version.py
         run: |
-          export module=$(sed 's/^.*\///' <<< ${{ package.name }} | tr '-' '/')
-          sed -i "s/__version__.*/__version__ = \"${{ package.version }}\"/" $module/version.py
+          export module=$(sed 's/^.*\///' <<< ${{ matrix.package.name }} | tr '-' '/')
+          sed -i "s/__version__.*/__version__ = \"${{ matrix.package.version }}\"/" $module/version.py
 
       - name: Build package
         run: python -m build
@@ -95,7 +95,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: python-package-distributions
-          path: ${{ package.name }}/dist/
+          path: ${{ matrix.package.name }}/dist/
 
   publish:
     needs:
