@@ -27,7 +27,7 @@ from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE
 
 from .common import resample_audio
 from .log import logger
-from .models import ClovaSttLanguages, ClovaSpeechAPIType
+from .models import ClovaSttLanguages, ClovaSpeechAPIType, clova_languages_mapping
 
 
 class STT(stt.STT):
@@ -43,7 +43,7 @@ class STT(stt.STT):
         super().__init__(streaming_supported=False)
         self._secret = secret or os.environ.get("CLOVA_STT_SECRET_KEY")
         self._invoke_url = invoke_url or os.environ.get("CLOVA_STT_INVOKE_URL")
-        self._language = language
+        self._language = clova_languages_mapping.get(language, language)
         self._session = http_session
         if self._secret is None:
             raise ValueError(
