@@ -38,6 +38,7 @@ class STT(stt.STT):
         secret: Optional[str] = None,
         invoke_url: Optional[str] = None,
         http_session: Optional[aiohttp.ClientSession] = None,
+        threshold: float = 0.5,
     ):
         super().__init__(streaming_supported=False)
         self._secret = secret or os.environ.get("CLOVA_STT_SECRET_KEY")
@@ -48,6 +49,7 @@ class STT(stt.STT):
             raise ValueError(
                 "Clova STT secret key is required. It should be set with env CLOVA_STT_SECRET_KEY"
             )
+        self.threshold = threshold
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -96,14 +98,18 @@ class STT(stt.STT):
                 end = time.time()
                 logger.info(f"{url} -> total_seconds: {end - start}")
                 text = response_data.get("text")
+                confidence = response_data.get("confidence")
 
                 if not text or "error" in response_data:
                     raise ValueError(f"Unexpected response: {response_data}")
-
+                if confidence < self.threshold:
+                    raise ValueError(
+                        f"Confidence: {confidence} is bellow threshold {self.threshold}. Skipping."
+                    )
                 logger.info(f"final event: {response_data}")
                 return self._transcription_to_speech_event(text=text)
         except Exception as ex:
-            logger.error(f"Error occurred when recognizing speech: {ex}")
+            logger.error(f"{ex}")
             return self._transcription_to_speech_event(
                 event_type=stt.SpeechEventType.END_OF_SPEECH, text=""
             )
