@@ -85,7 +85,7 @@ jobs:
         run: |
           export module=$(sed 's/^.*\///' <<< ${{ matrix.package.name }} | tr '-' '/')
           export version=$(sed -E 's|-(\d*)|${{  github.ref == 'refs/heads/main' && '' || '-dev' }}\1|g' <<< ${{ matrix.package.version }})
-          sed -i "s/__version__.*/__version__ = \"${{ matrix.package.version }}\"/" $module/version.py
+          sed -i "s/__version__.*/__version__ = \"$version\"/" $module/version.py
 
       - name: Build package
         run: python -m build
