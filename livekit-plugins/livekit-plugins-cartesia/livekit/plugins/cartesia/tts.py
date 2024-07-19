@@ -45,7 +45,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels = "upbeat-moon",
+        model: TTSModels = "sonic-english",
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceEmbedding,
         sample_rate: int = 24000,
