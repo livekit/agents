@@ -7,9 +7,7 @@ import traceback
 
 from livekit import rtc
 
-from .. import apipe, ipc_enc, utils
-from ..job_context import JobContext, _ShutdownInfo
-from ..job_request import AutoSubscribe
+from .. import utils
 from ..log import logger
 from ..utils import time_ms
 from . import protocol

@@ -5,8 +5,6 @@ import time
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Tuple
 
-from .. import apipe, ipc_enc
-
 PlotType = Literal["vad_probability", "raw_vol", "smoothed_vol"]
 EventType = Literal[
     "user_started_speaking",
@@ -57,7 +55,7 @@ PLT_MESSAGES: dict = {
 }
 
 
-def _draw_plot(reader: ipc_enc.ProcessPipeReader):
+def _draw_plot(reader):
     try:
         import matplotlib as mpl  # type: ignore
         import matplotlib.pyplot as plt  # type: ignore

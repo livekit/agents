@@ -9,11 +9,10 @@ import threading
 
 from livekit.protocol import agent
 
-from .. import apipe, utils
-from ..job_request import AcceptData
+from .. import utils
 from ..log import logger
 from ..utils import time_ms
-from . import consts, protocol
+from . import protocol
 from .job_main import _run_job
 
 
@@ -42,10 +41,6 @@ class JobProcess:
 
     async def run(self) -> None:
         self._process.start()
-
-        start_timeout = asyncio.sleep(consts.START_TIMEOUT)
-        ping_interval = utils.aio.interval(consts.PING_INTERVAL)
-        pong_timeout = utils.aio.sleep(consts.PING_TIMEOUT)
 
         start_res: protocol.StartJobResponse | None = None
 

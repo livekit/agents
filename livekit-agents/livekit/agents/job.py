@@ -17,43 +17,110 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Coroutine, Union
+from typing import Any, Callable, Coroutine, Optional, Union
 
+from livekit import rtc
 from livekit.protocol import agent, models
 
 from . import utils
 from .exceptions import AvailabilityAnsweredError
-from .job_context import JobContext
 from .log import logger
 
-AutoDisconnect = Enum("AutoDisconnect", ["ROOM_EMPTY", "PUBLISHER_LEFT", "NONE"])
-AutoSubscribe = Enum(
-    "AutoSubscribe", ["SUBSCRIBE_ALL", "SUBSCRIBE_NONE", "VIDEO_ONLY", "AUDIO_ONLY"]
-)
 
-AgentEntry = Callable[[JobContext], Coroutine[None, None, Any]]
+class AutoSubscribe(str, Enum):
+    SUBSCRIBE_ALL = "subscribe_all"
+    SUBSCRIBE_NONE = "subscribe_none"
+    AUDIO_ONLY = "audio_only"
+    VIDEO_ONLY = "video_only"
 
 
 @dataclass
-class AcceptData:
-    entry: AgentEntry
-    auto_subscribe: AutoSubscribe
-    auto_disconnect: AutoDisconnect
+class JobAcceptArguments:
     name: str
     identity: str
     metadata: str
 
 
 @dataclass
-class AvailRes:
+class RunningJobInfo:
+    job: agent.Job
+    accept_args: JobAcceptArguments
+    url: str
+    token: str
+
+
+class JobContext:
+    def __init__(
+        self,
+        close_tx: utils.aio.ChanSender[_ShutdownInfo],
+        proc: JobProcess,
+        info: RunningJobInfo,
+        room: rtc.Room,
+        publisher: rtc.RemoteParticipant | None = None,
+    ) -> None:
+        self._job, self._proc = job, proc
+        self._room = room
+        self._publisher = publisher
+        self._close_tx = close_tx
+
+    @property
+    def proc(self) -> JobProcess:
+        return self._proc
+
+    @property
+    def id(self) -> str:
+        return self._job.id
+
+    @property
+    def job(self) -> agent.Job:
+        return self._job
+
+    @property
+    def room(self) -> rtc.Room:
+        return self._room
+
+    @property
+    def publisher(self) -> rtc.RemoteParticipant | None:
+        return self._publisher
+
+    @property
+    def agent(self) -> rtc.LocalParticipant:
+        return self._room.local_participant
+
+    async def connect(
+        self,
+        *,
+        e2ee: rtc.E2EEOptions | None = None,
+        auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
+        rtc_config: rtc.RtcConfiguration | None = None,
+    ) -> None:
+        room_opts = rtc.RoomOptions(
+            e2ee=e2ee,
+            auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
+            rtc_config=rtc_config,
+        )
+
+        await self._room.connect(self._job.url, self._job.token, room_opts)
+
+    def shutdown(self, reason: str = "") -> None:
+        self._close_tx.send_nowait(_ShutdownInfo(reason=reason))
+
+
+class JobProcess:
+    def __init__(self):
+        pass
+
+
+@dataclass
+class _AvailRes:
     avail: bool
-    data: AcceptData | None = None
-    assignment_tx: utils.aio.ChanSender[Union[BaseException, None]] | None = None
+    data: _JobAcceptArgs | None = None
+    assignment_tx: utils.aio.ChanSender[Optional[BaseException]] | None = None
 
 
 class JobRequest:
     def __init__(
-        self, job: agent.Job, answer_tx: utils.aio.ChanSender[AvailRes]
+        self, job: agent.Job, answer_tx: utils.aio.ChanSender[_AvailRes]
     ) -> None:
         self._job = job
         self._lock = asyncio.Lock()
@@ -86,15 +153,12 @@ class JobRequest:
                 raise AvailabilityAnsweredError
             self._answered = True
 
-        await self._answer_tx.send(AvailRes(avail=False))
+        await self._answer_tx.send(_AvailRes(avail=False))
         logger.info(f"rejected job {self.id}", extra={"job": self.job})
 
     async def accept(
         self,
-        entry: AgentEntry,
         *,
-        auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
-        auto_disconnect: AutoDisconnect = AutoDisconnect.ROOM_EMPTY,
         name: str = "",
         identity: str = "",
         metadata: str = "",
@@ -108,16 +172,13 @@ class JobRequest:
             identity = "agent-" + self.id
 
         assign_tx = assign_rx = utils.aio.Chan[Union[BaseException, None]](1)
-        data = AcceptData(
-            entry=entry,
-            auto_subscribe=auto_subscribe,
-            auto_disconnect=auto_disconnect,
+        data = _JobAcceptArgs(
             name=name,
             identity=identity,
             metadata=metadata,
         )
         await self._answer_tx.send(
-            AvailRes(avail=True, data=data, assignment_tx=assign_tx)
+            _AvailRes(avail=True, data=data, assignment_tx=assign_tx)
         )
 
         # wait for the server to accept the assignment
