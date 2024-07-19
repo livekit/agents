@@ -84,7 +84,7 @@ jobs:
       - name: Bump version.py
         run: |
           export module=$(sed 's/^.*\///' <<< ${{ matrix.package.name }} | tr '-' '/')
-          export version=$(sed -E 's|-\([0-9]*\)$|\1|' <<< ${{ matrix.package.version }})
+          export version=$(sed 's|-\([0-9]*\)$|\1|' <<< ${{ matrix.package.version }})
           sed -i "s/__version__.*/__version__ = \"$version\"/" $module/version.py
 
       - name: Build package
