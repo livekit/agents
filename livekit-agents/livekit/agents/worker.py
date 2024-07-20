@@ -29,13 +29,12 @@ import psutil
 from livekit import api
 from livekit.protocol import agent, models
 
-from . import consts, http_server, ipc, utils
-from .job_request import AcceptData, AvailRes, JobRequest
+from . import http_server, ipc, utils
+from .job import JobContext, JobProcess, JobRequest
 from .log import logger
 from .version import __version__
 
-JobRequestFnc = Callable[[JobRequest], Coroutine]
-LoadFnc = Callable[[], float]
+MAX_RECONNECT_ATTEMPTS = 3
 
 
 def cpu_load_fnc() -> float:
@@ -55,13 +54,16 @@ class WorkerPermissions:
 # NOTE: this object must be pickle-able
 @dataclass
 class WorkerOptions:
-    request_fnc: JobRequestFnc
-    load_fnc: LoadFnc = cpu_load_fnc
+    job_request_fnc: Callable[[JobRequest], Coroutine]
+    initialize_process_fnc: Callable[[JobProcess], Any]
+    job_entrypoint_fnc: Callable[[JobContext], Coroutine]
+    job_shutdown_fnc: Callable[[JobContext], Coroutine]
+    load_fnc: Callable[[], float] = cpu_load_fnc
     load_threshold: float = 0.8
     namespace: str = "default"
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     worker_type: agent.JobType = agent.JobType.JT_ROOM
-    max_retry: int = consts.MAX_RECONNECT_ATTEMPTS
+    max_retry: int = MAX_RECONNECT_ATTEMPTS
     ws_url: str = "ws://localhost:7880"
     api_key: str | None = None
     api_secret: str | None = None

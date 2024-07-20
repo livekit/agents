@@ -1,9 +1,7 @@
-from .stt_forwarder import NoopSTTSegmentsForwarder, STTSegmentsForwarder
-from .tts_forwarder import NoopTTSSegmentsForwarder, TTSSegmentsForwarder
+from .stt_forwarder import STTSegmentsForwarder
+from .tts_forwarder import TTSSegmentsForwarder
 
 __all__ = [
     "TTSSegmentsForwarder",
     "STTSegmentsForwarder",
-    "NoopSTTSegmentsForwarder",
-    "NoopTTSSegmentsForwarder",
 ]

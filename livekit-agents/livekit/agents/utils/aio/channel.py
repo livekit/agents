@@ -9,6 +9,7 @@ T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
 T_contra = TypeVar("T_contra", contravariant=True)
 
+
 # Based on asyncio.Queue, see https://github.com/python/cpython/blob/main/Lib/asyncio/queues.py
 
 
@@ -102,7 +103,7 @@ class Chan(Generic[T]):
                 await g
             except ChanClosed:
                 raise
-            except:
+            except Exception:
                 g.cancel()
                 with contextlib.suppress(ValueError):
                     self._gets.remove(g)

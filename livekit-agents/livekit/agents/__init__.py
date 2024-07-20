@@ -12,13 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from livekit.protocol.agent import JobType
-
 from . import ipc, llm, stt, tokenize, transcription, tts, utils, vad, voice_assistant
-from .apipe import AsyncPipe  # noqa
-from .ipc.protocol import IPC_MESSAGES, Log, StartJobRequest, StartJobResponse  # noqa
-from .job_context import JobContext
-from .job_request import AutoDisconnect, AutoSubscribe, JobRequest
+from .job import JobContext, JobProcess, JobRequest
 from .plugin import Plugin
 from .version import __version__
 from .worker import Worker, WorkerOptions
@@ -27,11 +22,9 @@ __all__ = [
     "__version__",
     "Worker",
     "WorkerOptions",
-    "JobRequest",
-    "AutoSubscribe",
-    "AutoDisconnect",
+    "JobProcess",
     "JobContext",
-    "JobType",
+    "JobRequest",
     "Plugin",
     "ipc",
     "stt",

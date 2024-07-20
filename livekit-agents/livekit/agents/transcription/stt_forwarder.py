@@ -86,14 +86,3 @@ class STTSegmentsForwarder:
 
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
-
-
-class NoopSTTSegmentsForwarder(STTSegmentsForwarder):
-    def __init__(self):
-        pass
-
-    def update(self, ev: stt.SpeechEvent):
-        pass
-
-    async def aclose(self, *, wait: bool = True) -> None:
-        pass

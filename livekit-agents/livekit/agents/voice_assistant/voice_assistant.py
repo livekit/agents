@@ -276,9 +276,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         return super().on(event, callback)
 
     async def aclose(self) -> None:
-        """
-        Close the voice assistant
-        """
+        """Close the voice assistant"""
         if not self._started:
             return
 

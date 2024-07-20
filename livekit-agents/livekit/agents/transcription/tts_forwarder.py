@@ -332,29 +332,3 @@ class TTSSegmentsForwarder:
     def _check_not_closed(self) -> None:
         if self._closed:
             raise RuntimeError("TTSForwarder is closed")
-
-
-class NoopTTSSegmentsForwarder(TTSSegmentsForwarder):
-    def __init__(self):
-        pass
-
-    def segment_playout_started(self):
-        pass
-
-    def segment_playout_finished(self):
-        pass
-
-    def push_audio(self, frame: rtc.AudioFrame):
-        pass
-
-    def mark_audio_segment_end(self):
-        pass
-
-    def push_text(self, text: str):
-        pass
-
-    def mark_text_segment_end(self):
-        pass
-
-    async def aclose(self):
-        pass
