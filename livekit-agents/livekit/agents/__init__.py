@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from . import ipc, llm, stt, tokenize, transcription, tts, utils, vad, voice_assistant
-from .job import JobProcess, JobRequest, JobContext
+from .job import JobContext, JobProcess, JobRequest
 from .plugin import Plugin
 from .version import __version__
 from .worker import Worker, WorkerOptions

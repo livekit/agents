@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import contextlib
-import sys
 import asyncio
+import contextlib
 import multiprocessing as mp
-from typing import Callable, Any, Coroutine, Literal
+import sys
+from typing import Any, Callable, Coroutine, Literal
 
-from .supervised_proc import SupervisedProc
-from ..job import JobProcess, JobContext, RunningJobInfo
+from .. import utils
+from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
-from .. import utils
-
+from .supervised_proc import SupervisedProc
 
 EventTypes = Literal[
     "process_created", "process_started", "process_ready", "process_closed"

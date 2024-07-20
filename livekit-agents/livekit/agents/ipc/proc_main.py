@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import contextlib
 import asyncio
+import contextlib
+from dataclasses import dataclass
 
 from livekit import rtc
-from dataclasses import dataclass
-from . import channel, proto
-from ..job import JobProcess, JobContext, RunningJobInfo
-from ..log import logger
+
 from .. import utils
+from ..job import JobContext, JobProcess, RunningJobInfo
+from ..log import logger
+from . import channel, proto
 
 
 @dataclass
@@ -52,7 +53,9 @@ def _start_job(
         ctx_shutdown = True
 
         with contextlib.suppress(asyncio.InvalidStateError):
-            request_shutdown_fut.set_result(_ShutdownInfo(user_initiated=True, reason=reason))
+            request_shutdown_fut.set_result(
+                _ShutdownInfo(user_initiated=True, reason=reason)
+            )
 
     info = RunningJobInfo(
         job=start_req.job,
@@ -78,11 +81,11 @@ def _start_job(
         def log_exception(t: asyncio.Task) -> None:
             if not t.cancelled() and t.exception():
                 logger.error(
-                    f"unhandled exception while running the job task",
+                    "unhandled exception while running the job task",
                     exc_info=t.exception(),
                 )
             elif not ctx_connect and not ctx_shutdown:
-                logger.warn(f"job task completed without connecting or shutting down")
+                logger.warn("job task completed without connecting or shutting down")
 
         job_entry_task.add_done_callback(log_exception)
 

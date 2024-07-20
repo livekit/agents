@@ -1,13 +1,13 @@
-import ctypes
-import os
-import psutil
 import asyncio
+import ctypes
 import io
-import uuid
 import multiprocessing as mp
-from livekit.agents import ipc, job, JobProcess, JobContext
-from typing import ClassVar
+import uuid
 from dataclasses import dataclass
+from typing import ClassVar
+
+import psutil
+from livekit.agents import JobContext, JobProcess, ipc, job
 from livekit.protocol import agent
 
 
@@ -93,7 +93,9 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
     with entrypoint_fnc_v.get_lock():
         entrypoint_fnc_v.value += 1
 
-    job_ctx.shutdown("calling shutdown inside the test to avoid a warning when neither shutdown nor connect is called.")
+    job_ctx.shutdown(
+        "calling shutdown inside the test to avoid a warning when neither shutdown nor connect is called."
+    )
 
 
 async def _job_shutdown(job_ctx: JobContext) -> None:

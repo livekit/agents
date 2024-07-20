@@ -18,7 +18,7 @@ import asyncio
 import multiprocessing as mp
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Optional, Union, Any
+from typing import Any, Callable, Optional, Union
 
 from livekit import rtc
 from livekit.protocol import agent, models

@@ -30,10 +30,9 @@ from livekit import api
 from livekit.protocol import agent, models
 
 from . import http_server, ipc, utils
-from .job import JobContext, JobRequest, JobProcess
+from .job import JobContext, JobProcess, JobRequest
 from .log import logger
 from .version import __version__
-
 
 MAX_RECONNECT_ATTEMPTS = 3
 

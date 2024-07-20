@@ -1,3 +1,3 @@
-from . import proto, channel, proc_pool
+from . import channel, proc_pool, proto
 
 __all__ = ["proto", "channel", "proc_pool"]

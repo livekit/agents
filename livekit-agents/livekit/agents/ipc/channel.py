@@ -1,12 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import io
-import threading
 import struct
-import asyncio
-
-from typing import runtime_checkable, Protocol, Type, ClassVar
+from typing import ClassVar, Protocol, Type, runtime_checkable
 
 
 class ProcessConn(Protocol):

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import contextlib
-import threading
-import sys
 import asyncio
+import contextlib
 import multiprocessing as mp
-from typing import Callable, Any, Coroutine, Literal
-from multiprocessing.context import SpawnContext, ForkServerContext
+import sys
+import threading
+from multiprocessing.context import ForkServerContext, SpawnContext
+from typing import Any, Callable, Coroutine
 
-from ..job import JobProcess, JobContext, RunningJobInfo
-from ..log import logger
 from .. import utils
-from . import proto, channel, proc_main
+from ..job import JobContext, JobProcess, RunningJobInfo
+from ..log import logger
+from . import channel, proc_main, proto
 
 
 class SupervisedProc:

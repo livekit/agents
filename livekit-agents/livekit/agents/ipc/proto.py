@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import io
+import multiprocessing as mp
 from dataclasses import dataclass, field
-from typing import Callable, Any, Coroutine, ClassVar
+from typing import Any, Callable, ClassVar, Coroutine
 
 from livekit.protocol import agent
-from ..job import JobProcess, JobContext, JobAcceptArguments
+
+from ..job import JobAcceptArguments, JobContext, JobProcess
 from . import channel
-
-import multiprocessing as mp
-
 
 PING_INTERVAL = 5
 PING_TIMEOUT = 90
