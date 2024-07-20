@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import io
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Any, Coroutine, ClassVar
 
-from ..job import JobProcess, JobContext
+from livekit.protocol import agent
+from ..job import JobProcess, JobContext, JobAcceptArguments
 from . import channel
 
 import multiprocessing as mp
@@ -21,20 +24,27 @@ class ProcStartArgs:
     log_q: mp.Queue
     mp_cch: channel.ProcessConn
     asyncio_debug: bool
+    user_arguments: Any | None = None
 
 
 @dataclass
 class InitializeRequest:
+    """sent by the main process to the subprocess to initialize it. this is going to call initialize_process_fnc"""
+
     MSG_ID: ClassVar[int] = 0
 
 
 @dataclass
 class InitializeResponse:
+    """mark the process as initialized"""
+
     MSG_ID: ClassVar[int] = 1
 
 
 @dataclass
 class PingRequest:
+    """sent by the main process to the subprocess to check if it is still alive"""
+
     MSG_ID: ClassVar[int] = 2
     timestamp: int = 0
 
@@ -47,6 +57,8 @@ class PingRequest:
 
 @dataclass
 class PongResponse:
+    """response to a PingRequest"""
+
     MSG_ID: ClassVar[int] = 3
     last_timestamp: int = 0
     timestamp: int = 0
@@ -60,9 +72,71 @@ class PongResponse:
         self.timestamp = channel.read_long(b)
 
 
+@dataclass
+class StartJobRequest:
+    """sent by the main process to the subprocess to start a job, the subprocess will only
+    receive this message if the process is fully initialized (after sending a InitializeResponse)."""
+
+    MSG_ID: ClassVar[int] = 4
+    job: agent.Job = field(default_factory=agent.Job)
+    accept_args: JobAcceptArguments = field(init=False)
+    url: str = ""
+    token: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_bytes(b, self.job.SerializeToString())
+        channel.write_string(b, self.accept_args.name)
+        channel.write_string(b, self.accept_args.identity)
+        channel.write_string(b, self.accept_args.metadata)
+        channel.write_string(b, self.url)
+        channel.write_string(b, self.token)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.job.ParseFromString(channel.read_bytes(b))
+        self.accept_args = JobAcceptArguments(
+            name=channel.read_string(b),
+            identity=channel.read_string(b),
+            metadata=channel.read_string(b),
+        )
+        self.url = channel.read_string(b)
+        self.token = channel.read_string(b)
+
+
+@dataclass
+class ShutdownRequest:
+    """sent by the main process to the subprocess to indicate that it should shut down
+    gracefully. the subprocess will follow with a ExitInfo message"""
+
+    MSG_ID: ClassVar[int] = 5
+    reason: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.reason)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.reason = channel.read_string(b)
+
+
+@dataclass
+class Exiting:
+    """sent by the subprocess to the main process to indicate that it is exiting"""
+
+    MSG_ID: ClassVar[int] = 6
+    reason: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.reason)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.reason = channel.read_string(b)
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
     PingRequest.MSG_ID: PingRequest,
     PongResponse.MSG_ID: PongResponse,
+    StartJobRequest.MSG_ID: StartJobRequest,
+    ShutdownRequest.MSG_ID: ShutdownRequest,
+    Exiting.MSG_ID: Exiting,
 }

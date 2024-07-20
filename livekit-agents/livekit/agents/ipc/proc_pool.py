@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import contextlib
 import sys
 import asyncio
 import multiprocessing as mp
 from typing import Callable, Any, Coroutine, Literal
 
 from .supervised_proc import SupervisedProc
-from ..job import JobProcess, JobContext
+from ..job import JobProcess, JobContext, RunningJobInfo
 from ..log import logger
 from ..utils import aio
 from .. import utils
 
 
-EventTypes = Literal["process_started", "process_ready", "process_closed"]
+EventTypes = Literal[
+    "process_created", "process_started", "process_ready", "process_closed"
+]
 
 
 class ProcPool(utils.EventEmitter[EventTypes]):
@@ -23,15 +26,15 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         job_entrypoint_fnc: Callable[[JobContext], Coroutine],
         job_shutdown_fnc: Callable[[JobContext], Coroutine],
         loop: asyncio.AbstractEventLoop,
-        num_idle_processes: int = 3,
-        close_timeout: float = 10.0,
+        num_idle_processes: int,
+        close_timeout: float,
     ) -> None:
         super().__init__()
 
-        if sys.platform.startswith("win"):
-            self._mp_ctx = mp.get_context("spawn")
-        else:
+        if sys.platform.startswith("linux"):
             self._mp_ctx = mp.get_context("forkserver")
+        else:
+            self._mp_ctx = mp.get_context("spawn")
 
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
@@ -61,9 +64,10 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
         await aio.gracefully_cancel(self._main_atask)
 
-    async def launch_job(self) -> None:
+    async def launch_job(self, info: RunningJobInfo) -> None:
         proc = await self._warmed_proc_queue.get()
-        self._proc_needed_sem.release()
+        self._proc_needed_sem.release()  # notify that a new process needs to be warmed/started
+        await proc.launch_job(info)
 
     @utils.log_exceptions(logger=logger)
     async def _proc_watch_task(self) -> None:
@@ -74,9 +78,10 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             mp_ctx=self._mp_ctx,
             loop=self._loop,
         )
-        self._processes.append(proc)
         try:
+            self.emit("process_created", proc)
             proc.start()
+            self._processes.append(proc)
             self.emit("process_started", proc)
             await proc.initialize()
             self.emit("process_ready", proc)
@@ -88,22 +93,19 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        watch_tasks = set()
+        watch_tasks = []
         try:
             while True:
                 await self._proc_needed_sem.acquire()
                 task = asyncio.create_task(self._proc_watch_task())
-                watch_tasks.add(task)
+                watch_tasks.append(task)
                 task.add_done_callback(watch_tasks.remove)
         except asyncio.CancelledError:
-            await asyncio.wait_for(
-                asyncio.gather(
-                    *[proc.aclose() for proc in self._processes], return_exceptions=True
-                ),
-                timeout=self._close_timeout,
-            )
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.gather(*[proc.aclose() for proc in self._processes]),
+                    timeout=self._close_timeout,
+                )
 
-            for proc in self._processes:
-                proc.kill()
-
-            await asyncio.gather(*watch_tasks, return_exceptions=True)
+            await asyncio.gather(*[proc.kill() for proc in self._processes])
+            await asyncio.gather(*watch_tasks)

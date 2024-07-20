@@ -15,9 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+import multiprocessing as mp
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Coroutine, Optional, Union
+from typing import Callable, Optional, Union, Any
 
 from livekit import rtc
 from livekit.protocol import agent, models
@@ -52,36 +53,30 @@ class RunningJobInfo:
 class JobContext:
     def __init__(
         self,
-        close_tx: utils.aio.ChanSender[_ShutdownInfo],
+        *,
         proc: JobProcess,
         info: RunningJobInfo,
         room: rtc.Room,
-        publisher: rtc.RemoteParticipant | None = None,
+        on_connect: Callable[[], None],
+        on_shutdown: Callable[[str], None],
     ) -> None:
-        self._job, self._proc = job, proc
+        self._proc = proc
+        self._info = info
         self._room = room
-        self._publisher = publisher
-        self._close_tx = close_tx
+        self._on_connect = on_connect
+        self._on_shutdown = on_shutdown
 
     @property
     def proc(self) -> JobProcess:
         return self._proc
 
     @property
-    def id(self) -> str:
-        return self._job.id
-
-    @property
     def job(self) -> agent.Job:
-        return self._job
+        return self._info.job
 
     @property
     def room(self) -> rtc.Room:
         return self._room
-
-    @property
-    def publisher(self) -> rtc.RemoteParticipant | None:
-        return self._publisher
 
     @property
     def agent(self) -> rtc.LocalParticipant:
@@ -94,21 +89,39 @@ class JobContext:
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         rtc_config: rtc.RtcConfiguration | None = None,
     ) -> None:
-        room_opts = rtc.RoomOptions(
+        room_options = rtc.RoomOptions(
             e2ee=e2ee,
             auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
             rtc_config=rtc_config,
         )
 
-        await self._room.connect(self._job.url, self._job.token, room_opts)
+        await self._room.connect(self._info.url, self._info.token, options=room_options)
+        self._on_connect()
+
+        if auto_subscribe in (AutoSubscribe.AUDIO_ONLY, AutoSubscribe.VIDEO_ONLY):
+            pass
 
     def shutdown(self, reason: str = "") -> None:
-        self._close_tx.send_nowait(_ShutdownInfo(reason=reason))
+        self._on_shutdown(reason)
 
 
 class JobProcess:
-    def __init__(self):
-        pass
+    def __init__(self, *, start_arguments: Any | None = None) -> None:
+        self._mp_proc = mp.current_process()
+        self._userdata = {}
+        self._start_arguments = start_arguments
+
+    @property
+    def pid(self) -> int:
+        return self._mp_proc.pid
+
+    @property
+    def userdata(self) -> dict:
+        return self._userdata
+
+    @property
+    def start_arguments(self) -> Any | None:
+        return self._start_arguments
 
 
 @dataclass

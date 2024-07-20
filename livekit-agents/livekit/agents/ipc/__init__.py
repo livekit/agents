@@ -1,4 +1,3 @@
-from . import protocol, channel, proc_pool
-from .job_process import JobProcess
+from . import proto, channel, proc_pool
 
-__all__ = ["JobProcess", "protocol", "channel", "proc_pool"]
+__all__ = ["proto", "channel", "proc_pool"]
