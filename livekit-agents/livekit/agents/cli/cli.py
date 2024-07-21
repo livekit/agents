@@ -91,11 +91,14 @@ def _run_dev(
 
     if watch:
         from .watcher import WatchServer
+
         setup_logging(log_level, args.production)
         main_file = pathlib.Path(sys.argv[0]).parent
 
         async def _run_loop():
-            server = WatchServer(run_worker, main_file, args, loop=asyncio.get_event_loop())
+            server = WatchServer(
+                run_worker, main_file, args, loop=asyncio.get_event_loop()
+            )
             await server.run()
 
         asyncio.run(_run_loop())

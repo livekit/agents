@@ -97,11 +97,33 @@ class JobContext:
         await self._room.connect(self._info.url, self._info.token, options=room_options)
         self._on_connect()
 
-        if auto_subscribe in (AutoSubscribe.AUDIO_ONLY, AutoSubscribe.VIDEO_ONLY):
-            pass
+        _apply_auto_subscribe_opts(self._room, auto_subscribe)
 
     def shutdown(self, reason: str = "") -> None:
         self._on_shutdown(reason)
+
+
+def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
+    if auto_subscribe not in (AutoSubscribe.AUDIO_ONLY, AutoSubscribe.VIDEO_ONLY):
+        return
+
+    def _subscribe_if_needed(pub: rtc.RemoteTrackPublication):
+        if (
+            auto_subscribe == AutoSubscribe.AUDIO_ONLY
+            and pub.kind == rtc.TrackKind.KIND_AUDIO
+        ) or (
+            auto_subscribe == AutoSubscribe.VIDEO_ONLY
+            and pub.kind == rtc.TrackKind.KIND_VIDEO
+        ):
+            pub.set_subscribed(True)
+
+    for p in room.participants.values():
+        for pub in p.tracks.values():
+            _subscribe_if_needed(pub)
+
+    @room.on("track_published")
+    async def on_track_published(pub: rtc.RemoteTrackPublication, _: rtc.RemoteParticipant):
+        _subscribe_if_needed(pub)
 
 
 class JobProcess:

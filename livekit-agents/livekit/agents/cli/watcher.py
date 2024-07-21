@@ -67,7 +67,9 @@ class WatchServer:
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         mp_pch, cli_args.mp_cch = multiprocessing.Pipe(duplex=True)
-        self._pch = channel.ProcChannel(conn=mp_pch, loop=loop, messages=proto.IPC_MESSAGES)
+        self._pch = channel.ProcChannel(
+            conn=mp_pch, loop=loop, messages=proto.IPC_MESSAGES
+        )
         self._cli_args = cli_args
         self._worker_runner = worker_runner
         self._main_file = main_file
@@ -99,7 +101,9 @@ class WatchServer:
         self._working_reloading = True
 
         self._recv_jobs_fut = asyncio.Future()
-        await asyncio.wait_for(self._recv_jobs_fut, timeout=1.5) # wait max 1.5s to get the active jobs
+        await asyncio.wait_for(
+            self._recv_jobs_fut, timeout=1.5
+        )  # wait max 1.5s to get the active jobs
 
     @utils.log_exceptions(logger=logger)
     async def _read_ipc_task(self) -> None:
@@ -116,8 +120,6 @@ class WatchServer:
                 self._working_reloading = False
 
 
-
-
 class WatchClient:
     def __init__(
         self,
@@ -127,14 +129,16 @@ class WatchClient:
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._worker = worker
-        self._cch = channel.ProcChannel(conn=mp_cch, loop=self._loop, messages=proto.IPC_MESSAGES)
+        self._cch = channel.ProcChannel(
+            conn=mp_cch, loop=self._loop, messages=proto.IPC_MESSAGES
+        )
 
     def start(self) -> None:
         self._main_task = self._loop.create_task(self._run())
 
     async def _run(self) -> None:
         try:
-            await (self._cch.asend(proto.ReloadJobsRequest()))
+            await self._cch.asend(proto.ReloadJobsRequest())
             while True:
                 msg = await self._cch.arecv()
 
