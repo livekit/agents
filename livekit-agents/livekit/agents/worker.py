@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import datetime
 import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import reduce
 from typing import (
@@ -43,7 +44,8 @@ LoadFnc = Callable[[], float]
 
 
 def cpu_load_fnc() -> float:
-    return psutil.cpu_percent() / 100
+    percent = psutil.cpu_percent(1.0)
+    return percent / 100
 
 
 @dataclass
@@ -119,6 +121,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
         self._processes = dict[str, tuple[ipc.JobProcess, ActiveJob]]()
         self._close_future: asyncio.Future | None = None
+        self._executor = ThreadPoolExecutor(max_workers=1)
 
         self._msg_chan = aio.Chan[agent.WorkerMessage](128, loop=self._loop)
 
@@ -338,7 +341,9 @@ class Worker(utils.EventEmitter[EventTypes]):
                 await interval.tick()
 
                 old_status = current_status
-                current_load = self._opts.load_fnc()
+                current_load = await asyncio.get_event_loop().run_in_executor(
+                    self._executor, self._opts.load_fnc
+                )
                 is_full = current_load >= self._opts.load_threshold
                 currently_available = not is_full and not self._draining
 
@@ -411,7 +416,21 @@ class Worker(utils.EventEmitter[EventTypes]):
                 elif which == "assignment":
                     self._handle_assignment(msg.assignment)
 
-        await asyncio.gather(_send_task(), _recv_task(), _load_task())
+        tasks = [
+            asyncio.create_task(_load_task()),
+            asyncio.create_task(_send_task()),
+            asyncio.create_task(_recv_task()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            logger.warn("worker connection closed", extra={"error": e})
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            # ensure fully canceled
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _reload_jobs(self, jobs: list[ActiveJob]) -> None:
         for aj in jobs:
