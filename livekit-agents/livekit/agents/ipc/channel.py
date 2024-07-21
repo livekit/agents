@@ -56,8 +56,12 @@ class ProcChannel:
         self._write_q = queue.Queue[Optional[Message]]()
         self._exit_fut = asyncio.Future()
 
-        self._read_t = threading.Thread(target=self._read_thread, daemon=True, name="proc_channel_read")
-        self._write_t = threading.Thread(target=self._write_thread, daemon=True, name="proc_channel_write")
+        self._read_t = threading.Thread(
+            target=self._read_thread, daemon=True, name="proc_channel_read"
+        )
+        self._write_t = threading.Thread(
+            target=self._write_thread, daemon=True, name="proc_channel_write"
+        )
         self._read_t.start()
         self._write_t.start()
 
@@ -80,6 +84,7 @@ class ProcChannel:
                 break
 
         with contextlib.suppress(RuntimeError):
+
             def _close():
                 self._exit_fut.set_result(None)
                 self._read_q.put_nowait(None)
