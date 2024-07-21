@@ -5,159 +5,149 @@ import contextlib
 import json
 import multiprocessing
 import pathlib
-import threading
 import urllib.parse
 from importlib.metadata import Distribution, PackageNotFoundError
 from typing import Any, Callable, Set
 
 import watchfiles
 
-from .. import apipe, ipc_enc
+from .. import utils
+from ..ipc import channel
 from ..log import logger
 from ..plugin import Plugin
 from ..worker import Worker
-from . import protocol
+from . import proto
+
+
+def _find_watchable_paths(main_file: pathlib.Path) -> list[pathlib.Path]:
+    packages: list[Distribution] = []
+
+    # also watch agents plugins in editable mode
+    def _try_add(name: str) -> bool:
+        nonlocal packages
+        try:
+            dist = Distribution.from_name(name)
+            packages.append(dist)
+            return True
+        except PackageNotFoundError:
+            return False
+
+    if not _try_add("livekit.agents"):
+        _try_add("livekit-agents")
+
+    for plugin in Plugin.registered_plugins:
+        if not _try_add(plugin.package):
+            _try_add(plugin.package.replace(".", "-"))
+
+    paths: list[pathlib.Path] = [main_file.absolute()]
+    for pkg in packages:
+        # https://packaging.python.org/en/latest/specifications/direct-url/
+        durl = pkg.read_text("direct_url.json")
+        if not durl:
+            continue
+
+        durl_json: dict[str, Any] = json.loads(durl)
+        dir_info = durl_json.get("dir_info", {})
+        if dir_info.get("editable", False):
+            path: str | None = durl_json.get("url")
+            if path and path.startswith("file://"):
+                parsed_url = urllib.parse.urlparse(path)
+                file_path = pathlib.Path(urllib.parse.unquote(parsed_url.path))
+                paths.append(file_path)
+
+    return paths
 
 
 class WatchServer:
     def __init__(
         self,
-        worker_runner: Callable[[protocol.CliArgs], Any],
+        worker_runner: Callable[[proto.CliArgs], Any],
         main_file: pathlib.Path,
-        args: protocol.CliArgs,
-        watch_plugins: bool = True,
+        cli_args: proto.CliArgs,
+        loop: asyncio.AbstractEventLoop,
     ) -> None:
-        self._pch, args.cch = multiprocessing.Pipe(duplex=True)
+        mp_pch, cli_args.mp_cch = multiprocessing.Pipe(duplex=True)
+        self._pch = channel.ProcChannel(conn=mp_pch, loop=loop, messages=proto.IPC_MESSAGES)
+        self._cli_args = cli_args
         self._worker_runner = worker_runner
         self._main_file = main_file
-        self._args = args
-        self._watch_plugins = watch_plugins
-        self._read_thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._loop = loop
 
-        self._jobs_recv = threading.Event()
-        self._lock = threading.Lock()
-        self._worker_valid = True
+        self._recv_jobs_fut = asyncio.Future()
+        self._reloading_jobs = False
 
-    def run(self) -> None:
-        packages: list[Distribution] = []
-
-        if self._watch_plugins:
-            # also watch plugins that are installed in editable mode
-            # this is particulary useful when developing plugins
-
-            def _try_add(name: str) -> bool:
-                nonlocal packages
-                try:
-                    dist = Distribution.from_name(name)
-                    packages.append(dist)
-                    return True
-                except PackageNotFoundError:
-                    return False
-
-            if not _try_add("livekit.agents"):
-                _try_add("livekit-agents")
-
-            for plugin in Plugin.registered_plugins:
-                if not _try_add(plugin.package):
-                    _try_add(plugin.package.replace(".", "-"))
-
-        paths: list[pathlib.Path] = [self._main_file.absolute()]
-        for pkg in packages:
-            # https://packaging.python.org/en/latest/specifications/direct-url/
-            durl = pkg.read_text("direct_url.json")
-            if not durl:
-                continue
-
-            durl_json: dict[str, Any] = json.loads(durl)
-            dir_info = durl_json.get("dir_info", {})
-            if dir_info.get("editable", False):
-                path: str | None = durl_json.get("url")
-                if path and path.startswith("file://"):
-                    parsed_url = urllib.parse.urlparse(path)
-                    file_path = pathlib.Path(urllib.parse.unquote(parsed_url.path))
-                    paths.append(file_path)
-
-        for pth in paths:
+    async def run(self) -> None:
+        watch_paths = _find_watchable_paths(self._main_file)
+        for pth in watch_paths:
             logger.info(f"Watching {pth}")
 
-        self._read_thread.start()
-        watchfiles.run_process(
-            *paths,
+        read_ipc_task = self._loop.create_task(self._read_ipc_task())
+        await watchfiles.arun_process(
+            *watch_paths,
             target=self._worker_runner,
-            args=(self._args,),
+            args=(self._cli_args,),
             watch_filter=watchfiles.filters.PythonFilter(),
             callback=self._on_reload,
         )
+        await utils.aio.gracefully_cancel(read_ipc_task)
 
-    def _read_loop(self) -> None:
-        try:
-            active_jobs = []
-            while True:
-                msg = ipc_enc.read_msg(self._pch, protocol.IPC_MESSAGES)
-                if isinstance(msg, protocol.ActiveJobsResponse):
-                    with self._lock:
-                        if self._worker_valid:
-                            active_jobs = msg.jobs
+    async def _on_reload(self, _: Set[watchfiles.main.FileChange]) -> None:
+        if self._reloading_jobs:
+            return
 
-                    self._jobs_recv.set()
-                elif isinstance(msg, protocol.ReloadJobsRequest):
-                    ipc_enc.write_msg(
-                        self._pch, protocol.ReloadJobsResponse(jobs=active_jobs)
-                    )
-                elif isinstance(msg, protocol.Reloaded):
-                    with self._lock:
-                        self._worker_valid = True
+        await self._pch.asend(proto.ActiveJobsRequest())
+        self._working_reloading = True
 
-        except Exception:
-            logger.exception("watcher failed")
+        self._recv_jobs_fut = asyncio.Future()
+        await asyncio.wait_for(self._recv_jobs_fut, timeout=1.5) # wait max 1.5s to get the active jobs
 
-    def _on_reload(self, _: Set[watchfiles.main.FileChange]):
-        try:
-            # get the current active jobs before reloading
-            ipc_enc.write_msg(self._pch, protocol.ActiveJobsRequest())
-            self._jobs_recv.wait(timeout=1)
-        except Exception:
-            logger.exception("failed to request active jobs")
-        finally:
-            with self._lock:
-                self._worker_valid = False
-            self._jobs_recv.clear()
+    @utils.log_exceptions(logger=logger)
+    async def _read_ipc_task(self) -> None:
+        active_jobs = []
+        while True:
+            msg = await self._pch.arecv()
+            if isinstance(msg, proto.ActiveJobsResponse) and self._working_reloading:
+                active_jobs = msg.jobs
+                with contextlib.suppress(asyncio.InvalidStateError):
+                    self._recv_jobs_fut.set_result(None)
+            if isinstance(msg, proto.ReloadJobsRequest):
+                await self._pch.asend(proto.ReloadJobsResponse(jobs=active_jobs))
+            if isinstance(msg, proto.Reloaded):
+                self._working_reloading = False
+
+
 
 
 class WatchClient:
     def __init__(
         self,
         worker: Worker,
-        cch: ipc_enc.ProcessPipe,
+        mp_cch: channel.ProcessConn,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._worker = worker
-        self._apipe = apipe.AsyncPipe(cch, self._loop, protocol.IPC_MESSAGES)
+        self._cch = channel.ProcChannel(conn=mp_cch, loop=self._loop, messages=proto.IPC_MESSAGES)
 
     def start(self) -> None:
         self._main_task = self._loop.create_task(self._run())
 
     async def _run(self) -> None:
         try:
-            await self.send(protocol.ReloadJobsRequest())
-
+            await (self._cch.asend(proto.ReloadJobsRequest()))
             while True:
-                msg = await self._apipe.read()
+                msg = await self._cch.arecv()
 
-                if isinstance(msg, protocol.ActiveJobsRequest):
+                if isinstance(msg, proto.ActiveJobsRequest):
                     jobs = self._worker.active_jobs
-                    await self.send(protocol.ActiveJobsResponse(jobs=jobs))
-                elif isinstance(msg, protocol.ReloadJobsResponse):
-                    # TODO(theomonnom): This doesn't wait for the worker to be ready/connected
-                    self._worker._reload_jobs(msg.jobs)
-                    await self.send(protocol.Reloaded())
+                    await self._cch.asend(proto.ActiveJobsResponse(jobs=jobs))
+                elif isinstance(msg, proto.ReloadJobsResponse):
+                    # TODO(theomonnom): wait for the worker to be fully initialized/connected
+                    await self._worker._reload_jobs(msg.jobs)
+                    await self._cch.asend(proto.Reloaded())
 
         except Exception:
             logger.exception("watcher failed")
-
-    async def send(self, msg: ipc_enc.Message) -> None:
-        await self._apipe.write(msg)
 
     async def aclose(self) -> None:
         if not self._main_task:

@@ -24,10 +24,10 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Coroutine],
         job_shutdown_fnc: Callable[[JobContext], Coroutine],
-        loop: asyncio.AbstractEventLoop,
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
+        loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
 

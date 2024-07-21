@@ -18,13 +18,12 @@ import asyncio
 import multiprocessing as mp
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Coroutine
 
 from livekit import rtc
 from livekit.protocol import agent, models
 
 from . import utils
-from .exceptions import AvailabilityAnsweredError
 from .log import logger
 
 
@@ -44,8 +43,8 @@ class JobAcceptArguments:
 
 @dataclass
 class RunningJobInfo:
+    accept_arguments: JobAcceptArguments
     job: agent.Job
-    accept_args: JobAcceptArguments
     url: str
     token: str
 
@@ -124,21 +123,18 @@ class JobProcess:
         return self._start_arguments
 
 
-@dataclass
-class _AvailRes:
-    avail: bool
-    data: _JobAcceptArgs | None = None
-    assignment_tx: utils.aio.ChanSender[Optional[BaseException]] | None = None
-
-
 class JobRequest:
     def __init__(
-        self, job: agent.Job, answer_tx: utils.aio.ChanSender[_AvailRes]
+        self,
+        *,
+        job: agent.Job,
+        on_reject: Callable[[], Coroutine],
+        on_accept: Callable[[JobAcceptArguments], Coroutine[None, None, None]],
     ) -> None:
         self._job = job
         self._lock = asyncio.Lock()
-        self._answer_tx = answer_tx
-        self._answered = False
+        self._on_reject = on_reject
+        self._on_accept = on_accept
 
     @property
     def id(self) -> str:
@@ -156,18 +152,9 @@ class JobRequest:
     def publisher(self) -> models.ParticipantInfo | None:
         return self._job.participant
 
-    @property
-    def answered(self) -> bool:
-        return self._answered
-
     async def reject(self) -> None:
-        async with self._lock:
-            if self._answered:
-                raise AvailabilityAnsweredError
-            self._answered = True
-
-        await self._answer_tx.send(_AvailRes(avail=False))
-        logger.info(f"rejected job {self.id}", extra={"job": self.job})
+        """Reject the job request. The job may be assigned to another worker"""
+        await self._on_reject()
 
     async def accept(
         self,
@@ -176,30 +163,14 @@ class JobRequest:
         identity: str = "",
         metadata: str = "",
     ) -> None:
-        async with self._lock:
-            if self._answered:
-                raise AvailabilityAnsweredError
-            self._answered = True
-
+        """Accept the job request, and start the job if the LiveKit SFU assigns the job to our worker."""
         if not identity:
             identity = "agent-" + self.id
 
-        assign_tx = assign_rx = utils.aio.Chan[Union[BaseException, None]](1)
-        data = _JobAcceptArgs(
+        accept_arguments = JobAcceptArguments(
             name=name,
             identity=identity,
             metadata=metadata,
         )
-        await self._answer_tx.send(
-            _AvailRes(avail=True, data=data, assignment_tx=assign_tx)
-        )
 
-        # wait for the server to accept the assignment
-        # this will raise a TimeoutError if the server does not respond
-        # or if an exception is raised
-        exc = await assign_rx.recv()
-
-        if exc is not None:
-            raise exc
-
-        logger.info(f"accepted job {self.id}", extra={"job": self.job})
+        await self._on_accept(accept_arguments)

@@ -10,7 +10,7 @@ from typing import Any, Callable, ClassVar, Coroutine
 
 from livekit.protocol import agent
 
-from ..job import JobAcceptArguments, JobContext, JobProcess
+from ..job import JobAcceptArguments, JobContext, JobProcess, RunningJobInfo
 from . import channel
 
 PING_INTERVAL = 5
@@ -80,28 +80,30 @@ class StartJobRequest:
     receive this message if the process is fully initialized (after sending a InitializeResponse)."""
 
     MSG_ID: ClassVar[int] = 4
-    job: agent.Job = field(default_factory=agent.Job)
-    accept_args: JobAcceptArguments = field(init=False)
-    url: str = ""
-    token: str = ""
+    running_job: RunningJobInfo = field(init=False)
 
     def write(self, b: io.BytesIO) -> None:
-        channel.write_bytes(b, self.job.SerializeToString())
-        channel.write_string(b, self.accept_args.name)
-        channel.write_string(b, self.accept_args.identity)
-        channel.write_string(b, self.accept_args.metadata)
-        channel.write_string(b, self.url)
-        channel.write_string(b, self.token)
+        accept_args = self.running_job.accept_arguments
+        channel.write_bytes(b, self.running_job.job.SerializeToString())
+        channel.write_string(b, accept_args.name)
+        channel.write_string(b, accept_args.identity)
+        channel.write_string(b, accept_args.metadata)
+        channel.write_string(b, self.running_job.url)
+        channel.write_string(b, self.running_job.token)
 
     def read(self, b: io.BytesIO) -> None:
-        self.job.ParseFromString(channel.read_bytes(b))
-        self.accept_args = JobAcceptArguments(
-            name=channel.read_string(b),
-            identity=channel.read_string(b),
-            metadata=channel.read_string(b),
+        job = agent.Job()
+        job.ParseFromString(channel.read_bytes(b))
+        self.running_job = RunningJobInfo(
+            accept_arguments=JobAcceptArguments(
+                name=channel.read_string(b),
+                identity=channel.read_string(b),
+                metadata=channel.read_string(b),
+            ),
+            job=job,
+            url=channel.read_string(b),
+            token=channel.read_string(b),
         )
-        self.url = channel.read_string(b)
-        self.token = channel.read_string(b)
 
 
 @dataclass
