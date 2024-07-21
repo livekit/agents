@@ -91,12 +91,14 @@ def _run_dev(
 
     if watch:
         from .watcher import WatchServer
-
         setup_logging(log_level, args.production)
-
         main_file = pathlib.Path(sys.argv[0]).parent
-        server = WatchServer(run_worker, main_file, args, watch_plugins=True)
-        server.run()
+
+        async def _run_loop():
+            server = WatchServer(run_worker, main_file, args, loop=asyncio.get_event_loop())
+            await server.run()
+
+        asyncio.run(_run_loop())
     else:
         run_worker(args)
 
@@ -232,9 +234,9 @@ def run_worker(args: proto.CliArgs) -> None:
     if args.watch:
         from .watcher import WatchClient
 
-        assert args.cch is not None
+        assert args.mp_cch is not None
 
-        watch_client = WatchClient(worker, args.cch, loop=loop)
+        watch_client = WatchClient(worker, args.mp_cch, loop=loop)
         watch_client.start()
 
     main_task = loop.create_task(_worker_run(worker), name="agent_runner")
@@ -257,4 +259,5 @@ def run_worker(args: proto.CliArgs) -> None:
 
     loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
     loop.run_until_complete(loop.shutdown_asyncgens())
+    loop.run_until_complete(loop.shutdown_default_executor())
     loop.close()

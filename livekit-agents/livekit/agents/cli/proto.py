@@ -25,7 +25,7 @@ class CliArgs:
 
     # pipe used for the communication between the watch server and the watch client
     # when reload/dev mode is enabled
-    cch: channel.ProcessConn | None = None
+    mp_cch: channel.ProcessConn | None = None
 
 
 @dataclass

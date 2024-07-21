@@ -184,6 +184,7 @@ def main(args: proto.ProcStartArgs) -> None:
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    loop.set_debug(args.asyncio_debug)
 
     cch = channel.ProcChannel(conn=args.mp_cch, loop=loop, messages=proto.IPC_MESSAGES)
     init_req = loop.run_until_complete(cch.arecv())
@@ -199,5 +200,21 @@ def main(args: proto.ProcStartArgs) -> None:
 
     # signal to the ProcPool that is worker is now ready to receive jobs
     loop.run_until_complete(cch.asend(proto.InitializeResponse()))
-    loop.run_until_complete(_async_main(args, job_proc, cch))
-    loop.run_until_complete(cch.aclose())
+    try:
+        main_task = loop.create_task(_async_main(args, job_proc, cch), name="job_proc_main")
+        loop.run_until_complete(main_task)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            tasks = asyncio.all_tasks(loop)
+            for task in tasks:
+                task.cancel()
+
+            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
+            loop.run_until_complete(cch.aclose())
+        finally:
+            loop.close()
+
