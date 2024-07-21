@@ -142,6 +142,7 @@ class ColoredFormatter(logging.Formatter):
             "WARNING": self._esc_codes["esc_yellow"],
             "ERROR": self._esc_codes["esc_red"],
             "CRITICAL": self._esc_codes["esc_bold_red"],
+            "DEV": self._esc_codes["esc_purple"],
         }
 
         self._required_fields = _parse_style(self)
