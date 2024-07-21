@@ -18,12 +18,13 @@ from . import channel, proc_main, proto
 class LogQueueListener:
     _sentinel = None
 
-    def __init__(self, queue: mp.Queue) -> None:
+    def __init__(self, queue: mp.Queue, prepare_fnc: Callable[[logging.LogRecord], None]):
         self._thread: threading.Thread | None = None
         self._q = queue
+        self._prepare_fnc = prepare_fnc
 
     def start(self) -> None:
-        self._thread = t = threading.Thread(target=self._monitor, daemon=True)
+        self._thread = t = threading.Thread(target=self._monitor, daemon=True, name="log_listener")
         t.start()
 
     def stop(self) -> None:
@@ -32,6 +33,8 @@ class LogQueueListener:
         self._thread = None
 
     def handle(self, record: logging.LogRecord) -> None:
+        self._prepare_fnc(record)
+
         handlers = logging.root.handlers
         for handler in handlers:
             if record.levelno >= handler.level:
@@ -126,7 +129,12 @@ class SupervisedProc:
         if self._closing:
             raise RuntimeError("process is closed")
 
-        log_listener = LogQueueListener(self._proc_args.log_q)
+        def _add_proc_ctx_log(record: logging.LogRecord) -> None:
+            extra = self.logging_extra()
+            for key, value in extra.items():
+                setattr(record, key, value)
+
+        log_listener = LogQueueListener(self._proc_args.log_q, _add_proc_ctx_log)
         log_listener.start()
 
         self._proc.start()
@@ -294,4 +302,10 @@ class SupervisedProc:
         await asyncio.gather(_send_ping_co(), _pong_timeout_co())
 
     def logging_extra(self) -> dict:
-        return {"pid": self.pid}
+        extra: dict = {
+            "pid": self.pid,
+        }
+        if self._running_job:
+            extra["job_id"] = self._running_job.job.id
+
+        return extra

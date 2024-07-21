@@ -33,6 +33,7 @@ from . import http_server, ipc, utils
 from .job import JobContext, JobProcess, JobRequest, RunningJobInfo, JobAcceptArguments
 from .log import logger
 from .version import __version__
+from .exceptions import AssignmentTimeoutError
 
 MAX_RECONNECT_ATTEMPTS = 3.0
 ASSIGNMENT_TIMEOUT = 7.5
@@ -480,7 +481,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     f"assignment for job {job_req.id} timed out",
                     extra={"job_request": job_req},
                 )
-                return
+                raise AssignmentTimeoutError()
 
             job_assign = wait_assignment.result()
             running_info = RunningJobInfo(
