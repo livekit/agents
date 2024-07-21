@@ -158,7 +158,8 @@ def main(args: proto.ProcStartArgs) -> None:
     asyncio.set_event_loop(loop)
 
     cch = channel.ProcChannel(conn=args.mp_cch, loop=loop, messages=proto.IPC_MESSAGES)
-    init_req = cch.recv()
+    init_req = loop.run_until_complete(cch.arecv())
+
     assert isinstance(
         init_req, proto.InitializeRequest
     ), "first message must be InitializeRequest"
@@ -169,7 +170,6 @@ def main(args: proto.ProcStartArgs) -> None:
     logger.debug("process initialized", extra={"pid": job_proc.pid})
 
     # signal to the ProcPool that is worker is now ready to receive jobs
-    cch.send(proto.InitializeResponse())
-
+    loop.run_until_complete(cch.asend(proto.InitializeResponse()))
     loop.run_until_complete(_async_main(args, job_proc, cch))
-    cch.close()
+    loop.run_until_complete(cch.aclose())

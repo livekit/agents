@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
+import threading
+import queue
 import io
 import struct
-from typing import ClassVar, Protocol, Type, runtime_checkable
+import contextlib
+from typing import ClassVar, Protocol, Type, runtime_checkable, Optional
 
 
 class ProcessConn(Protocol):
-    def recv_bytes(self, maxlength: int | None = None) -> bytes: ...
+    def recv_bytes(self) -> bytes: ...
 
     def send_bytes(
         self,
@@ -16,6 +18,8 @@ class ProcessConn(Protocol):
         offset: int = 0,
         size: int | None = None,
     ): ...
+
+    def poll(self, timeout: float) -> bool: ...
 
     def close(self) -> None: ...
 
@@ -41,54 +45,100 @@ class ProcChannel:
         *,
         conn: ProcessConn,
         loop: asyncio.AbstractEventLoop,
-        messages: dict[int, Type[Message]],
+        messages: dict[int, type[Message]],
     ) -> None:
-        self._conn = conn
         self._loop = loop
+        self._conn = conn
         self._messages = messages
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        self._closed = False
 
-    @property
-    def conn(self) -> ProcessConn:
-        return self._conn
+        self._read_q = asyncio.Queue[Optional[Message]]()
+        self._write_q = queue.Queue[Optional[Message]]()
+        self._exit_fut = asyncio.Future()
 
-    async def asend(self, msg: Message) -> None:
-        await self._loop.run_in_executor(self._executor, self.send, msg)
+        self._read_t = threading.Thread(
+            target=self._read_thread, daemon=True, name="proc_channel_read"
+        )
+        self._write_t = threading.Thread(
+            target=self._write_thread, daemon=True, name="proc_channel_write"
+        )
+        self._read_t.start()
+        self._write_t.start()
+
+    def _read_thread(self) -> None:
+        while True:
+            try:
+                b = io.BytesIO(self._conn.recv_bytes())
+            except (OSError, EOFError):
+                break
+
+            msg_id = read_int(b)
+            msg = self._messages[msg_id]()
+
+            if isinstance(msg, DataMessage):
+                msg.read(b)
+
+            try:
+                self._loop.call_soon_threadsafe(self._read_q.put_nowait, msg)
+            except RuntimeError:
+                break
+
+        with contextlib.suppress(RuntimeError):
+
+            def _close():
+                self._exit_fut.set_result(None)
+                self._read_q.put_nowait(None)
+                self._send_close()
+
+            self._loop.call_soon_threadsafe(_close)
+
+    def _write_thread(self) -> None:
+        while True:
+            msg = self._write_q.get()
+            if msg is None:
+                break
+
+            b = io.BytesIO()
+            write_int(b, msg.MSG_ID)
+
+            if isinstance(msg, DataMessage):
+                msg.write(b)
+
+            try:
+                self._conn.send_bytes(b.getvalue())
+            except (OSError, ValueError):
+                break
+
+        self._conn.close()
 
     async def arecv(self) -> Message:
-        return await self._loop.run_in_executor(self._executor, self.recv)
-
-    async def aclose(self) -> None:
-        await self._loop.run_in_executor(self._executor, self._conn.close)
-
-    def send(self, msg: Message) -> None:
-        b = io.BytesIO()
-        write_int(b, msg.MSG_ID)
-
-        if isinstance(msg, DataMessage):
-            msg.write(b)
-
-        try:
-            self._conn.send_bytes(b.getvalue())
-        except (OSError, ValueError):
+        if self._closed:
             raise ChannelClosed()
 
-    def recv(self) -> Message:
-        try:
-            b = io.BytesIO(self._conn.recv_bytes())
-        except (OSError, EOFError):
+        msg = await self._read_q.get()
+        if msg is None:
             raise ChannelClosed()
-
-        msg_id = read_int(b)
-        msg = self._messages[msg_id]()
-
-        if isinstance(msg, DataMessage):
-            msg.read(b)
 
         return msg
 
-    def close(self) -> None:
-        self._conn.close()
+    async def asend(self, msg: Message) -> None:
+        if self._closed:
+            raise ChannelClosed()
+
+        self._write_q.put_nowait(msg)
+
+    async def aclose(self) -> None:
+        self._send_close()
+        # it seems like the conn close fnc could deadlock if the child process
+        # crashed or was killed?
+        await asyncio.wait_for(self._exit_fut, timeout=10.0)
+
+    def _send_close(self) -> None:
+        if self._closed:
+            return
+
+        self._closed = True
+        self._write_q.put_nowait(None)
 
 
 def write_bytes(b: io.BytesIO, buf: bytes) -> None:
