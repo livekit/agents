@@ -40,6 +40,8 @@ class ChannelClosed(Exception):
 
 
 class ProcChannel:
+    _sentinel = None
+
     def __init__(
         self,
         *,
@@ -87,15 +89,16 @@ class ProcChannel:
 
             def _close():
                 self._exit_fut.set_result(None)
-                self._read_q.put_nowait(None)
-                self._send_close()
+                self._read_q.put_nowait(self._sentinel)
+                self._write_q.put_nowait(self._sentinel)
+                self._do_close()
 
             self._loop.call_soon_threadsafe(_close)
 
     def _write_thread(self) -> None:
         while True:
             msg = self._write_q.get()
-            if msg is None:
+            if msg is self._sentinel:
                 break
 
             b = io.BytesIO()
@@ -109,14 +112,12 @@ class ProcChannel:
             except (OSError, ValueError):
                 break
 
-        self._conn.close()
-
     async def arecv(self) -> Message:
         if self._closed:
             raise ChannelClosed()
 
         msg = await self._read_q.get()
-        if msg is None:
+        if msg is self._sentinel:
             raise ChannelClosed()
 
         return msg
@@ -128,17 +129,15 @@ class ProcChannel:
         self._write_q.put_nowait(msg)
 
     async def aclose(self) -> None:
-        self._send_close()
-        # it seems like the conn close fnc could deadlock if the child process
-        # crashed or was killed?
-        await asyncio.wait_for(self._exit_fut, timeout=10.0)
+        self._do_close()
+        await self._exit_fut
 
-    def _send_close(self) -> None:
+    def _do_close(self) -> None:
         if self._closed:
             return
 
         self._closed = True
-        self._write_q.put_nowait(None)
+        self._conn.close()
 
 
 def write_bytes(b: io.BytesIO, buf: bytes) -> None:
