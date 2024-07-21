@@ -114,6 +114,10 @@ class SupervisedProc:
     def start_arguments(self, value: Any | None) -> None:
         self._proc_args.user_arguments = value
 
+    @property
+    def running_job(self) -> RunningJobInfo | None:
+        return self._running_job
+
     def start(self) -> None:
         """start the job process"""
         if self.started:

@@ -29,10 +29,10 @@ async def entrypoint(ctx: JobContext):
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
 
-async def request_fnc(req: JobRequest) -> None:
+async def job_request_fnc(req: JobRequest) -> None:
     logging.info("received request %s", req)
-    await req.accept(entrypoint)
+    await req.accept()
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(request_fnc))
+    cli.run_app(WorkerOptions(job_request_fnc=job_request_fnc, job_entrypoint_fnc=entrypoint))

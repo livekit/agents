@@ -7,11 +7,11 @@ import sys
 import click
 from livekit.protocol import models
 
+from . import proto
 from .. import utils
 from ..log import logger
 from ..plugin import Plugin
 from ..worker import Worker, WorkerOptions
-from . import protocol
 from .log import setup_logging
 
 
@@ -78,7 +78,7 @@ def _run_dev(
     opts.ws_url = url or opts.ws_url
     opts.api_key = api_key or opts.api_key
     opts.api_secret = api_secret or opts.api_secret
-    args = protocol.CliArgs(
+    args = proto.CliArgs(
         opts=opts,
         log_level=log_level,
         production=False,
@@ -119,7 +119,7 @@ def run_app(opts: WorkerOptions) -> None:
         opts.ws_url = url or opts.ws_url
         opts.api_key = api_key or opts.api_key
         opts.api_secret = api_secret or opts.api_secret
-        args = protocol.CliArgs(
+        args = proto.CliArgs(
             opts=opts,
             log_level=log_level,
             production=True,
@@ -191,7 +191,7 @@ def run_app(opts: WorkerOptions) -> None:
     cli()
 
 
-def run_worker(args: protocol.CliArgs) -> None:
+def run_worker(args: proto.CliArgs) -> None:
     class Shutdown(SystemExit):
         pass
 
