@@ -1,5 +1,6 @@
 import asyncio
 import ctypes
+import time
 import io
 import multiprocessing as mp
 import uuid
@@ -74,10 +75,26 @@ async def test_async_channel():
         string="hello", number=42, double=3.14, data=b"world"
     )
 
-    await pch.aclose()
-
     proc.kill()
     proc.join()
+    await pch.aclose()
+
+
+def _generate_fake_job() -> job.RunningJobInfo:
+    return job.RunningJobInfo(
+        job=agent.Job(
+            id="fake_job_" + str(uuid.uuid4().hex), type=agent.JobType.JT_ROOM
+        ),
+        url="fake_url",
+        token="fake_token",
+        accept_args=job.JobAcceptArguments(name="", identity="", metadata=""),
+    )
+
+
+async def _wait_for_q(q, n, timeout=2.0):
+    await asyncio.wait_for(
+        asyncio.gather(*(q.get() for _ in range(n))), timeout=timeout
+    )
 
 
 def _initialize_proc_main(proc: JobProcess) -> None:
@@ -105,17 +122,6 @@ async def _job_shutdown(job_ctx: JobContext) -> None:
         shutdown_fnc_v.value += 1
 
 
-def _generate_fake_job() -> job.RunningJobInfo:
-    return job.RunningJobInfo(
-        job=agent.Job(
-            id="fake_job_" + str(uuid.uuid4().hex), type=agent.JobType.JT_ROOM
-        ),
-        url="fake_url",
-        token="fake_token",
-        accept_args=job.JobAcceptArguments(name="", identity="", metadata=""),
-    )
-
-
 async def test_proc_pool():
     loop = asyncio.get_running_loop()
     num_idle_processes = 3
@@ -124,6 +130,7 @@ async def test_proc_pool():
         job_entrypoint_fnc=_job_entrypoint,
         job_shutdown_fnc=_job_shutdown,
         num_idle_processes=num_idle_processes,
+        initialize_timeout=20.0,
         close_timeout=20.0,
         loop=loop,
     )
@@ -161,14 +168,9 @@ async def test_proc_pool():
 
     pool.start()
 
-    async def wait_for_q(q, n):
-        await asyncio.wait_for(
-            asyncio.gather(*(q.get() for _ in range(n))), timeout=2.0
-        )
-
-    await wait_for_q(created_q, num_idle_processes)
-    await wait_for_q(start_q, num_idle_processes)
-    await wait_for_q(ready_q, num_idle_processes)
+    await _wait_for_q(created_q, num_idle_processes)
+    await _wait_for_q(start_q, num_idle_processes)
+    await _wait_for_q(ready_q, num_idle_processes)
 
     assert initialize_fnc_v.value == num_idle_processes
 
@@ -177,16 +179,16 @@ async def test_proc_pool():
     for _ in range(jobs_to_start):
         await pool.launch_job(_generate_fake_job())
 
-    await wait_for_q(created_q, jobs_to_start)
-    await wait_for_q(start_q, jobs_to_start)
-    await wait_for_q(ready_q, jobs_to_start)
+    await _wait_for_q(created_q, jobs_to_start)
+    await _wait_for_q(start_q, jobs_to_start)
+    await _wait_for_q(ready_q, jobs_to_start)
 
     await pool.aclose()
 
     assert entrypoint_fnc_v.value == jobs_to_start
     assert shutdown_fnc_v.value == jobs_to_start
 
-    await wait_for_q(close_q, jobs_to_start + num_idle_processes)
+    await _wait_for_q(close_q, jobs_to_start + num_idle_processes)
 
     # the way we check that a process doesn't exist anymore isn't technically reliable (pid recycle could happen)
     for pid in pids:
@@ -195,3 +197,50 @@ async def test_proc_pool():
     for exitcode in exitcodes:
         # this test expects graceful shutdown, kill is tested on another test
         assert exitcode == 0, f"process did not exit cleanly: {exitcode}"
+
+
+def _initialize_slow_proc_main(proc: JobProcess) -> None:
+    time.sleep(2)
+
+
+async def _job_entrypoint_slow(job_ctx: JobContext) -> None:
+    pass
+
+
+async def _job_shutdown_slow(job_ctx: JobContext) -> None:
+    pass
+
+
+async def test_slow_initialization():
+    loop = asyncio.get_running_loop()
+    num_idle_processes = 2
+    pool = ipc.proc_pool.ProcPool(
+        initialize_process_fnc=_initialize_slow_proc_main,
+        job_entrypoint_fnc=_job_entrypoint_slow,
+        job_shutdown_fnc=_job_shutdown_slow,
+        num_idle_processes=num_idle_processes,
+        initialize_timeout=1.0,
+        close_timeout=20.0,
+        loop=loop,
+    )
+
+    close_q = asyncio.Queue()
+    pids = []
+    exitcodes = []
+
+    @pool.on("process_closed")
+    def _process_closed(proc: ipc.proc_pool.SupervisedProc):
+        close_q.put_nowait(None)
+        pids.append(proc.pid)
+        exitcodes.append(proc.exitcode)
+
+    pool.start()
+
+    await _wait_for_q(close_q, num_idle_processes)
+    await pool.aclose()
+
+    for pid in pids:
+        assert not psutil.pid_exists(pid)
+
+    for exitcode in exitcodes:
+        assert exitcode != 0, f"process should have been killed"

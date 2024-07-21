@@ -26,6 +26,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         job_shutdown_fnc: Callable[[JobContext], Coroutine],
         loop: asyncio.AbstractEventLoop,
         num_idle_processes: int,
+        initialize_timeout: float,
         close_timeout: float,
     ) -> None:
         super().__init__()
@@ -39,6 +40,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._job_shutdown_fnc = job_shutdown_fnc
         self._close_timeout = close_timeout
+        self._initialize_timeout = initialize_timeout
         self._loop = loop
 
         self._proc_needed_sem = asyncio.Semaphore(num_idle_processes)
@@ -74,6 +76,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             initialize_process_fnc=self._initialize_process_fnc,
             job_entrypoint_fnc=self._job_entrypoint_fnc,
             job_shutdown_fnc=self._job_shutdown_fnc,
+            initialize_timeout=self._initialize_timeout,
+            close_timeout=self._close_timeout,
             mp_ctx=self._mp_ctx,
             loop=self._loop,
         )
@@ -82,9 +86,14 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             proc.start()
             self._processes.append(proc)
             self.emit("process_started", proc)
-            await proc.initialize()
-            self.emit("process_ready", proc)
-            self._warmed_proc_queue.put_nowait(proc)
+            try:
+                await proc.initialize()
+                # process where initialization times out will never fire "process_ready"
+                # neither be used to launch jobs
+                self.emit("process_ready", proc)
+                self._warmed_proc_queue.put_nowait(proc)
+            except asyncio.TimeoutError:
+                pass
             await proc.join()
             self.emit("process_closed", proc)
         finally:
@@ -100,11 +109,5 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 watch_tasks.append(task)
                 task.add_done_callback(watch_tasks.remove)
         except asyncio.CancelledError:
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(
-                    asyncio.gather(*[proc.aclose() for proc in self._processes]),
-                    timeout=self._close_timeout,
-                )
-
-            await asyncio.gather(*[proc.kill() for proc in self._processes])
+            await asyncio.gather(*[proc.aclose() for proc in self._processes])
             await asyncio.gather(*watch_tasks)
