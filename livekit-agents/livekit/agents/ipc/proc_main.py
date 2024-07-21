@@ -79,13 +79,7 @@ def _start_job(
                 _ShutdownInfo(user_initiated=True, reason=reason)
             )
 
-    info = RunningJobInfo(
-        job=start_req.job,
-        accept_args=start_req.accept_args,
-        url=start_req.url,
-        token=start_req.token,
-    )
-
+    info = start_req.running_job
     job_ctx = JobContext(
         proc=proc,
         info=info,
@@ -143,6 +137,7 @@ async def _async_main(
     job_task: JobTask | None = None
     exit_proc_fut = asyncio.Event()
 
+    @utils.log_exceptions(logger=logger)
     async def _read_ipc_task():
         nonlocal job_task
         while True:

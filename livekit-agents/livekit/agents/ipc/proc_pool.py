@@ -93,7 +93,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 self.emit("process_ready", proc)
                 self._warmed_proc_queue.put_nowait(proc)
             except asyncio.TimeoutError:
-                pass
+                self._proc_needed_sem.release()  # notify to warm a new process after initialization failure
             await proc.join()
             self.emit("process_closed", proc)
         finally:

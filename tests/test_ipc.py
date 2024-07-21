@@ -88,7 +88,7 @@ def _generate_fake_job() -> job.RunningJobInfo:
         ),
         url="fake_url",
         token="fake_token",
-        accept_args=job.JobAcceptArguments(name="", identity="", metadata=""),
+        accept_arguments=job.JobAcceptArguments(name="", identity="", metadata=""),
     )
 
 
@@ -252,7 +252,9 @@ async def test_slow_initialization():
 
     start_args = _new_start_args()
     start_args.initialize_simulate_work_time = 2.0
+    start_q = asyncio.Queue()
     close_q = asyncio.Queue()
+
 
     pids = []
     exitcodes = []
@@ -260,6 +262,7 @@ async def test_slow_initialization():
     @pool.on("process_created")
     def _process_created(proc: ipc.proc_pool.SupervisedProc):
         proc.start_arguments = start_args
+        start_q.put_nowait(None)
 
     @pool.on("process_closed")
     def _process_closed(proc: ipc.proc_pool.SupervisedProc):
@@ -269,7 +272,11 @@ async def test_slow_initialization():
 
     pool.start()
 
+    await _wait_for_elements(start_q, num_idle_processes)
     await _wait_for_elements(close_q, num_idle_processes)
+
+    # after initialization failure, warmup should be retried
+    await _wait_for_elements(start_q, num_idle_processes)
     await pool.aclose()
 
     for pid in pids:
@@ -338,3 +345,4 @@ async def test_job_graceful_shutdown():
 
     assert proc.exitcode == 0, f"process should have exited cleanly"
     assert not proc.killed
+    assert start_args.shutdown_counter.value == 1
