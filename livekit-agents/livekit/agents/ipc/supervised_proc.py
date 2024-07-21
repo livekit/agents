@@ -210,8 +210,8 @@ class SupervisedProc:
             raise RuntimeError("process already has a running job")
 
         self._running_job = info
-        start_req = proto.StartJobRequest(job=info.job, url=info.url, token=info.token)
-        start_req.accept_args = info.accept_args
+        start_req = proto.StartJobRequest()
+        start_req.running_job = info
         await self._pch.asend(start_req)
 
     def _send_kill_signal(self) -> None:
