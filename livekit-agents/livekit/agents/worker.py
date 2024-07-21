@@ -31,7 +31,7 @@ from livekit.protocol import agent, models
 
 from . import http_server, ipc, utils
 from .job import JobContext, JobProcess, JobRequest, RunningJobInfo, JobAcceptArguments
-from .log import logger
+from .log import logger, DEV_LEVEL
 from .version import __version__
 from .exceptions import AssignmentTimeoutError
 
@@ -39,10 +39,8 @@ MAX_RECONNECT_ATTEMPTS = 3.0
 ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_LOAD_INTERVAL = 10.0
 
-
 def _default_initialize_process_fnc(proc: JobProcess) -> Any:
-    pass
-
+    return
 
 async def _default_job_shutdown_fnc(ctx: JobContext) -> None:
     pass
@@ -411,7 +409,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
     async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
         for aj in jobs:
-            logger.info("reloading job", extra={"job": aj.job})
+            logger.log(DEV_LEVEL, "reloading job", extra={"job_id": aj.job.id})
             url = self._opts.ws_url
 
             # take the original jwt token and extend it while keeping all the same data that was generated

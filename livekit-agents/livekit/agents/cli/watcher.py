@@ -13,7 +13,7 @@ import watchfiles
 
 from .. import utils
 from ..ipc import channel
-from ..log import logger
+from ..log import logger, DEV_LEVEL
 from ..plugin import Plugin
 from ..worker import Worker
 from . import proto
@@ -81,7 +81,7 @@ class WatchServer:
     async def run(self) -> None:
         watch_paths = _find_watchable_paths(self._main_file)
         for pth in watch_paths:
-            logger.info(f"Watching {pth}")
+            logger.log(DEV_LEVEL, f"Watching {pth}")
 
         read_ipc_task = self._loop.create_task(self._read_ipc_task())
         await watchfiles.arun_process(
@@ -136,22 +136,20 @@ class WatchClient:
     def start(self) -> None:
         self._main_task = self._loop.create_task(self._run())
 
+    @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
-        try:
-            await self._cch.asend(proto.ReloadJobsRequest())
-            while True:
-                msg = await self._cch.arecv()
+        await self._cch.asend(proto.ReloadJobsRequest())
+        while True:
+            msg = await self._cch.arecv()
 
-                if isinstance(msg, proto.ActiveJobsRequest):
-                    jobs = self._worker.active_jobs
-                    await self._cch.asend(proto.ActiveJobsResponse(jobs=jobs))
-                elif isinstance(msg, proto.ReloadJobsResponse):
-                    # TODO(theomonnom): wait for the worker to be fully initialized/connected
-                    await self._worker._reload_jobs(msg.jobs)
-                    await self._cch.asend(proto.Reloaded())
+            if isinstance(msg, proto.ActiveJobsRequest):
+                jobs = self._worker.active_jobs
+                await self._cch.asend(proto.ActiveJobsResponse(jobs=jobs))
+            elif isinstance(msg, proto.ReloadJobsResponse):
+                # TODO(theomonnom): wait for the worker to be fully initialized/connected
+                await self._worker._reload_jobs(msg.jobs)
+                await self._cch.asend(proto.Reloaded())
 
-        except Exception:
-            logger.exception("watcher failed")
 
     async def aclose(self) -> None:
         if not self._main_task:
