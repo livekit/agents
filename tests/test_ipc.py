@@ -1,5 +1,6 @@
 import asyncio
 import ctypes
+import logging
 import time
 import io
 import multiprocessing as mp
@@ -91,42 +92,82 @@ def _generate_fake_job() -> job.RunningJobInfo:
     )
 
 
-async def _wait_for_q(q, n, timeout=2.0):
-    await asyncio.wait_for(
-        asyncio.gather(*(q.get() for _ in range(n))), timeout=timeout
+@dataclass
+class _StartArgs:
+    initialize_counter: mp.Value
+    entrypoint_counter: mp.Value
+    shutdown_counter: mp.Value
+    initialize_simulate_work_time: float
+    entrypoint_simulate_work_time: float
+    shutdown_simulate_work_time: float
+    update_ev: mp.Condition
+
+
+def _new_start_args() -> _StartArgs:
+    return _StartArgs(
+        initialize_counter=mp.Value(ctypes.c_uint),
+        entrypoint_counter=mp.Value(ctypes.c_uint),
+        shutdown_counter=mp.Value(ctypes.c_uint),
+        initialize_simulate_work_time=0.0,
+        entrypoint_simulate_work_time=0.0,
+        shutdown_simulate_work_time=0.0,
+        update_ev=mp.Condition(),
     )
 
 
-def _initialize_proc_main(proc: JobProcess) -> None:
-    (initialize_fnc_v, _, _) = proc.start_arguments
+def _initialize_proc(proc: JobProcess) -> None:
+    start_args: _StartArgs = proc.start_arguments
 
     # incrementing isn't atomic (the lock should be reentrant by default)
-    with initialize_fnc_v.get_lock():
-        initialize_fnc_v.value += 1
+    with start_args.initialize_counter.get_lock():
+        start_args.initialize_counter.value += 1
+
+    time.sleep(start_args.initialize_simulate_work_time)
+
+    with start_args.update_ev:
+        start_args.update_ev.notify()
 
 
 async def _job_entrypoint(job_ctx: JobContext) -> None:
-    (_, entrypoint_fnc_v, _) = job_ctx.proc.start_arguments
-    with entrypoint_fnc_v.get_lock():
-        entrypoint_fnc_v.value += 1
+    start_args: _StartArgs = job_ctx.proc.start_arguments
+
+    with start_args.entrypoint_counter.get_lock():
+        start_args.entrypoint_counter.value += 1
+
+    await asyncio.sleep(start_args.entrypoint_simulate_work_time)
 
     job_ctx.shutdown(
         "calling shutdown inside the test to avoid a warning when neither shutdown nor connect is called."
     )
 
+    with start_args.update_ev:
+        start_args.update_ev.notify()
+
 
 async def _job_shutdown(job_ctx: JobContext) -> None:
-    (_, _, shutdown_fnc_v) = job_ctx.proc.start_arguments
+    start_args: _StartArgs = job_ctx.proc.start_arguments
 
-    with shutdown_fnc_v.get_lock():
-        shutdown_fnc_v.value += 1
+    with start_args.shutdown_counter.get_lock():
+        start_args.shutdown_counter.value += 1
+
+    await asyncio.sleep(start_args.shutdown_simulate_work_time)
+
+    with start_args.update_ev:
+        start_args.update_ev.notify()
+
+
+async def _wait_for_elements(q: asyncio.Queue, num_elements: int) -> None:
+    for _ in range(num_elements):
+        await q.get()
 
 
 async def test_proc_pool():
+    logging.basicConfig(level=logging.DEBUG)
+
     loop = asyncio.get_running_loop()
     num_idle_processes = 3
     pool = ipc.proc_pool.ProcPool(
-        initialize_process_fnc=_initialize_proc_main,
+        initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
         job_shutdown_fnc=_job_shutdown,
         num_idle_processes=num_idle_processes,
@@ -135,10 +176,7 @@ async def test_proc_pool():
         loop=loop,
     )
 
-    initialize_fnc_v = mp.Value(ctypes.c_uint)
-    entrypoint_fnc_v = mp.Value(ctypes.c_uint)
-    shutdown_fnc_v = mp.Value(ctypes.c_uint)
-
+    start_args = _new_start_args()
     created_q = asyncio.Queue()
     start_q = asyncio.Queue()
     ready_q = asyncio.Queue()
@@ -150,7 +188,7 @@ async def test_proc_pool():
     @pool.on("process_created")
     def _process_created(proc: ipc.proc_pool.SupervisedProc):
         created_q.put_nowait(None)
-        proc.start_arguments = (initialize_fnc_v, entrypoint_fnc_v, shutdown_fnc_v)
+        proc.start_arguments = start_args
 
     @pool.on("process_started")
     def _process_started(proc: ipc.proc_pool.SupervisedProc):
@@ -168,27 +206,27 @@ async def test_proc_pool():
 
     pool.start()
 
-    await _wait_for_q(created_q, num_idle_processes)
-    await _wait_for_q(start_q, num_idle_processes)
-    await _wait_for_q(ready_q, num_idle_processes)
+    await _wait_for_elements(created_q, num_idle_processes)
+    await _wait_for_elements(start_q, num_idle_processes)
+    await _wait_for_elements(ready_q, num_idle_processes)
 
-    assert initialize_fnc_v.value == num_idle_processes
+    assert start_args.initialize_counter.value == num_idle_processes
 
     jobs_to_start = 2
 
     for _ in range(jobs_to_start):
         await pool.launch_job(_generate_fake_job())
 
-    await _wait_for_q(created_q, jobs_to_start)
-    await _wait_for_q(start_q, jobs_to_start)
-    await _wait_for_q(ready_q, jobs_to_start)
+    await _wait_for_elements(created_q, jobs_to_start)
+    await _wait_for_elements(start_q, jobs_to_start)
+    await _wait_for_elements(ready_q, jobs_to_start)
 
     await pool.aclose()
 
-    assert entrypoint_fnc_v.value == jobs_to_start
-    assert shutdown_fnc_v.value == jobs_to_start
+    assert start_args.entrypoint_counter.value == jobs_to_start
+    assert start_args.shutdown_counter.value == jobs_to_start
 
-    await _wait_for_q(close_q, jobs_to_start + num_idle_processes)
+    await _wait_for_elements(close_q, num_idle_processes + jobs_to_start)
 
     # the way we check that a process doesn't exist anymore isn't technically reliable (pid recycle could happen)
     for pid in pids:
@@ -199,34 +237,29 @@ async def test_proc_pool():
         assert exitcode == 0, f"process did not exit cleanly: {exitcode}"
 
 
-def _initialize_slow_proc_main(proc: JobProcess) -> None:
-    time.sleep(2)
-
-
-async def _job_entrypoint_slow(job_ctx: JobContext) -> None:
-    pass
-
-
-async def _job_shutdown_slow(job_ctx: JobContext) -> None:
-    pass
-
-
 async def test_slow_initialization():
     loop = asyncio.get_running_loop()
     num_idle_processes = 2
     pool = ipc.proc_pool.ProcPool(
-        initialize_process_fnc=_initialize_slow_proc_main,
-        job_entrypoint_fnc=_job_entrypoint_slow,
-        job_shutdown_fnc=_job_shutdown_slow,
+        initialize_process_fnc=_initialize_proc,
+        job_entrypoint_fnc=_job_entrypoint,
+        job_shutdown_fnc=_job_shutdown,
         num_idle_processes=num_idle_processes,
         initialize_timeout=1.0,
         close_timeout=20.0,
         loop=loop,
     )
 
+    start_args = _new_start_args()
+    start_args.initialize_simulate_work_time = 2.0
     close_q = asyncio.Queue()
+
     pids = []
     exitcodes = []
+
+    @pool.on("process_created")
+    def _process_created(proc: ipc.proc_pool.SupervisedProc):
+        proc.start_arguments = start_args
 
     @pool.on("process_closed")
     def _process_closed(proc: ipc.proc_pool.SupervisedProc):
@@ -236,7 +269,7 @@ async def test_slow_initialization():
 
     pool.start()
 
-    await _wait_for_q(close_q, num_idle_processes)
+    await _wait_for_elements(close_q, num_idle_processes)
     await pool.aclose()
 
     for pid in pids:
@@ -244,3 +277,64 @@ async def test_slow_initialization():
 
     for exitcode in exitcodes:
         assert exitcode != 0, f"process should have been killed"
+
+
+def _create_proc(
+    *, close_timeout: float, start_args: _StartArgs, initialize_timeout: float = 20.0
+) -> ipc.supervised_proc.SupervisedProc:
+    loop = asyncio.get_running_loop()
+    mp_ctx = mp.get_context("spawn")
+    proc = ipc.supervised_proc.SupervisedProc(
+        initialize_process_fnc=_initialize_proc,
+        job_entrypoint_fnc=_job_entrypoint,
+        job_shutdown_fnc=_job_shutdown,
+        initialize_timeout=initialize_timeout,
+        close_timeout=close_timeout,
+        mp_ctx=mp_ctx,
+        loop=loop,
+    )
+    proc.start_arguments = start_args
+    return proc
+
+
+async def test_shutdown_no_job():
+    start_args = _new_start_args()
+    proc = _create_proc(close_timeout=2.0, start_args=start_args)
+    proc.start()
+    await proc.initialize()
+    await proc.aclose()
+
+    assert not proc.killed
+    assert proc.exitcode == 0
+    assert (
+        start_args.shutdown_counter.value == 0
+    ), f"shutdown_cb isn't called when there is no job"
+
+
+async def test_job_slow_shutdown():
+    start_args = _new_start_args()
+    start_args.shutdown_simulate_work_time = 2.0
+    fake_job = _generate_fake_job()
+    proc = _create_proc(close_timeout=1.0, start_args=start_args)
+    proc.start()
+    await proc.initialize()
+    await proc.launch_job(fake_job)
+    await proc.aclose()
+
+    # process is killed when there is a job with slow timeout
+    assert proc.exitcode != 0, f"process should have been killed"
+    assert proc.killed
+
+
+async def test_job_graceful_shutdown():
+    start_args = _new_start_args()
+    start_args.shutdown_simulate_work_time = 1.0
+    fake_job = _generate_fake_job()
+    proc = _create_proc(close_timeout=2.0, start_args=start_args)
+    proc.start()
+    await proc.initialize()
+    await proc.launch_job(fake_job)
+    await proc.aclose()
+
+    assert proc.exitcode == 0, f"process should have exited cleanly"
+    assert not proc.killed

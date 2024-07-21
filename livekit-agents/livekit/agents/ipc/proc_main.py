@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import copy
 import contextlib
+import multiprocessing as mp
 from dataclasses import dataclass
 
 from livekit import rtc
@@ -10,6 +13,25 @@ from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from . import channel, proto
+
+
+class LogQueueHandler(logging.Handler):
+    def __init__(self, queue: mp.Queue) -> None:
+        super().__init__()
+        self._q = queue
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            record = copy.copy(record)
+            record.message = msg
+            record.msg = msg
+            record.args = None
+            record.exc_info = None
+            record.exc_text = None
+            self._q.put_nowait(record)
+        except Exception:
+            self.handleError(record)
 
 
 @dataclass
@@ -154,6 +176,12 @@ async def _async_main(
 
 
 def main(args: proto.ProcStartArgs) -> None:
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.NOTSET)
+
+    handler = LogQueueHandler(args.log_q)
+    root_logger.addHandler(handler)
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 

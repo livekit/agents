@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import contextlib
 import multiprocessing as mp
 import sys
@@ -12,6 +13,37 @@ from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from . import channel, proc_main, proto
+
+
+class LogQueueListener:
+    _sentinel = None
+
+    def __init__(self, queue: mp.Queue) -> None:
+        self._thread: threading.Thread | None = None
+        self._q = queue
+
+    def start(self) -> None:
+        self._thread = t = threading.Thread(target=self._monitor, daemon=True)
+        t.start()
+
+    def stop(self) -> None:
+        self._q.put_nowait(self._sentinel)
+        self._thread.join()
+        self._thread = None
+
+    def handle(self, record: logging.LogRecord) -> None:
+        handlers = logging.root.handlers
+        for handler in handlers:
+            if record.levelno >= handler.level:
+                handler.handle(record)
+
+    def _monitor(self):
+        while True:
+            record = self._q.get()
+            if record is self._sentinel:
+                break
+
+            self.handle(record)
 
 
 class SupervisedProc:
@@ -26,8 +58,8 @@ class SupervisedProc:
         mp_ctx: SpawnContext | ForkServerContext,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
-        log_q = mp.Queue()
         self._loop = loop
+        log_q = mp.Queue()
         mp_pch, mp_cch = mp_ctx.Pipe(duplex=True)
 
         self._pch = channel.ProcChannel(
@@ -63,6 +95,10 @@ class SupervisedProc:
         return self._exitcode
 
     @property
+    def killed(self) -> bool:
+        return self._kill_sent
+
+    @property
     def pid(self) -> int | None:
         return self._pid
 
@@ -86,17 +122,20 @@ class SupervisedProc:
         if self._closing:
             raise RuntimeError("process is closed")
 
+        log_listener = LogQueueListener(self._proc_args.log_q)
+        log_listener.start()
+
         self._proc.start()
         self._pid = self._proc.pid
         self._join_fut = asyncio.Future()
 
         def _sync_run():
             self._proc.join()
+            log_listener.stop()
             self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
 
         thread = threading.Thread(target=_sync_run)
         thread.start()
-
         self._main_atask = asyncio.create_task(self._main_task())
 
     async def join(self) -> None:
