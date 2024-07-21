@@ -90,6 +90,7 @@ def _start_job(
 
     @utils.log_exceptions(logger=logger)
     async def _run_job_task() -> None:
+        utils.http_context._new_session_ctx()
         job_entry_task = asyncio.create_task(
             args.job_entrypoint_fnc(job_ctx), name="job_entrypoint"
         )
@@ -124,6 +125,7 @@ def _start_job(
         except Exception:
             logger.exception("error while disconnecting room")
 
+        await utils.http_context._close_http_ctx()
         exit_proc_fut.set()
 
     task = asyncio.create_task(_run_job_task())
