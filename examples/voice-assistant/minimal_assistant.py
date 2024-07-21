@@ -16,6 +16,8 @@ async def entrypoint(ctx: JobContext):
         ),
     )
 
+    await ctx.connect()
+
     assistant = VoiceAssistant(
         vad=silero.VAD(),
         stt=deepgram.STT(),
