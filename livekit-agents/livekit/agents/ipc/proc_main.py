@@ -202,9 +202,12 @@ def main(args: proto.ProcStartArgs) -> None:
     loop.run_until_complete(cch.asend(proto.InitializeResponse()))
     try:
         main_task = loop.create_task(_async_main(args, job_proc, cch), name="job_proc_main")
-        loop.run_until_complete(main_task)
-    except KeyboardInterrupt:
-        pass
+        try:
+            loop.run_until_complete(main_task)
+        except KeyboardInterrupt:
+            # ignore the keyboard interrupt, we handle the process shutdown ourselves
+            # (this signal can be sent by watchfiles on dev mode)
+            loop.run_until_complete(main_task)
     finally:
         try:
             tasks = asyncio.all_tasks(loop)

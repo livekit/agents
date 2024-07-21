@@ -239,25 +239,28 @@ def run_worker(args: proto.CliArgs) -> None:
         watch_client = WatchClient(worker, args.mp_cch, loop=loop)
         watch_client.start()
 
-    main_task = loop.create_task(_worker_run(worker), name="agent_runner")
     try:
-        loop.run_until_complete(main_task)
-    except (Shutdown, KeyboardInterrupt):
-        pass
+        main_task = loop.create_task(_worker_run(worker), name="agent_runner")
+        try:
+            loop.run_until_complete(main_task)
+        except (Shutdown, KeyboardInterrupt):
+            pass
 
-    if args.production:
-        loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
+        if args.production:
+            loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
 
-    loop.run_until_complete(worker.aclose())
+        loop.run_until_complete(worker.aclose())
 
-    if watch_client:
-        loop.run_until_complete(watch_client.aclose())
+        if watch_client:
+            loop.run_until_complete(watch_client.aclose())
+    finally:
+        try:
+            tasks = asyncio.all_tasks(loop)
+            for task in tasks:
+                task.cancel()
 
-    tasks = asyncio.all_tasks(loop)
-    for task in tasks:
-        task.cancel()
-
-    loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-    loop.run_until_complete(loop.shutdown_asyncgens())
-    loop.run_until_complete(loop.shutdown_default_executor())
-    loop.close()
+            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
+        finally:
+            loop.close()
