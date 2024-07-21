@@ -51,8 +51,8 @@ jobs:
         id: changesets
         uses: changesets/action@v1
         with:
-          version: pnpm ci:version
-          publish: pnpm ci:publish
+          version: ${{ github.ref == 'refs/heads/main' && 'pnpm ci:version' || 'pnpm ci:version --snapshot dev' }}
+          publish: ${{ github.ref == 'refs/heads/main' && 'pnpm ci:publish' || 'pnpm ci:publish --tag dev' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -84,7 +84,8 @@ jobs:
       - name: Bump version.py
         run: |
           export module=$(sed 's/^.*\///' <<< ${{ matrix.package.name }} | tr '-' '/')
-          sed -i "s/__version__.*/__version__ = \"${{ matrix.package.version }}\"/" $module/version.py
+          export version=$(sed 's|-\([0-9]*\)$|\1|' <<< ${{ matrix.package.version }})
+          sed -i "s/__version__.*/__version__ = \"$version\"/" $module/version.py
 
       - name: Build package
         run: python -m build
