@@ -198,7 +198,9 @@ def main(args: proto.ProcStartArgs) -> None:
     # signal to the ProcPool that is worker is now ready to receive jobs
     loop.run_until_complete(cch.asend(proto.InitializeResponse()))
     try:
-        main_task = loop.create_task(_async_main(args, job_proc, cch), name="job_proc_main")
+        main_task = loop.create_task(
+            _async_main(args, job_proc, cch), name="job_proc_main"
+        )
         try:
             loop.run_until_complete(main_task)
         except KeyboardInterrupt:
@@ -217,4 +219,3 @@ def main(args: proto.ProcStartArgs) -> None:
             loop.run_until_complete(cch.aclose())
         finally:
             loop.close()
-

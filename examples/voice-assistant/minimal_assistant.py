@@ -37,4 +37,6 @@ async def job_request_fnc(req: JobRequest) -> None:
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(job_request_fnc=job_request_fnc, job_entrypoint_fnc=entrypoint))
+    cli.run_app(
+        WorkerOptions(job_request_fnc=job_request_fnc, job_entrypoint_fnc=entrypoint)
+    )

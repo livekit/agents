@@ -255,7 +255,6 @@ async def test_slow_initialization():
     start_q = asyncio.Queue()
     close_q = asyncio.Queue()
 
-
     pids = []
     exitcodes = []
 
