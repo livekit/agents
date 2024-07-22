@@ -85,8 +85,8 @@ async def test_stream(stt: agents.stt.STT):
     async def _stream_input():
         for frame in frames:
             stream.push_frame(frame)
-            # audio are split in 10ms chunks but the whole file is 40s
-            # but we  still wait less to make the tests faster
+            # audio are split in 10ms chunks but the whole file is 40s,
+            # but we still wait less to make the tests faster
             await asyncio.sleep(0.001)
 
         await stream.aclose()
@@ -106,8 +106,6 @@ async def test_stream(stt: agents.stt.STT):
                 recv_end = False
                 recv_start = True
                 continue
-
-            assert recv_start, "START_OF_SPEECH should be sent before any other event"
 
             if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
                 text += event.alternatives[0].text

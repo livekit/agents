@@ -125,6 +125,12 @@ class AgentOutput:
                 synth.cancel()
                 await synth
 
+            try:
+                if handle.play_handle is not None:
+                    await handle.play_handle
+            finally:
+                await handle._tr_fwd.aclose()
+
 
 @utils.log_exceptions(logger=logger)
 async def _str_synthesis_task(text: str, handle: SynthesisHandle) -> None:
@@ -179,10 +185,12 @@ async def _stream_synthesis_task(
             # audio_duration += frame.samples_per_channel / frame.sample_rate
             if handle._tr_fwd is not None:
                 handle._tr_fwd.push_audio(audio.frame)
+
             handle._buf_ch.send_nowait(audio.frame)
 
+            # we're only flushing once, so we know we can break at the end of the first segment
             if audio.end_of_segment:
-                return
+                break
 
         # self._log_debug(
         #    f"tts finished synthesising {audio_duration:.2f}s audio (streamed)"

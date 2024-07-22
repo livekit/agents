@@ -499,7 +499,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             # make sure at least some speech was played before committing the user message
             # since we try to validate as fast as possible it is possible the agent gets interrupted
-            # really quickly (barely hearable), we don't want to mark this question as "answered".
+            # really quickly (barely audible), we don't want to mark this question as "answered".
             if not is_using_tools and (
                 play_handle.time_played < MIN_TIME_PLAYED_FOR_COMMIT
                 and not play_handle_fut.done()
