@@ -20,6 +20,7 @@ import enum
 import functools
 import inspect
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, MutableSet, Tuple
 
@@ -56,6 +57,7 @@ class LLM(llm.LLM):
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient(base_url=get_base_url(base_url))
         self._running_fncs: MutableSet[asyncio.Task] = set()
+        logging.getLogger("httpx").setLevel(logging.WARNING)
 
     async def chat(
         self,
