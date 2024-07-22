@@ -91,6 +91,7 @@ class WatchServer:
             watch_filter=watchfiles.filters.PythonFilter(),
             callback=self._on_reload,
         )
+
         await utils.aio.gracefully_cancel(read_ipc_task)
 
     async def _on_reload(self, _: Set[watchfiles.main.FileChange]) -> None:
