@@ -10,8 +10,6 @@ from ..log import logger
 from .tts import (
     TTS,
     ChunkedStream,
-    SynthesisEvent,
-    SynthesisEventType,
     SynthesizedAudio,
     SynthesizeStream,
 )

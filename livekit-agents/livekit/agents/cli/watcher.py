@@ -101,9 +101,10 @@ class WatchServer:
         self._working_reloading = True
 
         self._recv_jobs_fut = asyncio.Future()
-        await asyncio.wait_for(
-            self._recv_jobs_fut, timeout=1.5
-        )  # wait max 1.5s to get the active jobs
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                self._recv_jobs_fut, timeout=1.5
+            )  # wait max 1.5s to get the active jobs
 
     @utils.log_exceptions(logger=logger)
     async def _read_ipc_task(self) -> None:

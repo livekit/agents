@@ -68,7 +68,7 @@ class STT(stt.STT):
         )
 
     async def recognize(
-        self, *, buffer: AudioBuffer, language: str | None = None
+        self, buffer: AudioBuffer, *, language: str | None = None
     ) -> stt.SpeechEvent:
         raise NotImplementedError("Azure STT does not support single frame recognition")
 
@@ -109,7 +109,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._stream.write(frame.data.tobytes())
 
-    async def aclose(self, *, wait: bool = True) -> None:
+    async def aclose(self) -> None:
         if self._closed:
             return
 

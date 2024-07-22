@@ -80,7 +80,7 @@ class STT(stt.STT):
         return config
 
     async def recognize(
-        self, *, buffer: AudioBuffer, language: str | None = None
+        self, buffer: AudioBuffer, *, language: str | None = None
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 

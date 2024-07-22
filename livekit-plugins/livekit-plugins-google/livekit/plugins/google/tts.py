@@ -20,8 +20,7 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 from livekit import rtc
-from livekit.agents import tts
-from livekit.agents.utils import codecs
+from livekit.agents import tts, utils
 
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
@@ -58,7 +57,10 @@ class TTS(tts.TTS):
         GOOGLE_APPLICATION_CREDENTIALS (default behavior of Google TextToSpeechAsyncClient)
         """
         super().__init__(
-            streaming_supported=False, sample_rate=sample_rate, num_channels=1
+            capabilities=tts.TTSCapabilities(
+                streaming=True,
+            ),
+            sample_rate=sample_rate, num_channels=1
         )
 
         self._client: texttospeech.TextToSpeechAsyncClient | None = None
@@ -127,6 +129,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
 
     async def _run(self) -> None:
+        segment_id = utils.nanoid()
         try:
             response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
                 input=texttospeech.SynthesisInput(text=self._text),
@@ -136,17 +139,16 @@ class ChunkedStream(tts.ChunkedStream):
 
             data = response.audio_content
             if self._opts.audio_config.audio_encoding == "mp3":
-                decoder = codecs.Mp3StreamDecoder()
-                frames = decoder.decode_chunk(data)
-                for frame in frames:
+                decoder = utils.codecs.Mp3StreamDecoder()
+                for frame in decoder.decode_chunk(data):
                     self._queue.put_nowait(
-                        tts.SynthesizedAudio(text=self._text, data=frame)
+                        tts.SynthesizedAudio(segment_id=segment_id, frame=frame)
                     )
             else:
                 self._queue.put_nowait(
                     tts.SynthesizedAudio(
-                        text="",
-                        data=rtc.AudioFrame(
+                        segment_id=segment_id,
+                        frame=rtc.AudioFrame(
                             data=data,
                             sample_rate=self._opts.audio_config.sample_rate_hertz,
                             num_channels=1,

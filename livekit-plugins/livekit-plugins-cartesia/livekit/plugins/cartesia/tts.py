@@ -55,7 +55,9 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
-            streaming_supported=False, sample_rate=sample_rate, num_channels=1
+            capabilities=tts.TTSCapabilities(streaming=False),
+            sample_rate=sample_rate,
+            num_channels=1,
         )
 
         api_key = api_key or os.environ.get("CARTESIA_API_KEY")
@@ -94,6 +96,7 @@ class ChunkedStream(tts.ChunkedStream):
 
     @utils.log_exceptions(logger=logger)
     async def _run(self):
+        segment_id = utils.nanoid()
         voice = {}
         if isinstance(self._opts.voice, str):
             voice["mode"] = "id"
@@ -133,8 +136,8 @@ class ChunkedStream(tts.ChunkedStream):
 
                         self._queue.put_nowait(
                             tts.SynthesizedAudio(
-                                text=self._text,
-                                data=rtc.AudioFrame(
+                                segment_id=segment_id,
+                                frame=rtc.AudioFrame(
                                     data=frame_data,
                                     sample_rate=self._opts.sample_rate,
                                     num_channels=1,
@@ -147,8 +150,8 @@ class ChunkedStream(tts.ChunkedStream):
                 if len(buf) > 0:
                     self._queue.put_nowait(
                         tts.SynthesizedAudio(
-                            text=self._text,
-                            data=rtc.AudioFrame(
+                            segment_id=segment_id,
+                            frame=rtc.AudioFrame(
                                 data=buf,
                                 sample_rate=self._opts.sample_rate,
                                 num_channels=1,
