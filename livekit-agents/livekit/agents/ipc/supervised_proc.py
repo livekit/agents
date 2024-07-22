@@ -39,8 +39,11 @@ class LogQueueListener:
     def handle(self, record: logging.LogRecord) -> None:
         self._prepare_fnc(record)
 
-        handlers = logging.root.handlers
-        for handler in handlers:
+        effective_level = logging.getLogger(record.name).getEffectiveLevel()
+        if record.levelno < effective_level:
+            return
+
+        for handler in logging.root.handlers:
             if record.levelno >= handler.level:
                 handler.handle(record)
 

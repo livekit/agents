@@ -8,6 +8,7 @@ from collections import OrderedDict
 from datetime import date, datetime, time, timezone
 from inspect import istraceback
 from typing import Any, Dict, Tuple
+from ..log import logger
 
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
@@ -194,4 +195,7 @@ def setup_logging(log_level: str, production: bool = True) -> None:
 
     root = logging.getLogger()
     root.addHandler(handler)
-    root.setLevel(log_level)
+    root.setLevel(logging.WARN)
+
+    logger.setLevel(log_level)
+
