@@ -6,9 +6,13 @@
 # separate terms of service, privacy policy, and support
 # documentation.
 
-name: Upload Python Package
+name: Release and publish
 
 on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
   workflow_call:
     inputs:
       package_name:
@@ -25,124 +29,120 @@ on:
       DOCS_DEPLOY_AWS_API_SECRET:
         required: true
 
-permissions:
-  contents: read
-
 jobs:
   bump:
     runs-on: ubuntu-latest
-    outputs: 
+    outputs:
       packages: ${{ steps.changesets.outputs.publishedPackages }}
 
     steps:
-    - uses: pnpm/action-setup@v4
-    - name: Use Node.js 20
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20
-        cache: "pnpm"
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
 
-    - name: Install pnpm dependencies
-      run: pnpm install
+      - name: Install pnpm dependencies
+        run: pnpm install
 
-    - name: Create Release Pull Request
-      id: changesets
-      uses: changesets/action@v1
-      with:
-        version: pnpm ci:version
-        publish: pnpm ci:publish
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create Release Pull Request
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          version: ${{ github.ref == 'refs/heads/main' && 'pnpm ci:version' || 'pnpm ci:version --snapshot dev' }}
+          publish: ${{ github.ref == 'refs/heads/main' && 'pnpm ci:publish' || 'pnpm ci:publish --tag dev' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  
   build:
     needs:
-    - bump
+      - bump
     strategy:
       matrix:
         package: ${{ fromJson(needs.bump.outputs.packages) }}
     defaults:
       run:
-        working-directory: ${{ package.name }}
+        working-directory: ${{ matrix.package.name }}
 
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v3
-      with:
-        python-version: '3.x'
+      - name: Set up Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: "3.x"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install build
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
 
-    - name: Bump version.py
-      run: |
-        export module=$(sed 's/^.*\///' <<< ${{ package.name }} | tr '-' '/')
-        sed -i "s/__version__.*/__version__ = \"${{ package.version }}\"/" $module/version.py
+      - name: Bump version.py
+        run: |
+          export module=$(sed 's/^.*\///' <<< ${{ matrix.package.name }} | tr '-' '/')
+          export version=$(sed 's|-\([0-9]*\)$|\1|' <<< ${{ matrix.package.version }})
+          sed -i "s/__version__.*/__version__ = \"$version\"/" $module/version.py
 
-    - name: Build package
-      run: python -m build
+      - name: Build package
+        run: python -m build
 
-    - name: Store the distribution packages
-      uses: actions/upload-artifact@v3
-      with:
-        name: python-package-distributions
-        path: ${{ package.name }}/dist/
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v3
+        with:
+          name: python-package-distributions
+          path: ${{ matrix.package.name }}/dist/
 
   publish:
-
     needs:
-    - build
+      - build
 
     runs-on: ubuntu-latest
 
     steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v3
+        with:
+          name: python-package-distributions
+          path: dist/
 
-    - name: Download all the dists
-      uses: actions/download-artifact@v3
-      with:
-        name: python-package-distributions
-        path: dist/
-
-    - name: Publish package
-      uses: pypa/gh-action-pypi-publish@27b31702a0e7fc50959f5ad993c78deac1bdfc29
-      with:
-        user: __token__
-        password: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Publish package
+        uses: pypa/gh-action-pypi-publish@27b31702a0e7fc50959f5ad993c78deac1bdfc29
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
 
   docs:
     needs:
-    - bump
-    - publish
+      - bump
+      - publish
     strategy:
       matrix:
         package: ${{ needs.bump.outputs.packages }}
 
     runs-on: ubuntu-latest
     env:
-      package: $(sed 's/^.*\///' <<< ${{ package.name }})
+      package: $(sed 's/^.*\///' <<< ${{ matrix.package.name }})
       module: $(tr '-' '/' <<< $package)
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Install pdoc 
-      run: python -m pip install --upgrade pdoc
+      - name: Install pdoc
+        run: python -m pip install --upgrade pdoc
 
-    - name: Install package
-      run: python -m pip install $package/
+      - name: Install package
+        run: python -m pip install $package/
 
-    - name: Build Docs
-      run: python -m pdoc $module --docformat=google --output-dir docs
+      - name: Build Docs
+        run: python -m pdoc $module --docformat=google --output-dir docs
 
-    - name: S3 Upload
-      run: aws s3 cp docs/ s3://livekit-docs/$package --recursive
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
-        AWS_DEFAULT_REGION: "us-east-1"
+      - name: S3 Upload
+        run: aws s3 cp docs/ s3://livekit-docs/$package --recursive
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
+          AWS_DEFAULT_REGION: "us-east-1"
