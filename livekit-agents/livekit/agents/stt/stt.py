@@ -18,7 +18,7 @@ class SpeechEventType(Enum):
     INTERIM_TRANSCRIPT = "interim_transcript"
     """interim transcript, useful for real-time transcription"""
     FINAL_TRANSCRIPT = "final_transcript"
-    """inal transcript, emitted when the STT is confident enough that a certain
+    """final transcript, emitted when the STT is confident enough that a certain
     portion of speech will not change"""
     END_OF_SPEECH = "end_of_speech"
     """indicate the end of speech, emitted when the user stops speaking"""
@@ -55,7 +55,7 @@ class STT(ABC):
 
     @abstractmethod
     async def recognize(
-        self, *, buffer: AudioBuffer, language: str | None = None
+        self, buffer: AudioBuffer, *, language: str | None = None
     ) -> SpeechEvent:
         pass
 
@@ -82,7 +82,7 @@ class SpeechStream(ABC):
         pass
 
     @abstractmethod
-    async def aclose(self, *, wait: bool = True) -> None:
+    async def aclose(self) -> None:
         """
         Close the stream, if wait is True, it will wait for the STT to finish processing the
         remaining frames, otherwise it will close the stream immediately

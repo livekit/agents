@@ -152,10 +152,6 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
                     if not cancelled:
                         handle._tr_fwd.segment_playout_finished()
 
-                    await (
-                        handle._tr_fwd.aclose()
-                    )  # TODO(theomonnom): move this to assistant
-
                 self.emit("playout_stopped", cancelled)
 
             handle._done_fut.set_result(None)

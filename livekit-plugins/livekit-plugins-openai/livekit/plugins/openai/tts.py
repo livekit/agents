@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import AsyncContextManager, Optional
 
 from livekit.agents import tts
-from livekit.agents.utils import codecs
+from livekit.agents.utils import codecs, nanoid
 
 import openai
 
@@ -52,7 +52,9 @@ class TTS(tts.TTS):
         client: openai.AsyncClient | None = None,
     ) -> None:
         super().__init__(
-            streaming_supported=False,
+            capabilities=tts.TTSCapabilities(
+                streaming=False,
+            ),
             sample_rate=OPENAI_TTS_SAMPLE_RATE,
             num_channels=OPENAI_TTS_CHANNELS,
         )
@@ -133,12 +135,13 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self):
         try:
+            segment_id = nanoid()
             async with self._oai_stream as stream:
                 async for data in stream.iter_bytes(4096):
                     frames = self._decoder.decode_chunk(data)
                     for frame in frames:
                         self._queue.put_nowait(
-                            tts.SynthesizedAudio(text=self._text, data=frame)
+                            tts.SynthesizedAudio(segment_id=segment_id, frame=frame)
                         )
         except Exception:
             logger.exception("openai tts main task failed in chunked stream")

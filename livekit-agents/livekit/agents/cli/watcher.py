@@ -91,6 +91,7 @@ class WatchServer:
             watch_filter=watchfiles.filters.PythonFilter(),
             callback=self._on_reload,
         )
+
         await utils.aio.gracefully_cancel(read_ipc_task)
 
     async def _on_reload(self, _: Set[watchfiles.main.FileChange]) -> None:
@@ -101,9 +102,10 @@ class WatchServer:
         self._working_reloading = True
 
         self._recv_jobs_fut = asyncio.Future()
-        await asyncio.wait_for(
-            self._recv_jobs_fut, timeout=1.5
-        )  # wait max 1.5s to get the active jobs
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                self._recv_jobs_fut, timeout=1.5
+            )  # wait max 1.5s to get the active jobs
 
     @utils.log_exceptions(logger=logger)
     async def _read_ipc_task(self) -> None:

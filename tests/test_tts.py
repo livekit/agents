@@ -48,8 +48,8 @@ SYNTHESIZE_TTS = [
 @pytest.mark.parametrize("tts", SYNTHESIZE_TTS)
 async def test_synthetize(tts: agents.tts.TTS):
     frames = []
-    async for frame in tts.synthesize(text=TEST_AUDIO_SYNTHESIZE):
-        frames.append(frame.data)
+    async for audio in tts.synthesize(text=TEST_AUDIO_SYNTHESIZE):
+        frames.append(audio.frame)
 
     await _assert_valid_synthesized_audio(
         frames, tts, TEST_AUDIO_SYNTHESIZE, SIMILARITY_THRESHOLD
@@ -92,24 +92,16 @@ async def test_stream(tts: agents.tts.TTS):
     for chunk in chunks:
         stream.push_text(chunk)
 
-    stream.mark_segment_end()
-    await stream.aclose(wait=True)
+    stream.flush()
 
     frames = []
-    assert (await stream.__anext__()).type == agents.tts.SynthesisEventType.STARTED
+    async for audio in stream:
+        frames.append(audio.frame)
 
-    # this test only have one segment
-    one_finished = False
-    async for event in stream:
-        if event.type == agents.tts.SynthesisEventType.FINISHED:
-            assert not one_finished
-            one_finished = True
-            continue
+        if audio.end_of_segment:
+            break
 
-        assert event.type == agents.tts.SynthesisEventType.AUDIO
-        assert event.audio is not None
-        frames.append(event.audio.data)
-
+    await stream.aclose()
     await _assert_valid_synthesized_audio(
         frames, tts, TEST_AUDIO_SYNTHESIZE, SIMILARITY_THRESHOLD
     )

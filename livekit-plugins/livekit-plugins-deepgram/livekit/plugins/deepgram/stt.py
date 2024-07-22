@@ -99,7 +99,7 @@ class STT(stt.STT):
         return self._session
 
     async def recognize(
-        self, *, buffer: AudioBuffer, language: DeepgramLanguages | str | None = None
+        self, buffer: AudioBuffer, *, language: DeepgramLanguages | str | None = None
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 
@@ -222,6 +222,7 @@ class SpeechStream(stt.SpeechStream):
                 endpointing = self._opts.endpointing_ms
                 if endpointing == 0:
                     endpointing = False
+
                 live_config = {
                     "model": self._opts.model,
                     "punctuate": self._opts.punctuate,
@@ -235,7 +236,6 @@ class SpeechStream(stt.SpeechStream):
                     "endpointing": endpointing,
                     "filler_words": self._opts.filler_words,
                 }
-                print(live_config)
 
                 if self._opts.language:
                     live_config["language"] = self._opts.language

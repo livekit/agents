@@ -139,7 +139,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         # wrap with StreamAdapter automatically when streaming is not supported on a specific TTS
         # to override StreamAdapter options, create the adapter manually
-        if not tts.streaming_supported:
+        if not tts.capabilities.streaming:
             from .. import tts as text_to_speech
 
             tts = text_to_speech.StreamAdapter(
@@ -499,7 +499,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             # make sure at least some speech was played before committing the user message
             # since we try to validate as fast as possible it is possible the agent gets interrupted
-            # really quickly (barely hearable), we don't want to mark this question as "answered".
+            # really quickly (barely audible), we don't want to mark this question as "answered".
             if not is_using_tools and (
                 play_handle.time_played < MIN_TIME_PLAYED_FOR_COMMIT
                 and not play_handle_fut.done()

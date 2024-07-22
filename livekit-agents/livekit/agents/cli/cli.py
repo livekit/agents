@@ -101,7 +101,10 @@ def _run_dev(
             )
             await server.run()
 
-        asyncio.run(_run_loop())
+        try:
+            asyncio.run(_run_loop())
+        except KeyboardInterrupt:
+            pass
     else:
         run_worker(args)
 

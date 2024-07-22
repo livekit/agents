@@ -125,6 +125,12 @@ class AgentOutput:
                 synth.cancel()
                 await synth
 
+            try:
+                if handle.play_handle is not None:
+                    await handle.play_handle
+            finally:
+                await handle._tr_fwd.aclose()
+
 
 @utils.log_exceptions(logger=logger)
 async def _str_synthesis_task(text: str, handle: SynthesisHandle) -> None:
@@ -145,7 +151,7 @@ async def _str_synthesis_task(text: str, handle: SynthesisHandle) -> None:
             # dt = time.time() - start_time
             # self._log_debug(f"tts first frame in {dt:.2f}s")
 
-            frame = audio.data
+            frame = audio.frame
             # audio_duration += frame.samples_per_channel / frame.sample_rate
 
             handle._buf_ch.send_nowait(frame)
@@ -165,23 +171,26 @@ async def _stream_synthesis_task(
 ) -> None:
     """synthesize speech from streamed text"""
 
+    @utils.log_exceptions(logger=logger)
     async def _read_generated_audio_task():
         # start_time = time.time()
         # first_frame = True
         # audio_duration = 0.0
-        async for event in tts_stream:
-            if event.type == text_to_speech.SynthesisEventType.AUDIO:
-                # if first_frame:
-                #    first_frame = False
-                #    dt = time.time() - start_time
-                #    self._log_debug(f"tts first frame in {dt:.2f}s (streamed)")
+        async for audio in tts_stream:
+            # if first_frame:
+            #    first_frame = False
+            #    dt = time.time() - start_time
+            #    self._log_debug(f"tts first frame in {dt:.2f}s (streamed)")
 
-                assert event.audio is not None
-                frame = event.audio.data
-                # audio_duration += frame.samples_per_channel / frame.sample_rate
-                if handle._tr_fwd is not None:
-                    handle._tr_fwd.push_audio(frame)
-                handle._buf_ch.send_nowait(frame)
+            # audio_duration += frame.samples_per_channel / frame.sample_rate
+            if handle._tr_fwd is not None:
+                handle._tr_fwd.push_audio(audio.frame)
+
+            handle._buf_ch.send_nowait(audio.frame)
+
+            # we're only flushing once, so we know we can break at the end of the first segment
+            if audio.end_of_segment:
+                break
 
         # self._log_debug(
         #    f"tts finished synthesising {audio_duration:.2f}s audio (streamed)"
@@ -203,9 +212,9 @@ async def _stream_synthesis_task(
         if handle._tr_fwd is not None:
             handle._tr_fwd.mark_text_segment_end()
 
-        tts_stream.mark_segment_end()
-        await tts_stream.aclose()
+        tts_stream.flush()
         await read_atask
+        await tts_stream.aclose()
 
         if handle._tr_fwd is not None:
             handle._tr_fwd.mark_audio_segment_end()

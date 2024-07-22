@@ -18,13 +18,17 @@ from . import channel, proc_main, proto
 class LogQueueListener:
     _sentinel = None
 
-    def __init__(self, queue: mp.Queue, prepare_fnc: Callable[[logging.LogRecord], None]):
+    def __init__(
+        self, queue: mp.Queue, prepare_fnc: Callable[[logging.LogRecord], None]
+    ):
         self._thread: threading.Thread | None = None
         self._q = queue
         self._prepare_fnc = prepare_fnc
 
     def start(self) -> None:
-        self._thread = t = threading.Thread(target=self._monitor, daemon=True, name="log_listener")
+        self._thread = t = threading.Thread(
+            target=self._monitor, daemon=True, name="log_listener"
+        )
         t.start()
 
     def stop(self) -> None:

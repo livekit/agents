@@ -209,13 +209,14 @@ def main(args: proto.ProcStartArgs) -> None:
             loop.run_until_complete(main_task)
     finally:
         try:
-            tasks = asyncio.all_tasks(loop)
-            for task in tasks:
-                task.cancel()
+            pass
+            #tasks = asyncio.all_tasks(loop)
+            #for task in tasks:
+            #    task.cancel()
 
-            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.run_until_complete(loop.shutdown_default_executor())
-            loop.run_until_complete(cch.aclose())
+            #loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+            #loop.run_until_complete(loop.shutdown_asyncgens())
+            #loop.run_until_complete(loop.shutdown_default_executor())
+            #loop.run_until_complete(cch.aclose())
         finally:
             loop.close()

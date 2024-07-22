@@ -1,60 +1,40 @@
 from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum
 from typing import AsyncIterator
-
 from livekit import rtc
-
 from ..utils import misc
 
 
 @dataclass
 class SynthesizedAudio:
-    text: str
-    data: rtc.AudioFrame
-
-
-class SynthesisEventType(Enum):
-    # first event, indicates that the stream has started
-    # retriggered after FINISHED
-    STARTED = 0
-    # audio data is available
-    AUDIO = 1
-    # finished synthesizing an audio segment (generally separated by sending "None" to push_text)
-    # this doesn't means the stream is done, more text can be pushed
-    FINISHED = 2
-
-
-@dataclass
-class SynthesisEvent:
-    type: SynthesisEventType
-    audio: SynthesizedAudio | None = None
+    segment_id: str
+    """Segment ID is used to identify the same synthesized audio across different SynthesizedAudio events"""
+    frame: rtc.AudioFrame
+    """Synthesized audio frame"""
+    delta_text: str = ""
+    """Current segment of the synthesized audio"""
+    end_of_segment: bool = False
+    """True if this is the last frame in the segment"""
 
 
 class ChunkedStream(ABC):
-    """
-    Used by the non-streamed synthesize API, some providers support chunked http responses
-    """
+    """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
     async def collect(self) -> rtc.AudioFrame:
-        """
-        Utility method to collect every frame in a single call
-        """
+        """Utility method to collect every frame in a single call"""
         frames = []
         async for ev in self:
-            frames.append(ev.data)
-
+            frames.append(ev.frame)
         return misc.merge_frames(frames)
 
     @abstractmethod
-    async def __anext__(self) -> SynthesizedAudio: ...
+    async def aclose(self) -> None:
+        """Close is automatically called if the stream is completely collected"""
+        ...
 
     @abstractmethod
-    async def aclose(self) -> None:
-        """close is automatically called if the stream is completely collected"""
-        ...
+    async def __anext__(self) -> SynthesizedAudio: ...
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
@@ -63,43 +43,44 @@ class ChunkedStream(ABC):
 class SynthesizeStream(ABC):
     @abstractmethod
     def push_text(self, token: str | None) -> None:
-        """
-        Push some text to be synthesized. If token is None,
-        it will be used to identify the end of this particular segment.
-        (required by some TTS engines)
-        """
+        """Push some text to be synthesized. If token is None,
+        it will be used to identify the end of this particular segment."""
         pass
 
-    def mark_segment_end(self) -> None:
-        """
-        Mark the end of the current segment, this is equivalent to calling
-        push_text(None)
-        """
+    def flush(self) -> None:
+        """Mark the end of the current segment, this is equivalent to calling
+        push_text(None)"""
         self.push_text(None)
 
     @abstractmethod
-    async def aclose(self, *, wait: bool = True) -> None:
-        """
-        Close the stream, if wait is True, it will wait for the TTS to
-        finish synthesizing the audio, otherwise it will close ths stream immediately
-        """
-        pass
+    async def aclose(self) -> None:
+        """Close ths stream immediately"""
+        ...
 
     @abstractmethod
-    async def __anext__(self) -> SynthesisEvent:
+    async def __anext__(self) -> SynthesizedAudio:
         pass
 
-    def __aiter__(self) -> AsyncIterator[SynthesisEvent]:
+    def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
+
+
+@dataclass
+class TTSCapabilities:
+    streaming: bool
 
 
 class TTS(ABC):
     def __init__(
-        self, *, streaming_supported: bool, sample_rate: int, num_channels: int
+        self, *, capabilities: TTSCapabilities, sample_rate: int, num_channels: int
     ) -> None:
-        self._streaming_supported = streaming_supported
+        self._capabilities = capabilities
         self._sample_rate = sample_rate
         self._num_channels = num_channels
+
+    @property
+    def capabilities(self) -> TTSCapabilities:
+        return self._capabilities
 
     @property
     def sample_rate(self) -> int:
@@ -117,6 +98,4 @@ class TTS(ABC):
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"
         )
 
-    @property
-    def streaming_supported(self) -> bool:
-        return self._streaming_supported
+    async def aclose(self) -> None: ...
