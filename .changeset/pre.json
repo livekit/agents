@@ -15,6 +15,7 @@
     "livekit-plugins/livekit-plugins-silero": "0.5.1"
   },
   "changesets": [
+    "famous-donuts-burn",
     "hip-knives-fly"
   ]
 }
