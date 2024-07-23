@@ -50,7 +50,6 @@ class BufferedTokenStream:
                 buf_toks = []
                 buf = ""
 
-
     def flush(self) -> None:
         self._check_not_closed()
         if self._buf:

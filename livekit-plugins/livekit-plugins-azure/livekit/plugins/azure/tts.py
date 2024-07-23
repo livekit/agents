@@ -77,7 +77,8 @@ class ChunkedStream(tts.ChunkedStream):
             asyncio.get_running_loop(), self._event_ch
         )
         synthesizer = _create_speech_synthesizer(
-            config=self._opts, stream=speechsdk.audio.PushAudioOutputStream(stream_callback)
+            config=self._opts,
+            stream=speechsdk.audio.PushAudioOutputStream(stream_callback),
         )
 
         def _synthesize() -> speechsdk.SpeechSynthesisResult:
@@ -127,7 +128,7 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
 
 
 def _create_speech_synthesizer(
-        *, config: _TTSOptions, stream: speechsdk.audio.AudioOutputStream
+    *, config: _TTSOptions, stream: speechsdk.audio.AudioOutputStream
 ) -> speechsdk.SpeechSynthesizer:
     speech_config = speechsdk.SpeechConfig(
         subscription=config.speech_key, region=config.speech_region
@@ -139,4 +140,3 @@ def _create_speech_synthesizer(
     return speechsdk.SpeechSynthesizer(
         speech_config=speech_config, audio_config=stream_config
     )
-
