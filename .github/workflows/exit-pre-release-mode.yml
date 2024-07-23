@@ -32,13 +32,17 @@ jobs:
         run: pnpm install
 
       - name: Enter pre-release mode
+        id: exit
         run: |
+          set +e
           pnpm changeset pre exit
+          echo "exitcode=$?" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add changes
         uses: EndBug/add-and-commit@v9
+        if: ${{ steps.exit.outputs.exitcode == '0' }}
         with:
           add: '[".changeset"]'
           default_author: github_actions
