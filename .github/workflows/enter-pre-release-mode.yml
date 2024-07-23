@@ -1,0 +1,49 @@
+name: Ensure pre-release mode
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - edited
+    branches:
+      - dev
+
+jobs:
+  enter-pre:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        if: ${{ github.event_name != 'pull_request' }}
+      - uses: actions/checkout@v4
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }} # required to checkout the repo when triggered through PRs
+          ref: ${{ github.event.pull_request.head.ref }} # required to checkout the repo when triggered through PRs
+      - uses: pnpm/action-setup@v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install pnpm dependencies
+        run: pnpm install
+
+      - name: Enter pre-release mode
+        id: enter
+        run: |
+          set +e
+          pnpm changeset pre enter dev
+          echo "exitcode=$?" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add changes
+        if: ${{ steps.enter.outputs.exitcode == '0' }}
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: '[".changeset"]'
+          default_author: github_actions
+          message: enter pre-release mode

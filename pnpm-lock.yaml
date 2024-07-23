@@ -27,9 +27,13 @@ importers:
 
   livekit-plugins/livekit-plugins-google: {}
 
+  livekit-plugins/livekit-plugins-minimal: {}
+
   livekit-plugins/livekit-plugins-nltk: {}
 
   livekit-plugins/livekit-plugins-openai: {}
+
+  livekit-plugins/livekit-plugins-rag: {}
 
   livekit-plugins/livekit-plugins-silero: {}
 
