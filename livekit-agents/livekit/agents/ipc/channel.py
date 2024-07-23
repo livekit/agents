@@ -146,6 +146,8 @@ class AsyncProcChannel(ProcChannel):
                         self._loop.call_soon_threadsafe(self._read_q.put_nowait, msg)
                     except RuntimeError:
                         break
+            except (OSError, EOFError, ValueError):
+                break
             except ChannelClosed:
                 break
 

@@ -175,8 +175,7 @@ class TTSSegmentsForwarder:
     def mark_text_segment_end(self) -> None:
         self._check_not_closed()
         stream = self._forming_segments.text.sentence_stream
-        stream.mark_segment_end()
-        self._task_set.create_task(stream.aclose())
+        stream.end_input()
 
         # create a new segment on "mark_text_segment_end"
         # further text can already be pushed even if mark_audio_segment_end has not been
@@ -235,8 +234,7 @@ class TTSSegmentsForwarder:
             seg.forward_start_time = time.time()
 
             async for ev in sentence_stream:
-                if ev.type == tokenize.TokenEventType.TOKEN:
-                    await self._sync_sentence_co(seg, ev.token, rtc_seg_q)
+                await self._sync_sentence_co(seg, ev.token, rtc_seg_q)
 
         rtc_seg_q.put_nowait(None)
         await forward_task

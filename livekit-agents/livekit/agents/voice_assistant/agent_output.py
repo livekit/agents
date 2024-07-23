@@ -189,8 +189,6 @@ async def _stream_synthesis_task(
             handle._buf_ch.send_nowait(audio.frame)
 
             # we're only flushing once, so we know we can break at the end of the first segment
-            if audio.end_of_segment:
-                break
 
         # self._log_debug(
         #    f"tts finished synthesising {audio_duration:.2f}s audio (streamed)"
@@ -212,7 +210,7 @@ async def _stream_synthesis_task(
         if handle._tr_fwd is not None:
             handle._tr_fwd.mark_text_segment_end()
 
-        tts_stream.flush()
+        tts_stream.end_input()
         await read_atask
         await tts_stream.aclose()
 
