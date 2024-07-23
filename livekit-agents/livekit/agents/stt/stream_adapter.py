@@ -47,12 +47,13 @@ class StreamAdapterWrapper(SpeechStream):
 
             self._vad_stream.end_input()
 
-
         async def _recognize():
             """recognize speech from vad"""
             async for event in self._vad_stream:
                 if event.type == VADEventType.START_OF_SPEECH:
-                    self._event_ch.send_nowait(SpeechEvent(SpeechEventType.START_OF_SPEECH))
+                    self._event_ch.send_nowait(
+                        SpeechEvent(SpeechEventType.START_OF_SPEECH)
+                    )
                 elif event.type == VADEventType.END_OF_SPEECH:
                     self._event_ch.send_nowait(
                         SpeechEvent(

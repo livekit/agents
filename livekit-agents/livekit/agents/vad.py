@@ -107,4 +107,3 @@ class VADStream(ABC):
         if self._input_ch.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
-

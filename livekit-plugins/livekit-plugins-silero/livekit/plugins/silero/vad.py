@@ -104,7 +104,9 @@ class VADStream(agents.vad.VADStream):
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self):
         window_ch = utils.aio.Chan[_WindowData]()
-        await asyncio.gather(self._run_inference(window_ch), self._forward_input(window_ch))
+        await asyncio.gather(
+            self._run_inference(window_ch), self._forward_input(window_ch)
+        )
 
     async def _forward_input(self, window_tx: utils.aio.ChanSender[_WindowData]):
         """
@@ -118,8 +120,8 @@ class VADStream(agents.vad.VADStream):
                 continue
 
             if (
-                    self._original_sample_rate is not None
-                    and self._original_sample_rate != frame.sample_rate
+                self._original_sample_rate is not None
+                and self._original_sample_rate != frame.sample_rate
             ):
                 raise ValueError("a frame with another sample rate was already pushed")
 
@@ -149,9 +151,9 @@ class VADStream(agents.vad.VADStream):
                 self._remaining_samples -= to_copy
                 remaining_data -= to_copy
 
-                self._window_data.original_data[i * step : i * step + to_copy * step] = (
-                    og_frame[: to_copy * step]
-                )
+                self._window_data.original_data[
+                    i * step : i * step + to_copy * step
+                ] = og_frame[: to_copy * step]
                 self._window_data.inference_data[i : i + to_copy] = if_frame[:to_copy]
 
                 if self._remaining_samples == 0:
@@ -167,7 +169,6 @@ class VADStream(agents.vad.VADStream):
                     self._remaining_samples = self._model.window_size_samples
 
         window_tx.close()
-
 
     async def _run_inference(self, window_rx: utils.aio.ChanReceiver[_WindowData]):
         pub_speaking = False
