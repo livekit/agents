@@ -142,8 +142,6 @@ class AsyncProcChannel(ProcChannel):
             try:
                 if self._conn.poll(1.0):
                     msg = self.recv()
-
-
                     try:
                         self._loop.call_soon_threadsafe(self._read_q.put_nowait, msg)
                     except RuntimeError:

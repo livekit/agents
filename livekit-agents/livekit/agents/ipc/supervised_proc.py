@@ -68,6 +68,7 @@ class SupervisedProc:
     ) -> None:
         self._loop = loop
         log_q = mp.Queue()
+        log_q.cancel_join_thread()
         mp_pch, mp_cch = mp_ctx.Pipe(duplex=True)
 
         self._pch = channel.AsyncProcChannel(
