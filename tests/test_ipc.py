@@ -78,9 +78,9 @@ async def test_async_channel():
         string="hello", number=42, double=3.14, data=b"world"
     )
 
+    await pch.aclose()
     proc.kill()
     proc.join()
-    await pch.aclose()
 
 
 def _generate_fake_job() -> job.RunningJobInfo:
