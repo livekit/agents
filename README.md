@@ -22,9 +22,9 @@ The framework includes plugins for common workflows, such as voice activity dete
 
 Agents integrates seamlessly with [LiveKit server](https://github.com/livekit/livekit), offloading job queuing and scheduling responsibilities to it. This eliminates the need for additional queuing infrastructure. Agent code developed on your local machine can scale to support thousands of concurrent sessions when deployed to a server in production.
 
-> This SDK is currently in Developer Preview mode and not ready for production use. There will be bugs and APIs may change during this period.
+> This SDK is currently in Developer Preview. During this period, you may encounter bugs and the APIs may change.
 >
-> We welcome and appreciate any feedback or contributions. You can create issues here or chat live with us in the #dev channel within the [LiveKit Community Slack](https://livekit.io/join-slack).
+> We welcome and appreciate any feedback or contributions. You can create issues here or chat live with us in the [LiveKit Community Slack](https://livekit.io/join-slack).
 
 ## Docs & Guides
 
@@ -35,7 +35,7 @@ Agents integrates seamlessly with [LiveKit server](https://github.com/livekit/li
 
 ## Examples
 
-- [KITT](https://github.com/livekit/agents/tree/main/examples/voice-assistant): A voice assistant with STT, LLM, and TTS. [Demo](https://kitt.livekit.io)
+- [Voice assistant](https://github.com/livekit/agents/tree/main/examples/voice-assistant): A voice assistant with STT, LLM, and TTS. [Demo](https://kitt.livekit.io)
 - [Video publishing](https://github.com/livekit/agents/tree/main/examples/simple-color): A demonstration of publishing RGB frames to a LiveKit Room
 - [STT](https://github.com/livekit/agents/tree/main/examples/speech-to-text): An agent that transcribes a participant's audio into text
 - [TTS](https://github.com/livekit/agents/tree/main/examples/text-to-speech): An agent that publishes synthesized speech to a LiveKit Room
@@ -58,6 +58,8 @@ The following plugins are available today:
 
 | Plugin                                                                             | Features                        |
 | ---------------------------------------------------------------------------------- | ------------------------------- |
+| [livekit-plugins-azure](https://pypi.org/project/livekit-plugins-azure/)           | STT, TTS                        |
+| [livekit-plugins-cartesia](https://pypi.org/project/livekit-plugins-cartesia/)     | TTS                             |
 | [livekit-plugins-deepgram](https://pypi.org/project/livekit-plugins-deepgram/)     | STT                             |
 | [livekit-plugins-elevenlabs](https://pypi.org/project/livekit-plugins-elevenlabs/) | TTS                             |
 | [livekit-plugins-google](https://pypi.org/project/livekit-plugins-google/)         | STT, TTS                        |
@@ -100,7 +102,7 @@ To ease the process of building and testing an agent, we've developed a versatil
 To join a LiveKit room that's already active, you can use the `connect` command:
 
 ```bash
-python my_agent.py connect --room-name <my-room>
+python my_agent.py connect --room <my-room>
 ```
 
 ### What happens when I run my agent?
@@ -115,7 +117,7 @@ If a notified worker rejects the job or does not accept within a predetermined t
 
 ### What happens when I SIGTERM a worker?
 
-The orchestration system was designed for production use cases. Unlike the typical web server, an agent is a stateful program, so it's important that a worker can't be terminated while it's managing any active agents.
+The orchestration system was designed for production use cases. Unlike the typical web server, an agent is a stateful program, so it's important that a worker isn't terminated while active sessions are ongoing.
 
 When calling SIGTERM on a worker, the worker will signal to LiveKit server that it no longer wants additional jobs. It will also auto-reject any new job requests that get through before the server signal is received. The worker will remain alive while it manages any agents connected to rooms.
 
@@ -142,7 +144,9 @@ class MyPlugin(Plugin):
 ```
 
 <!--BEGIN_REPO_NAV-->
+
 <br/><table>
+
 <thead><tr><th colspan="2">LiveKit Ecosystem</th></tr></thead>
 <tbody>
 <tr><td>Real-time SDKs</td><td><a href="https://github.com/livekit/components-js">React Components</a> · <a href="https://github.com/livekit/client-sdk-js">Browser</a> · <a href="https://github.com/livekit/client-sdk-swift">iOS/macOS</a> · <a href="https://github.com/livekit/client-sdk-android">Android</a> · <a href="https://github.com/livekit/client-sdk-flutter">Flutter</a> · <a href="https://github.com/livekit/client-sdk-react-native">React Native</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/client-sdk-unity-web">Unity (web)</a> · <a href="https://github.com/livekit/client-sdk-unity">Unity (beta)</a></td></tr><tr></tr>

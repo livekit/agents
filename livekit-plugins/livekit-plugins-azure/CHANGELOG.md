@@ -1,5 +1,11 @@
 # livekit-plugins-azure
 
+## 0.3.0-dev.1
+
+### Minor Changes
+
+- dev prerelease - [#435](https://github.com/livekit/agents/pull/435) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.2.2-dev.0
 
 ### Patch Changes
