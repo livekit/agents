@@ -30,19 +30,26 @@ class BufferedTokenStream:
             return
 
         tokens = self._tokenize_fnc(self._buf)
-        if len(tokens) < 2:
-            return
 
-        for i in range(len(tokens) - 1):
-            buf = " ".join(tokens[: i + 1])
+        buf_toks = []
+        buf = ""
+        while len(tokens) > 1:
+            if buf:
+                buf += " "
 
+            tok = tokens.pop(0)
+            buf += tok
+            buf_toks.append(tok)
             if len(buf) >= self._min_token_len:
                 self._event_ch.send_nowait(TokenData(token=buf))
 
-                for j in range(i + 1):
-                    tok = tokens[j]
+                for i, tok in enumerate(buf_toks):
                     tok_i = self._buf.index(tok)
                     self._buf = self._buf[tok_i + len(tok) :].lstrip()
+
+                buf_toks = []
+                buf = ""
+
 
     def flush(self) -> None:
         self._check_not_closed()

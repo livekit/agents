@@ -216,6 +216,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _main_task(self) -> None:
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
+        @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
             """tokenize text from the input_ch to words"""
             word_stream = None
@@ -290,6 +291,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     text=f"{data.token} ",  # must always end with a space
                     try_trigger_generation=False,
                 )
+                print(data_pkt)
                 await ws_conn.send_str(json.dumps(data_pkt))
 
             # no more token, mark eos
@@ -321,10 +323,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     segment_id=segment_id,
                 )
 
-        try:
-            await asyncio.gather(send_task(), recv_task(), return_exceptions=True)
-        except Exception:
-            logger.exception("11labs ws connection failed")
+        await asyncio.gather(send_task(), recv_task())
 
     def _process_stream_event(
         self, *, data: dict, request_id: str, segment_id: str

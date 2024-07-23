@@ -48,7 +48,7 @@ IPC_MESSAGES = {
 def _ping_pong_main(mp_cch):
     async def _pong():
         loop = asyncio.get_event_loop()
-        cch = ipc.channel.ProcChannel(conn=mp_cch, loop=loop, messages=IPC_MESSAGES)
+        cch = ipc.channel.AsyncProcChannel(conn=mp_cch, loop=loop, messages=IPC_MESSAGES)
         while True:
             try:
                 msg = await cch.arecv()
@@ -62,7 +62,7 @@ def _ping_pong_main(mp_cch):
 async def test_async_channel():
     loop = asyncio.get_event_loop()
     mp_pch, mp_cch = mp.Pipe(duplex=True)
-    pch = ipc.channel.ProcChannel(conn=mp_pch, loop=loop, messages=IPC_MESSAGES)
+    pch = ipc.channel.AsyncProcChannel(conn=mp_pch, loop=loop, messages=IPC_MESSAGES)
     proc = mp.Process(target=_ping_pong_main, args=(mp_cch,))
     proc.start()
 
