@@ -178,10 +178,10 @@ class VADStream(agents.vad.VADStream):
         may_start_at_sample = -1
         may_end_at_sample = -1
 
-        min_speech_samples = math.ceil(
+        min_speech_samples = int(
             self._opts.min_speech_duration * self._opts.sample_rate
         )
-        min_silence_samples = math.ceil(
+        min_silence_samples = int(
             self._opts.min_silence_duration * self._opts.sample_rate
         )
 
