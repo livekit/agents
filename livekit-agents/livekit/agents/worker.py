@@ -242,7 +242,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         """_queue_msg raises aio.ChanClosed when the worker is closing/closed"""
         if self._connecting:
             which = msg.WhichOneof("message")
-            if which == "update_worker" and not msg.update_worker.metadata:
+            if which == "update_worker":
                 return
             elif which == "ping":
                 return
