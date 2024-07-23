@@ -116,7 +116,7 @@ class AgentOutput:
             co = _stream_synthesis_task(handle._speech_source, handle)
 
         synth = asyncio.create_task(co)
-        synth.add_done_callback(lambda _: handle._buf_ch.close)
+        synth.add_done_callback(lambda _: handle._buf_ch.close())
         try:
             _ = await asyncio.wait(
                 [synth, handle._interrupt_fut], return_when=asyncio.FIRST_COMPLETED
