@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-import contextlib
 from typing import Any, AsyncIterable, Union
 
 from livekit import rtc
