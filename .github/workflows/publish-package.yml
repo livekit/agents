@@ -23,6 +23,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
       - uses: pnpm/action-setup@v4
       - name: Use Node.js 20
         uses: actions/setup-node@v4
@@ -32,6 +34,22 @@ jobs:
 
       - name: Install pnpm dependencies
         run: pnpm install
+
+      - name: Ensure release mode
+        id: release_mode
+        run: |
+          set +e
+          pnpm changeset pre ${{ github.ref == '/refs/heads/main' && 'exit' || 'enter dev' }}
+          echo "exitcode=$?" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Add changes
+        if: ${{ steps.release_mode.outputs.exitcode == '0' }}
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: '[".changeset"]'
+          default_author: github_actions
+          message: enter pre-release mode
 
       - name: Create Release Pull Request
         id: changesets
@@ -107,7 +125,7 @@ jobs:
       - publish
     strategy:
       matrix:
-        package: ${{ needs.bump.outputs.packages }}
+        package: ${{ fromJSON(needs.bump.outputs.packages) }}
 
     runs-on: ubuntu-latest
     env:
