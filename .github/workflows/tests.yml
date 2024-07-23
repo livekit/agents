@@ -14,7 +14,7 @@ on:
 jobs:
   tests:
     name: Run tests
-    runs-on: namespace-profile-default
+    runs-on: namespace-profile-4vcpu-cache
     steps:
       - uses: actions/checkout@v4
         with:
