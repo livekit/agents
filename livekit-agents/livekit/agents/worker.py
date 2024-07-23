@@ -35,7 +35,7 @@ from .job import JobAcceptArguments, JobContext, JobProcess, JobRequest, Running
 from .log import DEV_LEVEL, logger
 from .version import __version__
 
-MAX_RECONNECT_ATTEMPTS = 3.0
+MAX_RECONNECT_ATTEMPTS = 3
 ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_LOAD_INTERVAL = 10.0
 
