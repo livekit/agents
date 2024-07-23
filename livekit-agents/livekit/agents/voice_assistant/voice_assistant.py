@@ -312,7 +312,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             tv = 1.0
             if self._opts.allow_interruptions:
-                tv = max(0, 1 - ev.probability)
+                tv = max(0.0, 1.0 - ev.probability)
                 self._agent_output.audio_source.target_volume = tv
 
             smoothed_tv = self._agent_output.audio_source.smoothed_volume
@@ -471,6 +471,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         )
 
     async def _play_speech(self, speech_info: _SpeechInfo) -> None:
+        logger.debug("VoiceAssistant._play_speech started")
         MIN_TIME_PLAYED_FOR_COMMIT = 1.5
 
         assert (
@@ -485,7 +486,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         user_speech_commited = False
 
         play_handle = synthesis_handle.play()
-        play_handle_fut = asyncio.ensure_future(play_handle)
+        join_fut = play_handle.join()
         self._playing_synthesis = synthesis_handle
 
         def _commit_user_message_if_needed() -> None:
@@ -507,7 +508,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             # really quickly (barely audible), we don't want to mark this question as "answered".
             if not is_using_tools and (
                 play_handle.time_played < MIN_TIME_PLAYED_FOR_COMMIT
-                and not play_handle_fut.done()
+                and not join_fut.done()
             ):
                 return
 
@@ -519,9 +520,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             user_speech_commited = True
 
         # wait for the play_handle to finish and check every 1s if the user question should be committed
-        while not play_handle_fut.done():
+        while not join_fut.done():
             await asyncio.wait(
-                [play_handle_fut], return_when=asyncio.FIRST_COMPLETED, timeout=1.0
+                [join_fut], return_when=asyncio.FIRST_COMPLETED, timeout=1.0
             )
 
             _commit_user_message_if_needed()
@@ -579,7 +580,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     transcript=_llm_stream_to_str_iterable(answer_stream)
                 )
                 self._playing_synthesis = answer_synthesis
-                await answer_synthesis.play()
+                play_handle = answer_synthesis.play()
+                await play_handle.join()
 
                 collected_text = answer_synthesis.collected_text
                 interrupted = answer_synthesis.interrupted
@@ -594,6 +596,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self.emit("agent_speech_interrupted", msg)
             else:
                 self.emit("agent_speech_committed", msg)
+
+        logger.debug("VoiceAssistant._play_speech ended")
 
 
 async def _llm_stream_to_str_iterable(stream: LLMStream) -> AsyncIterable[str]:
@@ -677,6 +681,7 @@ class _DeferredAnswerValidation:
         self._last_final_transcript = ""
         self._received_end_of_speech = False
         self._validate_fnc()
+        logger.debug("_DeferredAnswerValidation speech validated")
 
     def _run(self, delay: float) -> None:
         if self._validating_task is not None:

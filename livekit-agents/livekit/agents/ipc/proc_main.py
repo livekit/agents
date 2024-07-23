@@ -210,8 +210,9 @@ def main(args: proto.ProcStartArgs) -> None:
             # (this signal can be sent by watchfiles on dev mode)
             loop.run_until_complete(main_task)
     finally:
-        try:
-            loop.run_until_complete(loop.shutdown_default_executor())
-            #loop.run_until_complete(cch.aclose())
-        finally:
-            loop.close()
+        # try:
+        loop.run_until_complete(loop.shutdown_default_executor())
+        loop.run_until_complete(cch.aclose())
+        # finally:
+        # loop.close()
+        # pass

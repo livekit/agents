@@ -41,8 +41,8 @@ class PlayoutHandle:
 
         self._interrupted = True
 
-    def __await__(self):
-        return self._done_fut.__await__()
+    def join(self) -> asyncio.Future:
+        return self._done_fut
 
 
 class CancellableAudioSource(utils.EventEmitter[EventTypes]):
@@ -89,6 +89,7 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
         self._playout_atask = asyncio.create_task(
             self._playout_task(self._playout_atask, handle)
         )
+
         return handle
 
     @utils.log_exceptions(logger=logger)
@@ -104,9 +105,9 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
 
         try:
             if old_task is not None:
-                with contextlib.suppress(asyncio.CancelledError):
-                    old_task.cancel()
-                    await old_task
+                await utils.aio.gracefully_cancel(old_task)
+
+            logger.debug("CancellableAudioSource._playout_task: started")
 
             async for frame in handle._playout_source:
                 if first_frame:
@@ -121,7 +122,7 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
                     break
 
                 # divide the frame by chunks of 20ms
-                ms20 = frame.sample_rate // 100
+                ms20 = frame.sample_rate // 50
                 i = 0
                 while i < len(frame.data):
                     if _should_break():
@@ -148,10 +149,10 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
                     handle._time_played += rem / frame.sample_rate
         finally:
             if not first_frame:
-                if handle._tr_fwd is not None:
-                    if not cancelled:
-                        handle._tr_fwd.segment_playout_finished()
+                if handle._tr_fwd is not None and not cancelled:
+                    handle._tr_fwd.segment_playout_finished()
 
                 self.emit("playout_stopped", cancelled)
 
             handle._done_fut.set_result(None)
+            logger.debug("CancellableAudioSource._playout_task: ended")

@@ -185,6 +185,10 @@ class TTSSegmentsForwarder:
         self._forming_segments.q.append(new_seg)
         self._seg_queue.put_nowait(new_seg)
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     async def aclose(self) -> None:
         if self._closed:
             return

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import contextlib
 from typing import Any, AsyncIterable, Union
 
@@ -122,48 +123,36 @@ class AgentOutput:
                 [synth, handle._interrupt_fut], return_when=asyncio.FIRST_COMPLETED
             )
         finally:
-            with contextlib.suppress(asyncio.CancelledError):
-                synth.cancel()
-                await synth
-
-            try:
-                if handle.play_handle is not None:
-                    await handle.play_handle
-            finally:
-                await handle._tr_fwd.aclose()
+            await utils.aio.gracefully_cancel(synth)
 
 
 @utils.log_exceptions(logger=logger)
 async def _str_synthesis_task(text: str, handle: SynthesisHandle) -> None:
     """synthesize speech from a string"""
-    if handle._tr_fwd is not None:
+    if handle._tr_fwd and not handle._tr_fwd.closed:
         handle._tr_fwd.push_text(text)
         handle._tr_fwd.mark_text_segment_end()
 
-    # start_time = time.time()
-    # first_frame = True
-    # audio_duration = 0.0
+    start_time = time.time()
+    first_frame = True
     handle._collected_text = text
 
     try:
         async for audio in handle._tts.synthesize(text):
-            # if first_frame:
-            # first_frame = False
-            # dt = time.time() - start_time
-            # self._log_debug(f"tts first frame in {dt:.2f}s")
+            if first_frame:
+                first_frame = False
+                dt = time.time() - start_time
+                logger.debug(f"AgentOutput._str_synthesis_task: TTFB in {dt:.2f}s")
 
             frame = audio.frame
-            # audio_duration += frame.samples_per_channel / frame.sample_rate
 
             handle._buf_ch.send_nowait(frame)
-            if handle._tr_fwd is not None:
+            if handle._tr_fwd and not handle._tr_fwd.closed:
                 handle._tr_fwd.push_audio(frame)
 
     finally:
-        if handle._tr_fwd is not None:
+        if handle._tr_fwd and not handle._tr_fwd.closed:
             handle._tr_fwd.mark_audio_segment_end()
-        handle._buf_ch.close()
-        # self._log_debug(f"tts finished synthesising {audio_duration:.2f}s of audio")
 
 
 @utils.log_exceptions(logger=logger)
@@ -174,26 +163,18 @@ async def _stream_synthesis_task(
 
     @utils.log_exceptions(logger=logger)
     async def _read_generated_audio_task():
-        # start_time = time.time()
-        # first_frame = True
-        # audio_duration = 0.0
+        start_time = time.time()
+        first_frame = True
         async for audio in tts_stream:
-            # if first_frame:
-            #    first_frame = False
-            #    dt = time.time() - start_time
-            #    self._log_debug(f"tts first frame in {dt:.2f}s (streamed)")
+            if first_frame:
+                first_frame = False
+                dt = time.time() - start_time
+                logger.debug(f"AgentOutput._stream_synthesis_task: TTFB in {dt:.2f}s")
 
-            # audio_duration += frame.samples_per_channel / frame.sample_rate
-            if handle._tr_fwd is not None:
+            if handle._tr_fwd and not handle._tr_fwd.closed:
                 handle._tr_fwd.push_audio(audio.frame)
 
             handle._buf_ch.send_nowait(audio.frame)
-
-            # we're only flushing once, so we know we can break at the end of the first segment
-
-        # self._log_debug(
-        #    f"tts finished synthesising {audio_duration:.2f}s audio (streamed)"
-        # )
 
     # otherwise, stream the text to the TTS
     tts_stream = handle._tts.stream()
@@ -202,20 +183,21 @@ async def _stream_synthesis_task(
     try:
         async for seg in streamed_text:
             handle._collected_text += seg
-            if handle._tr_fwd is not None:
+
+            if handle._tr_fwd and not handle._tr_fwd.closed:
                 handle._tr_fwd.push_text(seg)
 
             tts_stream.push_text(seg)
-
     finally:
-        if handle._tr_fwd is not None:
+        tts_stream.end_input()
+
+        if handle._tr_fwd and not handle._tr_fwd.closed:
             handle._tr_fwd.mark_text_segment_end()
 
-        tts_stream.end_input()
         await read_atask
         await tts_stream.aclose()
 
-        if handle._tr_fwd is not None:
+        if handle._tr_fwd and not handle._tr_fwd.closed:
+            # mark_audio_segment_end must be called *after* mart_text_segment_end
             handle._tr_fwd.mark_audio_segment_end()
-
-
+            await handle._tr_fwd.aclose()

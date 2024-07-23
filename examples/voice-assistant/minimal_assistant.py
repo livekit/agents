@@ -7,7 +7,6 @@ from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
 
 
-
 async def entrypoint(ctx: JobContext):
     initial_ctx = ChatContext().append(
         role="system",
@@ -32,8 +31,5 @@ async def entrypoint(ctx: JobContext):
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
 
-
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(entrypoint_fnc=entrypoint)
-    )
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
