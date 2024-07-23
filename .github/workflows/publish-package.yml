@@ -60,6 +60,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: debug packages
+        run: echo "${{ steps.changesets.outputs.publishedPackages }}"
+
   build:
     needs:
       - bump
