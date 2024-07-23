@@ -40,7 +40,7 @@ class BufferedTokenStream:
                 self._event_ch.send_nowait(TokenData(token=buf))
 
                 for j in range(i + 1):
-                    tok = tokens[i + j]
+                    tok = tokens[j]
                     tok_i = self._buf.index(tok)
                     self._buf = self._buf[tok_i + len(tok) :].lstrip()
 
