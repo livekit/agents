@@ -1,11 +1,12 @@
 from . import basic
-from .token_stream import BufferedTokenStream
+from .token_stream import (
+    BufferedSentenceStream,
+    BufferedWordStream,
+)
 from .tokenizer import (
     SentenceStream,
     SentenceTokenizer,
-    TokenEvent,
-    TokenEventType,
-    TokenStream,
+    TokenData,
     WordStream,
     WordTokenizer,
 )
@@ -15,9 +16,8 @@ __all__ = [
     "SentenceStream",
     "WordTokenizer",
     "WordStream",
-    "TokenStream",
-    "TokenEvent",
-    "TokenEventType",
-    "BufferedTokenStream",
+    "TokenData",
+    "BufferedSentenceStream",
+    "BufferedWordStream",
     "basic",
 ]

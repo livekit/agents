@@ -47,12 +47,8 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=[
-        "livekit-agents~=0.7",
-    ],
-    package_data={
-        "livekit.plugins.deepgram": ["py.typed"],
-    },
+    install_requires=["livekit-agents~=0.7"],
+    package_data={"livekit.plugins.deepgram": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

@@ -7,11 +7,11 @@ import sys
 import click
 from livekit.protocol import models
 
-from .. import aio
+from .. import utils
 from ..log import logger
 from ..plugin import Plugin
 from ..worker import Worker, WorkerOptions
-from . import protocol
+from . import proto
 from .log import setup_logging
 
 
@@ -78,7 +78,7 @@ def _run_dev(
     opts.ws_url = url or opts.ws_url
     opts.api_key = api_key or opts.api_key
     opts.api_secret = api_secret or opts.api_secret
-    args = protocol.CliArgs(
+    args = proto.CliArgs(
         opts=opts,
         log_level=log_level,
         production=False,
@@ -93,10 +93,18 @@ def _run_dev(
         from .watcher import WatchServer
 
         setup_logging(log_level, args.production)
-
         main_file = pathlib.Path(sys.argv[0]).parent
-        server = WatchServer(run_worker, main_file, args, watch_plugins=True)
-        server.run()
+
+        async def _run_loop():
+            server = WatchServer(
+                run_worker, main_file, args, loop=asyncio.get_event_loop()
+            )
+            await server.run()
+
+        try:
+            asyncio.run(_run_loop())
+        except KeyboardInterrupt:
+            pass
     else:
         run_worker(args)
 
@@ -119,7 +127,7 @@ def run_app(opts: WorkerOptions) -> None:
         opts.ws_url = url or opts.ws_url
         opts.api_key = api_key or opts.api_key
         opts.api_secret = api_secret or opts.api_secret
-        args = protocol.CliArgs(
+        args = proto.CliArgs(
             opts=opts,
             log_level=log_level,
             production=True,
@@ -191,7 +199,7 @@ def run_app(opts: WorkerOptions) -> None:
     cli()
 
 
-def run_worker(args: protocol.CliArgs) -> None:
+def run_worker(args: proto.CliArgs) -> None:
     class Shutdown(SystemExit):
         pass
 
@@ -202,7 +210,7 @@ def run_worker(args: protocol.CliArgs) -> None:
 
     loop.set_debug(args.asyncio_debug)
     loop.slow_callback_duration = 0.05  # 50ms
-    aio.debug.hook_slow_callbacks(2)
+    utils.aio.debug.hook_slow_callbacks(2)
 
     if args.room:
         # directly connect to a specific roomj
@@ -232,29 +240,33 @@ def run_worker(args: protocol.CliArgs) -> None:
     if args.watch:
         from .watcher import WatchClient
 
-        assert args.cch is not None
+        assert args.mp_cch is not None
 
-        watch_client = WatchClient(worker, args.cch, loop=loop)
+        watch_client = WatchClient(worker, args.mp_cch, loop=loop)
         watch_client.start()
 
-    main_task = loop.create_task(_worker_run(worker), name="agent_runner")
     try:
-        loop.run_until_complete(main_task)
-    except (Shutdown, KeyboardInterrupt):
-        pass
+        main_task = loop.create_task(_worker_run(worker), name="agent_runner")
+        try:
+            loop.run_until_complete(main_task)
+        except (Shutdown, KeyboardInterrupt):
+            pass
 
-    if args.production:
-        loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
+        if args.production:
+            loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
 
-    loop.run_until_complete(worker.aclose())
+        loop.run_until_complete(worker.aclose())
 
-    if watch_client:
-        loop.run_until_complete(watch_client.aclose())
+        if watch_client:
+            loop.run_until_complete(watch_client.aclose())
+    finally:
+        try:
+            tasks = asyncio.all_tasks(loop)
+            for task in tasks:
+                task.cancel()
 
-    tasks = asyncio.all_tasks(loop)
-    for task in tasks:
-        task.cancel()
-
-    loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-    loop.run_until_complete(loop.shutdown_asyncgens())
-    loop.close()
+            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
+        finally:
+            loop.close()

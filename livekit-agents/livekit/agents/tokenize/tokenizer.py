@@ -2,36 +2,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum
-from typing import AsyncIterator, Protocol
+from typing import AsyncIterator
 
-
-class TokenEventType(Enum):
-    STARTED = 0
-    TOKEN = 1
-    FINISHED = 2
+from ..utils import aio
 
 
 @dataclass
-class TokenEvent:
-    type: TokenEventType
+class TokenData:
+    segment_id: str = ""
     token: str = ""
-
-
-class TokenStream(Protocol):
-    def push_text(self, text: str | None) -> None: ...
-
-    def mark_segment_end(self) -> None:
-        self.push_text(None)
-
-    async def aclose(self) -> None: ...
-
-    @abstractmethod
-    async def __anext__(self) -> TokenEvent:
-        pass
-
-    def __aiter__(self) -> AsyncIterator[TokenEvent]:
-        return self
 
 
 class SentenceTokenizer(ABC):
@@ -44,7 +23,35 @@ class SentenceTokenizer(ABC):
         pass
 
 
-class SentenceStream(TokenStream, Protocol): ...
+class SentenceStream(ABC):
+    def __init__(self) -> None:
+        self._event_ch = aio.Chan[TokenData]()
+
+    @abstractmethod
+    def push_text(self, text: str) -> None: ...
+
+    @abstractmethod
+    def flush(self) -> None: ...
+
+    @abstractmethod
+    def end_input(self) -> None: ...
+
+    @abstractmethod
+    async def aclose(self) -> None: ...
+
+    async def __anext__(self) -> TokenData:
+        return await self._event_ch.__anext__()
+
+    def __aiter__(self) -> AsyncIterator[TokenData]:
+        return self
+
+    def _do_close(self) -> None:
+        self._event_ch.close()
+
+    def _check_not_closed(self) -> None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
 
 
 class WordTokenizer(ABC):
@@ -60,4 +67,32 @@ class WordTokenizer(ABC):
         return " ".join(words)
 
 
-class WordStream(TokenStream, Protocol): ...
+class WordStream(ABC):
+    def __init__(self) -> None:
+        self._event_ch = aio.Chan[TokenData]()
+
+    @abstractmethod
+    def push_text(self, text: str) -> None: ...
+
+    @abstractmethod
+    def flush(self) -> None: ...
+
+    @abstractmethod
+    def end_input(self) -> None: ...
+
+    @abstractmethod
+    async def aclose(self) -> None: ...
+
+    async def __anext__(self) -> TokenData:
+        return await self._event_ch.__anext__()
+
+    def __aiter__(self) -> AsyncIterator[TokenData]:
+        return self
+
+    def _do_close(self) -> None:
+        self._event_ch.close()
+
+    def _check_not_closed(self) -> None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")

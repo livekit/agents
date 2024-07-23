@@ -49,7 +49,9 @@ class STT(stt.STT):
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ):
-        super().__init__(streaming_supported=False)
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=False, interim_results=False)
+        )
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY must be set")
@@ -68,24 +70,17 @@ class STT(stt.STT):
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
-            self._session = utils.http_session()
+            self._session = utils.http_context.http_session()
 
         return self._session
 
-    def _sanitize_options(
-        self,
-        *,
-        language: str | None = None,
-    ) -> _STTOptions:
+    def _sanitize_options(self, *, language: str | None = None) -> _STTOptions:
         config = dataclasses.replace(self._opts)
         config.language = language or config.language
         return config
 
     async def recognize(
-        self,
-        *,
-        buffer: AudioBuffer,
-        language: str | None = None,
+        self, buffer: AudioBuffer, *, language: str | None = None
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 

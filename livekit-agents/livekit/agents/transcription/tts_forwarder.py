@@ -5,11 +5,11 @@ import contextlib
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Deque, Optional
 
 from livekit import rtc
 
-from .. import aio, tokenize, utils
+from .. import tokenize, utils
 from ..log import logger
 from . import _utils
 
@@ -105,26 +105,24 @@ class TTSSegmentsForwarder:
         )
         self._closed = False
         self._loop = loop or asyncio.get_event_loop()
-        self._close_future = asyncio.Future()
+        self._close_future = asyncio.Future[None]()
 
         self._next_segment_index = 0
         self._playing_seg_index = -1
         self._finshed_seg_index = -1
 
         first_segment = self._create_segment()
-        segments_q = deque()
+        segments_q: Deque[_SegmentData] = deque()
         segments_q.append(first_segment)
 
         self._forming_segments = _FormingSegments(
-            audio=first_segment,
-            text=first_segment,
-            q=segments_q,
+            audio=first_segment, text=first_segment, q=segments_q
         )
 
         self._seg_queue = asyncio.Queue[Optional[_SegmentData]]()
         self._seg_queue.put_nowait(first_segment)
         self._main_atask = self._loop.create_task(self._main_task())
-        self._task_set = aio.TaskSet(loop)
+        self._task_set = utils.aio.TaskSet(loop)
 
     def segment_playout_started(self) -> None:
         """
@@ -177,8 +175,7 @@ class TTSSegmentsForwarder:
     def mark_text_segment_end(self) -> None:
         self._check_not_closed()
         stream = self._forming_segments.text.sentence_stream
-        stream.mark_segment_end()
-        self._task_set.create_task(stream.aclose())
+        stream.end_input()
 
         # create a new segment on "mark_text_segment_end"
         # further text can already be pushed even if mark_audio_segment_end has not been
@@ -189,6 +186,9 @@ class TTSSegmentsForwarder:
         self._seg_queue.put_nowait(new_seg)
 
     async def aclose(self) -> None:
+        if self._closed:
+            return
+
         self._closed = True
         self._close_future.set_result(None)
         self._seg_queue.put_nowait(None)
@@ -237,8 +237,7 @@ class TTSSegmentsForwarder:
             seg.forward_start_time = time.time()
 
             async for ev in sentence_stream:
-                if ev.type == tokenize.TokenEventType.TOKEN:
-                    await self._sync_sentence_co(seg, ev.token, rtc_seg_q)
+                await self._sync_sentence_co(seg, ev.token, rtc_seg_q)
 
         rtc_seg_q.put_nowait(None)
         await forward_task
@@ -255,7 +254,7 @@ class TTSSegmentsForwarder:
         # put each sentence in a different transcription segment
         seg_id = _utils.segment_uuid()
         words = self._opts.word_tokenizer.tokenize(text=tokenized_sentence)
-        processed_words = []
+        processed_words: list[str] = []
 
         text = ""
         for word in words:
@@ -275,7 +274,7 @@ class TTSSegmentsForwarder:
             elapsed_time = time.time() - seg.forward_start_time
             text = self._opts.word_tokenizer.format_words(processed_words)
 
-            delay = 0
+            delay = 0.0
             speed = self._opts.speed
             if seg.real_speed is not None:
                 speed = seg.real_speed
@@ -295,11 +294,7 @@ class TTSSegmentsForwarder:
             await self._sleep_if_not_closed(first_delay)
             rtc_seg_q.put_nowait(
                 rtc.TranscriptionSegment(
-                    id=seg_id,
-                    text=text,
-                    start_time=0,
-                    end_time=0,
-                    final=False,
+                    id=seg_id, text=text, start_time=0, end_time=0, final=False
                 )
             )
             await self._sleep_if_not_closed(delay - first_delay)
@@ -307,11 +302,7 @@ class TTSSegmentsForwarder:
 
         rtc_seg_q.put_nowait(
             rtc.TranscriptionSegment(
-                id=seg_id,
-                text=tokenized_sentence,
-                start_time=0,
-                end_time=0,
-                final=True,
+                id=seg_id, text=tokenized_sentence, start_time=0, end_time=0, final=True
             )
         )
 
@@ -323,7 +314,7 @@ class TTSSegmentsForwarder:
             await asyncio.wait([self._close_future], timeout=delay)
 
     def _calc_hyphens(self, text: str) -> list[str]:
-        hyphenes = []
+        hyphenes: list[str] = []
         words = self._opts.word_tokenizer.tokenize(text=text)
         for word in words:
             new = self._opts.hyphenate_word(word)

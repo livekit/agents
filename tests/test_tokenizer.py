@@ -28,7 +28,6 @@ EXPECTED_MIN_20 = [
     "Hey! Hi! Hello!",
 ]
 
-
 SENT_TOKENIZERS = [
     nltk.SentenceTokenizer(min_sentence_len=20),
     basic.SentenceTokenizer(min_sentence_len=20),
@@ -60,18 +59,11 @@ async def test_streamed_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer):
     for chunk in chunks:
         stream.push_text(chunk)
 
-    assert (await stream.__anext__()).type == tokenize.TokenEventType.STARTED
-    for i in range(len(EXPECTED_MIN_20) - 1):
+    stream.end_input()
+
+    for i in range(len(EXPECTED_MIN_20)):
         ev = await stream.__anext__()
-        assert ev.type == tokenize.TokenEventType.TOKEN
         assert ev.token == EXPECTED_MIN_20[i]
-
-    stream.mark_segment_end()
-
-    ev = await stream.__anext__()
-    assert ev.type == tokenize.TokenEventType.TOKEN
-    assert ev.token == EXPECTED_MIN_20[-1]
-    assert (await stream.__anext__()).type == tokenize.TokenEventType.FINISHED
 
 
 WORDS_TEXT = (
@@ -119,18 +111,11 @@ async def test_streamed_word_tokenizer(tokenizer: tokenize.WordTokenizer):
     for chunk in chunks:
         stream.push_text(chunk)
 
-    assert (await stream.__anext__()).type == tokenize.TokenEventType.STARTED
-    for i in range(len(WORDS_EXPECTED) - 1):
+    stream.end_input()
+
+    for i in range(len(WORDS_EXPECTED)):
         ev = await stream.__anext__()
-        assert ev.type == tokenize.TokenEventType.TOKEN
         assert ev.token == WORDS_EXPECTED[i]
-
-    stream.mark_segment_end()
-
-    ev = await stream.__anext__()
-    assert ev.type == tokenize.TokenEventType.TOKEN
-    assert ev.token == WORDS_EXPECTED[-1]
-    assert (await stream.__anext__()).type == tokenize.TokenEventType.FINISHED
 
 
 HYPHENATOR_TEXT = [

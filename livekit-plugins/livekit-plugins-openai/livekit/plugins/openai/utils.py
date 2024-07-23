@@ -1,5 +1,7 @@
 import os
-from typing import Optional
+from typing import Awaitable, Callable, Optional, Union
+
+AsyncAzureADTokenProvider = Callable[[], Union[str, Awaitable[str]]]
 
 
 def get_base_url(base_url: Optional[str]) -> str:

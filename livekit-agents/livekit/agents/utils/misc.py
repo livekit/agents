@@ -1,4 +1,5 @@
 import time
+import uuid
 from typing import List, Union
 
 from livekit import rtc
@@ -43,3 +44,7 @@ def merge_frames(buffer: AudioBuffer) -> rtc.AudioFrame:
 
 def time_ms() -> int:
     return int(time.time() * 1000)
+
+
+def shortuuid() -> str:
+    return str(uuid.uuid4().hex)[:12]

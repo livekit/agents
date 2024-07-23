@@ -16,10 +16,7 @@
 from .sentence_tokenizer import SentenceTokenizer
 from .version import __version__
 
-__all__ = [
-    "SentenceTokenizer",
-    "__version__",
-]
+__all__ = ["SentenceTokenizer", "__version__"]
 
 
 from livekit.agents import Plugin
