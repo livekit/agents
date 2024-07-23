@@ -9,7 +9,7 @@ import time
 
 import pytest
 from livekit import agents, rtc
-from livekit.plugins import deepgram, google, openai, silero
+from livekit.plugins import azure, deepgram, google, openai, silero
 
 from .utils import wer
 
@@ -55,10 +55,10 @@ async def test_recognize(stt: agents.stt.STT):
 
 STREAM_VAD = silero.VAD()
 STREAM_STT = [
-    # deepgram.STT(),
-    # google.STT(),
-    # agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
-    # azure.STT(),
+    deepgram.STT(),
+    google.STT(),
+    agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
+    azure.STT(),
 ]
 
 
