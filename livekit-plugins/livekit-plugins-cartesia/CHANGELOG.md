@@ -1,5 +1,11 @@
 # livekit-plugins-cartesia
 
+## 0.2.0-dev.1
+
+### Minor Changes
+
+- dev prerelease - [#435](https://github.com/livekit/agents/pull/435) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.1.2-dev.0
 
 ### Patch Changes

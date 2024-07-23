@@ -15,6 +15,7 @@
     "livekit-plugins-silero": "0.5.1"
   },
   "changesets": [
-    "famous-donuts-burn"
+    "famous-donuts-burn",
+    "slow-cameras-stare"
   ]
 }
