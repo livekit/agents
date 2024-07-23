@@ -131,8 +131,8 @@ class STT(stt.STT):
 
     async def recognize(
         self,
-        *,
         buffer: utils.AudioBuffer,
+        *,
         language: SpeechLanguages | str | None = None,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)

@@ -216,7 +216,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self._link_participant(participant)
         else:
             # no participant provided, try to find the first in the room
-            for participant in self._room.participants.values():
+            for participant in self._room.remote_participants.values():
                 self._link_participant(participant.identity)
                 break
 
@@ -290,7 +290,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._link_participant(participant.identity)
 
     def _link_participant(self, identity: str) -> None:
-        participant = self._room.participants_by_identity.get(identity)
+        participant = self._room.remote_participants.get(identity)
         if participant is None:
             logger.error("_link_participant must be called with a valid identity")
             return
