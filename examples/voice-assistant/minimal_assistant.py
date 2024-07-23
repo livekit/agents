@@ -1,11 +1,9 @@
 import asyncio
-import logging
 
-from livekit.agents import JobContext, JobProcess, JobRequest, WorkerOptions, cli
+from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import ChatContext
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
-
 
 
 async def entrypoint(ctx: JobContext):
@@ -32,8 +30,5 @@ async def entrypoint(ctx: JobContext):
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
 
-
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(entrypoint_fnc=entrypoint)
-    )
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
