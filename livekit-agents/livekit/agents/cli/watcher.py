@@ -75,7 +75,7 @@ class WatchServer:
         self._main_file = main_file
         self._loop = loop
 
-        self._recv_jobs_fut = asyncio.Future()
+        self._recv_jobs_fut = asyncio.Future[None]()
         self._reloading_jobs = False
 
     async def run(self) -> None:

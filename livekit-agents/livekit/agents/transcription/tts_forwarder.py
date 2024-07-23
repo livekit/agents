@@ -307,7 +307,12 @@ class TTSSegmentsForwarder:
 
         rtc_seg_q.put_nowait(
             rtc.TranscriptionSegment(
-                id=seg_id, text=tokenized_sentence, start_time=0, end_time=0, final=True
+                id=seg_id,
+                text=tokenized_sentence,
+                start_time=0,
+                end_time=0,
+                final=True,
+                language=self._opts.language,
             )
         )
 

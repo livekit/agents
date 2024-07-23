@@ -133,7 +133,7 @@ class STT(stt.STT):
         self,
         *,
         buffer: utils.AudioBuffer,
-        language: SpeechLanguages | str | None = None,
+        language: SpeechLanguages | None = None,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
         frame = agents.utils.merge_frames(buffer)
