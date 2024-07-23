@@ -219,6 +219,9 @@ class SpeechStream(stt.SpeechStream):
 
                 await self._run_ws(ws)
             except Exception as e:
+                if self._session.closed:
+                    break
+
                 if retry_count >= max_retry:
                     logger.exception(
                         f"failed to connect to deepgram after {max_retry} tries"

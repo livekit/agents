@@ -309,9 +309,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 return
 
             assert self._agent_output is not None
-            tv = max(0, 1 - ev.probability)
-            self._agent_output.audio_source.target_volume = tv
+
+            tv = 1.0
+            if self._opts.allow_interruptions:
+                tv = max(0, 1 - ev.probability)
+                self._agent_output.audio_source.target_volume = tv
+
             smoothed_tv = self._agent_output.audio_source.smoothed_volume
+
             self._plotter.plot_value("raw_vol", tv)
             self._plotter.plot_value("smoothed_vol", smoothed_tv)
             self._plotter.plot_value("vad_probability", ev.probability)

@@ -43,10 +43,8 @@ UPDATE_LOAD_INTERVAL = 10.0
 def _default_initialize_process_fnc(proc: JobProcess) -> Any:
     return
 
-def _default_shutdown_fnc(proc: JobContext) -> Any:
+async def _default_shutdown_fnc(proc: JobContext) -> None:
     return
-
-
 
 async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()

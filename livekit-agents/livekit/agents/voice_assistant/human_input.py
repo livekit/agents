@@ -137,7 +137,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
             await asyncio.gather(_audio_stream_co(), _vad_stream_co(), _stt_stream_co())
         finally:
             await asyncio.gather(
-                stt_forwarder.aclose(wait=False),
-                stt_stream.aclose(wait=False),
+                stt_forwarder.aclose(),
+                stt_stream.aclose(),
                 vad_stream.aclose(),
             )

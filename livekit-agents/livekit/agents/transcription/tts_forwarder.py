@@ -186,6 +186,9 @@ class TTSSegmentsForwarder:
         self._seg_queue.put_nowait(new_seg)
 
     async def aclose(self) -> None:
+        if self._closed:
+            return
+
         self._closed = True
         self._close_future.set_result(None)
         self._seg_queue.put_nowait(None)
