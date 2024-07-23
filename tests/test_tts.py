@@ -60,7 +60,6 @@ STREAM_SENT_TOKENIZER = nltk.SentenceTokenizer(min_sentence_len=20)
 STREAM_TTS = [
     elevenlabs.TTS(),
     elevenlabs.TTS(encoding="pcm_44100"),
-    """
     agents.tts.StreamAdapter(
         tts=openai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
@@ -71,7 +70,6 @@ STREAM_TTS = [
     agents.tts.StreamAdapter(
         tts=cartesia.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
-    """,
 ]
 
 

@@ -87,7 +87,7 @@ class VADStream(ABC):
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""
-        self.end_input()
+        self._input_ch.close()
         await aio.gracefully_cancel(self._task)
         self._event_ch.close()
 

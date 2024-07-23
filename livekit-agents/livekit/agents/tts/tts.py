@@ -74,7 +74,7 @@ class ChunkedStream(ABC):
         return misc.merge_frames(frames)
 
     @abstractmethod
-    def _main_task(self) -> None: ...
+    async def _main_task(self) -> None: ...
 
     async def aclose(self) -> None:
         """Close is automatically called if the stream is completely collected"""
@@ -99,7 +99,7 @@ class SynthesizeStream(ABC):
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @abstractmethod
-    def _main_task(self) -> None: ...
+    async def _main_task(self) -> None: ...
 
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""
@@ -121,7 +121,7 @@ class SynthesizeStream(ABC):
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""
-        self.end_input()
+        self._input_ch.close()
         await aio.gracefully_cancel(self._task)
         self._event_ch.close()
 

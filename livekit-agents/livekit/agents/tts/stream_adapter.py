@@ -49,28 +49,22 @@ class StreamAdapterWrapper(SynthesizeStream):
         super().__init__()
         self._tts = tts
         self._sent_stream = sentence_tokenizer.stream()
-        self._main_task = asyncio.create_task(self._run())
-
-    def push_text(self, token: str | None) -> None:
-        self._check_not_closed()
-        self._sent_stream.push_text(token)
-
-    async def aclose(self) -> None:
-        if self._closed:
-            return
-
-        self._do_close()
-        await self._sent_stream.aclose()
-        await utils.aio.gracefully_cancel(self._main_task)
 
     @utils.log_exceptions(logger=logger)
-    async def _run(self) -> None:
-        try:
-            async for ev in self._sent_stream:
-                if ev.type == tokenize.TokenEventType.TOKEN:
-                    async for audio in self._tts.synthesize(ev.token):
-                        audio.end_of_segment = False
-                        self._event_ch.put_nowait(audio)
+    async def _main_task(self) -> None:
+        async def _forward_input():
+            """forward input to vad"""
+            async for input in self._input_ch:
+                if isinstance(input, self._FlushSentinel):
+                    self._sent_stream.flush()
+                    continue
+                self._sent_stream.push_text(input)
 
-        finally:
-            self._event_ch.put_nowait(None)
+            self._sent_stream.end_input()
+
+        async def _synthesize():
+            async for ev in self._sent_stream:
+                async for audio in self._tts.synthesize(ev.token):
+                    self._event_ch.send_nowait(audio)
+
+        await asyncio.gather(_forward_input(), _synthesize())

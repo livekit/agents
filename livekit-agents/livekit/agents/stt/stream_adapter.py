@@ -44,6 +44,9 @@ class StreamAdapterWrapper(SpeechStream):
         async def _forward_input():
             """forward input to vad"""
             async for input in self._input_ch:
+                if isinstance(input, self._FlushSentinel):
+                    self._vad_stream.flush()
+                    continue
                 self._vad_stream.push_frame(input)
 
             self._vad_stream.end_input()
