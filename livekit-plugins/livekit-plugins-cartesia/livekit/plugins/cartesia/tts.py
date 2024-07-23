@@ -88,7 +88,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._text, self._opts, self._session = text, opts, session
 
     @utils.log_exceptions(logger=logger)
-    async def _run(self):
+    async def _main_task(self):
         bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate, num_channels=1
         )

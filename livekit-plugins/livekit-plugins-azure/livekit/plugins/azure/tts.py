@@ -68,20 +68,20 @@ class TTS(tts.TTS):
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, text: str, opts: _TTSOptions) -> None:
-        self._main_task = asyncio.create_task(self._run(text, opts))
-        self._main_task.add_done_callback(self._event_ch.close)
+        super().__init__()
+        self._text, self._opts = text, opts
 
     @utils.log_exceptions()
-    async def _run(self, text: str, opts: _TTSOptions):
+    async def _main_task(self):
         stream_callback = _PushAudioOutputStreamCallback(
             asyncio.get_running_loop(), self._event_ch
         )
         synthesizer = _create_speech_synthesizer(
-            config=opts, stream=speechsdk.audio.PushAudioOutputStream(stream_callback)
+            config=self._opts, stream=speechsdk.audio.PushAudioOutputStream(stream_callback)
         )
 
         def _synthesize() -> speechsdk.SpeechSynthesisResult:
-            return synthesizer.speak_text_async(text).get()  # type: ignore
+            return synthesizer.speak_text_async(self._text).get()  # type: ignore
 
         try:
             result = await asyncio.to_thread(_synthesize)
@@ -97,24 +97,6 @@ class ChunkedStream(tts.ChunkedStream):
                 del result
 
             await asyncio.to_thread(_cleanup)
-
-    async def aclose(self) -> None:
-        await utils.aio.gracefully_cancel(self._main_task)
-
-
-def _create_speech_synthesizer(
-    *, config: _TTSOptions, stream: speechsdk.audio.AudioOutputStream
-) -> speechsdk.SpeechSynthesizer:
-    speech_config = speechsdk.SpeechConfig(
-        subscription=config.speech_key, region=config.speech_region
-    )
-    stream_config = speechsdk.audio.AudioOutputConfig(stream=stream)
-    if config.voice is not None:
-        speech_config.speech_synthesis_voice_name = config.voice
-
-    return speechsdk.SpeechSynthesizer(
-        speech_config=speech_config, audio_config=stream_config
-    )
 
 
 class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallback):
@@ -142,3 +124,19 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         )
         self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
         return audio_buffer.nbytes
+
+
+def _create_speech_synthesizer(
+        *, config: _TTSOptions, stream: speechsdk.audio.AudioOutputStream
+) -> speechsdk.SpeechSynthesizer:
+    speech_config = speechsdk.SpeechConfig(
+        subscription=config.speech_key, region=config.speech_region
+    )
+    stream_config = speechsdk.audio.AudioOutputConfig(stream=stream)
+    if config.voice is not None:
+        speech_config.speech_synthesis_voice_name = config.voice
+
+    return speechsdk.SpeechSynthesizer(
+        speech_config=speech_config, audio_config=stream_config
+    )
+
