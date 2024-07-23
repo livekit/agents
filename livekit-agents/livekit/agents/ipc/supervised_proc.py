@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import contextlib
+import logging
 import multiprocessing as mp
 import sys
 import threading
@@ -68,9 +68,10 @@ class SupervisedProc:
     ) -> None:
         self._loop = loop
         log_q = mp.Queue()
+        log_q.cancel_join_thread()
         mp_pch, mp_cch = mp_ctx.Pipe(duplex=True)
 
-        self._pch = channel.ProcChannel(
+        self._pch = channel.AsyncProcChannel(
             conn=mp_pch, loop=self._loop, messages=proto.IPC_MESSAGES
         )
 

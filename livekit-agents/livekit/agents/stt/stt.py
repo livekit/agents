@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterator, List
+from typing import AsyncIterator, List, Union
 
 from livekit import rtc
 
-from ..utils import AudioBuffer
+from ..utils import AudioBuffer, aio
 
 
 @unique
@@ -73,25 +74,54 @@ class STT(ABC):
 
 
 class SpeechStream(ABC):
+    class _FlushSentinel:
+        pass
+
+    def __init__(self):
+        self._input_ch = aio.Chan[Union[rtc.AudioFrame, SpeechStream._FlushSentinel]]()
+        self._event_ch = aio.Chan[SpeechEvent]()
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
     @abstractmethod
+    def _main_task(self) -> None: ...
+
     def push_frame(self, frame: rtc.AudioFrame) -> None:
-        """
-        Push a frame to be recognized, it is recommended to push
-        frames as soon as they are available
-        """
-        pass
+        """Push audio to be recognized"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(frame)
 
-    @abstractmethod
+    def flush(self) -> None:
+        """Mark the end of the current segment"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._FlushSentinel())
+
+    def end_input(self) -> None:
+        """Mark the end of input, no more text will be pushed"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.close()
+
     async def aclose(self) -> None:
-        """
-        Close the stream, if wait is True, it will wait for the STT to finish processing the
-        remaining frames, otherwise it will close the stream immediately
-        """
-        pass
+        """Close ths stream immediately"""
+        self._input_ch.close()
+        await aio.gracefully_cancel(self._task)
+        self._event_ch.close()
 
-    @abstractmethod
     async def __anext__(self) -> SpeechEvent:
-        pass
+        return await self._event_ch.__anext__()
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
         return self
+
+    def _check_not_closed(self) -> None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
+
+    def _check_input_not_ended(self) -> None:
+        if self._input_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")

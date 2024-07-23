@@ -93,13 +93,11 @@ async def test_stream(tts: agents.tts.TTS):
         stream.push_text(chunk)
 
     stream.flush()
+    stream.end_input()
 
     frames = []
     async for audio in stream:
         frames.append(audio.frame)
-
-        if audio.end_of_segment:
-            break
 
     await stream.aclose()
     await _assert_valid_synthesized_audio(

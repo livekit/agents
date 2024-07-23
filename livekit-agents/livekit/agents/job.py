@@ -23,9 +23,6 @@ from typing import Any, Callable, Coroutine
 from livekit import rtc
 from livekit.protocol import agent, models
 
-from . import utils
-from .log import logger
-
 
 class AutoSubscribe(str, Enum):
     SUBSCRIBE_ALL = "subscribe_all"

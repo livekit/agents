@@ -7,11 +7,11 @@ import sys
 import click
 from livekit.protocol import models
 
-from . import proto
 from .. import utils
 from ..log import logger
 from ..plugin import Plugin
 from ..worker import Worker, WorkerOptions
+from . import proto
 from .log import setup_logging
 
 

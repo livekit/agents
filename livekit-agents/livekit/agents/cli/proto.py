@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import io
-import pickle
 from dataclasses import dataclass, field
 from typing import ClassVar
 
 from livekit.protocol import agent
 
-from ..job import RunningJobInfo, JobAcceptArguments
 from ..ipc import channel
+from ..job import JobAcceptArguments, RunningJobInfo
 from ..worker import WorkerOptions
 
 

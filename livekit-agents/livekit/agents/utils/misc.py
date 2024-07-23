@@ -1,7 +1,7 @@
 import time
 import uuid
-
 from typing import List, Union
+
 from livekit import rtc
 
 AudioBuffer = Union[List[rtc.AudioFrame], rtc.AudioFrame]
@@ -46,5 +46,5 @@ def time_ms() -> int:
     return int(time.time() * 1000)
 
 
-def nanoid() -> str:
+def shortuuid() -> str:
     return str(uuid.uuid4().hex)[:12]

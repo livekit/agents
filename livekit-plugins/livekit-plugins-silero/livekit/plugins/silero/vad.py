@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import AsyncIterator, Optional
 
 import numpy as np
 from livekit import agents, rtc
@@ -94,69 +93,40 @@ class _WindowData:
 
 class VADStream(agents.vad.VADStream):
     def __init__(self, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
+        super().__init__()
         self._opts, self._model = opts, model
-        self._main_atask = asyncio.create_task(self._main_task())
-
         self._original_sample_rate: int | None = None
         self._window_data: _WindowData | None = None
-
         self._remaining_samples = model.window_size_samples
 
-        self._input_q = asyncio.Queue[Optional[_WindowData]]()
-        self._event_ch = utils.aio.Chan[agents.vad.VADEvent]()
-        self._closed = False
+    @agents.utils.log_exceptions(logger=logger)
+    async def _main_task(self):
+        window_ch = utils.aio.Chan[_WindowData]()
+        await asyncio.gather(
+            self._run_inference(window_ch), self._forward_input(window_ch)
+        )
 
-    def push_frame(self, frame: rtc.AudioFrame) -> None:
+    async def _forward_input(self, window_tx: utils.aio.ChanSender[_WindowData]):
         """
         Push frame to the VAD stream for processing.
         The frames are split into chunks of the given window size and processed.
         (Buffered if the window size is not reached yet)
         """
-        if self._closed:
-            raise ValueError("vad stream is closed")
+        async for frame in self._input_ch:
+            if frame.sample_rate != 8000 and frame.sample_rate % 16000 != 0:
+                logger.error("only 8KHz and 16KHz*X sample rates are supported")
+                continue
 
-        if frame.sample_rate != 8000 and frame.sample_rate % 16000 != 0:
-            raise ValueError("only 8KHz and 16KHz*X sample rates are supported")
+            if (
+                self._original_sample_rate is not None
+                and self._original_sample_rate != frame.sample_rate
+            ):
+                raise ValueError("a frame with another sample rate was already pushed")
 
-        if (
-            self._original_sample_rate is not None
-            and self._original_sample_rate != frame.sample_rate
-        ):
-            raise ValueError("a frame with another sample rate was already pushed")
+            self._original_sample_rate = frame.sample_rate
+            step = frame.sample_rate // 16000
 
-        self._original_sample_rate = frame.sample_rate
-        step = frame.sample_rate // 16000
-
-        if self._window_data is None:
-            self._window_data = _WindowData(
-                inference_data=np.zeros(
-                    self._model.window_size_samples, dtype=np.float32
-                ),
-                original_data=np.zeros(
-                    self._model.window_size_samples * step, dtype=np.int16
-                ),
-            )
-
-        if frame.num_channels != 1:
-            raise ValueError("vad currently only supports mono audio frames")
-
-        og_frame = np.frombuffer(frame.data, dtype=np.int16)
-        if_frame = og_frame[::step].astype(np.float32) / np.iinfo(np.int16).max
-
-        remaining_data = len(if_frame)
-        while remaining_data > 0:
-            i = self._model.window_size_samples - self._remaining_samples
-            to_copy = min(remaining_data, self._remaining_samples)
-            self._remaining_samples -= to_copy
-            remaining_data -= to_copy
-
-            self._window_data.original_data[i * step : i * step + to_copy * step] = (
-                og_frame[: to_copy * step]
-            )
-            self._window_data.inference_data[i : i + to_copy] = if_frame[:to_copy]
-
-            if self._remaining_samples == 0:
-                self._input_q.put_nowait(self._window_data)
+            if self._window_data is None:
                 self._window_data = _WindowData(
                     inference_data=np.zeros(
                         self._model.window_size_samples, dtype=np.float32
@@ -165,18 +135,40 @@ class VADStream(agents.vad.VADStream):
                         self._model.window_size_samples * step, dtype=np.int16
                     ),
                 )
-                self._remaining_samples = self._model.window_size_samples
 
-    async def aclose(self) -> None:
-        if self._closed:
-            return
+            if frame.num_channels != 1:
+                raise ValueError("vad currently only supports mono audio frames")
 
-        self._closed = True
-        self._input_q.put_nowait(None)
-        await self._main_atask
+            og_frame = np.frombuffer(frame.data, dtype=np.int16)
+            if_frame = og_frame[::step].astype(np.float32) / np.iinfo(np.int16).max
 
-    @agents.utils.log_exceptions(logger=logger)
-    async def _main_task(self):
+            remaining_data = len(if_frame)
+            while remaining_data > 0:
+                i = self._model.window_size_samples - self._remaining_samples
+                to_copy = min(remaining_data, self._remaining_samples)
+                self._remaining_samples -= to_copy
+                remaining_data -= to_copy
+
+                self._window_data.original_data[
+                    i * step : i * step + to_copy * step
+                ] = og_frame[: to_copy * step]
+                self._window_data.inference_data[i : i + to_copy] = if_frame[:to_copy]
+
+                if self._remaining_samples == 0:
+                    window_tx.send_nowait(self._window_data)
+                    self._window_data = _WindowData(
+                        inference_data=np.zeros(
+                            self._model.window_size_samples, dtype=np.float32
+                        ),
+                        original_data=np.zeros(
+                            self._model.window_size_samples * step, dtype=np.int16
+                        ),
+                    )
+                    self._remaining_samples = self._model.window_size_samples
+
+        window_tx.close()
+
+    async def _run_inference(self, window_rx: utils.aio.ChanReceiver[_WindowData]):
         pub_speaking = False
         pub_speech_duration = 0.0
         pub_silence_duration = 0.0
@@ -190,13 +182,7 @@ class VADStream(agents.vad.VADStream):
 
         current_sample = 0
 
-        while True:
-            window_data = await self._input_q.get()
-            if window_data is None:
-                break
-
-            assert self._original_sample_rate is not None
-
+        async for window_data in window_rx:
             inference_data = window_data.inference_data
             start_time = time.time()
             raw_prob = await asyncio.to_thread(lambda: self._model(inference_data))
@@ -293,11 +279,3 @@ class VADStream(agents.vad.VADStream):
                     pub_silence_duration += self._opts.min_silence_duration
 
             current_sample += self._model.window_size_samples
-
-        self._event_ch.close()
-
-    async def __anext__(self) -> agents.vad.VADEvent:
-        return await self._event_ch.__anext__()
-
-    def __aiter__(self) -> AsyncIterator[agents.vad.VADEvent]:
-        return self._event_ch

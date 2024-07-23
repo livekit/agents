@@ -1,9 +1,9 @@
 import asyncio
 import ctypes
-import logging
-import time
 import io
+import logging
 import multiprocessing as mp
+import time
 import uuid
 from dataclasses import dataclass
 from typing import ClassVar
@@ -48,7 +48,9 @@ IPC_MESSAGES = {
 def _ping_pong_main(mp_cch):
     async def _pong():
         loop = asyncio.get_event_loop()
-        cch = ipc.channel.ProcChannel(conn=mp_cch, loop=loop, messages=IPC_MESSAGES)
+        cch = ipc.channel.AsyncProcChannel(
+            conn=mp_cch, loop=loop, messages=IPC_MESSAGES
+        )
         while True:
             try:
                 msg = await cch.arecv()
@@ -62,7 +64,7 @@ def _ping_pong_main(mp_cch):
 async def test_async_channel():
     loop = asyncio.get_event_loop()
     mp_pch, mp_cch = mp.Pipe(duplex=True)
-    pch = ipc.channel.ProcChannel(conn=mp_pch, loop=loop, messages=IPC_MESSAGES)
+    pch = ipc.channel.AsyncProcChannel(conn=mp_pch, loop=loop, messages=IPC_MESSAGES)
     proc = mp.Process(target=_ping_pong_main, args=(mp_cch,))
     proc.start()
 
@@ -76,9 +78,9 @@ async def test_async_channel():
         string="hello", number=42, double=3.14, data=b"world"
     )
 
-    proc.kill()
-    proc.join()
     await pch.aclose()
+    proc.terminate()
+    proc.join()
 
 
 def _generate_fake_job() -> job.RunningJobInfo:
@@ -282,7 +284,7 @@ async def test_slow_initialization():
         assert not psutil.pid_exists(pid)
 
     for exitcode in exitcodes:
-        assert exitcode != 0, f"process should have been killed"
+        assert exitcode != 0, "process should have been killed"
 
 
 def _create_proc(
@@ -314,7 +316,7 @@ async def test_shutdown_no_job():
     assert proc.exitcode == 0
     assert (
         start_args.shutdown_counter.value == 0
-    ), f"shutdown_cb isn't called when there is no job"
+    ), "shutdown_cb isn't called when there is no job"
 
 
 async def test_job_slow_shutdown():
@@ -328,7 +330,7 @@ async def test_job_slow_shutdown():
     await proc.aclose()
 
     # process is killed when there is a job with slow timeout
-    assert proc.exitcode != 0, f"process should have been killed"
+    assert proc.exitcode != 0, "process should have been killed"
     assert proc.killed
 
 
@@ -342,6 +344,6 @@ async def test_job_graceful_shutdown():
     await proc.launch_job(fake_job)
     await proc.aclose()
 
-    assert proc.exitcode == 0, f"process should have exited cleanly"
+    assert proc.exitcode == 0, "process should have exited cleanly"
     assert not proc.killed
     assert start_args.shutdown_counter.value == 1

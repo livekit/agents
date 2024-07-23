@@ -15,11 +15,8 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Optional
 
-from livekit import rtc
-from livekit.agents import stt
-from livekit.agents.utils import AudioBuffer
+from livekit.agents import stt, utils
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 
@@ -68,7 +65,7 @@ class STT(stt.STT):
         )
 
     async def recognize(
-        self, buffer: AudioBuffer, *, language: str | None = None
+        self, buffer: utils.AudioBuffer, *, language: str | None = None
     ) -> stt.SpeechEvent:
         raise NotImplementedError("Azure STT does not support single frame recognition")
 
@@ -80,8 +77,6 @@ class SpeechStream(stt.SpeechStream):
     def __init__(self, opts: STTOptions) -> None:
         super().__init__()
         self._opts = opts
-        self._event_queue = asyncio.Queue[Optional[stt.SpeechEvent]]()
-        self._closed = False
         self._speaking = False
 
         self._stream = speechsdk.audio.PushAudioInputStream(
@@ -103,26 +98,21 @@ class SpeechStream(stt.SpeechStream):
         self._done_event = asyncio.Event()
         self._loop = asyncio.get_running_loop()
 
-    def push_frame(self, frame: rtc.AudioFrame) -> None:
-        if self._closed:
-            raise ValueError("cannot push frame to closed stream")
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
+        try:
+            async for input in self._input_ch:
+                self._stream.write(input.data.tobytes())
 
-        self._stream.write(frame.data.tobytes())
+            self._stream.close()
+            await self._done_event.wait()
+        finally:
 
-    async def aclose(self) -> None:
-        if self._closed:
-            return
+            def _cleanup():
+                self._recognizer.stop_continuous_recognition()
+                del self._recognizer
 
-        self._closed = True
-        self._stream.close()
-
-        await self._done_event.wait()
-
-        def _cleanup():
-            self._recognizer.stop_continuous_recognition()
-            del self._recognizer
-
-        await asyncio.to_thread(_cleanup)
+            await asyncio.to_thread(_cleanup)
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs):
         detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
@@ -134,7 +124,7 @@ class SpeechStream(stt.SpeechStream):
             language=detected_lg, confidence=1.0, text=evt.result.text
         )
 
-        self._threadsafe_put(
+        self._threadsafe_send(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]
             )
@@ -150,7 +140,7 @@ class SpeechStream(stt.SpeechStream):
             language=detected_lg, confidence=0.0, text=evt.result.text
         )
 
-        self._threadsafe_put(
+        self._threadsafe_send(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT, alternatives=[interim_data]
             )
@@ -161,31 +151,20 @@ class SpeechStream(stt.SpeechStream):
             return
 
         self._speaking = True
-        self._threadsafe_put(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+        self._threadsafe_send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     def _on_speech_end(self, evt: speechsdk.SpeechRecognitionEventArgs):
         if not self._speaking:
             return
 
         self._speaking = False
-        self._threadsafe_put(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+        self._threadsafe_send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     def _on_session_stopped(self, evt: speechsdk.SpeechRecognitionEventArgs):
-        if not self._closed:
-            logger.error("session stopped unexpectedly")
-
         self._loop.call_soon_threadsafe(self._done_event.set)
-        self._threadsafe_put(None)
 
-    def _threadsafe_put(self, evt: stt.SpeechEvent | None):
-        self._loop.call_soon_threadsafe(self._event_queue.put_nowait, evt)
-
-    async def __anext__(self) -> stt.SpeechEvent:
-        evt = await self._event_queue.get()
-        if evt is None:
-            raise StopAsyncIteration
-
-        return evt
+    def _threadsafe_send(self, evt: stt.SpeechEvent | None):
+        self._loop.call_soon_threadsafe(self._event_ch.send_nowait, evt)
 
 
 def _create_speech_recognizer(

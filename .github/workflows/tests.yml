@@ -14,9 +14,9 @@ on:
 jobs:
   tests:
     name: Run tests
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-4vcpu-cache
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
           lfs: true
@@ -33,9 +33,15 @@ jobs:
         run: |
           pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
           pip3 install -r ./tests/test-requirements.txt
-          for dir in livekit-plugins/*; do
-            pip3 install $dir
-          done
+          pip3 install ./livekit-agents \
+                      ./livekit-plugins/livekit-plugins-openai \
+                      ./livekit-plugins/livekit-plugins-deepgram \
+                      ./livekit-plugins/livekit-plugins-google \
+                      ./livekit-plugins/livekit-plugins-nltk \
+                      ./livekit-plugins/livekit-plugins-silero \
+                      ./livekit-plugins/livekit-plugins-elevenlabs \
+                      ./livekit-plugins/livekit-plugins-cartesia \
+                      ./livekit-plugins/livekit-plugins-azure
 
       - name: Run tests
         env:

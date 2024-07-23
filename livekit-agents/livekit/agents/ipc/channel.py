@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import threading
-import queue
-import io
-import struct
 import contextlib
-from typing import ClassVar, Protocol, Type, runtime_checkable, Optional
+import io
+import queue
+import struct
+import threading
+from typing import ClassVar, Optional, Protocol, runtime_checkable
 
 
 class ProcessConn(Protocol):
@@ -46,13 +46,62 @@ class ProcChannel:
         self,
         *,
         conn: ProcessConn,
-        loop: asyncio.AbstractEventLoop,
         messages: dict[int, type[Message]],
     ) -> None:
-        self._loop = loop
         self._conn = conn
         self._messages = messages
         self._closed = False
+
+    def recv(self) -> Message:
+        if self._closed:
+            raise ChannelClosed()
+
+        try:
+            b = io.BytesIO(self._conn.recv_bytes())
+        except (OSError, EOFError, ValueError):
+            raise ChannelClosed()
+
+        msg_id = read_int(b)
+        msg = self._messages[msg_id]()
+
+        if isinstance(msg, DataMessage):
+            msg.read(b)
+
+        return msg
+
+    def send(self, msg: Message) -> None:
+        if self._closed:
+            raise ChannelClosed()
+
+        b = io.BytesIO()
+        write_int(b, msg.MSG_ID)
+
+        if isinstance(msg, DataMessage):
+            msg.write(b)
+
+        try:
+            self._conn.send_bytes(b.getvalue())
+        except (OSError, ValueError):
+            raise ChannelClosed()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+
+        self._closed = True
+        self._conn.close()
+
+
+class AsyncProcChannel(ProcChannel):
+    def __init__(
+        self,
+        *,
+        conn: ProcessConn,
+        messages: dict[int, type[Message]],
+        loop: asyncio.AbstractEventLoop,
+    ):
+        super().__init__(conn=conn, messages=messages)
+        self._loop = loop
 
         self._read_q = asyncio.Queue[Optional[Message]]()
         self._write_q = queue.Queue[Optional[Message]]()
@@ -66,51 +115,7 @@ class ProcChannel:
         )
         self._read_t.start()
         self._write_t.start()
-
-    def _read_thread(self) -> None:
-        while True:
-            try:
-                b = io.BytesIO(self._conn.recv_bytes())
-            except (OSError, EOFError):
-                break
-
-            msg_id = read_int(b)
-            msg = self._messages[msg_id]()
-
-            if isinstance(msg, DataMessage):
-                msg.read(b)
-
-            try:
-                self._loop.call_soon_threadsafe(self._read_q.put_nowait, msg)
-            except RuntimeError:
-                break
-
-        with contextlib.suppress(RuntimeError):
-
-            def _close():
-                self._exit_fut.set_result(None)
-                self._read_q.put_nowait(self._sentinel)
-                self._write_q.put_nowait(self._sentinel)
-                self._do_close()
-
-            self._loop.call_soon_threadsafe(_close)
-
-    def _write_thread(self) -> None:
-        while True:
-            msg = self._write_q.get()
-            if msg is self._sentinel:
-                break
-
-            b = io.BytesIO()
-            write_int(b, msg.MSG_ID)
-
-            if isinstance(msg, DataMessage):
-                msg.write(b)
-
-            try:
-                self._conn.send_bytes(b.getvalue())
-            except (OSError, ValueError):
-                break
+        self._closed = False
 
     async def arecv(self) -> Message:
         if self._closed:
@@ -129,15 +134,41 @@ class ProcChannel:
         self._write_q.put_nowait(msg)
 
     async def aclose(self) -> None:
-        self._do_close()
+        self.close()
         await self._exit_fut
 
-    def _do_close(self) -> None:
-        if self._closed:
-            return
+    def _read_thread(self) -> None:
+        while True:
+            try:
+                if self._conn.poll(1.0):
+                    msg = self.recv()
+                    try:
+                        self._loop.call_soon_threadsafe(self._read_q.put_nowait, msg)
+                    except RuntimeError:
+                        break
+            except ChannelClosed:
+                break
 
-        self._closed = True
-        self._conn.close()
+        with contextlib.suppress(RuntimeError):
+
+            def _close():
+                self._exit_fut.set_result(None)
+                self._read_q.put_nowait(self._sentinel)
+                self._write_q.put_nowait(self._sentinel)
+                self.close()
+
+            self._loop.call_soon_threadsafe(_close)
+
+    def _write_thread(self) -> None:
+        while True:
+            msg = self._write_q.get()
+            if msg is self._sentinel:
+                break
+
+            try:
+                self.send(msg)
+            except ChannelClosed:
+                break
 
 
 def write_bytes(b: io.BytesIO, buf: bytes) -> None:

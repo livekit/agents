@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import multiprocessing as mp
 import sys
 from typing import Any, Callable, Coroutine, Literal
@@ -31,10 +30,10 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     ) -> None:
         super().__init__()
 
-        if sys.platform.startswith("linux"):
-            self._mp_ctx = mp.get_context("forkserver")
-        else:
-            self._mp_ctx = mp.get_context("spawn")
+        #if sys.platform.startswith("linux"):
+        #    self._mp_ctx = mp.get_context("forkserver")
+        #else:
+        self._mp_ctx = mp.get_context("spawn")
 
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc

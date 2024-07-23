@@ -13,7 +13,7 @@ import watchfiles
 
 from .. import utils
 from ..ipc import channel
-from ..log import logger, DEV_LEVEL
+from ..log import DEV_LEVEL, logger
 from ..plugin import Plugin
 from ..worker import Worker
 from . import proto
@@ -67,7 +67,7 @@ class WatchServer:
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         mp_pch, cli_args.mp_cch = multiprocessing.Pipe(duplex=True)
-        self._pch = channel.ProcChannel(
+        self._pch = channel.AsyncProcChannel(
             conn=mp_pch, loop=loop, messages=proto.IPC_MESSAGES
         )
         self._cli_args = cli_args
@@ -103,9 +103,8 @@ class WatchServer:
 
         self._recv_jobs_fut = asyncio.Future()
         with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(
-                self._recv_jobs_fut, timeout=1.5
-            )  # wait max 1.5s to get the active jobs
+            # wait max 1.5s to get the active jobs
+            await asyncio.wait_for(self._recv_jobs_fut, timeout=1.5)
 
     @utils.log_exceptions(logger=logger)
     async def _read_ipc_task(self) -> None:
@@ -131,7 +130,7 @@ class WatchClient:
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._worker = worker
-        self._cch = channel.ProcChannel(
+        self._cch = channel.AsyncProcChannel(
             conn=mp_cch, loop=self._loop, messages=proto.IPC_MESSAGES
         )
 
@@ -142,7 +141,10 @@ class WatchClient:
     async def _run(self) -> None:
         await self._cch.asend(proto.ReloadJobsRequest())
         while True:
-            msg = await self._cch.arecv()
+            try:
+                msg = await self._cch.arecv()
+            except channel.ChannelClosed:
+                break
 
             if isinstance(msg, proto.ActiveJobsRequest):
                 jobs = self._worker.active_jobs
@@ -151,7 +153,6 @@ class WatchClient:
                 # TODO(theomonnom): wait for the worker to be fully initialized/connected
                 await self._worker._reload_jobs(msg.jobs)
                 await self._cch.asend(proto.Reloaded())
-
 
     async def aclose(self) -> None:
         if not self._main_task:

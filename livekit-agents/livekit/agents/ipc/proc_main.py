@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-import copy
 import contextlib
+import copy
+import logging
 import multiprocessing as mp
 from dataclasses import dataclass
 
 from livekit import rtc
 
 from .. import utils
-from ..job import JobContext, JobProcess, RunningJobInfo
+from ..job import JobContext, JobProcess
 from ..log import logger
 from . import channel, proto
 
@@ -52,7 +52,7 @@ def _start_job(
     proc: JobProcess,
     start_req: proto.StartJobRequest,
     exit_proc_fut: asyncio.Event,
-    cch: channel.ProcChannel,
+    cch: channel.AsyncProcChannel,
 ) -> JobTask:
     # used to warn users if none of connect/shutdown is called inside the job_entry
     ctx_connect, ctx_shutdown = False, False
@@ -134,7 +134,7 @@ def _start_job(
 
 
 async def _async_main(
-    args: proto.ProcStartArgs, proc: JobProcess, cch: channel.ProcChannel
+    args: proto.ProcStartArgs, proc: JobProcess, cch: channel.AsyncProcChannel
 ) -> None:
     job_task: JobTask | None = None
     exit_proc_fut = asyncio.Event()
@@ -183,7 +183,9 @@ def main(args: proto.ProcStartArgs) -> None:
     asyncio.set_event_loop(loop)
     loop.set_debug(args.asyncio_debug)
 
-    cch = channel.ProcChannel(conn=args.mp_cch, loop=loop, messages=proto.IPC_MESSAGES)
+    cch = channel.AsyncProcChannel(
+        conn=args.mp_cch, loop=loop, messages=proto.IPC_MESSAGES
+    )
     init_req = loop.run_until_complete(cch.arecv())
 
     assert isinstance(
@@ -209,14 +211,7 @@ def main(args: proto.ProcStartArgs) -> None:
             loop.run_until_complete(main_task)
     finally:
         try:
-            pass
-            #tasks = asyncio.all_tasks(loop)
-            #for task in tasks:
-            #    task.cancel()
-
-            #loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-            #loop.run_until_complete(loop.shutdown_asyncgens())
-            #loop.run_until_complete(loop.shutdown_default_executor())
-            #loop.run_until_complete(cch.aclose())
+            loop.run_until_complete(loop.shutdown_default_executor())
+            loop.run_until_complete(cch.aclose())
         finally:
             loop.close()

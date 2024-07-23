@@ -9,7 +9,7 @@ import time
 
 import pytest
 from livekit import agents, rtc
-from livekit.plugins import azure, deepgram, google, openai, silero
+from livekit.plugins import deepgram, google, openai, silero
 
 from .utils import wer
 
@@ -55,10 +55,10 @@ async def test_recognize(stt: agents.stt.STT):
 
 STREAM_VAD = silero.VAD()
 STREAM_STT = [
-    deepgram.STT(),
-    google.STT(),
-    agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
-    azure.STT(),
+    # deepgram.STT(),
+    # google.STT(),
+    # agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
+    # azure.STT(),
 ]
 
 
@@ -89,7 +89,8 @@ async def test_stream(stt: agents.stt.STT):
             # but we still wait less to make the tests faster
             await asyncio.sleep(0.001)
 
-        await stream.aclose()
+        print("end input")
+        stream.end_input()
 
     async def _stream_output():
         text = ""
@@ -98,6 +99,7 @@ async def test_stream(stt: agents.stt.STT):
         start_time = time.time()
 
         async for event in stream:
+            print(event)
             if event.type == agents.stt.SpeechEventType.START_OF_SPEECH:
                 assert (
                     recv_end

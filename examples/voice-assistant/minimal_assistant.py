@@ -1,13 +1,18 @@
 import asyncio
 import logging
 
-from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
+from livekit.agents import JobContext, JobProcess, JobRequest, WorkerOptions, cli
 from livekit.agents.llm import ChatContext
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
 
 
+def initialize(proc: JobProcess):
+    proc.userdata["silero"] = silero.VAD.load()
+
+
 async def entrypoint(ctx: JobContext):
+    silero_vad: silero.VAD = ctx.proc.userdata["silero"]
     initial_ctx = ChatContext().append(
         role="system",
         text=(
@@ -19,7 +24,7 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     assistant = VoiceAssistant(
-        vad=silero.VAD(),
+        vad=silero_vad,
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=openai.TTS(),

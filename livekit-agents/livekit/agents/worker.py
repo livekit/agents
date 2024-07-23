@@ -30,20 +30,22 @@ from livekit import api
 from livekit.protocol import agent, models
 
 from . import http_server, ipc, utils
-from .job import JobContext, JobProcess, JobRequest, RunningJobInfo, JobAcceptArguments
-from .log import logger, DEV_LEVEL
-from .version import __version__
 from .exceptions import AssignmentTimeoutError
+from .job import JobAcceptArguments, JobContext, JobProcess, JobRequest, RunningJobInfo
+from .log import DEV_LEVEL, logger
+from .version import __version__
 
 MAX_RECONNECT_ATTEMPTS = 3.0
 ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_LOAD_INTERVAL = 10.0
 
+
 def _default_initialize_process_fnc(proc: JobProcess) -> Any:
     return
 
-async def _default_job_shutdown_fnc(ctx: JobContext) -> None:
-    pass
+
+async def _default_request_fnc(ctx: JobRequest) -> None:
+    await ctx.accept()
 
 
 def _default_cpu_load_fnc() -> float:
@@ -63,12 +65,9 @@ class WorkerPermissions:
 # NOTE: this object must be pickle-able
 @dataclass
 class WorkerOptions:
-    job_request_fnc: Callable[[JobRequest], Coroutine]
-    job_entrypoint_fnc: Callable[[JobContext], Coroutine]
-    initialize_process_fnc: Callable[[JobProcess], Any] = (
-        _default_initialize_process_fnc
-    )
-    job_shutdown_fnc: Callable[[JobContext], Coroutine] = _default_job_shutdown_fnc
+    entrypoint_fnc: Callable[[JobContext], Coroutine]
+    request_fnc: Callable[[JobRequest], Coroutine] = _default_request_fnc
+    prewarm_fnc: Callable[[JobProcess], Any] = _default_initialize_process_fnc
     load_fnc: Callable[[], float] = _default_cpu_load_fnc
     load_threshold: float = 0.8
     num_idle_processes: int = 3
@@ -499,12 +498,12 @@ class Worker(utils.EventEmitter[EventTypes]):
                 await self._opts.job_request_fnc(job_req)
             except Exception:
                 logger.exception(
-                    f"job_request_fnc failed", extra={"job_request": job_req}
+                    "job_request_fnc failed", extra={"job_request": job_req}
                 )
 
             if not answered:
                 logger.warning(
-                    f"no answer was given inside the job_request_fnc, automatically rejecting the job",
+                    "no answer was given inside the job_request_fnc, automatically rejecting the job",
                     extra={"job_request": job_req},
                 )
                 await _on_reject()
@@ -520,5 +519,5 @@ class Worker(utils.EventEmitter[EventTypes]):
                 fut.set_result(assignment)
         else:
             logger.warning(
-                f"received assignment for an unknown job", extra={"job": assignment.job}
+                "received assignment for an unknown job", extra={"job": assignment.job}
             )

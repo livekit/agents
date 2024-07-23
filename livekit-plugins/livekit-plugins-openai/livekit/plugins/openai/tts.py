@@ -14,14 +14,11 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import os
 from dataclasses import dataclass
-from typing import AsyncContextManager, Optional
+from typing import AsyncContextManager
 
-from livekit.agents import tts
-from livekit.agents.utils import codecs, nanoid
+from livekit.agents import tts, utils
 
 import openai
 
@@ -127,41 +124,20 @@ class ChunkedStream(tts.ChunkedStream):
         text: str,
         opts: _TTSOptions,
     ) -> None:
+        super().__init__()
         self._opts, self._text = opts, text
         self._oai_stream = oai_stream
-        self._decoder = codecs.Mp3StreamDecoder()
-        self._main_task: asyncio.Task[None] | None = None
-        self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
 
-    async def _run(self):
-        try:
-            segment_id = nanoid()
-            async with self._oai_stream as stream:
-                async for data in stream.iter_bytes(4096):
-                    frames = self._decoder.decode_chunk(data)
-                    for frame in frames:
-                        self._queue.put_nowait(
-                            tts.SynthesizedAudio(segment_id=segment_id, frame=frame)
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self):
+        request_id = utils.shortuuid()
+        segment_id = utils.shortuuid()
+        decoder = utils.codecs.Mp3StreamDecoder()
+        async with self._oai_stream as stream:
+            async for data in stream.iter_bytes(4096):
+                for frame in decoder.decode_chunk(data):
+                    self._event_ch.send_nowait(
+                        tts.SynthesizedAudio(
+                            request_id=request_id, segment_id=segment_id, frame=frame
                         )
-        except Exception:
-            logger.exception("openai tts main task failed in chunked stream")
-        finally:
-            self._queue.put_nowait(None)
-
-    async def __anext__(self) -> tts.SynthesizedAudio:
-        if not self._main_task:
-            self._main_task = asyncio.create_task(self._run())
-
-        frame = await self._queue.get()
-        if frame is None:
-            raise StopAsyncIteration
-
-        return frame
-
-    async def aclose(self) -> None:
-        if not self._main_task:
-            return
-
-        self._main_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
+                    )
