@@ -130,7 +130,8 @@ class AgentOutput:
                 if handle.play_handle is not None:
                     await handle.play_handle
             finally:
-                await handle._tr_fwd.aclose()
+                if handle._tr_fwd:
+                    await handle._tr_fwd.aclose()
 
 
 @utils.log_exceptions(logger=logger)

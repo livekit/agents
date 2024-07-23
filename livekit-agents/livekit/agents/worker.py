@@ -35,7 +35,7 @@ from .job import JobAcceptArguments, JobContext, JobProcess, JobRequest, Running
 from .log import DEV_LEVEL, logger
 from .version import __version__
 
-MAX_RECONNECT_ATTEMPTS = 3.0
+MAX_RECONNECT_ATTEMPTS = 3
 ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_LOAD_INTERVAL = 10.0
 
@@ -43,8 +43,10 @@ UPDATE_LOAD_INTERVAL = 10.0
 def _default_initialize_process_fnc(proc: JobProcess) -> Any:
     return
 
+
 async def _default_shutdown_fnc(proc: JobContext) -> None:
     return
+
 
 async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
@@ -240,7 +242,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         """_queue_msg raises aio.ChanClosed when the worker is closing/closed"""
         if self._connecting:
             which = msg.WhichOneof("message")
-            if which == "update_worker" and not msg.update_worker.metadata:
+            if which == "update_worker":
                 return
             elif which == "ping":
                 return

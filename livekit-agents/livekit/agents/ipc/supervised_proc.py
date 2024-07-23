@@ -32,6 +32,8 @@ class LogQueueListener:
         t.start()
 
     def stop(self) -> None:
+        if self._thread is None:
+            return
         self._q.put_nowait(self._sentinel)
         self._thread.join()
         self._thread = None
@@ -67,7 +69,7 @@ class SupervisedProc:
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._loop = loop
-        log_q = mp.Queue()
+        log_q = mp.Queue[logging.LogRecord]()
         log_q.cancel_join_thread()
         mp_pch, mp_cch = mp_ctx.Pipe(duplex=True)
 
@@ -97,7 +99,7 @@ class SupervisedProc:
         self._main_atask: asyncio.Task[None] | None = None
         self._closing = False
         self._kill_sent = False
-        self._initialize_fut = asyncio.Future()
+        self._initialize_fut = asyncio.Future[None]()
 
     @property
     def exitcode(self) -> int | None:
@@ -145,7 +147,7 @@ class SupervisedProc:
 
         self._proc.start()
         self._pid = self._proc.pid
-        self._join_fut = asyncio.Future()
+        self._join_fut = asyncio.Future[None]()
 
         def _sync_run():
             self._proc.join()
@@ -161,7 +163,8 @@ class SupervisedProc:
         if not self.started:
             raise RuntimeError("process not started")
 
-        await asyncio.shield(self._main_atask)
+        if self._main_atask:
+            await asyncio.shield(self._main_atask)
 
     async def initialize(self) -> None:
         """initialize the job process, this is calling the user provided initialize_process_fnc
@@ -198,16 +201,18 @@ class SupervisedProc:
             await self._pch.asend(proto.ShutdownRequest())
 
         try:
-            await asyncio.wait_for(
-                asyncio.shield(self._main_atask), timeout=self._close_timeout
-            )
+            if self._main_atask:
+                await asyncio.wait_for(
+                    asyncio.shield(self._main_atask), timeout=self._close_timeout
+                )
         except asyncio.TimeoutError:
             logger.error(
                 "process did not exit in time, killing job", extra=self.logging_extra()
             )
             self._send_kill_signal()
 
-        await asyncio.shield(self._main_atask)
+        if self._main_atask:
+            await asyncio.shield(self._main_atask)
 
     async def kill(self) -> None:
         """forcefully kill the job process"""
@@ -216,7 +221,8 @@ class SupervisedProc:
 
         self._closing = True
         self._send_kill_signal()
-        await asyncio.shield(self._main_atask)
+        if self._main_atask:
+            await asyncio.shield(self._main_atask)
 
     async def launch_job(self, info: RunningJobInfo) -> None:
         """start/assign a job to the process"""

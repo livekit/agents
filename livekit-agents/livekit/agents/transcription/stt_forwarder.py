@@ -66,13 +66,19 @@ class STTSegmentsForwarder:
                     start_time=0,
                     end_time=0,
                     final=False,
+                    language="",  # TODO
                 )
             )
         elif ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             text = ev.alternatives[0].text
             self._queue.put_nowait(
                 rtc.TranscriptionSegment(
-                    id=self._current_id, text=text, start_time=0, end_time=0, final=True
+                    id=self._current_id,
+                    text=text,
+                    start_time=0,
+                    end_time=0,
+                    final=True,
+                    language="",  # TODO
                 )
             )
 

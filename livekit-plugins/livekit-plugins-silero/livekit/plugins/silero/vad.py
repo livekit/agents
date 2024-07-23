@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from dataclasses import dataclass
 
@@ -177,8 +178,12 @@ class VADStream(agents.vad.VADStream):
         may_start_at_sample = -1
         may_end_at_sample = -1
 
-        min_speech_samples = self._opts.min_speech_duration * self._opts.sample_rate
-        min_silence_samples = self._opts.min_silence_duration * self._opts.sample_rate
+        min_speech_samples = int(
+            self._opts.min_speech_duration * self._opts.sample_rate
+        )
+        min_silence_samples = int(
+            self._opts.min_silence_duration * self._opts.sample_rate
+        )
 
         current_sample = 0
 
@@ -204,6 +209,7 @@ class VADStream(agents.vad.VADStream):
             else:
                 max_data_s += self._opts.max_buffered_speech
 
+            assert self._original_sample_rate is not None
             cl = int(max_data_s) * self._original_sample_rate
             if len(pub_speech_buf) > cl:
                 pub_speech_buf = pub_speech_buf[-cl:]

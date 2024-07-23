@@ -75,7 +75,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         Subscribe to the participant microphone if found and not already subscribed.
         Do nothing if no track is found.
         """
-        for publication in self._participant.tracks.values():
+        for publication in self._participant.track_publications.values():
             if publication.source != rtc.TrackSource.SOURCE_MICROPHONE:
                 continue
 

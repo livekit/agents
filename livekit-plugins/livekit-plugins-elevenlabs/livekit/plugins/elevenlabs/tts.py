@@ -183,8 +183,8 @@ class ChunkedStream(tts.ChunkedStream):
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
             json=data,
         ) as resp:
-            async for data, _ in resp.content.iter_chunks():
-                for frame in bstream.write(data):
+            async for bytes_data, _ in resp.content.iter_chunks():
+                for frame in bstream.write(bytes_data):
                     self._event_ch.send_nowait(
                         tts.SynthesizedAudio(
                             request_id=request_id, segment_id=segment_id, frame=frame

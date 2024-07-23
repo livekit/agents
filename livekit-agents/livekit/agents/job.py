@@ -114,8 +114,8 @@ def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) ->
         ):
             pub.set_subscribed(True)
 
-    for p in room.participants.values():
-        for pub in p.tracks.values():
+    for p in room.remote_participants.values():
+        for pub in p.track_publications.values():
             _subscribe_if_needed(pub)
 
     @room.on("track_published")
@@ -128,11 +128,11 @@ def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) ->
 class JobProcess:
     def __init__(self, *, start_arguments: Any | None = None) -> None:
         self._mp_proc = mp.current_process()
-        self._userdata = {}
+        self._userdata: dict[str, Any] = {}
         self._start_arguments = start_arguments
 
     @property
-    def pid(self) -> int:
+    def pid(self) -> int | None:
         return self._mp_proc.pid
 
     @property

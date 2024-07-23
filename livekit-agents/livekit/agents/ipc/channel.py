@@ -105,7 +105,7 @@ class AsyncProcChannel(ProcChannel):
 
         self._read_q = asyncio.Queue[Optional[Message]]()
         self._write_q = queue.Queue[Optional[Message]]()
-        self._exit_fut = asyncio.Future()
+        self._exit_fut = asyncio.Future[None]()
 
         self._read_t = threading.Thread(
             target=self._read_thread, daemon=True, name="proc_channel_read"
