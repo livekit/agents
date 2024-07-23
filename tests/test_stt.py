@@ -57,7 +57,7 @@ STREAM_VAD = silero.VAD()
 STREAM_STT = [
     # deepgram.STT(),
     # google.STT(),
-    agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
+    # agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
     # azure.STT(),
 ]
 

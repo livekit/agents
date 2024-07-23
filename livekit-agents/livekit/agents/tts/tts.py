@@ -20,11 +20,49 @@ class SynthesizedAudio:
     """Current segment of the synthesized audio"""
 
 
+@dataclass
+class TTSCapabilities:
+    streaming: bool
+
+
+class TTS(ABC):
+    def __init__(
+        self, *, capabilities: TTSCapabilities, sample_rate: int, num_channels: int
+    ) -> None:
+        self._capabilities = capabilities
+        self._sample_rate = sample_rate
+        self._num_channels = num_channels
+
+    @property
+    def capabilities(self) -> TTSCapabilities:
+        return self._capabilities
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    @property
+    def num_channels(self) -> int:
+        return self._num_channels
+
+    @abstractmethod
+    def synthesize(self, text: str) -> ChunkedStream: ...
+
+    def stream(self) -> SynthesizeStream:
+        raise NotImplementedError(
+            "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"
+        )
+
+    async def aclose(self) -> None: ...
+
+
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
     def __init__(self):
         self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
 
     async def collect(self) -> rtc.AudioFrame:
         """Utility method to collect every frame in a single call"""
@@ -34,9 +72,12 @@ class ChunkedStream(ABC):
         return misc.merge_frames(frames)
 
     @abstractmethod
+    def _main_task(self) -> None: ...
+
     async def aclose(self) -> None:
         """Close is automatically called if the stream is completely collected"""
-        pass
+        await aio.gracefully_cancel(self._task)
+        self._event_ch.close()
 
     async def __anext__(self) -> SynthesizedAudio:
         return await self._event_ch.__anext__()
@@ -82,12 +123,6 @@ class SynthesizeStream(ABC):
         await aio.gracefully_cancel(self._task)
         self._event_ch.close()
 
-    async def __anext__(self) -> SynthesizedAudio:
-        return await self._event_ch.__anext__()
-
-    def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
-        return self
-
     def _check_not_closed(self) -> None:
         if self._event_ch.closed:
             cls = type(self)
@@ -98,38 +133,8 @@ class SynthesizeStream(ABC):
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
+    async def __anext__(self) -> SynthesizedAudio:
+        return await self._event_ch.__anext__()
 
-@dataclass
-class TTSCapabilities:
-    streaming: bool
-
-
-class TTS(ABC):
-    def __init__(
-        self, *, capabilities: TTSCapabilities, sample_rate: int, num_channels: int
-    ) -> None:
-        self._capabilities = capabilities
-        self._sample_rate = sample_rate
-        self._num_channels = num_channels
-
-    @property
-    def capabilities(self) -> TTSCapabilities:
-        return self._capabilities
-
-    @property
-    def sample_rate(self) -> int:
-        return self._sample_rate
-
-    @property
-    def num_channels(self) -> int:
-        return self._num_channels
-
-    @abstractmethod
-    def synthesize(self, text: str) -> ChunkedStream: ...
-
-    def stream(self) -> SynthesizeStream:
-        raise NotImplementedError(
-            "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"
-        )
-
-    async def aclose(self) -> None: ...
+    def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
+        return self

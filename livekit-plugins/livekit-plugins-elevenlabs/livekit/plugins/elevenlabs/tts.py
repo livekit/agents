@@ -157,99 +157,47 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
     ) -> None:
-        self._opts = opts
-        self._text = text
-        self._session = session
-        self._task: asyncio.Task[None] | None = None
-        self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
+        super().__init__()
+        self._text, self._opts, self._session = text, opts, session
 
-    def _synthesize_url(self) -> str:
-        base_url = self._opts.base_url
-        voice_id = self._opts.voice.id
-        model_id = self._opts.model_id
-        sample_rate = _sample_rate_from_format(self._opts.encoding)
-        latency = self._opts.streaming_latency
-        url = (
-            f"{base_url}/text-to-speech/{voice_id}/stream?"
-            f"model_id={model_id}&output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
+        bstream = utils.audio.AudioByteStream(
+            sample_rate=self._opts.sample_rate, num_channels=1
         )
-        return url
+        request_id = utils.shortuuid()
+        segment_id = utils.shortuuid()
 
-    async def _main_task(self):
-        try:
-            await self._run()
-        except Exception:
-            logger.exception("11labs main task failed in chunked stream")
-        finally:
-            self._queue.put_nowait(None)
+        voice_settings = (
+            dataclasses.asdict(self._opts.voice.settings)
+            if self._opts.voice.settings
+            else None
+        )
+        data = {
+            "text": self._text,
+            "model_id": self._opts.model_id,
+            "voice_settings": voice_settings,
+        }
 
-    async def _run(self) -> None:
         async with self._session.post(
-            self._synthesize_url(),
+            _synthesize_url(self._opts),
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
-            json=dict(
-                text=self._text,
-                model_id=self._opts.model_id,
-                voice_settings=(
-                    dataclasses.asdict(self._opts.voice.settings)
-                    if self._opts.voice.settings
-                    else None
-                ),
-            ),
+            json=data,
         ) as resp:
-            # avoid very small frames. chunk by 10ms 16bits
-            bytes_per_frame = (self._opts.sample_rate // 100) * 2
-            buf = bytearray()
             async for data, _ in resp.content.iter_chunks():
-                buf.extend(data)
-
-                while len(buf) >= bytes_per_frame:
-                    frame_data = buf[:bytes_per_frame]
-                    buf = buf[bytes_per_frame:]
-
-                    self._queue.put_nowait(
+                for frame in bstream.write(data):
+                    self._event_ch.send_nowait(
                         tts.SynthesizedAudio(
-                            segment_id=segment_id,
-                            frame=rtc.AudioFrame(
-                                data=frame_data,
-                                sample_rate=self._opts.sample_rate,
-                                num_channels=1,
-                                samples_per_channel=len(frame_data) // 2,
-                            ),
+                            request_id=request_id, segment_id=segment_id, frame=frame
                         )
                     )
 
-            # send any remaining data
-            if len(buf) > 0:
-                self._queue.put_nowait(
+            for frame in bstream.flush():
+                self._event_ch.send_nowait(
                     tts.SynthesizedAudio(
-                        segment_id=segment_id,
-                        frame=rtc.AudioFrame(
-                            data=buf,
-                            sample_rate=self._opts.sample_rate,
-                            num_channels=1,
-                            samples_per_channel=len(buf) // 2,
-                        ),
+                        request_id=request_id, segment_id=segment_id, frame=frame
                     )
                 )
-
-    async def __anext__(self) -> tts.SynthesizedAudio:
-        if not self._task:
-            self._task = asyncio.create_task(self._main_task())
-
-        frame = await self._queue.get()
-        if frame is None:
-            raise StopAsyncIteration
-
-        return frame
-
-    async def aclose(self) -> None:
-        if not self._task:
-            return
-
-        self._task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._task
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -428,15 +376,25 @@ def _dict_to_voices_list(data: dict[str, Any]):
     return voices
 
 
+def _synthesize_url(opts: _TTSOptions) -> str:
+    base_url = opts.base_url
+    voice_id = opts.voice.id
+    model_id = opts.model_id
+    sample_rate = _sample_rate_from_format(opts.encoding)
+    latency = opts.streaming_latency
+    return (
+        f"{base_url}/text-to-speech/{voice_id}/stream?"
+        f"model_id={model_id}&output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
+    )
+
+
 def _stream_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
     voice_id = opts.voice.id
     model_id = opts.model_id
     output_format = opts.encoding
     latency = opts.streaming_latency
-    url = (
+    return (
         f"{base_url}/text-to-speech/{voice_id}/stream-input?"
         f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}"
     )
-
-    return url

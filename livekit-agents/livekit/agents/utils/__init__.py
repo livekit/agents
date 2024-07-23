@@ -1,4 +1,4 @@
-from . import aio, codecs, http_context, images
+from . import aio, codecs, http_context, images, audio
 from .event_emitter import EventEmitter
 from .exp_filter import ExpFilter
 from .log import log_exceptions
@@ -17,5 +17,6 @@ __all__ = [
     "log_exceptions",
     "codecs",
     "images",
+    "audio",
     "aio",
 ]
