@@ -45,9 +45,8 @@ class STTSegmentsForwarder:
 
                 transcription = rtc.Transcription(
                     participant_identity=self._participant_identity,
-                    track_id=self._track_id,
+                    track_sid=self._track_id,
                     segments=[seg],  # no history for now
-                    language="",  # TODO(theomonnom)
                 )
                 await self._room.local_participant.publish_transcription(transcription)
 

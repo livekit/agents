@@ -217,9 +217,8 @@ class TTSSegmentsForwarder:
 
                 tr = rtc.Transcription(
                     participant_identity=self._opts.participant_identity,
-                    track_id=self._opts.track_id,
+                    track_sid=self._opts.track_id,
                     segments=[seg],  # no history for now, only one segment
-                    language=self._opts.language,
                 )
                 await self._opts.room.local_participant.publish_transcription(tr)
 

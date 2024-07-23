@@ -200,4 +200,3 @@ async def _stream_synthesis_task(
         if handle._tr_fwd and not handle._tr_fwd.closed:
             # mark_audio_segment_end must be called *after* mart_text_segment_end
             handle._tr_fwd.mark_audio_segment_end()
-            await handle._tr_fwd.aclose()
