@@ -39,11 +39,13 @@ MAX_RECONNECT_ATTEMPTS = 3.0
 ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_LOAD_INTERVAL = 10.0
 
+
 def _default_initialize_process_fnc(proc: JobProcess) -> Any:
     return
 
-async def _default_job_shutdown_fnc(ctx: JobContext) -> None:
-    pass
+
+async def _default_request_fnc(ctx: JobRequest) -> None:
+    await ctx.accept()
 
 
 def _default_cpu_load_fnc() -> float:
@@ -63,12 +65,9 @@ class WorkerPermissions:
 # NOTE: this object must be pickle-able
 @dataclass
 class WorkerOptions:
-    job_request_fnc: Callable[[JobRequest], Coroutine]
-    job_entrypoint_fnc: Callable[[JobContext], Coroutine]
-    initialize_process_fnc: Callable[[JobProcess], Any] = (
-        _default_initialize_process_fnc
-    )
-    job_shutdown_fnc: Callable[[JobContext], Coroutine] = _default_job_shutdown_fnc
+    entrypoint_fnc: Callable[[JobContext], Coroutine]
+    request_fnc: Callable[[JobRequest], Coroutine] = _default_request_fnc
+    prewarm_fnc: Callable[[JobProcess], Any] = _default_initialize_process_fnc
     load_fnc: Callable[[], float] = _default_cpu_load_fnc
     load_threshold: float = 0.8
     num_idle_processes: int = 3

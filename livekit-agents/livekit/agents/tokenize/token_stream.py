@@ -1,97 +1,106 @@
 from __future__ import annotations
 
-import asyncio
-from typing import Callable, Optional
+import string
+from typing import Callable, AsyncIterator
+from .tokenizer import TokenData, WordStream, SentenceStream
+from ..utils import aio
 
-from .tokenizer import TokenEvent, TokenEventType, TokenStream
 
-
-class BufferedTokenStream(TokenStream):
+class BufferedTokenStream:
     def __init__(
-        self, *, tokenizer: Callable[[str], list[str]], min_token_len: int, ctx_len: int
+        self,
+        *,
+        tokenize_fnc: Callable[[str], list[str]],
+        min_token_len: int,
+        min_ctx_len: int,
     ) -> None:
-        self._tokenizer = tokenizer
-        self._ctx_len = ctx_len
+        self._event_ch = aio.Chan[TokenData]()
+        self._tokenize_fnc = tokenize_fnc
+        self._min_ctx_len = min_ctx_len
         self._min_token_len = min_token_len
-        self._event_queue = asyncio.Queue[Optional[TokenEvent]]()
-        self._closed = False
 
-        self._incomplete_tokens: list[str] = []  # <= min_token_len
-        self._buffer = ""
-        self._new_segment = True
+        self._buf_tokens: list[str] = []  # <= min_token_len
+        self._buf = ""
 
-    def push_text(self, text: str | None) -> None:
-        if self._closed:
-            raise ValueError("cannot push text to closed stream")
+    def push_text(self, text: str) -> None:
+        self._check_not_closed()
+        self._buf += text
 
-        if self._new_segment:
-            self._new_segment = False
-            self._event_queue.put_nowait(TokenEvent(type=TokenEventType.STARTED))
-
-        if text is None:
-            self._flush()
-            self._event_queue.put_nowait(TokenEvent(type=TokenEventType.FINISHED))
-            self._new_segment = True
+        if len(self._buf) < self._min_ctx_len:
             return
 
-        for char in text:
-            self._buffer += char
+        tokens = self._tokenize_fnc(self._buf)
+        if len(tokens) < 2:
+            return
 
-            if len(self._buffer) < self._ctx_len:
-                continue
+        for i in range(len(tokens) - 1):
+            buf = " ".join(tokens[: i + 1])
 
-            tokens = self._tokenizer(self._buffer)
-            if len(tokens) < 2:
-                continue
+            if len(buf) >= self._min_token_len:
+                self._event_ch.send_nowait(TokenData(token=buf))
 
-            new_token = tokens[0]
-            self._incomplete_tokens.append(new_token)
-            s = " ".join(self._incomplete_tokens)
+                for j in range(i + 1):
+                    tok = tokens[i + j]
+                    tok_i = self._buf.index(tok)
+                    self._buf = self._buf[tok_i + len(tok) :].lstrip()
 
-            if len(s) >= self._min_token_len:
-                self._put_token(s)
-                self._incomplete_tokens = []
+    def flush(self) -> None:
+        self._check_not_closed()
+        if self._buf:
+            tokens = self._tokenize_fnc(self._buf)
+            if tokens:
+                buf = " ".join(tokens)
+            else:
+                buf = self._buf
 
-            real_len = self._buffer.find(new_token) + len(new_token)
-            self._buffer = self._buffer[real_len:][1:]
+            self._event_ch.send_nowait(TokenData(token=buf))
 
-    def mark_segment_end(self) -> None:
-        self.push_text(None)
+        self._buf = ""
 
-    async def aclose(self, *, wait: bool = True) -> None:
-        self._closed = True
-        self._flush()
-        self._event_queue.put_nowait(None)
+    def end_input(self) -> None:
+        self.flush()
+        self._event_ch.close()
 
-    def _flush(self) -> None:
-        # try to segment the remaining data inside self._text_buffer
-        ibuff = " ".join(self._incomplete_tokens)
-        buff = ibuff
-        tokens = self._tokenizer(self._buffer)
-        start = 0
-        for t in tokens:
-            if not ibuff:
-                start = 1
+    async def aclose(self) -> None:
+        self._event_ch.close()
 
-            buff += " " + t
-            if len(buff) >= self._min_token_len:
-                self._put_token(buff[start:])
-                buff = ""
-
-        if buff:
-            self._put_token(buff[start:])
-
-        self._buffer = ""
-
-    def _put_token(self, token: str) -> None:
-        self._event_queue.put_nowait(TokenEvent(type=TokenEventType.TOKEN, token=token))
+    def _check_not_closed(self) -> None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
 
     def __aiter__(self) -> "BufferedTokenStream":
         return self
 
-    async def __anext__(self) -> TokenEvent:
-        event = await self._event_queue.get()
-        if event is None:
-            raise StopAsyncIteration
+    async def __anext__(self) -> TokenData:
+        return await self._event_ch.__anext__()
 
-        return event
+
+class BufferedSentenceStream(BufferedTokenStream, SentenceStream):
+    def __init__(
+        self,
+        *,
+        tokenizer: Callable[[str], list[str]],
+        min_token_len: int,
+        min_ctx_len: int,
+    ) -> None:
+        super().__init__(
+            tokenize_fnc=tokenizer,
+            min_token_len=min_token_len,
+            min_ctx_len=min_ctx_len,
+        )
+
+
+class BufferedWordStream(BufferedTokenStream, WordStream):
+    def __init__(
+        self,
+        *,
+        tokenizer: Callable[[str], list[str]],
+        min_token_len: int,
+        min_ctx_len: int,
+    ) -> None:
+        super().__init__(
+            tokenize_fnc=tokenizer,
+            min_token_len=min_token_len,
+            min_ctx_len=min_ctx_len,
+        )

@@ -60,7 +60,8 @@ class TTS(tts.TTS):
             capabilities=tts.TTSCapabilities(
                 streaming=True,
             ),
-            sample_rate=sample_rate, num_channels=1
+            sample_rate=sample_rate,
+            num_channels=1,
         )
 
         self._client: texttospeech.TextToSpeechAsyncClient | None = None

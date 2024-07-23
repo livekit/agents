@@ -1,3 +1,6 @@
+import re
+
+
 def split_words(text: str, ignore_punctuation: bool = True) -> list[str]:
     # fmt: off
     punctuations = [".", ",", "!", "?", ";", ":", "'", '"', "(", ")", "[", "]", "{", "}", "<", ">",
@@ -9,7 +12,7 @@ def split_words(text: str, ignore_punctuation: bool = True) -> list[str]:
             # TODO(theomonnom): Ignore acronyms
             text = text.replace(p, "")
 
-    words = text.split(" ")
+    words = re.split("[ \n]+", text)
     new_words = []
     for word in words:
         if not word:

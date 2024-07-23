@@ -70,7 +70,7 @@ class SupervisedProc:
         log_q = mp.Queue()
         mp_pch, mp_cch = mp_ctx.Pipe(duplex=True)
 
-        self._pch = channel.ProcChannel(
+        self._pch = channel.AsyncProcChannel(
             conn=mp_pch, loop=self._loop, messages=proto.IPC_MESSAGES
         )
 

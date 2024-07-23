@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Tuple
 
+from ..ipc import channel
+
 PlotType = Literal["vad_probability", "raw_vol", "smoothed_vol"]
 EventType = Literal[
     "user_started_speaking",
@@ -23,14 +25,14 @@ class PlotMessage:
     y: float = 0.0
 
     def write(self, b: io.BytesIO) -> None:
-        ipc_enc._write_string(b, self.which)
-        ipc_enc._write_float(b, self.x)
-        ipc_enc._write_float(b, self.y)
+        channel.write_string(b, self.which)
+        channel.write_float(b, self.x)
+        channel.write_float(b, self.y)
 
     def read(self, b: io.BytesIO) -> None:
-        self.which = ipc_enc._read_string(b)  # type: ignore
-        self.x = ipc_enc._read_float(b)
-        self.y = ipc_enc._read_float(b)
+        self.which = channel.read_string(b)  # type: ignore
+        self.x = channel.read_float(b)
+        self.y = channel.read_float(b)
 
 
 @dataclass
@@ -41,12 +43,12 @@ class PlotEventMessage:
     x: float = 0.0
 
     def write(self, b: io.BytesIO) -> None:
-        ipc_enc._write_string(b, self.which)
-        ipc_enc._write_float(b, self.x)
+        channel.write_string(b, self.which)
+        channel.write_float(b, self.x)
 
     def read(self, b: io.BytesIO) -> None:
-        self.which = ipc_enc._read_string(b)  # type: ignore
-        self.x = ipc_enc._read_float(b)
+        self.which = channel.read_string(b)  # type: ignore
+        self.x = channel.read_float(b)
 
 
 PLT_MESSAGES: dict = {
@@ -75,9 +77,11 @@ def _draw_plot(reader):
 
     max_points = 250
 
+    plot_rx = channel.ProcChannel(conn=reader, messages=PLT_MESSAGES)
+
     def _draw_cb(sp, pv):
         while reader.poll():
-            msg = ipc_enc.read_msg(reader, PLT_MESSAGES)
+            msg = plot_rx.recv()
             if isinstance(msg, PlotMessage):
                 data = plot_data.setdefault(msg.which, ([], []))
                 data[0].append(msg.x)
@@ -140,26 +144,29 @@ class AssistantPlotter:
         if self._started:
             return
 
+        mp_pch, mp_cch = mp.Pipe(duplex=True)
+        self._plot_tx = channel.AsyncProcChannel(
+            conn=mp_pch, loop=self._loop, messages=PLT_MESSAGES
+        )
+        self._plot_proc = mp.Process(target=_draw_plot, args=(mp_cch,), daemon=True)
+        self._plot_proc.start()
+
         self._started = True
         self._start_time = time.time()
-        pch, cch = mp.Pipe()
-        self._plot_tx = apipe.AsyncPipe(pch, loop=self._loop, messages=PLT_MESSAGES)
-        self._plot_proc = mp.Process(target=_draw_plot, args=(cch,), daemon=True)
-        self._plot_proc.start()
 
     def plot_value(self, which: PlotType, y: float):
         if not self._started:
             return
 
         ts = time.time() - self._start_time
-        asyncio.ensure_future(self._plot_tx.write(PlotMessage(which=which, x=ts, y=y)))
+        asyncio.ensure_future(self._plot_tx.asend(PlotMessage(which=which, x=ts, y=y)))
 
     def plot_event(self, which: EventType):
         if not self._started:
             return
 
         ts = time.time() - self._start_time
-        asyncio.ensure_future(self._plot_tx.write(PlotEventMessage(which=which, x=ts)))
+        asyncio.ensure_future(self._plot_tx.asend(PlotEventMessage(which=which, x=ts)))
 
     def terminate(self):
         if not self._started:

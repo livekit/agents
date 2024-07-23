@@ -19,8 +19,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from livekit import rtc
-from livekit.agents import tts
-from livekit.agents.utils import nanoid
+from livekit.agents import tts, utils
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 
@@ -73,29 +72,28 @@ class TTS(tts.TTS):
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, text: str, opts: _TTSOptions) -> None:
-        self._opts = opts
-        self._text = text
-        self._main_task: asyncio.Task | None = None
-        self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
+        self._main_task = asyncio.create_task(self._run(text, opts))
+        self._main_task.add_done_callback(self._event_ch.close)
 
-    async def _run(self):
+    @utils.log_exceptions()
+    async def _run(self, text: str, opts: _TTSOptions):
+        stream_callback = _PushAudioOutputStreamCallback(
+            asyncio.get_running_loop(), self._event_ch
+        )
+        synthesizer = _create_speech_synthesizer(
+            config=opts, stream=speechsdk.audio.PushAudioOutputStream(stream_callback)
+        )
+
+        def _synthesize() -> speechsdk.SpeechSynthesisResult:
+            return synthesizer.speak_text_async(text).get()  # type: ignore
+
         try:
-            stream_callback = _PushAudioOutputStreamCallback(
-                asyncio.get_running_loop(), self._queue
-            )
-            push_stream = speechsdk.audio.PushAudioOutputStream(stream_callback)
-            synthesizer = _create_speech_synthesizer(
-                config=self._opts, stream=push_stream
-            )
-
-            def _synthesize() -> speechsdk.SpeechSynthesisResult:
-                return synthesizer.speak_text_async(self._text).get()  # type: ignore
-
             result = await asyncio.to_thread(_synthesize)
             if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
                 raise ValueError(
                     f"failed to synthesize audio: {result.reason} {result.cancellation_details}"
                 )
+        finally:
 
             def _cleanup() -> None:
                 nonlocal synthesizer, result
@@ -104,28 +102,8 @@ class ChunkedStream(tts.ChunkedStream):
 
             await asyncio.to_thread(_cleanup)
 
-        except Exception:
-            logger.exception("failed to synthesize")
-        finally:
-            self._queue.put_nowait(None)
-
-    async def __anext__(self) -> tts.SynthesizedAudio:
-        if not self._main_task:
-            self._main_task = asyncio.create_task(self._run())
-
-        frame = await self._queue.get()
-        if frame is None:
-            raise StopAsyncIteration
-
-        return frame
-
     async def aclose(self) -> None:
-        if not self._main_task:
-            return
-
-        self._main_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
+        await utils.aio.gracefully_cancel(self._main_task)
 
 
 def _create_speech_synthesizer(
@@ -147,21 +125,24 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
     def __init__(
         self,
         loop: asyncio.AbstractEventLoop,
-        event_queue: asyncio.Queue[tts.SynthesizedAudio | None],
+        event_ch: utils.aio.ChanSender[tts.SynthesizedAudio],
     ):
         super().__init__()
-        self._event_queue = event_queue
+        self._event_ch = event_ch
         self._loop = loop
-        self._segment_id = nanoid()
+        self._request_id = utils.shortuuid()
+        self._segment_id = utils.shortuuid()
 
     def write(self, audio_buffer: memoryview) -> int:
-        audio_frame = rtc.AudioFrame(
-            data=audio_buffer,
-            sample_rate=AZURE_SAMPLE_RATE,
-            num_channels=AZURE_NUM_CHANNELS,
-            samples_per_channel=audio_buffer.nbytes // 2,
+        audio = tts.SynthesizedAudio(
+            request_id=self._request_id,
+            segment_id=self._segment_id,
+            frame=rtc.AudioFrame(
+                data=audio_buffer,
+                sample_rate=AZURE_SAMPLE_RATE,
+                num_channels=AZURE_NUM_CHANNELS,
+                samples_per_channel=audio_buffer.nbytes // 2,
+            ),
         )
-
-        audio = tts.SynthesizedAudio(segment_id=nanoid(), frame=audio_frame)
-        self._loop.call_soon_threadsafe(self._event_queue.put_nowait, audio)
+        self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
         return audio_buffer.nbytes

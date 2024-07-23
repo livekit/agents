@@ -128,6 +128,7 @@ class Chan(Generic[T]):
         return item
 
     def close(self) -> None:
+        self._closed = True
         self._close_ev.set()
         for putter in self._puts:
             if not putter.cancelled():
@@ -144,9 +145,9 @@ class Chan(Generic[T]):
     #        if self.empty():
     #            self._finished_ev.set()
 
-    # @property
-    # def closed(self) -> bool:
-    #    return self._closed
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     #    async def join(self) -> None:
     #        await self._finished_ev.wait()

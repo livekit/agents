@@ -17,11 +17,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from livekit import rtc
 from dataclasses import dataclass
 from typing import AsyncContextManager, Optional
 
-from livekit.agents import tts
-from livekit.agents.utils import codecs, nanoid
+from livekit.agents import tts, utils
 
 import openai
 
@@ -129,7 +129,7 @@ class ChunkedStream(tts.ChunkedStream):
     ) -> None:
         self._opts, self._text = opts, text
         self._oai_stream = oai_stream
-        self._decoder = codecs.Mp3StreamDecoder()
+        self._decoder = utils.codecs.Mp3StreamDecoder()
         self._main_task: asyncio.Task[None] | None = None
         self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
 
@@ -143,6 +143,20 @@ class ChunkedStream(tts.ChunkedStream):
                         self._queue.put_nowait(
                             tts.SynthesizedAudio(segment_id=segment_id, frame=frame)
                         )
+
+                self._queue.put_nowait(
+                    tts.SynthesizedAudio(
+                        segment_id=segment_id,
+                        end_of_segment=True,
+                        frame=rtc.AudioFrame(
+                            data=bytes(),
+                            sample_rate=OPENAI_TTS_SAMPLE_RATE,
+                            num_channels=OPENAI_TTS_CHANNELS,
+                            samples_per_channel=0,
+                        ),
+                    )
+                )
+
         except Exception:
             logger.exception("openai tts main task failed in chunked stream")
         finally:

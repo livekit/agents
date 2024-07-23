@@ -198,4 +198,3 @@ def setup_logging(log_level: str, production: bool = True) -> None:
     root.setLevel(logging.WARN)
 
     logger.setLevel(log_level)
-

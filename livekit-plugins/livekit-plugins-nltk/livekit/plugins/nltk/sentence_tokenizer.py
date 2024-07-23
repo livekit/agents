@@ -42,7 +42,7 @@ class SentenceTokenizer(agents.tokenize.SentenceTokenizer):
             config.language = language
         return config
 
-    def tokenize(self, *, text: str, language: str | None = None) -> list[str]:
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         config = self._sanitize_options(language=language)
         sentences = nltk.tokenize.sent_tokenize(text, config.language)
         new_sentences = []
@@ -60,10 +60,10 @@ class SentenceTokenizer(agents.tokenize.SentenceTokenizer):
 
     def stream(self, *, language: str | None = None) -> agents.tokenize.SentenceStream:
         config = self._sanitize_options(language=language)
-        return agents.tokenize.BufferedTokenStream(
+        return agents.tokenize.BufferedSentenceStream(
             tokenizer=functools.partial(
                 nltk.tokenize.sent_tokenize, language=config.language
             ),
             min_token_len=self._config.min_sentence_len,
-            ctx_len=self._config.stream_context_len,
+            min_ctx_len=self._config.stream_context_len,
         )
