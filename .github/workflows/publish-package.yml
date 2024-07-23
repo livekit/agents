@@ -49,7 +49,7 @@ jobs:
         with:
           add: '[".changeset"]'
           default_author: github_actions
-          message: enter pre-release mode
+          message: ${{ github.ref == '/refs/heads/main' && 'Exit' || 'Enter dev' }} pre release mode
 
       - name: Create Release Pull Request
         id: changesets
