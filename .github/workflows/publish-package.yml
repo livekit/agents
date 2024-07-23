@@ -101,7 +101,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: python-package-distributions
-          path: ${{ github.workspace }}/dist/
+          path: "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}/dist/"
 
   publish:
     needs:
