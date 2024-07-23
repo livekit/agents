@@ -43,6 +43,10 @@ UPDATE_LOAD_INTERVAL = 10.0
 def _default_initialize_process_fnc(proc: JobProcess) -> Any:
     return
 
+def _default_shutdown_fnc(proc: JobContext) -> Any:
+    return
+
+
 
 async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
@@ -121,9 +125,9 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._close_future: asyncio.Future[None] | None = None
         self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
         self._proc_pool = ipc.proc_pool.ProcPool(
-            initialize_process_fnc=opts.initialize_process_fnc,
-            job_entrypoint_fnc=opts.job_entrypoint_fnc,
-            job_shutdown_fnc=opts.job_shutdown_fnc,
+            initialize_process_fnc=opts.prewarm_fnc,
+            job_entrypoint_fnc=opts.entrypoint_fnc,
+            job_shutdown_fnc=_default_shutdown_fnc,
             num_idle_processes=opts.num_idle_processes,
             loop=self._loop,
             initialize_timeout=opts.initialize_process_timeout,
@@ -495,7 +499,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         @utils.log_exceptions(logger=logger)
         async def _job_request_task():
             try:
-                await self._opts.job_request_fnc(job_req)
+                await self._opts.request_fnc(job_req)
             except Exception:
                 logger.exception(
                     "job_request_fnc failed", extra={"job_request": job_req}

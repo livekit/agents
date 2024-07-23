@@ -7,12 +7,8 @@ from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
 
 
-def initialize(proc: JobProcess):
-    proc.userdata["silero"] = silero.VAD.load()
-
 
 async def entrypoint(ctx: JobContext):
-    silero_vad: silero.VAD = ctx.proc.userdata["silero"]
     initial_ctx = ChatContext().append(
         role="system",
         text=(
@@ -24,7 +20,7 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     assistant = VoiceAssistant(
-        vad=silero_vad,
+        vad=silero.VAD(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=openai.TTS(),
@@ -36,12 +32,8 @@ async def entrypoint(ctx: JobContext):
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
 
-async def job_request_fnc(req: JobRequest) -> None:
-    logging.info("received request %s", req)
-    await req.accept()
-
 
 if __name__ == "__main__":
     cli.run_app(
-        WorkerOptions(job_request_fnc=job_request_fnc, job_entrypoint_fnc=entrypoint)
+        WorkerOptions(entrypoint_fnc=entrypoint)
     )
