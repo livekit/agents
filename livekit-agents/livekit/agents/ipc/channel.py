@@ -140,14 +140,14 @@ class AsyncProcChannel(ProcChannel):
     def _read_thread(self) -> None:
         while True:
             try:
-                msg = self.recv()
+                if self._conn.poll(1.0):
+                    msg = self.recv()
             except ChannelClosed:
                 break
 
             try:
                 self._loop.call_soon_threadsafe(self._read_q.put_nowait, msg)
             except RuntimeError:
-                print("RuntimeError")
                 break
 
         with contextlib.suppress(RuntimeError):

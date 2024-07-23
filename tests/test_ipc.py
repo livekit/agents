@@ -79,7 +79,7 @@ async def test_async_channel():
     )
 
     await pch.aclose()
-    proc.kill()
+    proc.terminate()
     proc.join()
 
 
