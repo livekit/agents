@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       packages: ${{ steps.changesets.outputs.publishedPackages }}
+      dev_packages: ${{ steps.dev_release.outputs.publishedPackages}}
 
     steps:
       - uses: actions/checkout@v4
@@ -49,10 +50,20 @@ jobs:
 
       - name: Create Release Pull Request
         id: changesets
+        if: ${{ github.ref == 'refs/heads/main' }}
         uses: changesets/action@v1
         with:
-          version: ${{ github.ref == 'refs/heads/main' && 'pnpm ci:version' || 'pnpm ci:version --snapshot dev' }}
-          publish: ${{ github.ref == 'refs/heads/main' && 'pnpm ci:publish' || 'pnpm ci:publish --tag dev' }}
+          version: pnpm ci:version
+          publish: pnpm ci:publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create dev snapshot release
+        id: dev_release
+        if: ${{ github.ref == 'refs/heads/dev' }}
+        run: |
+          pnpm ci:version --snaphot dev
+          node ./.changeset/snapshot_publish.js
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -61,7 +72,7 @@ jobs:
       - bump
     strategy:
       matrix:
-        package: ${{ fromJson(needs.bump.outputs.packages) }}
+        package: ${{ fromJson(needs.bump.outputs.packages || needs.bump.outputs.dev_packages) }}
     defaults:
       run:
         working-directory: ${{ matrix.package.name }}
