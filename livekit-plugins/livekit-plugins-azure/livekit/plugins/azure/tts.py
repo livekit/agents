@@ -13,17 +13,13 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 from livekit import rtc
 from livekit.agents import tts, utils
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
-
-from .log import logger
 
 AZURE_SAMPLE_RATE: int = 16000
 AZURE_BITS_PER_SAMPLE: int = 16

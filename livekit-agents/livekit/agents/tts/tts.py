@@ -4,8 +4,10 @@ import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import AsyncIterator, Union
+
 from livekit import rtc
-from ..utils import misc, aio
+
+from ..utils import aio, misc
 
 
 @dataclass

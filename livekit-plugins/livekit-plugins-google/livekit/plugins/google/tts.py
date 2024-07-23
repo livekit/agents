@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Union
 
 from livekit import rtc
 from livekit.agents import tts, utils

@@ -1,7 +1,6 @@
-import logging
 
 import pytest
-from livekit.agents import utils, log
+from livekit.agents import utils
 
 
 @pytest.fixture

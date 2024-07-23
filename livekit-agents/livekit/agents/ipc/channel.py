@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-import threading
-import queue
-import io
-import struct
 import contextlib
-from typing import ClassVar, Protocol, Type, runtime_checkable, Optional
+import io
+import queue
+import struct
+import threading
+from typing import ClassVar, Optional, Protocol, runtime_checkable
 
 
 class ProcessConn(Protocol):

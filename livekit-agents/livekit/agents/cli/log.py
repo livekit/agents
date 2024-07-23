@@ -8,6 +8,7 @@ from collections import OrderedDict
 from datetime import date, datetime, time, timezone
 from inspect import istraceback
 from typing import Any, Dict, Tuple
+
 from ..log import logger
 
 # skip default LogRecord attributes

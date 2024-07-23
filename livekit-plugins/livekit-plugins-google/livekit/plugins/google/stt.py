@@ -18,9 +18,9 @@ import asyncio
 import dataclasses
 import os
 from dataclasses import dataclass
-from typing import AsyncIterable, List, Optional, Union
+from typing import AsyncIterable, List, Union
 
-from livekit import agents, rtc
+from livekit import agents
 from livekit.agents import stt, utils
 
 from google.cloud.speech_v2 import SpeechAsyncClient
@@ -234,7 +234,7 @@ class SpeechStream(stt.SpeechStream):
 
                     except Exception:
                         logger.exception(
-                            f"an error occurred while streaming input to google STT"
+                            "an error occurred while streaming input to google STT"
                         )
 
                 # try to connect

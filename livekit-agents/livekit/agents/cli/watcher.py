@@ -13,7 +13,7 @@ import watchfiles
 
 from .. import utils
 from ..ipc import channel
-from ..log import logger, DEV_LEVEL
+from ..log import DEV_LEVEL, logger
 from ..plugin import Plugin
 from ..worker import Worker
 from . import proto

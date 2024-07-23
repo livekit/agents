@@ -9,7 +9,7 @@ import time
 
 import pytest
 from livekit import agents, rtc
-from livekit.plugins import azure, deepgram, google, openai, silero
+from livekit.plugins import deepgram, google, openai, silero
 
 from .utils import wer
 

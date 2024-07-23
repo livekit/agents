@@ -16,12 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import dataclasses
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Literal
 
 import aiohttp
 from livekit import rtc

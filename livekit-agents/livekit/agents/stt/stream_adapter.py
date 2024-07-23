@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+
 from .. import utils
 from ..log import logger
 from ..vad import VAD, VADEventType

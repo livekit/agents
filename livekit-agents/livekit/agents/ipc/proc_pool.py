@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import multiprocessing as mp
 import sys
 from typing import Any, Callable, Coroutine, Literal

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import contextlib
+import logging
 import multiprocessing as mp
 import sys
 import threading

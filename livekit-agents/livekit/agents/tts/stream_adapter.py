@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+
 from .. import tokenize, utils
 from ..log import logger
 from .tts import (
     TTS,
-    TTSCapabilities,
     ChunkedStream,
     SynthesizeStream,
+    TTSCapabilities,
 )
 
 

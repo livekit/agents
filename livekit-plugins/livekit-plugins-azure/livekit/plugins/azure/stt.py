@@ -15,9 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Optional
 
-from livekit import rtc
 from livekit.agents import stt, utils
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore

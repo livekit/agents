@@ -14,12 +14,9 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import os
-from livekit import rtc
 from dataclasses import dataclass
-from typing import AsyncContextManager, Optional
+from typing import AsyncContextManager
 
 from livekit.agents import tts, utils
 

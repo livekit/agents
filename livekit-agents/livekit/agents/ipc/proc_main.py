@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-import copy
 import contextlib
+import copy
+import logging
 import multiprocessing as mp
 from dataclasses import dataclass
 
 from livekit import rtc
 
 from .. import utils
-from ..job import JobContext, JobProcess, RunningJobInfo
+from ..job import JobContext, JobProcess
 from ..log import logger
 from . import channel, proto
 

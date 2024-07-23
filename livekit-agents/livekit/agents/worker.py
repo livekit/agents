@@ -30,10 +30,10 @@ from livekit import api
 from livekit.protocol import agent, models
 
 from . import http_server, ipc, utils
-from .job import JobContext, JobProcess, JobRequest, RunningJobInfo, JobAcceptArguments
-from .log import logger, DEV_LEVEL
-from .version import __version__
 from .exceptions import AssignmentTimeoutError
+from .job import JobAcceptArguments, JobContext, JobProcess, JobRequest, RunningJobInfo
+from .log import DEV_LEVEL, logger
+from .version import __version__
 
 MAX_RECONNECT_ATTEMPTS = 3.0
 ASSIGNMENT_TIMEOUT = 7.5
@@ -498,12 +498,12 @@ class Worker(utils.EventEmitter[EventTypes]):
                 await self._opts.job_request_fnc(job_req)
             except Exception:
                 logger.exception(
-                    f"job_request_fnc failed", extra={"job_request": job_req}
+                    "job_request_fnc failed", extra={"job_request": job_req}
                 )
 
             if not answered:
                 logger.warning(
-                    f"no answer was given inside the job_request_fnc, automatically rejecting the job",
+                    "no answer was given inside the job_request_fnc, automatically rejecting the job",
                     extra={"job_request": job_req},
                 )
                 await _on_reject()
@@ -519,5 +519,5 @@ class Worker(utils.EventEmitter[EventTypes]):
                 fut.set_result(assignment)
         else:
             logger.warning(
-                f"received assignment for an unknown job", extra={"job": assignment.job}
+                "received assignment for an unknown job", extra={"job": assignment.job}
             )

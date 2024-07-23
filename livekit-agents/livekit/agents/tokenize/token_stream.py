@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import string
-from typing import Callable, AsyncIterator
-from .tokenizer import TokenData, WordStream, SentenceStream
+from typing import Callable
+
 from ..utils import aio
+from .tokenizer import SentenceStream, TokenData, WordStream
 
 
 class BufferedTokenStream:

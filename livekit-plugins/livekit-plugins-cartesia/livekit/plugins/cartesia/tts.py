@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+
 import aiohttp
-from livekit import rtc
 from livekit.agents import tts, utils
 
 from .log import logger

@@ -17,9 +17,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import AsyncIterator, Optional
 
-import aiohttp
 import numpy as np
 from livekit import agents, rtc
 from livekit.agents import utils

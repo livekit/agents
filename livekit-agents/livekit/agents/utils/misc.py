@@ -1,7 +1,7 @@
 import time
 import uuid
-
 from typing import List, Union
+
 from livekit import rtc
 
 AudioBuffer = Union[List[rtc.AudioFrame], rtc.AudioFrame]
