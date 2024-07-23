@@ -69,7 +69,7 @@ class SupervisedProc:
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._loop = loop
-        log_q = mp.Queue[logging.LogRecord]()
+        log_q = mp.Queue()
         log_q.cancel_join_thread()
         mp_pch, mp_cch = mp_ctx.Pipe(duplex=True)
 
