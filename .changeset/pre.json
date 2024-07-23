@@ -14,5 +14,7 @@
     "livekit-plugins/livekit-plugins-rag": "0.1.0",
     "livekit-plugins/livekit-plugins-silero": "0.5.1"
   },
-  "changesets": []
+  "changesets": [
+    "hip-knives-fly"
+  ]
 }
