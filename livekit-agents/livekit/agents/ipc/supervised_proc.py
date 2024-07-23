@@ -236,7 +236,10 @@ class SupervisedProc:
 
     def _send_kill_signal(self) -> None:
         """forcefully kill the job process"""
-        if not self._proc.is_alive():
+        try:
+            if not self._proc.is_alive():
+                return
+        except ValueError:
             return
 
         logger.debug("killing job process", extra=self.logging_extra())

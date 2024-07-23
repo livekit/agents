@@ -157,9 +157,10 @@ async def _async_main(
 
                 if isinstance(msg, proto.ShutdownRequest):
                     if job_task is not None:
-                        job_task.shutdown_fut.set_result(
-                            _ShutdownInfo(reason=msg.reason, user_initiated=False)
-                        )
+                        with contextlib.suppress(asyncio.InvalidStateError):
+                            job_task.shutdown_fut.set_result(
+                                _ShutdownInfo(reason=msg.reason, user_initiated=False)
+                            )
                     else:
                         exit_proc_fut.set()  # there is no running job, we can exit immediately
 
