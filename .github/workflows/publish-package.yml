@@ -13,28 +13,13 @@ on:
   push:
     branches:
       - main
-  workflow_call:
-    inputs:
-      package_name:
-        required: true
-        type: string
-      package_module:
-        required: true
-        type: string
-    secrets:
-      PYPI_API_TOKEN:
-        required: true
-      DOCS_DEPLOY_AWS_ACCESS_KEY:
-        required: true
-      DOCS_DEPLOY_AWS_API_SECRET:
-        required: true
+      - dev
 
 jobs:
   bump:
     runs-on: ubuntu-latest
     outputs:
       packages: ${{ steps.changesets.outputs.publishedPackages }}
-      dev_packages: ${{ steps.dev_release.outputs.publishedPackages}}
 
     steps:
       - uses: actions/checkout@v4
@@ -50,20 +35,10 @@ jobs:
 
       - name: Create Release Pull Request
         id: changesets
-        if: ${{ github.ref == 'refs/heads/main' }}
         uses: changesets/action@v1
         with:
           version: pnpm ci:version
           publish: pnpm ci:publish
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create dev snapshot release
-        id: dev_release
-        if: ${{ github.ref == 'refs/heads/dev' }}
-        run: |
-          pnpm ci:version --snaphot dev
-          node ./.changeset/snapshot_publish.js
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -72,7 +47,7 @@ jobs:
       - bump
     strategy:
       matrix:
-        package: ${{ fromJson(needs.bump.outputs.packages || needs.bump.outputs.dev_packages) }}
+        package: ${{ fromJson(needs.bump.outputs.packages) }}
     defaults:
       run:
         working-directory: ${{ matrix.package.name }}
