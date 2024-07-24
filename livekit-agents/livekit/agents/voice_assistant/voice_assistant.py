@@ -292,7 +292,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         self._human_input = HumanInput(
-            room=self._room, vad=self._vad, stt=self._stt, participant=participant
+            room=self._room,
+            vad=self._vad,
+            stt=self._stt,
+            participant=participant,
+            transcription=self._opts.transcription.human_transcription,
         )
 
         def _on_start_of_speech(ev: vad.VADEvent) -> None:

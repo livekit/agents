@@ -148,7 +148,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
             await utils.aio.gracefully_cancel(*tasks)
 
             if stt_forwarder is not None:
-                (await stt_forwarder.aclose(),)
+                await stt_forwarder.aclose()
 
             await stt_stream.aclose()
             await vad_stream.aclose()
