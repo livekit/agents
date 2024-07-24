@@ -482,6 +482,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     async def _play_speech(self, speech_info: _SpeechInfo) -> None:
         logger.debug("VoiceAssistant._play_speech started")
+
+        assert self._agent_playing_speech is not None
+
         MIN_TIME_PLAYED_FOR_COMMIT = 1.5
 
         assert (
