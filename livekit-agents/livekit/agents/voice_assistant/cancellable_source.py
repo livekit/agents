@@ -154,6 +154,6 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
                 self.emit("playout_stopped", cancelled)
 
             handle._done_fut.set_result(None)
-            await handle._tr_fwd.aclose()
+            if handle._tr_fwd is not None:
+                await handle._tr_fwd.aclose()
             logger.debug("CancellableAudioSource._playout_task: ended")
-

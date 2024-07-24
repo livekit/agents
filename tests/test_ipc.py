@@ -1,11 +1,13 @@
+from __future__ import annotations
+
 import asyncio
 import ctypes
 import io
-import logging
 import multiprocessing as mp
 import time
 import uuid
 from dataclasses import dataclass
+from multiprocessing.context import ForkServerContext, SpawnContext
 from typing import ClassVar
 
 import psutil
@@ -62,10 +64,12 @@ def _ping_pong_main(mp_cch):
 
 
 async def test_async_channel():
+    mp_ctx = mp.get_context("spawn")
+
     loop = asyncio.get_event_loop()
-    mp_pch, mp_cch = mp.Pipe(duplex=True)
+    mp_pch, mp_cch = mp_ctx.Pipe(duplex=True)
     pch = ipc.channel.AsyncProcChannel(conn=mp_pch, loop=loop, messages=IPC_MESSAGES)
-    proc = mp.Process(target=_ping_pong_main, args=(mp_cch,))
+    proc = mp_ctx.Process(target=_ping_pong_main, args=(mp_cch,))
     proc.start()
 
     await pch.asend(EmptyMessage())
@@ -105,15 +109,15 @@ class _StartArgs:
     update_ev: mp.Condition
 
 
-def _new_start_args() -> _StartArgs:
+def _new_start_args(mp_ctx: SpawnContext | ForkServerContext) -> _StartArgs:
     return _StartArgs(
-        initialize_counter=mp.Value(ctypes.c_uint),
-        entrypoint_counter=mp.Value(ctypes.c_uint),
-        shutdown_counter=mp.Value(ctypes.c_uint),
+        initialize_counter=mp_ctx.Value(ctypes.c_uint),
+        entrypoint_counter=mp_ctx.Value(ctypes.c_uint),
+        shutdown_counter=mp_ctx.Value(ctypes.c_uint),
         initialize_simulate_work_time=0.0,
         entrypoint_simulate_work_time=0.0,
         shutdown_simulate_work_time=0.0,
-        update_ev=mp.Condition(),
+        update_ev=mp_ctx.Condition(),
     )
 
 
@@ -164,8 +168,7 @@ async def _wait_for_elements(q: asyncio.Queue, num_elements: int) -> None:
 
 
 async def test_proc_pool():
-    logging.basicConfig(level=logging.DEBUG)
-
+    mp_ctx = mp.get_context("spawn")
     loop = asyncio.get_running_loop()
     num_idle_processes = 3
     pool = ipc.proc_pool.ProcPool(
@@ -175,10 +178,11 @@ async def test_proc_pool():
         num_idle_processes=num_idle_processes,
         initialize_timeout=20.0,
         close_timeout=20.0,
+        mp_ctx=mp_ctx,
         loop=loop,
     )
 
-    start_args = _new_start_args()
+    start_args = _new_start_args(mp_ctx)
     created_q = asyncio.Queue()
     start_q = asyncio.Queue()
     ready_q = asyncio.Queue()
@@ -240,6 +244,7 @@ async def test_proc_pool():
 
 
 async def test_slow_initialization():
+    mp_ctx = mp.get_context("spawn")
     loop = asyncio.get_running_loop()
     num_idle_processes = 2
     pool = ipc.proc_pool.ProcPool(
@@ -249,10 +254,11 @@ async def test_slow_initialization():
         num_idle_processes=num_idle_processes,
         initialize_timeout=1.0,
         close_timeout=20.0,
+        mp_ctx=mp_ctx,
         loop=loop,
     )
 
-    start_args = _new_start_args()
+    start_args = _new_start_args(mp_ctx)
     start_args.initialize_simulate_work_time = 2.0
     start_q = asyncio.Queue()
     close_q = asyncio.Queue()
@@ -288,10 +294,13 @@ async def test_slow_initialization():
 
 
 def _create_proc(
-    *, close_timeout: float, start_args: _StartArgs, initialize_timeout: float = 20.0
-) -> ipc.supervised_proc.SupervisedProc:
+    *,
+    close_timeout: float,
+    mp_ctx: SpawnContext | ForkServerContext,
+    initialize_timeout: float = 20.0,
+) -> (ipc.supervised_proc.SupervisedProc, _StartArgs):
+    start_args = _new_start_args(mp_ctx)
     loop = asyncio.get_running_loop()
-    mp_ctx = mp.get_context("spawn")
     proc = ipc.supervised_proc.SupervisedProc(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
@@ -302,12 +311,12 @@ def _create_proc(
         loop=loop,
     )
     proc.start_arguments = start_args
-    return proc
+    return proc, start_args
 
 
 async def test_shutdown_no_job():
-    start_args = _new_start_args()
-    proc = _create_proc(close_timeout=2.0, start_args=start_args)
+    mp_ctx = mp.get_context("spawn")
+    proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
     proc.start()
     await proc.initialize()
     await proc.aclose()
@@ -320,12 +329,14 @@ async def test_shutdown_no_job():
 
 
 async def test_job_slow_shutdown():
-    start_args = _new_start_args()
-    start_args.shutdown_simulate_work_time = 2.0
-    fake_job = _generate_fake_job()
-    proc = _create_proc(close_timeout=1.0, start_args=start_args)
+    mp_ctx = mp.get_context("spawn")
+    proc, start_args = _create_proc(close_timeout=1.0, mp_ctx=mp_ctx)
+    start_args.shutdown_simulate_work_time = 5.0
+
     proc.start()
     await proc.initialize()
+
+    fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
     await proc.aclose()
 
@@ -335,12 +346,13 @@ async def test_job_slow_shutdown():
 
 
 async def test_job_graceful_shutdown():
-    start_args = _new_start_args()
+    mp_ctx = mp.get_context("spawn")
+    proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
     start_args.shutdown_simulate_work_time = 1.0
-    fake_job = _generate_fake_job()
-    proc = _create_proc(close_timeout=2.0, start_args=start_args)
     proc.start()
     await proc.initialize()
+
+    fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
     await proc.aclose()
 

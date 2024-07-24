@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import multiprocessing as mp
+from multiprocessing.context import ForkServerContext, SpawnContext
 from typing import Any, Callable, Coroutine, Literal
 
 from .. import utils
@@ -25,15 +25,11 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
+        mp_ctx: ForkServerContext | SpawnContext,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
-
-        # if sys.platform.startswith("linux"):
-        #    self._mp_ctx = mp.get_context("forkserver")
-        # else:
-        self._mp_ctx = mp.get_context("spawn")
-
+        self._mp_ctx = mp_ctx
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._job_shutdown_fnc = job_shutdown_fnc

@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import multiprocessing as mp
 import os
 from dataclasses import dataclass, field
 from functools import reduce
@@ -124,12 +125,17 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
         self._close_future: asyncio.Future[None] | None = None
         self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
+
+        # using spawn context for all platforms. We may have further optimizations for
+        # Linux with forkserver, but for now, this is the safest option
+        mp_ctx = mp.get_context("spawn")
         self._proc_pool = ipc.proc_pool.ProcPool(
             initialize_process_fnc=opts.prewarm_fnc,
             job_entrypoint_fnc=opts.entrypoint_fnc,
             job_shutdown_fnc=_default_shutdown_fnc,
             num_idle_processes=opts.num_idle_processes,
             loop=self._loop,
+            mp_ctx=mp_ctx,
             initialize_timeout=opts.initialize_process_timeout,
             close_timeout=opts.shutdown_process_timeout,
         )
