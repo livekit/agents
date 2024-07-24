@@ -12,7 +12,7 @@ from ..utils import AudioBuffer, aio
 
 
 @unique
-class SpeechEventType(Enum):
+class SpeechEventType(str, Enum):
     START_OF_SPEECH = "start_of_speech"
     """indicate the start of speech
     if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT"""

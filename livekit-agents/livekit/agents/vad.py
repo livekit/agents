@@ -10,7 +10,7 @@ from .utils import aio
 
 
 @unique
-class VADEventType(Enum):
+class VADEventType(str, Enum):
     START_OF_SPEECH = "start_of_speech"
     INFERENCE_DONE = "inference_done"
     END_OF_SPEECH = "end_of_speech"
