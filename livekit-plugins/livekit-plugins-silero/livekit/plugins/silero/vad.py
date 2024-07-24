@@ -83,7 +83,7 @@ class VAD(agents.vad.VAD):
         session: onnxruntime.InferenceSession,
         opts: _VADOptions,
     ) -> None:
-        super().__init__()
+        super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.032))
         self._onnx_session = session
         self._opts = opts
 
