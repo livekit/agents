@@ -23,8 +23,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
         env:
           GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
+
       - uses: pnpm/action-setup@v4
       - name: Use Node.js 20
         uses: actions/setup-node@v4
@@ -78,6 +82,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
         env:
           GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
 
@@ -149,7 +156,10 @@ jobs:
       module: $(tr '-' '/' <<< $package)
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
 
       - name: Install pdoc
         run: python -m pip install --upgrade pdoc
