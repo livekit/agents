@@ -120,7 +120,9 @@ def _start_job(
         try:
             shutdown_tasks = []
             for callback in job_ctx._shutdown_callbacks:
-                shutdown_tasks.append(asyncio.create_task(callback(), name="job_shutdown_callback"))
+                shutdown_tasks.append(
+                    asyncio.create_task(callback(), name="job_shutdown_callback")
+                )
 
             await asyncio.gather(*shutdown_tasks)
         except Exception:
