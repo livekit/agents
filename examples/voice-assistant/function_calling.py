@@ -7,6 +7,9 @@ from livekit.agents import JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
 
+logger = logging.getLogger("function-calling-demo")
+logger.setLevel(logging.INFO)
+
 
 class Room(enum.Enum):
     # ai_callable can understand enum types as a set of choices
@@ -47,7 +50,7 @@ class AssistantFnc(llm.FunctionContext):
         room: Annotated[Room, llm.TypeInfo(description="The specific room")],
         status: bool,
     ):
-        logging.info("toggle_light - room: %s status: %s", room, status)
+        logger.info("toggle_light - room: %s status: %s", room, status)
         self._light_status[room] = status
         return f"Turned the lights in the {room} {'on' if status else 'off'}"
 
@@ -86,7 +89,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     assistant = VoiceAssistant(
-        vad=silero.VAD(),
+        vad=silero.VAD.load(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=openai.TTS(),

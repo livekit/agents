@@ -346,7 +346,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._transcribed_text += ev.alternatives[0].text
 
             if self._opts.preemptive_synthesis:
-                self._synthesize_answer(user_transcript=self._transcribed_text)
+                self._synthesize_answer(
+                    user_transcript=self._transcribed_text, force_play=False
+                )
 
         self._human_input.on("start_of_speech", _on_start_of_speech)
         self._human_input.on("vad_inference_done", _on_vad_updated)
@@ -403,7 +405,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._playout_ch.send_nowait(self._agent_answer_speech)
             self._agent_answer_speech = None
         elif not self._opts.preemptive_synthesis and self._transcribed_text:
-            self._synthesize_answer(user_transcript=self._transcribed_text)
+            self._synthesize_answer(
+                user_transcript=self._transcribed_text, force_play=True
+            )
 
     def _interrupt_if_needed(self) -> None:
         """
@@ -427,7 +431,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._agent_playing_speech.synthesis_handle.interrupt()
 
-    def _synthesize_answer(self, *, user_transcript: str):
+    def _synthesize_answer(self, *, user_transcript: str, force_play: bool) -> None:
         """
         Synthesize the answer to the user question and make sure
         only one answer is synthesized at a time
@@ -469,6 +473,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 synthesis_handle=synthesis,
             )
             self._deferred_validation.on_new_synthesis(user_transcript)
+
+            if force_play:
+                self._playout_ch.send_nowait(self._agent_answer_speech)
 
         if self._agent_answer_speech is not None:
             self._agent_answer_speech.synthesis_handle.interrupt()
