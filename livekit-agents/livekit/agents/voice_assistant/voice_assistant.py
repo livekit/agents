@@ -497,7 +497,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         play_handle = synthesis_handle.play()
         join_fut = play_handle.join()
-        self._playing_synthesis = synthesis_handle
 
         def _commit_user_message_if_needed() -> None:
             nonlocal user_speech_commited
@@ -589,7 +588,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 answer_synthesis = self._agent_synthesize(
                     transcript=_llm_stream_to_str_iterable(answer_stream)
                 )
-                self._playing_synthesis = answer_synthesis
+                # make sure users can interrupt the fnc calls answer
+                self._agent_playing_speech.synthesis_handle = answer_synthesis
                 play_handle = answer_synthesis.play()
                 await play_handle.join()
 
