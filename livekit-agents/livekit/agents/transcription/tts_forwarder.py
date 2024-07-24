@@ -13,6 +13,9 @@ from .. import tokenize, utils
 from ..log import logger
 from . import _utils
 
+# 3.83 is the "baseline", the number of hyphens per second TTS returns in avg.
+STANDARD_SPEECH_RATE = 3.83
+
 
 @dataclass
 class _TTSOptions:
@@ -35,7 +38,7 @@ class _SegmentData:
     pushed_duration: float = 0.0
     real_speed: float | None = None
     processed_sentences: int = 0
-    processed_hyphenes: int = 0
+    processed_hyphens: int = 0
     validated: bool = False
     forward_start_time: float | None = 0.0
 
@@ -62,7 +65,7 @@ class TTSSegmentsForwarder:
         participant: rtc.Participant | str,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
         language: str = "",
-        speed: float = 3.83,
+        speed: float = 1.0,
         new_sentence_delay: float = 0.4,
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
         sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
@@ -82,7 +85,7 @@ class TTSSegmentsForwarder:
                 to start the transcription.
             word_tokenizer: word tokenizer used to split the text into words
             sentence_tokenizer: sentence tokenizer used to split the text into sentences
-            hyphenate_word: function that returns a list of hyphenes for a given word
+            hyphenate_word: function that returns a list of hyphens for a given word
 
         """
         identity = participant if isinstance(participant, str) else participant.identity
@@ -92,6 +95,8 @@ class TTSSegmentsForwarder:
         elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
             track = track.sid
 
+        # 3.83 is the "baseline"
+        speed = speed * STANDARD_SPEECH_RATE
         self._opts = _TTSOptions(
             room=room,
             participant_identity=identity,
@@ -270,7 +275,7 @@ class TTSSegmentsForwarder:
                 # transcription closed, early
                 return
 
-            word_hyphenes = len(self._opts.hyphenate_word(word))
+            word_hyphens = len(self._opts.hyphenate_word(word))
             processed_words.append(word)
 
             # elapsed time since the start of the seg
@@ -286,12 +291,12 @@ class TTSSegmentsForwarder:
                 )
                 hyph_pauses = estimated_pauses_s * speed
 
-                target_hyphenes = round(speed * elapsed_time)
-                dt = target_hyphenes - seg.processed_hyphenes - hyph_pauses
-                to_wait_hyphenes = max(0, word_hyphenes - dt)
-                delay = to_wait_hyphenes / speed
+                target_hyphens = round(speed * elapsed_time)
+                dt = target_hyphens - seg.processed_hyphens - hyph_pauses
+                to_wait_hyphens = max(0, word_hyphens - dt)
+                delay = to_wait_hyphens / speed
             else:
-                delay = word_hyphenes / speed
+                delay = word_hyphens / speed
 
             first_delay = min(delay / 2, 2 / speed)
             await self._sleep_if_not_closed(first_delay)
@@ -306,7 +311,7 @@ class TTSSegmentsForwarder:
                 )
             )
             await self._sleep_if_not_closed(delay - first_delay)
-            seg.processed_hyphenes += word_hyphenes
+            seg.processed_hyphens += word_hyphens
 
         rtc_seg_q.put_nowait(
             rtc.TranscriptionSegment(
@@ -327,13 +332,13 @@ class TTSSegmentsForwarder:
             await asyncio.wait([self._close_future], timeout=delay)
 
     def _calc_hyphens(self, text: str) -> list[str]:
-        hyphenes: list[str] = []
+        hyphens: list[str] = []
         words = self._opts.word_tokenizer.tokenize(text=text)
         for word in words:
             new = self._opts.hyphenate_word(word)
-            hyphenes.extend(new)
+            hyphens.extend(new)
 
-        return hyphenes
+        return hyphens
 
     def _create_segment(self) -> _SegmentData:
         data = _SegmentData(

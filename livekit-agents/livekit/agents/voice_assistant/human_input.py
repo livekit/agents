@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from typing import Literal
 
 from livekit import rtc
@@ -28,13 +27,15 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         vad: voice_activity_detection.VAD,
         stt: speech_to_text.STT,
         participant: rtc.RemoteParticipant,
+        transcription: bool,
     ) -> None:
         super().__init__()
-        self._room, self._vad, self._stt, self._participant = (
+        self._room, self._vad, self._stt, self._participant, self._transcription = (
             room,
             vad,
             stt,
             participant,
+            transcription,
         )
         self._subscribed_track: rtc.RemoteAudioTrack | None = None
         self._recognize_atask: asyncio.Task[None] | None = None
@@ -57,10 +58,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         self._speaking = False
 
         if self._recognize_atask is not None:
-            self._recognize_atask.cancel()
-
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._recognize_atask
+            await utils.aio.gracefully_cancel(self._recognize_atask)
 
     @property
     def speaking(self) -> bool:
@@ -103,9 +101,13 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
 
-        stt_forwarder = transcription.STTSegmentsForwarder(
-            room=self._room, participant=self._participant, track=self._subscribed_track
-        )
+        stt_forwarder = None
+        if self._transcription:
+            stt_forwarder = transcription.STTSegmentsForwarder(
+                room=self._room,
+                participant=self._participant,
+                track=self._subscribed_track,
+            )
 
         async def _audio_stream_co() -> None:
             # forward the audio stream to the VAD and STT streams
@@ -127,17 +129,26 @@ class HumanInput(utils.EventEmitter[EventTypes]):
 
         async def _stt_stream_co() -> None:
             async for ev in stt_stream:
-                stt_forwarder.update(ev)
+                if stt_forwarder is not None:
+                    stt_forwarder.update(ev)
+
                 if ev.type == speech_to_text.SpeechEventType.FINAL_TRANSCRIPT:
                     self.emit("final_transcript", ev)
                 elif ev.type == speech_to_text.SpeechEventType.INTERIM_TRANSCRIPT:
                     self.emit("interim_transcript", ev)
 
+        tasks = [
+            asyncio.create_task(_audio_stream_co()),
+            asyncio.create_task(_vad_stream_co()),
+            asyncio.create_task(_stt_stream_co()),
+        ]
         try:
-            await asyncio.gather(_audio_stream_co(), _vad_stream_co(), _stt_stream_co())
+            await asyncio.gather(*tasks)
         finally:
-            await asyncio.gather(
-                stt_forwarder.aclose(),
-                stt_stream.aclose(),
-                vad_stream.aclose(),
-            )
+            await utils.aio.gracefully_cancel(*tasks)
+
+            if stt_forwarder is not None:
+                await stt_forwarder.aclose()
+
+            await stt_stream.aclose()
+            await vad_stream.aclose()

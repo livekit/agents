@@ -327,13 +327,14 @@ async def test_shutdown_no_job():
 async def test_job_slow_shutdown():
     mp_ctx = mp.get_context("spawn")
     proc, start_args = _create_proc(close_timeout=1.0, mp_ctx=mp_ctx)
-    start_args.shutdown_simulate_work_time = 5.0
+    start_args.shutdown_simulate_work_time = 10.0
 
     proc.start()
     await proc.initialize()
 
     fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
+    await asyncio.sleep(1.0)
     await proc.aclose()
 
     # process is killed when there is a job with slow timeout
