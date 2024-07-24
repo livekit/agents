@@ -50,7 +50,8 @@ async def _default_request_fnc(ctx: JobRequest) -> None:
 
 
 def _default_cpu_load_fnc() -> float:
-    return psutil.cpu_percent() / 100
+    percent = psutil.cpu_percent(1.0)
+    return percent / 100
 
 
 @dataclass
@@ -313,9 +314,11 @@ class Worker(utils.EventEmitter[EventTypes]):
                     break
 
                 if retry_count >= self._opts.max_retry:
-                    raise Exception(
-                        f"failed to connect to livekit after {retry_count} attempts: {e}"
+                    logger.error(
+                        f"failed to connect to livekit after {retry_count} attempts",
+                        exc_info=e,
                     )
+                    break
 
                 retry_delay = min(retry_count * 2, 10)
                 retry_count += 1
@@ -332,11 +335,16 @@ class Worker(utils.EventEmitter[EventTypes]):
             """periodically check load and update worker status"""
             interval = utils.aio.interval(UPDATE_LOAD_INTERVAL)
             current_status = agent.WorkerStatus.WS_AVAILABLE
+            id = utils.shortuuid()
             while True:
                 await interval.tick()
+                print(id)
 
                 old_status = current_status
-                current_load = self._opts.load_fnc()
+                current_load = await asyncio.get_event_loop().run_in_executor(
+                    None, self._opts.load_fnc
+                )
+
                 is_full = current_load >= self._opts.load_threshold
                 currently_available = not is_full and not self._draining
 
@@ -408,7 +416,15 @@ class Worker(utils.EventEmitter[EventTypes]):
                 elif which == "assignment":
                     self._handle_assignment(msg.assignment)
 
-        await asyncio.gather(_send_task(), _recv_task(), _load_task())
+        tasks = [
+            asyncio.create_task(_load_task()),
+            asyncio.create_task(_send_task()),
+            asyncio.create_task(_recv_task()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
 
     async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
         for aj in jobs:
@@ -421,8 +437,9 @@ class Worker(utils.EventEmitter[EventTypes]):
             decoded = jwt.decode(
                 original_token, self._opts.api_secret, algorithms=["HS256"]
             )
-            exp = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 3600
-            decoded["exp"] = exp
+            decoded["exp"] = (
+                int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 3600
+            )
             running_info = RunningJobInfo(
                 accept_arguments=aj.accept_arguments,
                 job=aj.job,
@@ -495,6 +512,11 @@ class Worker(utils.EventEmitter[EventTypes]):
             await self._proc_pool.launch_job(running_info)
 
         job_req = JobRequest(job=msg.job, on_reject=_on_reject, on_accept=_on_accept)
+
+        logger.info(
+            "received job request",
+            extra={"job_request": msg.job, "resuming": msg.resuming},
+        )
 
         @utils.log_exceptions(logger=logger)
         async def _job_request_task():
