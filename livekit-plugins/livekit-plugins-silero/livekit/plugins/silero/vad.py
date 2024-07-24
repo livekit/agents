@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass
 
 import numpy as np
+import onnxruntime  # type: ignore
 from livekit import agents, rtc
 from livekit.agents import utils
 
@@ -37,8 +38,9 @@ class _VADOptions:
 
 
 class VAD(agents.vad.VAD):
-    def __init__(
-        self,
+    @classmethod
+    def load(
+        cls,
         *,
         min_speech_duration: float = 0.05,
         min_silence_duration: float = 0.1,
@@ -47,7 +49,7 @@ class VAD(agents.vad.VAD):
         activation_threshold: float = 0.25,
         sample_rate: int = 16000,
         force_cpu: bool = True,
-    ) -> None:
+    ) -> "VAD":
         """
         Initialize the Silero VAD with the given options.
         The options are already set to strong defaults.
@@ -61,12 +63,11 @@ class VAD(agents.vad.VAD):
             sample_rate: sample rate for the inference (only 8KHz and 16KHz are supported)
             force_cpu: force to use CPU for inference
         """
-
         if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
 
-        self._onnx_session = onnx_model.new_inference_session(force_cpu)
-        self._opts = _VADOptions(
+        session = onnx_model.new_inference_session(force_cpu)
+        opts = _VADOptions(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,
             padding_duration=padding_duration,
@@ -74,6 +75,17 @@ class VAD(agents.vad.VAD):
             activation_threshold=activation_threshold,
             sample_rate=sample_rate,
         )
+        return cls(session=session, opts=opts)
+
+    def __init__(
+        self,
+        *,
+        session: onnxruntime.InferenceSession,
+        opts: _VADOptions,
+    ) -> None:
+        super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.032))
+        self._onnx_session = session
+        self._opts = opts
 
     def stream(self) -> "VADStream":
         return VADStream(

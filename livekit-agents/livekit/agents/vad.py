@@ -42,8 +42,8 @@ class VADCapabilities:
 
 
 class VAD(ABC):
-    def __init__(self, *, capatiilities: VADCapabilities) -> None:
-        self._capabilities = capatiilities
+    def __init__(self, *, capabilities: VADCapabilities) -> None:
+        self._capabilities = capabilities
 
     @property
     def capabilities(self) -> VADCapabilities:
