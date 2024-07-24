@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 
 import numpy as np
-import onnxruntime
+import onnxruntime  # type: ignore
 from livekit import agents, rtc
 from livekit.agents import utils
 
