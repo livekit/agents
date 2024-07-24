@@ -93,11 +93,21 @@ class _ImplOptions:
 @dataclass(frozen=True)
 class AssistantTranscriptionOptions:
     user_transcription: bool = True
+    """Whether to forward the user transcription to the client"""
     agent_transcription: bool = True
+    """Whether to forward the agent transcription to the client"""
     agent_transcription_speed: float = 1.0
+    """The speed at which the agent's speech transcription is forwarded to the client.
+    We try to mimic the agent's speech speed by adjusting the transcription speed."""
     sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
+    """The tokenizer used to split the speech into sentences. 
+    This is used to device when to mark a transcript as final for the agent transcription."""
     word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer()
+    """The tokenizer used to split the speech into words.
+    This is used to simulate the "interim results" of the agent transcription."""
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
+    """A function that takes a string (word) as input and returns a list of strings,
+    representing the hyphenated parts of the word."""
 
 
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
@@ -636,7 +646,7 @@ class _DeferredAnswerValidation:
         self, validate_fnc: Callable[[], None], loop: asyncio.AbstractEventLoop
     ) -> None:
         self._validate_fnc = validate_fnc
-        self._ts = utils.aio.TaskSet(loop=loop)
+        self._tasks_set = utils.aio.TaskSet(loop=loop)
 
         self._validating_task: asyncio.Task | None = None
         self._last_final_transcript: str = ""
@@ -687,7 +697,7 @@ class _DeferredAnswerValidation:
         if self._validating_task is not None:
             self._validating_task.cancel()
 
-        await self._ts.aclose()
+        await self._tasks_set.aclose()
 
     @utils.log_exceptions(logger=logger)
     async def _run_task(self, delay: float) -> None:
@@ -701,4 +711,4 @@ class _DeferredAnswerValidation:
         if self._validating_task is not None:
             self._validating_task.cancel()
 
-        self._validating = self._ts.create_task(self._run_task(delay))
+        self._validating = self._tasks_set.create_task(self._run_task(delay))
