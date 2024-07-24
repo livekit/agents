@@ -3,7 +3,7 @@ import enum
 import logging
 from typing import Annotated
 
-from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm
+from livekit.agents import JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
 
@@ -95,6 +95,8 @@ async def entrypoint(ctx: JobContext):
         will_synthesize_assistant_reply=_will_synthesize_assistant_reply,
     )
 
+    await ctx.connect()
+
     # Start the assistant. This will automatically publish a microphone track and listen to the first participant
     # it finds in the current room. If you need to specify a particular participant, use the participant parameter.
     assistant.start(ctx.room)
@@ -103,10 +105,5 @@ async def entrypoint(ctx: JobContext):
     await assistant.say("Hey, how can I help you today?")
 
 
-async def request_fnc(req: JobRequest) -> None:
-    logging.info("received request %s", req)
-    await req.accept(entrypoint)
-
-
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(request_fnc))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

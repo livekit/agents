@@ -1,8 +1,7 @@
 import asyncio
-import logging
 import pickle
 
-from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm
+from livekit.agents import JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, rag, silero
 
@@ -51,16 +50,13 @@ async def entrypoint(ctx: JobContext):
         will_synthesize_assistant_reply=_will_synthesize_assistant_answer,
         plotting=True,
     )
+
+    await ctx.connect()
     assistant.start(ctx.room)
 
     await asyncio.sleep(1)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
 
-async def request_fnc(req: JobRequest) -> None:
-    logging.info("received request %s", req)
-    await req.accept(entrypoint)
-
-
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(request_fnc))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
