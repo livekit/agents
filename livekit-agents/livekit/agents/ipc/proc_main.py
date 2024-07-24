@@ -118,12 +118,15 @@ def _start_job(
         await room.disconnect()
 
         try:
-            job_shutdown_task = asyncio.create_task(
-                args.job_shutdown_fnc(job_ctx), name="job_shutdown"
-            )
-            await job_shutdown_task
+            shutdown_tasks = []
+            for callback in job_ctx._shutdown_callbacks:
+                shutdown_tasks.append(
+                    asyncio.create_task(callback(), name="job_shutdown_callback")
+                )
+
+            await asyncio.gather(*shutdown_tasks)
         except Exception:
-            logger.exception("error while disconnecting room")
+            logger.exception("error while shutting down the job")
 
         await utils.http_context._close_http_ctx()
         exit_proc_fut.set()

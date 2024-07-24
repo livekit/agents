@@ -62,7 +62,6 @@ class SupervisedProc:
         *,
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Coroutine],
-        job_shutdown_fnc: Callable[[JobContext], Coroutine],
         initialize_timeout: float,
         close_timeout: float,
         mp_ctx: SpawnContext | ForkServerContext,
@@ -82,7 +81,6 @@ class SupervisedProc:
         self._proc_args = proto.ProcStartArgs(
             initialize_process_fnc=initialize_process_fnc,
             job_entrypoint_fnc=job_entrypoint_fnc,
-            job_shutdown_fnc=job_shutdown_fnc,
             log_q=log_q,
             mp_cch=mp_cch,
             asyncio_debug=loop.get_debug(),

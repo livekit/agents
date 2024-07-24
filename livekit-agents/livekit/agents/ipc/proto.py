@@ -19,7 +19,6 @@ HIGH_PING_THRESHOLD = 0.02  # 20ms
 class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Coroutine]
-    job_shutdown_fnc: Callable[[JobContext], Coroutine]
     log_q: mp.Queue
     mp_cch: channel.ProcessConn
     asyncio_debug: bool

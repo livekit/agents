@@ -21,7 +21,6 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         *,
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Coroutine],
-        job_shutdown_fnc: Callable[[JobContext], Coroutine],
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
@@ -32,7 +31,6 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._mp_ctx = mp_ctx
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
-        self._job_shutdown_fnc = job_shutdown_fnc
         self._close_timeout = close_timeout
         self._initialize_timeout = initialize_timeout
         self._loop = loop
@@ -69,7 +67,6 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         proc = SupervisedProc(
             initialize_process_fnc=self._initialize_process_fnc,
             job_entrypoint_fnc=self._job_entrypoint_fnc,
-            job_shutdown_fnc=self._job_shutdown_fnc,
             initialize_timeout=self._initialize_timeout,
             close_timeout=self._close_timeout,
             mp_ctx=self._mp_ctx,

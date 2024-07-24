@@ -61,6 +61,7 @@ class JobContext:
         self._room = room
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
+        self._shutdown_callbacks: list[Callable[[], Coroutine]] = []
 
     @property
     def proc(self) -> JobProcess:
@@ -77,6 +78,9 @@ class JobContext:
     @property
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
+
+    def add_shutdown_callback(self, callback: Callable[[], Coroutine]) -> None:
+        self._shutdown_callbacks.append(callback)
 
     async def connect(
         self,

@@ -45,10 +45,6 @@ def _default_initialize_process_fnc(proc: JobProcess) -> Any:
     return
 
 
-async def _default_shutdown_fnc(proc: JobContext) -> None:
-    return
-
-
 async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
 
@@ -131,7 +127,6 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._proc_pool = ipc.proc_pool.ProcPool(
             initialize_process_fnc=opts.prewarm_fnc,
             job_entrypoint_fnc=opts.entrypoint_fnc,
-            job_shutdown_fnc=_default_shutdown_fnc,
             num_idle_processes=opts.num_idle_processes,
             loop=self._loop,
             mp_ctx=mp_ctx,
