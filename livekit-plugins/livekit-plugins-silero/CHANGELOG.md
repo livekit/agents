@@ -1,5 +1,11 @@
 # livekit-plugins-silero
 
+## 0.6.0-dev.4
+
+### Patch Changes
+
+- fix changesets release CI - [#435](https://github.com/livekit/agents/pull/435) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.0-dev.3
 
 ### Patch Changes
