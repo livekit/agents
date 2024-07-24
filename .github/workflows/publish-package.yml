@@ -94,6 +94,13 @@ jobs:
           export version=$(sed 's|-\([0-9]*\)$|\1|' <<< ${{ matrix.package.version }})
           sed -i "s/__version__.*/__version__ = \"$version\"/" $module/version.py
 
+      - name: Commit changes to
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: '["."]'
+          default_author: github_actions
+          message: Update version.py
+
       - name: Build package
         run: python -m build
 
