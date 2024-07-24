@@ -108,7 +108,7 @@ jobs:
         uses: EndBug/add-and-commit@v9
         with:
           add: '["."]'
-          pull: 'https://github.com/livekit/agents'
+          pull: '--rebase --autostash'
           default_author: github_actions
           message: 'Update ${{ matrix.package.name }} to ${{ matrix.package.version }}'
 
