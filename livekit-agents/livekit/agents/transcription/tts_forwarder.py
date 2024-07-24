@@ -13,7 +13,7 @@ from .. import tokenize, utils
 from ..log import logger
 from . import _utils
 
-# 3.83 is the "baseline", the number of hyphenes per second TTS returns in avg.
+# 3.83 is the "baseline", the number of hyphens per second TTS returns in avg.
 STANDARD_SPEECH_RATE = 3.83
 
 
