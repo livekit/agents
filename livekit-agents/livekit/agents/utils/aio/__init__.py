@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 
 from . import debug
 from .channel import Chan, ChanClosed, ChanReceiver, ChanSender
@@ -11,7 +12,8 @@ async def gracefully_cancel(*futures: asyncio.Future):
     for f in futures:
         f.cancel()
 
-    await asyncio.gather(*futures, return_exceptions=True)
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.gather(*futures)
 
 
 __all__ = [

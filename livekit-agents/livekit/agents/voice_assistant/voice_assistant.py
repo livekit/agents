@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import contextvars
 import time
 from dataclasses import dataclass
@@ -11,7 +10,7 @@ from livekit import rtc
 
 from .. import stt, tokenize, tts, utils, vad
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
-from .agent_output import AgentOutput, SynthesisHandle
+from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .cancellable_source import CancellableAudioSource
 from .human_input import HumanInput
 from .log import logger
@@ -88,13 +87,17 @@ class _ImplOptions:
     preemptive_synthesis: bool
     will_synthesize_assistant_reply: WillSynthesizeAssistantReply
     plotting: bool
+    transcription: AssistantTranscriptionOptions
 
-    # transcription & transcript analysis
-    transcription: bool
-    word_tokenizer: tokenize.WordTokenizer
-    sentence_tokenizer: tokenize.SentenceTokenizer
-    hyphenate_word: Callable[[str], list[str]]
-    transcription_speed: float
+
+@dataclass
+class AssistantTranscriptionOptions:
+    human_transcription: bool = True
+    agent_transcription: bool = True
+    agent_transcription_speed: float = 1.0
+    sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
+    word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer()
+    hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
 
 
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
@@ -105,18 +108,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         stt: stt.STT,
         llm: LLM,
         tts: tts.TTS,
-        chat_ctx: ChatContext = ChatContext(),
+        chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
         interrupt_speech_duration: float = 0.6,
         interrupt_min_words: int = 0,
         preemptive_synthesis: bool = True,
-        transcription: bool = True,
+        transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply = _default_will_synthesize_assistant_reply,
-        sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
-        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
-        hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
-        transcription_speed: float = 3.83,
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -129,10 +128,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             int_min_words=interrupt_min_words,
             preemptive_synthesis=preemptive_synthesis,
             transcription=transcription,
-            sentence_tokenizer=sentence_tokenizer,
-            word_tokenizer=word_tokenizer,
-            hyphenate_word=hyphenate_word,
-            transcription_speed=transcription_speed,
             will_synthesize_assistant_reply=will_synthesize_assistant_reply,
         )
         self._plotter = AssistantPlotter(self._loop)
@@ -147,7 +142,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             )
 
         self._stt, self._vad, self._llm, self._tts = stt, vad, llm, tts
-        self._chat_ctx, self._fnc_ctx = chat_ctx, fnc_ctx
+        self._chat_ctx = chat_ctx or ChatContext()
+        self._fnc_ctx = fnc_ctx
         self._started, self._closed = False, False
 
         self._human_input: HumanInput | None = None
@@ -247,7 +243,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if isinstance(speech_source, LLMStream):
             speech_source = _llm_stream_to_str_iterable(speech_source)
 
-        synthesis_handle = self._agent_output.synthesize(transcript=speech_source)
+        synthesis_handle = self._agent_synthesize(transcript=speech_source)
         speech = _SpeechInfo(
             source=source,
             user_question="",
@@ -407,7 +403,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if self._opts.int_min_words != 0:
             # check the final/interim transcribed text for the minimum word count
             # to interrupt the agent speech
-            interim_words = self._opts.word_tokenizer.tokenize(
+            interim_words = self._opts.transcription.word_tokenizer.tokenize(
                 text=self._transcribed_interim_text
             )
             if len(interim_words) < self._opts.int_min_words:
@@ -430,9 +426,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ), "agent output should be initialized when ready"
 
             if old_task is not None:
-                with contextlib.suppress(asyncio.CancelledError):
-                    old_task.cancel()
-                    await old_task
+                await utils.aio.gracefully_cancel(old_task)
 
             user_msg = ChatMessage.create(text=user_transcript, role="user")
             copied_ctx = self._chat_ctx.copy()
@@ -448,7 +442,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     self, chat_ctx=copied_ctx
                 )
 
-            synthesis = self._agent_output.synthesize(
+            synthesis = self._agent_synthesize(
                 transcript=_llm_stream_to_str_iterable(llm_stream)
             )
             self._agent_answer_speech = _SpeechInfo(
@@ -576,7 +570,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 chat_ctx.messages.extend(extra_tools_messages)
 
                 answer_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self._fnc_ctx)
-                answer_synthesis = self._agent_output.synthesize(
+                answer_synthesis = self._agent_synthesize(
                     transcript=_llm_stream_to_str_iterable(answer_stream)
                 )
                 self._playing_synthesis = answer_synthesis
@@ -598,6 +592,20 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self.emit("agent_speech_committed", msg)
 
         logger.debug("VoiceAssistant._play_speech ended")
+
+    def _agent_synthesize(self, *, transcript: SpeechSource) -> SynthesisHandle:
+        assert (
+            self._agent_output is not None
+        ), "agent output should be initialized when ready"
+
+        return self._agent_output.synthesize(
+            transcript=transcript,
+            transcription=self._opts.transcription.agent_transcription,
+            transcription_speed=self._opts.transcription.agent_transcription_speed,
+            sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
+            word_tokenizer=self._opts.transcription.word_tokenizer,
+            hyphenate_word=self._opts.transcription.hyphenate_word,
+        )
 
 
 async def _llm_stream_to_str_iterable(stream: LLMStream) -> AsyncIterable[str]:

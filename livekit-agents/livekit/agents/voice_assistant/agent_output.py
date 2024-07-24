@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, AsyncIterable, Union
+from typing import Any, AsyncIterable, Callable, Union
 
 from livekit import rtc
 
-from .. import llm, transcription, utils
+from .. import llm, tokenize, utils
+from .. import transcription as agent_transcription
 from .. import tts as text_to_speech
 from .cancellable_source import CancellableAudioSource, PlayoutHandle
 from .log import logger
@@ -21,7 +22,7 @@ class SynthesisHandle:
         speech_source: SpeechSource,
         audio_source: CancellableAudioSource,
         tts: text_to_speech.TTS,
-        transcription_fwd: transcription.TTSSegmentsForwarder | None = None,
+        transcription_fwd: agent_transcription.TTSSegmentsForwarder | None = None,
     ) -> None:
         self._speech_source, self._audio_source, self._tts, self._tr_fwd = (
             speech_source,
@@ -90,10 +91,26 @@ class AgentOutput:
 
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
-    def synthesize(self, *, transcript: SpeechSource) -> SynthesisHandle:
-        transcription_fwd = transcription.TTSSegmentsForwarder(
-            room=self._room, participant=self._room.local_participant
-        )
+    def synthesize(
+        self,
+        *,
+        transcript: SpeechSource,
+        transcription: bool,
+        transcription_speed: float,
+        sentence_tokenizer: tokenize.SentenceTokenizer,
+        word_tokenizer: tokenize.WordTokenizer,
+        hyphenate_word: Callable[[str], list[str]],
+    ) -> SynthesisHandle:
+        transcription_fwd = None
+        if transcription:
+            transcription_fwd = agent_transcription.TTSSegmentsForwarder(
+                room=self._room,
+                participant=self._room.local_participant,
+                speed=transcription_speed,
+                sentence_tokenizer=sentence_tokenizer,
+                word_tokenizer=word_tokenizer,
+                hyphenate_word=hyphenate_word,
+            )
 
         handle = SynthesisHandle(
             speech_source=transcript,

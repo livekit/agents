@@ -62,7 +62,7 @@ class TTSSegmentsForwarder:
         participant: rtc.Participant | str,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
         language: str = "",
-        speed: float = 3.83,
+        speed: float = 1.0,
         new_sentence_delay: float = 0.4,
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
         sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
@@ -92,6 +92,8 @@ class TTSSegmentsForwarder:
         elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
             track = track.sid
 
+        # 3.83 is the "baseline"
+        speed = speed * 3.83
         self._opts = _TTSOptions(
             room=room,
             participant_identity=identity,
