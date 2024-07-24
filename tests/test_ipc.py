@@ -137,6 +137,17 @@ def _initialize_proc(proc: JobProcess) -> None:
 async def _job_entrypoint(job_ctx: JobContext) -> None:
     start_args: _StartArgs = job_ctx.proc.start_arguments
 
+    async def _job_shutdown() -> None:
+        with start_args.shutdown_counter.get_lock():
+            start_args.shutdown_counter.value += 1
+
+        await asyncio.sleep(start_args.shutdown_simulate_work_time)
+
+        with start_args.update_ev:
+            start_args.update_ev.notify()
+
+    job_ctx.add_shutdown_callback(_job_shutdown)
+
     with start_args.entrypoint_counter.get_lock():
         start_args.entrypoint_counter.value += 1
 
@@ -145,18 +156,6 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
     job_ctx.shutdown(
         "calling shutdown inside the test to avoid a warning when neither shutdown nor connect is called."
     )
-
-    with start_args.update_ev:
-        start_args.update_ev.notify()
-
-
-async def _job_shutdown(job_ctx: JobContext) -> None:
-    start_args: _StartArgs = job_ctx.proc.start_arguments
-
-    with start_args.shutdown_counter.get_lock():
-        start_args.shutdown_counter.value += 1
-
-    await asyncio.sleep(start_args.shutdown_simulate_work_time)
 
     with start_args.update_ev:
         start_args.update_ev.notify()
@@ -174,7 +173,6 @@ async def test_proc_pool():
     pool = ipc.proc_pool.ProcPool(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
-        job_shutdown_fnc=_job_shutdown,
         num_idle_processes=num_idle_processes,
         initialize_timeout=20.0,
         close_timeout=20.0,
@@ -250,7 +248,6 @@ async def test_slow_initialization():
     pool = ipc.proc_pool.ProcPool(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
-        job_shutdown_fnc=_job_shutdown,
         num_idle_processes=num_idle_processes,
         initialize_timeout=1.0,
         close_timeout=20.0,
@@ -304,7 +301,6 @@ def _create_proc(
     proc = ipc.supervised_proc.SupervisedProc(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
-        job_shutdown_fnc=_job_shutdown,
         initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
         mp_ctx=mp_ctx,
