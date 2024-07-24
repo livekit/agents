@@ -314,11 +314,9 @@ class Worker(utils.EventEmitter[EventTypes]):
                     break
 
                 if retry_count >= self._opts.max_retry:
-                    logger.error(
+                    raise RuntimeError(
                         f"failed to connect to livekit after {retry_count} attempts",
-                        exc_info=e,
                     )
-                    break
 
                 retry_delay = min(retry_count * 2, 10)
                 retry_count += 1
