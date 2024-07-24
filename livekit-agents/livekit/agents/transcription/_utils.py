@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import uuid
 
 from livekit import rtc
 
 
 def find_micro_track_id(room: rtc.Room, identity: str) -> str:
-    p = room.participants_by_identity.get(identity)
+    p: rtc.RemoteParticipant | rtc.LocalParticipant | None = (
+        room.remote_participants.get(identity)
+    )
     if identity == room.local_participant.identity:
         p = room.local_participant
 
@@ -13,7 +17,7 @@ def find_micro_track_id(room: rtc.Room, identity: str) -> str:
 
     # find first micro track
     track_id = None
-    for track in p.tracks.values():
+    for track in p.track_publications.values():
         if track.source == rtc.TrackSource.SOURCE_MICROPHONE:
             track_id = track.sid
             break

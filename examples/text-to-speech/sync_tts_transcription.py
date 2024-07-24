@@ -5,7 +5,6 @@ from typing import Optional
 from livekit import rtc
 from livekit.agents import (
     JobContext,
-    JobRequest,
     WorkerOptions,
     cli,
     transcription,
@@ -58,7 +57,7 @@ async def _eg_streamed_tts_stream(
         tts_stream.push_text(chunk)
         tts_forwarder.push_text(chunk)
 
-    tts_stream.mark_segment_end()
+    tts_stream.flush()
     tts_forwarder.mark_text_segment_end()
 
     second_streamed_text = "This is another segment that will be streamed"
@@ -67,25 +66,23 @@ async def _eg_streamed_tts_stream(
         tts_stream.push_text(chunk)
         tts_forwarder.push_text(chunk)
 
-    tts_stream.mark_segment_end()
+    tts_stream.flush()
+    tts_stream.end_input()
     tts_forwarder.mark_text_segment_end()
 
     playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
 
     async def _synth_task():
         async for ev in tts_stream:
-            if ev.type != tts.SynthesisEventType.AUDIO:
-                continue
-            assert ev.audio is not None
-            playout_q.put_nowait(ev.audio.data)
+            playout_q.put_nowait(ev.frame)
 
         playout_q.put_nowait(None)
 
     synth_task = asyncio.create_task(_synth_task())
     playout_task = asyncio.create_task(_playout_task(playout_q, source))
 
-    await tts_stream.aclose(wait=True)
     await asyncio.gather(synth_task, playout_task)
+    await tts_stream.aclose()
     await tts_forwarder.aclose()
 
 
@@ -107,8 +104,8 @@ async def _eg_single_segment(
     playout_task = asyncio.create_task(_playout_task(playout_q, source))
 
     async for output in tts_11labs.synthesize(text):
-        tts_forwarder.push_audio(output.data)
-        playout_q.put_nowait(output.data)
+        tts_forwarder.push_audio(output.frame)
+        playout_q.put_nowait(output.frame)
 
     tts_forwarder.mark_audio_segment_end()
     playout_q.put_nowait(None)
@@ -122,9 +119,7 @@ async def _eg_deferred_playout(
 ):
     """example with deferred playout (We have a synthesized audio before starting to play it)"""
     tts_forwarder = transcription.TTSSegmentsForwarder(
-        room=ctx.room,
-        participant=ctx.room.local_participant,
-        auto_playout=False,
+        room=ctx.room, participant=ctx.room.local_participant
     )
 
     text = "Hello world, this is a single segment with deferred playout"
@@ -135,8 +130,8 @@ async def _eg_deferred_playout(
     playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
 
     async for output in tts_11labs.synthesize(text):
-        tts_forwarder.push_audio(output.data)
-        playout_q.put_nowait(output.data)
+        tts_forwarder.push_audio(output.frame)
+        playout_q.put_nowait(output.frame)
 
     tts_forwarder.mark_audio_segment_end()
 
@@ -147,6 +142,7 @@ async def _eg_deferred_playout(
     playout_task = asyncio.create_task(_playout_task(playout_q, source))
 
     playout_q.put_nowait(None)
+    tts_forwarder.segment_playout_finished()
     await playout_task
     await tts_forwarder.aclose()
 
@@ -160,6 +156,8 @@ async def entrypoint(ctx: JobContext):
     source = rtc.AudioSource(tts_11labs.sample_rate, tts_11labs.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
     options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+
+    await ctx.connect()
     await ctx.room.local_participant.publish_track(track, options)
 
     # start the transcription examples
@@ -171,10 +169,5 @@ async def entrypoint(ctx: JobContext):
     await _eg_deferred_playout(ctx, tts_11labs, source)
 
 
-async def request_fnc(req: JobRequest) -> None:
-    logging.info("received request %s", req)
-    await req.accept(entrypoint)
-
-
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(request_fnc=request_fnc))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

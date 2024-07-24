@@ -15,15 +15,13 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses
 import os
 from dataclasses import dataclass
-from typing import AsyncIterable, List, Optional, Union
+from typing import AsyncIterable, List, Union
 
-from livekit import agents, rtc
-from livekit.agents import stt
-from livekit.agents.utils import AudioBuffer
+from livekit import agents
+from livekit.agents import stt, utils
 
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
@@ -63,7 +61,9 @@ class STT(stt.STT):
         if no credentials is provided, it will use the credentials on the environment
         GOOGLE_APPLICATION_CREDENTIALS (default behavior of Google SpeechAsyncClient)
         """
-        super().__init__(streaming_supported=True)
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+        )
 
         self._client: SpeechAsyncClient | None = None
         self._credentials_info = credentials_info
@@ -112,11 +112,7 @@ class STT(stt.STT):
         project_id = self._ensure_client().transport._credentials.project_id  # type: ignore
         return f"projects/{project_id}/locations/global/recognizers/_"
 
-    def _sanitize_options(
-        self,
-        *,
-        language: str | None = None,
-    ) -> STTOptions:
+    def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._config)
 
         if language:
@@ -135,8 +131,8 @@ class STT(stt.STT):
 
     async def recognize(
         self,
+        buffer: utils.AudioBuffer,
         *,
-        buffer: AudioBuffer,
         language: SpeechLanguages | str | None = None,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
@@ -159,24 +155,16 @@ class STT(stt.STT):
 
         raw = await self._ensure_client().recognize(
             cloud_speech.RecognizeRequest(
-                recognizer=self._recognizer,
-                config=config,
-                content=frame.data.tobytes(),
+                recognizer=self._recognizer, config=config, content=frame.data.tobytes()
             )
         )
         return _recognize_response_to_speech_event(raw)
 
     def stream(
-        self,
-        *,
-        language: SpeechLanguages | str | None = None,
+        self, *, language: SpeechLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(
-            self._ensure_client(),
-            self._recognizer,
-            config,
-        )
+        return SpeechStream(self._ensure_client(), self._recognizer, config)
 
 
 class SpeechStream(stt.SpeechStream):
@@ -196,15 +184,7 @@ class SpeechStream(stt.SpeechStream):
         self._config = config
         self._sample_rate = sample_rate
         self._num_channels = num_channels
-
-        self._queue = asyncio.Queue[Optional[rtc.AudioFrame]]()
-        self._event_queue = asyncio.Queue[Optional[stt.SpeechEvent]]()
-        self._closed = False
-        self._main_task = asyncio.create_task(self._run(max_retry=max_retry))
-
-        self._final_events: List[stt.SpeechEvent] = []
-        self._need_bos = True
-        self._need_eos = False
+        self._max_retry = max_retry
 
         self._streaming_config = cloud_speech.StreamingRecognitionConfig(
             config=cloud_speech.RecognitionConfig(
@@ -226,30 +206,13 @@ class SpeechStream(stt.SpeechStream):
             ),
         )
 
-        def log_exception(task: asyncio.Task) -> None:
-            if not task.cancelled() and task.exception():
-                logger.error(f"google stt task failed: {task.exception()}")
-
-        self._main_task.add_done_callback(log_exception)
-
-    def push_frame(self, frame: rtc.AudioFrame) -> None:
-        if self._closed:
-            raise ValueError("cannot push frame to closed stream")
-
-        self._queue.put_nowait(frame)
-
-    async def aclose(self, *, wait: bool = True) -> None:
-        self._closed = True
-        if not wait:
-            self._main_task.cancel()
-
-        self._queue.put_nowait(None)
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
+        await self._run(self._max_retry)
 
     async def _run(self, max_retry: int) -> None:
         retry_count = 0
-        while not self._closed:
+        while not self._input_ch.closed:
             try:
                 # google requires a async generator when calling streaming_recognize
                 # this function basically convert the queue into a async generator
@@ -260,19 +223,19 @@ class SpeechStream(stt.SpeechStream):
                             recognizer=self._recognizer,
                             streaming_config=self._streaming_config,
                         )
-                        while True:
-                            frame = await self._queue.get()
-                            if frame is None:
-                                break
 
+                        async for frame in self._input_ch:
                             frame = frame.remix_and_resample(
                                 self._sample_rate, self._num_channels
                             )
                             yield cloud_speech.StreamingRecognizeRequest(
-                                audio=frame.data.tobytes(),
+                                audio=frame.data.tobytes()
                             )
-                    except Exception as e:
-                        logger.error(f"an error occurred while streaming inputs: {e}")
+
+                    except Exception:
+                        logger.exception(
+                            "an error occurred while streaming input to google STT"
+                        )
 
                 # try to connect
                 stream = await self._client.streaming_recognize(
@@ -297,8 +260,6 @@ class SpeechStream(stt.SpeechStream):
                 )
                 await asyncio.sleep(retry_delay)
 
-        self._event_queue.put_nowait(None)
-
     async def _run_stream(
         self, stream: AsyncIterable[cloud_speech.StreamingRecognizeResponse]
     ):
@@ -307,11 +268,9 @@ class SpeechStream(stt.SpeechStream):
                 resp.speech_event_type
                 == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
             ):
-                if self._need_eos:
-                    self._send_eos()
-
-            if self._need_bos:
-                self._send_bos()
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                )
 
             if (
                 resp.speech_event_type
@@ -319,96 +278,31 @@ class SpeechStream(stt.SpeechStream):
             ):
                 result = resp.results[0]
                 if not result.is_final:
-                    iterim_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                        alternatives=[
-                            _streaming_recognize_response_to_speech_data(resp)
-                        ],
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                            alternatives=[
+                                _streaming_recognize_response_to_speech_data(resp)
+                            ],
+                        )
                     )
-                    self._event_queue.put_nowait(iterim_event)
-
                 else:
-                    final_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=[
-                            _streaming_recognize_response_to_speech_data(resp)
-                        ],
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                            alternatives=[
+                                _streaming_recognize_response_to_speech_data(resp)
+                            ],
+                        )
                     )
-                    self._final_events.append(final_event)
-                    self._event_queue.put_nowait(final_event)
-
-            if self._need_eos:
-                self._send_eos()
 
             if (
                 resp.speech_event_type
                 == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
             ):
-                self._need_eos = True
-
-        if not self._need_bos:
-            self._send_eos()
-
-    def _send_bos(self) -> None:
-        self._need_bos = False
-        start_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.START_OF_SPEECH,
-        )
-        self._event_queue.put_nowait(start_event)
-
-    def _send_eos(self) -> None:
-        self._need_eos = False
-        self._need_bos = True
-
-        if self._final_events:
-            lg = self._final_events[0].alternatives[0].language
-
-            sentence = ""
-            confidence = 0.0
-            for alt in self._final_events:
-                sentence += f"{alt.alternatives[0].text.strip()} "
-                confidence += alt.alternatives[0].confidence
-
-            sentence = sentence.rstrip()
-            confidence /= len(self._final_events)  # avg. of confidence
-
-            end_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.END_OF_SPEECH,
-                alternatives=[
-                    stt.SpeechData(
-                        language=lg,
-                        start_time=self._final_events[0].alternatives[0].start_time,
-                        end_time=self._final_events[-1].alternatives[0].end_time,
-                        confidence=confidence,
-                        text=sentence,
-                    )
-                ],
-            )
-
-            self._final_events = []
-            self._event_queue.put_nowait(end_event)
-        else:
-            end_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.END_OF_SPEECH,
-                alternatives=[
-                    stt.SpeechData(
-                        language="",
-                        start_time=0,
-                        end_time=0,
-                        confidence=0,
-                        text="",
-                    )
-                ],
-            )
-
-            self._event_queue.put_nowait(end_event)
-
-    async def __anext__(self) -> stt.SpeechEvent:
-        evt = await self._event_queue.get()
-        if evt is None:
-            raise StopAsyncIteration
-
-        return evt
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                )
 
 
 def _recognize_response_to_speech_event(
@@ -453,11 +347,7 @@ def _streaming_recognize_response_to_speech_data(
     lg = resp.results[0].language_code
 
     data = stt.SpeechData(
-        language=lg,
-        start_time=0,
-        end_time=0,
-        confidence=confidence,
-        text=text,
+        language=lg, start_time=0, end_time=0, confidence=confidence, text=text
     )
 
     return data

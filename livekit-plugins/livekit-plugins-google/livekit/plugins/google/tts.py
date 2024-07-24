@@ -14,20 +14,14 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Union
 
 from livekit import rtc
-from livekit.agents import tts
-from livekit.agents.utils import codecs
+from livekit.agents import tts, utils
 
 from google.cloud import texttospeech
-from google.cloud.texttospeech_v1.types import (
-    SsmlVoiceGender,
-    SynthesizeSpeechResponse,
-)
+from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
 
 from .log import logger
 from .models import AudioEncoding, Gender, SpeechLanguages
@@ -61,7 +55,11 @@ class TTS(tts.TTS):
         GOOGLE_APPLICATION_CREDENTIALS (default behavior of Google TextToSpeechAsyncClient)
         """
         super().__init__(
-            streaming_supported=False, sample_rate=sample_rate, num_channels=1
+            capabilities=tts.TTSCapabilities(
+                streaming=True,
+            ),
+            sample_rate=sample_rate,
+            num_channels=1,
         )
 
         self._client: texttospeech.TextToSpeechAsyncClient | None = None
@@ -75,9 +73,7 @@ class TTS(tts.TTS):
             ssml_gender = SsmlVoiceGender.FEMALE
 
         voice = texttospeech.VoiceSelectionParams(
-            name=voice_name,
-            language_code=language,
-            ssml_gender=ssml_gender,
+            name=voice_name, language_code=language, ssml_gender=ssml_gender
         )
 
         if encoding == "linear16" or encoding == "wav":
@@ -117,10 +113,7 @@ class TTS(tts.TTS):
         assert self._client is not None
         return self._client
 
-    def synthesize(
-        self,
-        text: str,
-    ) -> "ChunkedStream":
+    def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(text, self._opts, self._ensure_client())
 
 
@@ -128,60 +121,38 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self, text: str, opts: _TTSOptions, client: texttospeech.TextToSpeechAsyncClient
     ) -> None:
-        self._text = text
-        self._opts = opts
-        self._client = client
-        self._main_task: asyncio.Task | None = None
-        self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
+        super().__init__()
+        self._text, self._opts, self._client = text, opts, client
 
-    async def _run(self) -> None:
-        try:
-            response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
-                input=texttospeech.SynthesisInput(text=self._text),
-                voice=self._opts.voice,
-                audio_config=self._opts.audio_config,
-            )
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
+        request_id = utils.shortuuid()
+        segment_id = utils.shortuuid()
+        response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
+            input=texttospeech.SynthesisInput(text=self._text),
+            voice=self._opts.voice,
+            audio_config=self._opts.audio_config,
+        )
 
-            data = response.audio_content
-            if self._opts.audio_config.audio_encoding == "mp3":
-                decoder = codecs.Mp3StreamDecoder()
-                frames = decoder.decode_chunk(data)
-                for frame in frames:
-                    self._queue.put_nowait(
-                        tts.SynthesizedAudio(text=self._text, data=frame)
-                    )
-            else:
-                self._queue.put_nowait(
+        data = response.audio_content
+        if self._opts.audio_config.audio_encoding == "mp3":
+            decoder = utils.codecs.Mp3StreamDecoder()
+            for frame in decoder.decode_chunk(data):
+                self._event_ch.send_nowait(
                     tts.SynthesizedAudio(
-                        text="",
-                        data=rtc.AudioFrame(
-                            data=data,
-                            sample_rate=self._opts.audio_config.sample_rate_hertz,
-                            num_channels=1,
-                            samples_per_channel=len(data) // 2,  # 16-bit
-                        ),
+                        request_id=request_id, segment_id=segment_id, frame=frame
                     )
                 )
-
-        except Exception:
-            logger.exception("failed to synthesize")
-        finally:
-            self._queue.put_nowait(None)
-
-    async def __anext__(self) -> tts.SynthesizedAudio:
-        if not self._main_task:
-            self._main_task = asyncio.create_task(self._run())
-
-        frame = await self._queue.get()
-        if frame is None:
-            raise StopAsyncIteration
-
-        return frame
-
-    async def aclose(self) -> None:
-        if not self._main_task:
-            return
-
-        self._main_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
+        else:
+            self._event_ch.send_nowait(
+                tts.SynthesizedAudio(
+                    request_id=request_id,
+                    segment_id=segment_id,
+                    frame=rtc.AudioFrame(
+                        data=data,
+                        sample_rate=self._opts.audio_config.sample_rate_hertz,
+                        num_channels=1,
+                        samples_per_channel=len(data) // 2,  # 16-bit
+                    ),
+                )
+            )

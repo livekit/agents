@@ -14,92 +14,186 @@
 
 from __future__ import annotations
 
-import abc
+import asyncio
 import enum
+import functools
 import inspect
 import typing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from ..log import logger
+
+
+class _UseDocMarker:
+    pass
+
+
 METADATA_ATTR = "__livekit_ai_metadata__"
+USE_DOCSTRING = _UseDocMarker()
+
+
+@dataclass(frozen=True)
+class TypeInfo:
+    description: str = ""
+    choices: list[Any] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class FunctionArgInfo:
+    name: str
+    description: str
+    type: type
+    default: Any
+    choices: list[Any] | None
+
+
+@dataclass(frozen=True)
+class FunctionInfo:
+    name: str
+    description: str
+    auto_retry: bool
+    callable: Callable
+    arguments: dict[str, FunctionArgInfo]
+
+
+@dataclass(frozen=True)
+class FunctionCallInfo:
+    tool_call_id: str
+    function_info: FunctionInfo
+    raw_arguments: str
+    arguments: dict[str, Any]
+
+    def execute(self) -> CalledFunction:
+        function_info = self.function_info
+        func = functools.partial(function_info.callable, **self.arguments)
+        if asyncio.iscoroutinefunction(function_info.callable):
+            task = asyncio.create_task(func())
+        else:
+            task = asyncio.create_task(asyncio.to_thread(func))
+
+        called_fnc = CalledFunction(call_info=self, task=task)
+
+        def _on_done(fut):
+            try:
+                called_fnc.result = fut.result()
+            except BaseException as e:
+                called_fnc.exception = e
+
+        task.add_done_callback(_on_done)
+        return called_fnc
+
+
+@dataclass
+class CalledFunction:
+    call_info: FunctionCallInfo
+    task: asyncio.Task[Any]
+    result: Any | None = None
+    exception: BaseException | None = None
 
 
 def ai_callable(
     *,
     name: str | None = None,
-    desc: str | None = None,
-    auto_retry: bool = True,
+    description: str | _UseDocMarker | None = None,
+    auto_retry: bool = False,
 ) -> Callable:
     def deco(f):
-        metadata = AIFncMetadata(
-            name=name or f.__name__,
-            desc=desc or "",
-            auto_retry=auto_retry,
-        )
-
-        setattr(f, METADATA_ATTR, metadata)
+        _set_metadata(f, name=name, desc=description, auto_retry=auto_retry)
         return f
 
     return deco
 
 
-@dataclass(frozen=True)
-class TypeInfo:
-    desc: str = ""
-
-
-class FunctionContext(abc.ABC):
+class FunctionContext:
     def __init__(self) -> None:
-        self._fncs = dict[str, AIFunction]()
+        self._fncs = dict[str, FunctionInfo]()
 
-        # retrieve ai functions & metadata
         for _, member in inspect.getmembers(self, predicate=inspect.ismethod):
-            if not hasattr(member, METADATA_ATTR):
-                continue
+            if hasattr(member, METADATA_ATTR):
+                self._register_ai_function(member)
 
-            metadata: AIFncMetadata = getattr(member, METADATA_ATTR)
-            if metadata.name in self._fncs:
-                raise ValueError(f"Duplicate function name: {metadata.name}")
+    def ai_callable(
+        self,
+        *,
+        name: str | None = None,
+        description: str | _UseDocMarker | None = None,
+        auto_retry: bool = True,
+    ) -> Callable:
+        def deco(f):
+            _set_metadata(f, name=name, desc=description, auto_retry=auto_retry)
+            self._register_ai_function(f)
 
-            sig = inspect.signature(member)
-            type_hints = typing.get_type_hints(member)  # Annotated[T, ...] -> T
-            args = dict()
+        return deco
 
-            for name, param in sig.parameters.items():
-                if param.kind not in (
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                    inspect.Parameter.KEYWORD_ONLY,
-                ):
-                    raise ValueError(
-                        f"unsupported parameter kind inside ai_callable: {param.kind}"
-                    )
+    def _register_ai_function(self, fnc: Callable) -> None:
+        if not hasattr(fnc, METADATA_ATTR):
+            logger.warning(f"function {fnc.__name__} does not have ai metadata")
+            return
 
-                if param.annotation is inspect.Parameter.empty:
-                    raise ValueError(f"missing type annotation for parameter {name}")
+        metadata: _AIFncMetadata = getattr(fnc, METADATA_ATTR)
+        fnc_name = metadata.name
+        if fnc_name in self._fncs:
+            raise ValueError(f"duplicate ai_callable name: {fnc_name}")
 
-                th = type_hints[name]
+        sig = inspect.signature(fnc)
+        type_hints = typing.get_type_hints(fnc)  # Annotated[T, ...] -> T
+        args = dict()
 
-                if not is_type_supported(th):
-                    raise ValueError(f"unsupported type {th} for parameter {name}")
+        for name, param in sig.parameters.items():
+            if param.kind not in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ):
+                raise ValueError(f"{fnc_name}: unsupported parameter kind {param.kind}")
 
-                default = param.default
-
-                type_info = _find_param_type_info(param.annotation)
-                desc = type_info.desc if type_info else ""
-
-                args[name] = AIFncArg(
-                    name=name,
-                    desc=desc,
-                    type=th,
-                    default=default,
+            if param.annotation is inspect.Parameter.empty:
+                raise ValueError(
+                    f"{fnc_name}: missing type annotation for parameter {name}"
                 )
 
-            aifnc = AIFunction(metadata=metadata, fnc=member, args=args)
-            self._fncs[metadata.name] = aifnc
+            th = type_hints[name]
+            if not is_type_supported(th):
+                raise ValueError(
+                    f"{fnc_name}: unsupported type {th} for parameter {name}"
+                )
+
+            type_info = _find_param_type_info(param.annotation)
+            desc = type_info.description if type_info else ""
+            choices = type_info.choices if type_info else None
+
+            if issubclass(th, enum.Enum) and not choices:
+                # the enum must be a str or int (and at least one value)
+                # this is verified by is_type_supported
+                choices = [item.value for item in th]
+                th = type(choices[0])
+
+            args[name] = FunctionArgInfo(
+                name=name,
+                description=desc,
+                type=th,
+                default=param.default,
+                choices=choices,
+            )
+
+        self._fncs[metadata.name] = FunctionInfo(
+            name=metadata.name,
+            description=metadata.description,
+            auto_retry=metadata.auto_retry,
+            callable=fnc,
+            arguments=args,
+        )
 
     @property
-    def ai_functions(self) -> dict[str, AIFunction]:
+    def ai_functions(self) -> dict[str, FunctionInfo]:
         return self._fncs
+
+
+@dataclass(frozen=True)
+class _AIFncMetadata:
+    name: str
+    description: str
+    auto_retry: bool
 
 
 def _find_param_type_info(annotation: type) -> TypeInfo | None:
@@ -113,34 +207,46 @@ def _find_param_type_info(annotation: type) -> TypeInfo | None:
     return None
 
 
-# internal metadata
-@dataclass(frozen=True)
-class AIFncMetadata:
-    name: str = ""
-    desc: str = ""
-    auto_retry: bool = True
+def _set_metadata(
+    f: Callable,
+    name: str | None = None,
+    desc: str | _UseDocMarker | None = None,
+    auto_retry: bool = False,
+) -> None:
+    if desc is None:
+        desc = ""
 
+    if isinstance(desc, _UseDocMarker):
+        desc = inspect.getdoc(f)
+        if desc is None:
+            raise ValueError(
+                f"missing docstring for function {f.__name__}, "
+                "use explicit description or provide docstring"
+            )
 
-@dataclass(frozen=True)
-class AIFncArg:
-    name: str
-    desc: str
-    type: type
-    default: Any
+    metadata = _AIFncMetadata(
+        name=name or f.__name__, description=desc, auto_retry=auto_retry
+    )
 
-
-@dataclass(frozen=True)
-class AIFunction:
-    metadata: AIFncMetadata
-    fnc: Callable
-    args: dict[str, AIFncArg]
+    setattr(f, METADATA_ATTR, metadata)
 
 
 def is_type_supported(t: type) -> bool:
     if t in (str, int, float, bool):
         return True
 
+    if typing.get_origin(t) is list:
+        in_type = typing.get_args(t)[0]
+        return in_type in (str, int, float, bool)
+
     if issubclass(t, enum.Enum):
-        return all(isinstance(e.value, str) for e in t)
+        initial_type = None
+        for e in t:
+            if initial_type is None:
+                initial_type = type(e.value)
+            if type(e.value) is not initial_type:
+                return False
+
+        return initial_type in (str, int)
 
     return False

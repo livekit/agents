@@ -14,18 +14,14 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 import aiohttp
-from livekit import rtc
 from livekit.agents import tts, utils
 
 from .log import logger
-from .models import TTSDefaultVoiceEmbedding, TTSEncoding, TTSModels
+from .models import TTSDefaultVoiceId, TTSEncoding, TTSModels
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
@@ -39,6 +35,7 @@ class _TTSOptions:
     sample_rate: int
     voice: str | list[float]
     api_key: str
+    language: str
 
 
 class TTS(tts.TTS):
@@ -46,14 +43,15 @@ class TTS(tts.TTS):
         self,
         *,
         model: TTSModels = "sonic-english",
+        language: str = "en",
         encoding: TTSEncoding = "pcm_s16le",
-        voice: str | list[float] = TTSDefaultVoiceEmbedding,
+        voice: str | list[float] = TTSDefaultVoiceId,
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
-            streaming_supported=False,
+            capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
             num_channels=1,
         )
@@ -64,6 +62,7 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(
             model=model,
+            language=language,
             encoding=encoding,
             sample_rate=sample_rate,
             voice=voice,
@@ -73,14 +72,11 @@ class TTS(tts.TTS):
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
-            self._session = utils.http_session()
+            self._session = utils.http_context.http_session()
 
         return self._session
 
-    def synthesize(
-        self,
-        text: str,
-    ) -> "ChunkedStream":
+    def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(text, self._opts, self._ensure_session())
 
 
@@ -88,14 +84,17 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
     ) -> None:
-        self._opts = opts
-        self._text = text
-        self._session = session
-        self._main_task: asyncio.Task | None = None
-        self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
+        super().__init__()
+        self._text, self._opts, self._session = text, opts, session
 
     @utils.log_exceptions(logger=logger)
-    async def _run(self):
+    async def _main_task(self):
+        bstream = utils.audio.AudioByteStream(
+            sample_rate=self._opts.sample_rate, num_channels=1
+        )
+        request_id = utils.shortuuid()
+        segment_id = utils.shortuuid()
+
         voice = {}
         if isinstance(self._opts.voice, str):
             voice["mode"] = "id"
@@ -104,77 +103,37 @@ class ChunkedStream(tts.ChunkedStream):
             voice["mode"] = "embedding"
             voice["embedding"] = self._opts.voice
 
-        try:
-            async with self._session.post(
-                "https://api.cartesia.ai/tts/bytes",
-                headers={
-                    API_AUTH_HEADER: f"{self._opts.api_key}",
-                    API_VERSION_HEADER: API_VERSION,
-                },
-                json={
-                    "model_id": self._opts.model,
-                    "transcript": self._text,
-                    "voice": voice,
-                    "output_format": {
-                        "container": "raw",
-                        "encoding": self._opts.encoding,
-                        "sample_rate": self._opts.sample_rate,
-                    },
-                },
-            ) as resp:
-                bytes_per_frame = (self._opts.sample_rate // 100) * 2
-                buf = bytearray()
+        data = {
+            "model_id": self._opts.model,
+            "transcript": self._text,
+            "voice": voice,
+            "output_format": {
+                "container": "raw",
+                "encoding": self._opts.encoding,
+                "sample_rate": self._opts.sample_rate,
+            },
+            "language": self._opts.language,
+        }
 
-                async for data, _ in resp.content.iter_chunks():
-                    buf.extend(data)
-
-                    while len(buf) >= bytes_per_frame:
-                        frame_data = buf[:bytes_per_frame]
-                        buf = buf[bytes_per_frame:]
-
-                        self._queue.put_nowait(
-                            tts.SynthesizedAudio(
-                                text=self._text,
-                                data=rtc.AudioFrame(
-                                    data=frame_data,
-                                    sample_rate=self._opts.sample_rate,
-                                    num_channels=1,
-                                    samples_per_channel=len(frame_data) // 2,
-                                ),
-                            )
-                        )
-
-                # send any remaining data
-                if len(buf) > 0:
-                    self._queue.put_nowait(
+        async with self._session.post(
+            "https://api.cartesia.ai/tts/bytes",
+            headers={
+                API_AUTH_HEADER: f"{self._opts.api_key}",
+                API_VERSION_HEADER: API_VERSION,
+            },
+            json=data,
+        ) as resp:
+            async for data, _ in resp.content.iter_chunks():
+                for frame in bstream.write(data):
+                    self._event_ch.send_nowait(
                         tts.SynthesizedAudio(
-                            text=self._text,
-                            data=rtc.AudioFrame(
-                                data=buf,
-                                sample_rate=self._opts.sample_rate,
-                                num_channels=1,
-                                samples_per_channel=len(buf) // 2,
-                            ),
+                            request_id=request_id, segment_id=segment_id, frame=frame
                         )
                     )
 
-        finally:
-            self._queue.put_nowait(None)
-
-    async def __anext__(self) -> tts.SynthesizedAudio:
-        if not self._main_task:
-            self._main_task = asyncio.create_task(self._run())
-
-        frame = await self._queue.get()
-        if frame is None:
-            raise StopAsyncIteration
-
-        return frame
-
-    async def aclose(self) -> None:
-        if not self._main_task:
-            return
-
-        self._main_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
+            for frame in bstream.flush():
+                self._event_ch.send_nowait(
+                    tts.SynthesizedAudio(
+                        request_id=request_id, segment_id=segment_id, frame=frame
+                    )
+                )

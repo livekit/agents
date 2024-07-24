@@ -1,20 +1,20 @@
 import asyncio
+import enum
 import logging
-from enum import Enum
 from typing import Annotated
 
-from livekit.agents import (
-    JobContext,
-    JobRequest,
-    WorkerOptions,
-    cli,
-    llm,
-)
-from livekit.agents.voice_assistant import AssistantContext, VoiceAssistant
-from livekit.plugins import deepgram, elevenlabs, openai, silero
+from livekit.agents import JobContext, WorkerOptions, cli, llm
+from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.plugins import deepgram, openai, silero
+
+logger = logging.getLogger("function-calling-demo")
+logger.setLevel(logging.INFO)
 
 
-class Room(Enum):
+class Room(enum.Enum):
+    # ai_callable can understand enum types as a set of choices
+    # this is equivalent to:
+    #     `Annotated[Room, llm.TypeInfo(choices=["bedroom", "living room", "kitchen", "bathroom", "office"])]`
     BEDROOM = "bedroom"
     LIVING_ROOM = "living room"
     KITCHEN = "kitchen"
@@ -23,85 +23,90 @@ class Room(Enum):
 
 
 class AssistantFnc(llm.FunctionContext):
-    @llm.ai_callable(desc="Turn on/off the lights in a room")
+    """
+    The class defines a set of AI functions that the assistant can execute.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+
+        # default state of the lights in each room
+        self._light_status = {
+            Room.BEDROOM: False,
+            Room.LIVING_ROOM: True,
+            Room.KITCHEN: True,
+            Room.BATHROOM: False,
+            Room.OFFICE: False,
+        }
+
+    @property
+    def light_status(self):
+        return self._light_status
+
+    # Simple demonstration of an AI function that can be called by the user with some arguments.
+    @llm.ai_callable(description="Turn on/off the lights in a room")
     async def toggle_light(
         self,
-        room: Annotated[Room, llm.TypeInfo(desc="The specific room")],
+        room: Annotated[Room, llm.TypeInfo(description="The specific room")],
         status: bool,
     ):
-        logging.info("toggle_light %s %s", room, status)
-        ctx = AssistantContext.get_current()
-        key = "enabled_rooms" if status else "disabled_rooms"
-        li = ctx.get_metadata(key, [])
-        li.append(room)
-        ctx.store_metadata(key, li)
-
-    @llm.ai_callable(desc="User want the assistant to stop/pause speaking")
-    def stop_speaking(self):
-        pass  # do nothing
+        logger.info("toggle_light - room: %s status: %s", room, status)
+        self._light_status[room] = status
+        return f"Turned the lights in the {room} {'on' if status else 'off'}"
 
 
 async def entrypoint(ctx: JobContext):
-    gpt = openai.LLM(model="gpt-4-turbo")
+    fnc_ctx = AssistantFnc()  # create our fnc ctx instance
 
-    initial_ctx = llm.ChatContext(
-        messages=[
+    async def _will_synthesize_assistant_reply(
+        assistant: VoiceAssistant, chat_ctx: llm.ChatContext
+    ):
+        # Inject the current state of the lights into the context of the LLM
+        chat_ctx = chat_ctx.copy()
+        chat_ctx.messages.append(
             llm.ChatMessage(
-                role=llm.ChatRole.SYSTEM,
-                text="You are a voice assistant created by LiveKit. Your interface with users will be voice. You should use short and concise responses, and avoiding usage of unpronouncable punctuation.",
+                content=(
+                    "Current state of the lights:\n"
+                    + "\n".join(
+                        f"- {room}: {'on' if status else 'off'}"
+                        for room, status in fnc_ctx.light_status.items()
+                    )
+                ),
+                role="system",
             )
-        ]
+        )
+        return assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
+
+    initial_chat_ctx = llm.ChatContext()
+    initial_chat_ctx.messages.append(
+        llm.ChatMessage(
+            content=(
+                "You are a home assistant created by LiveKit. Your interface with users will be voice. "
+                "You should use short and concise responses, and avoiding usage of unpronouncable punctuation. "
+            ),
+            role="system",
+        )
     )
 
     assistant = VoiceAssistant(
-        vad=silero.VAD(),
+        vad=silero.VAD.load(),
         stt=deepgram.STT(),
-        llm=gpt,
-        tts=elevenlabs.TTS(),
-        fnc_ctx=AssistantFnc(),
-        chat_ctx=initial_ctx,
+        llm=openai.LLM(),
+        tts=openai.TTS(),
+        fnc_ctx=fnc_ctx,
+        chat_ctx=initial_chat_ctx,
+        will_synthesize_assistant_reply=_will_synthesize_assistant_reply,
     )
 
-    async def _answer_light_toggling(enabled_rooms, disabled_rooms):
-        prompt = "Make a summary of the following actions you did:"
-        if enabled_rooms:
-            enabled_rooms_str = ", ".join(enabled_rooms)
-            prompt += f"\n - You enabled the lights in the following rooms: {enabled_rooms_str}"
+    await ctx.connect()
 
-        if disabled_rooms:
-            disabled_rooms_str = ", ".join(disabled_rooms)
-            prompt += f"\n - You disabled the lights in the following rooms {disabled_rooms_str}"
-
-        chat_ctx = llm.ChatContext(
-            messages=[llm.ChatMessage(role=llm.ChatRole.SYSTEM, text=prompt)]
-        )
-
-        stream = await gpt.chat(chat_ctx)
-        await assistant.say(stream)
-
-    @assistant.on("agent_speech_interrupted")
-    def _agent_speech_interrupted(chat_ctx: llm.ChatContext, msg: llm.ChatMessage):
-        msg.text += "... (user interrupted you)"
-
-    @assistant.on("function_calls_finished")
-    def _function_calls_done(ctx: AssistantContext):
-        logging.info("function_calls_done %s", ctx)
-        enabled_rooms = ctx.get_metadata("enabled_rooms", [])
-        disabled_rooms = ctx.get_metadata("disabled_rooms", [])
-
-        if enabled_rooms or disabled_rooms:
-            # if there was a change in the lights, summarize it and let the user know
-            asyncio.ensure_future(_answer_light_toggling(enabled_rooms, disabled_rooms))
-
+    # Start the assistant. This will automatically publish a microphone track and listen to the first participant
+    # it finds in the current room. If you need to specify a particular participant, use the participant parameter.
     assistant.start(ctx.room)
-    await asyncio.sleep(3)
+
+    await asyncio.sleep(2)
     await assistant.say("Hey, how can I help you today?")
 
 
-async def request_fnc(req: JobRequest) -> None:
-    logging.info("received request %s", req)
-    await req.accept(entrypoint)
-
-
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(request_fnc))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

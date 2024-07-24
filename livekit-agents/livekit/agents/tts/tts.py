@@ -1,105 +1,43 @@
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum
-from typing import AsyncIterator
+from typing import AsyncIterator, Union
 
 from livekit import rtc
 
-from ..utils import misc
+from ..utils import aio, misc
 
 
 @dataclass
 class SynthesizedAudio:
-    text: str
-    data: rtc.AudioFrame
-
-
-class SynthesisEventType(Enum):
-    # first event, indicates that the stream has started
-    # retriggered after FINISHED
-    STARTED = 0
-    # audio data is available
-    AUDIO = 1
-    # finished synthesizing an audio segment (generally separated by sending "None" to push_text)
-    # this doesn't means the stream is done, more text can be pushed
-    FINISHED = 2
+    request_id: str
+    """Request ID (one segment could be made up of multiple requests)"""
+    segment_id: str
+    """Segment ID, each segment is separated by a flush"""
+    frame: rtc.AudioFrame
+    """Synthesized audio frame"""
+    delta_text: str = ""
+    """Current segment of the synthesized audio"""
 
 
 @dataclass
-class SynthesisEvent:
-    type: SynthesisEventType
-    audio: SynthesizedAudio | None = None
-
-
-class ChunkedStream(ABC):
-    """
-    Used by the non-streamed synthesize API, some providers support chunked http responses
-    """
-
-    async def collect(self) -> rtc.AudioFrame:
-        """
-        Utility method to collect every frame in a single call
-        """
-        frames = []
-        async for ev in self:
-            frames.append(ev.data)
-
-        return misc.merge_frames(frames)
-
-    @abstractmethod
-    async def __anext__(self) -> SynthesizedAudio: ...
-
-    @abstractmethod
-    async def aclose(self) -> None:
-        """close is automatically called if the stream is completely collected"""
-        ...
-
-    def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
-        return self
-
-
-class SynthesizeStream(ABC):
-    @abstractmethod
-    def push_text(self, token: str | None) -> None:
-        """
-        Push some text to be synthesized. If token is None,
-        it will be used to identify the end of this particular segment.
-        (required by some TTS engines)
-        """
-        pass
-
-    def mark_segment_end(self) -> None:
-        """
-        Mark the end of the current segment, this is equivalent to calling
-        push_text(None)
-        """
-        self.push_text(None)
-
-    @abstractmethod
-    async def aclose(self, *, wait: bool = True) -> None:
-        """
-        Close the stream, if wait is True, it will wait for the TTS to
-        finish synthesizing the audio, otherwise it will close ths stream immediately
-        """
-        pass
-
-    @abstractmethod
-    async def __anext__(self) -> SynthesisEvent:
-        pass
-
-    def __aiter__(self) -> AsyncIterator[SynthesisEvent]:
-        return self
+class TTSCapabilities:
+    streaming: bool
 
 
 class TTS(ABC):
     def __init__(
-        self, *, streaming_supported: bool, sample_rate: int, num_channels: int
+        self, *, capabilities: TTSCapabilities, sample_rate: int, num_channels: int
     ) -> None:
-        self._streaming_supported = streaming_supported
+        self._capabilities = capabilities
         self._sample_rate = sample_rate
         self._num_channels = num_channels
+
+    @property
+    def capabilities(self) -> TTSCapabilities:
+        return self._capabilities
 
     @property
     def sample_rate(self) -> int:
@@ -117,6 +55,88 @@ class TTS(ABC):
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"
         )
 
-    @property
-    def streaming_supported(self) -> bool:
-        return self._streaming_supported
+    async def aclose(self) -> None: ...
+
+
+class ChunkedStream(ABC):
+    """Used by the non-streamed synthesize API, some providers support chunked http responses"""
+
+    def __init__(self):
+        self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+    async def collect(self) -> rtc.AudioFrame:
+        """Utility method to collect every frame in a single call"""
+        frames = []
+        async for ev in self:
+            frames.append(ev.frame)
+        return misc.merge_frames(frames)
+
+    @abstractmethod
+    async def _main_task(self) -> None: ...
+
+    async def aclose(self) -> None:
+        """Close is automatically called if the stream is completely collected"""
+        await aio.gracefully_cancel(self._task)
+        self._event_ch.close()
+
+    async def __anext__(self) -> SynthesizedAudio:
+        return await self._event_ch.__anext__()
+
+    def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
+        return self
+
+
+class SynthesizeStream(ABC):
+    class _FlushSentinel:
+        pass
+
+    def __init__(self):
+        self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+        self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+    @abstractmethod
+    async def _main_task(self) -> None: ...
+
+    def push_text(self, token: str) -> None:
+        """Push some text to be synthesized"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(token)
+
+    def flush(self) -> None:
+        """Mark the end of the current segment"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._FlushSentinel())
+
+    def end_input(self) -> None:
+        """Mark the end of input, no more text will be pushed"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.close()
+
+    async def aclose(self) -> None:
+        """Close ths stream immediately"""
+        self._input_ch.close()
+        await aio.gracefully_cancel(self._task)
+        self._event_ch.close()
+
+    def _check_not_closed(self) -> None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
+
+    def _check_input_not_ended(self) -> None:
+        if self._input_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
+
+    async def __anext__(self) -> SynthesizedAudio:
+        return await self._event_ch.__anext__()
+
+    def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
+        return self

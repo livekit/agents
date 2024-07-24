@@ -1,5 +1,5 @@
 {
-  "name": "livekit-plugins/livekit-plugins-rag",
+  "name": "livekit-plugins-rag",
   "private": true,
-  "version": "0.1.0"
+  "version": "0.2.0-dev.7"
 }

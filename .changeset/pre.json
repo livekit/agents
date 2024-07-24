@@ -1,0 +1,27 @@
+{
+  "mode": "pre",
+  "tag": "dev",
+  "initialVersions": {
+    "livekit-agents": "0.7.2",
+    "livekit-plugins-azure": "0.2.1",
+    "livekit-plugins-cartesia": "0.1.1",
+    "livekit-plugins-deepgram": "0.5.1",
+    "livekit-plugins-elevenlabs": "0.6.0",
+    "livekit-plugins-google": "0.5.1",
+    "livekit-plugins-minimal": "0.1.0",
+    "livekit-plugins-nltk": "0.6.1",
+    "livekit-plugins-openai": "0.6.0",
+    "livekit-plugins-rag": "0.1.0",
+    "livekit-plugins-silero": "0.5.1"
+  },
+  "changesets": [
+    "clean-plums-report",
+    "curly-geckos-report",
+    "famous-donuts-burn",
+    "fast-lions-explain",
+    "green-kiwis-kneel",
+    "proud-goats-hunt",
+    "slow-cameras-stare",
+    "wise-dancers-mate"
+  ]
+}

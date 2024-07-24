@@ -1,22 +1,17 @@
-from .stream_adapter import (
-    StreamAdapter,
-    StreamAdapterWrapper,
-)
+from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .tts import (
     TTS,
     ChunkedStream,
-    SynthesisEvent,
-    SynthesisEventType,
     SynthesizedAudio,
     SynthesizeStream,
+    TTSCapabilities,
 )
 
 __all__ = [
     "TTS",
-    "SynthesisEvent",
     "SynthesizedAudio",
     "SynthesizeStream",
-    "SynthesisEventType",
+    "TTSCapabilities",
     "StreamAdapterWrapper",
     "StreamAdapter",
     "ChunkedStream",

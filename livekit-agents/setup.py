@@ -48,9 +48,9 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "click~=8.1",
-        "livekit~=0.11",
-        "livekit-api~=0.4",
-        "livekit-protocol~=0.4",
+        "livekit~=0.12.0.dev1",
+        "livekit-api~=0.6.0",
+        "livekit-protocol~=0.6.0",
         "protobuf>=3",
         "pyjwt>=2.0.0",
         "types-protobuf>=4,<5",
@@ -64,9 +64,7 @@ setuptools.setup(
         "codecs": ["av>=11.0.0"],
         "images": ["pillow~=10.3.0"],
     },
-    package_data={
-        "livekit.agents": ["py.typed"],
-    },
+    package_data={"livekit.agents": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

@@ -13,21 +13,7 @@ on:
   push:
     branches:
       - main
-  workflow_call:
-    inputs:
-      package_name:
-        required: true
-        type: string
-      package_module:
-        required: true
-        type: string
-    secrets:
-      PYPI_API_TOKEN:
-        required: true
-      DOCS_DEPLOY_AWS_ACCESS_KEY:
-        required: true
-      DOCS_DEPLOY_AWS_API_SECRET:
-        required: true
+      - dev
 
 jobs:
   bump:
@@ -37,6 +23,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
+
       - uses: pnpm/action-setup@v4
       - name: Use Node.js 20
         uses: actions/setup-node@v4
@@ -47,29 +39,54 @@ jobs:
       - name: Install pnpm dependencies
         run: pnpm install
 
+      - name: Ensure release mode
+        id: release_mode
+        run: |
+          set +e
+          pnpm changeset pre ${{ github.ref == '/refs/heads/main' && 'exit' || 'enter dev' }}
+          echo "exitcode=$?" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Add changes
+        if: ${{ steps.release_mode.outputs.exitcode == '0' }}
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: '[".changeset"]'
+          default_author: github_actions
+          message: ${{ github.ref == '/refs/heads/main' && 'Exit' || 'Enter dev' }} pre release mode
+
       - name: Create Release Pull Request
         id: changesets
         uses: changesets/action@v1
         with:
-          version: ${{ github.ref == 'refs/heads/main' && 'pnpm ci:version' || 'pnpm ci:version --snapshot dev' }}
-          publish: ${{ github.ref == 'refs/heads/main' && 'pnpm ci:publish' || 'pnpm ci:publish --tag dev' }}
+          version: pnpm ci:version
+          publish: pnpm ci:publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: debug packages
+        run: echo "${{ steps.changesets.outputs.publishedPackages }}"
 
   build:
     needs:
       - bump
+    if: ${{ fromJson(needs.bump.outputs.packages)[0] != null }}
     strategy:
       matrix:
         package: ${{ fromJson(needs.bump.outputs.packages) }}
     defaults:
       run:
-        working-directory: ${{ matrix.package.name }}
+        working-directory: "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}"
 
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
 
       - name: Set up Python
         uses: actions/setup-python@v3
@@ -83,9 +100,17 @@ jobs:
 
       - name: Bump version.py
         run: |
-          export module=$(sed 's/^.*\///' <<< ${{ matrix.package.name }} | tr '-' '/')
+          export module=$(echo "${{ matrix.package.name }}" | tr '-' '/')
           export version=$(sed 's|-\([0-9]*\)$|\1|' <<< ${{ matrix.package.version }})
           sed -i "s/__version__.*/__version__ = \"$version\"/" $module/version.py
+
+      - name: Commit changes to
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: '["."]'
+          pull: '--rebase --autostash'
+          default_author: github_actions
+          message: 'Update ${{ matrix.package.name }} to ${{ matrix.package.version }}'
 
       - name: Build package
         run: python -m build
@@ -94,12 +119,14 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: python-package-distributions
-          path: ${{ matrix.package.name }}/dist/
+          path: "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}/dist/"
 
   publish:
     needs:
       - build
+      - bump
 
+    if: ${{ fromJson(needs.bump.outputs.packages)[0] != null }}
     runs-on: ubuntu-latest
 
     steps:
@@ -116,12 +143,13 @@ jobs:
           password: ${{ secrets.PYPI_API_TOKEN }}
 
   docs:
+    if: ${{ fromJson(needs.bump.outputs.packages)[0] != null }}
     needs:
       - bump
       - publish
     strategy:
       matrix:
-        package: ${{ needs.bump.outputs.packages }}
+        package: ${{ fromJSON(needs.bump.outputs.packages) }}
 
     runs-on: ubuntu-latest
     env:
@@ -129,7 +157,10 @@ jobs:
       module: $(tr '-' '/' <<< $package)
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
 
       - name: Install pdoc
         run: python -m pip install --upgrade pdoc

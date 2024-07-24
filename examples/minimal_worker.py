@@ -1,6 +1,6 @@
 import logging
 
-from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
+from livekit.agents import JobContext, WorkerOptions, cli
 
 
 async def entrypoint(ctx: JobContext):
@@ -9,10 +9,5 @@ async def entrypoint(ctx: JobContext):
     # Add your agent logic here!
 
 
-async def request_fnc(req: JobRequest) -> None:
-    logging.info("received request %s", req)
-    await req.accept(entrypoint)
-
-
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(request_fnc))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
