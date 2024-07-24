@@ -92,7 +92,7 @@ class _ImplOptions:
 
 @dataclass
 class AssistantTranscriptionOptions:
-    human_transcription: bool = True
+    user_transcription: bool = True
     agent_transcription: bool = True
     agent_transcription_speed: float = 1.0
     sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
@@ -296,7 +296,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             vad=self._vad,
             stt=self._stt,
             participant=participant,
-            transcription=self._opts.transcription.human_transcription,
+            transcription=self._opts.transcription.user_transcription,
         )
 
         def _on_start_of_speech(ev: vad.VADEvent) -> None:
@@ -533,7 +533,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             speech_info.source.function_calls
         )
 
-        extra_tools_messages = []  # additonal messages from the functions to add to the context if needed
+        extra_tools_messages = []  # additional messages from the functions to add to the context if needed
 
         # if the answer is using tools, execute the functions and automatically generate
         # a response to the user question from the returned values
