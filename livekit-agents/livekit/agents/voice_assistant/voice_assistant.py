@@ -93,9 +93,9 @@ class _ImplOptions:
 @dataclass
 class AssistantTranscriptionOptions:
     user_transcription: bool = True
-    """Whether to forward the user speech to the client"""
+    """Whether to forward the user transcription to the client"""
     agent_transcription: bool = True
-    """Whether to forward the agent speech to the client"""
+    """Whether to forward the agent transcription to the client"""
     agent_transcription_speed: float = 1.0
     """The speed at which the agent's speech transcription is forwarded to the client.
     We try to mimic the agent's speech speed by adjusting the transcription speed."""
