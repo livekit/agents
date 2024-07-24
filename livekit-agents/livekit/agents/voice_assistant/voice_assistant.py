@@ -402,7 +402,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         ):
             self._playout_ch.send_nowait(self._agent_answer_speech)
             self._agent_answer_speech = None
-        elif not self._opts.preemptive_synthesis:
+        elif not self._opts.preemptive_synthesis and self._transcribed_text:
             self._synthesize_answer(user_transcript=self._transcribed_text)
 
     def _interrupt_if_needed(self) -> None:
