@@ -1,5 +1,11 @@
 # livekit-plugins-minimal
 
+## 0.2.0-dev.3
+
+### Patch Changes
+
+- bump versions to update dependencies - [#510](https://github.com/livekit/agents/pull/510) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.2.0-dev.2
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.8.0-dev.4
+
+### Patch Changes
+
+- bump versions to update dependencies - [#510](https://github.com/livekit/agents/pull/510) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.8.0-dev.3
 
 ### Patch Changes
