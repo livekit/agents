@@ -66,6 +66,7 @@ jobs:
   build:
     needs:
       - bump
+    if: ${{ fromJson(needs.bump.outputs.packages)[0] != null }}
     strategy:
       matrix:
         package: ${{ fromJson(needs.bump.outputs.packages) }}
@@ -115,7 +116,9 @@ jobs:
   publish:
     needs:
       - build
+      - bump
 
+    if: ${{ fromJson(needs.bump.outputs.packages)[0] != null }}
     runs-on: ubuntu-latest
 
     steps:
@@ -132,6 +135,7 @@ jobs:
           password: ${{ secrets.PYPI_API_TOKEN }}
 
   docs:
+    if: ${{ fromJson(needs.bump.outputs.packages)[0] != null }}
     needs:
       - bump
       - publish
