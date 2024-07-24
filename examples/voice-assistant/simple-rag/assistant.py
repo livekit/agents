@@ -18,7 +18,7 @@ async def entrypoint(ctx: JobContext):
     ):
         user_msg = chat_ctx.messages[-1]
         user_embedding = await openai.create_embeddings(
-            input=user_msg.content,  # type: ignore
+            input=[user_msg.content],
             model="text-embedding-3-small",
             dimensions=embeddings_dimension,
         )

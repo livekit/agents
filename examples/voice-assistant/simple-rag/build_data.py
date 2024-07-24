@@ -17,7 +17,7 @@ async def _create_embeddings(
     input: str, http_session: aiohttp.ClientSession
 ) -> openai.EmbeddingData:
     results = await openai.create_embeddings(
-        input=input,
+        input=[input],
         model="text-embedding-3-small",
         dimensions=embeddings_dimension,
         http_session=http_session,

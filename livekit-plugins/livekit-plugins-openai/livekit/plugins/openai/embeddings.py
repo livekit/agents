@@ -19,7 +19,7 @@ class EmbeddingData:
 
 async def create_embeddings(
     *,
-    input: list[str] | str,
+    input: list[str],
     model: models.EmbeddingModels = "text-embedding-3-small",
     dimensions: int | None = None,
     api_key: str | None = None,
