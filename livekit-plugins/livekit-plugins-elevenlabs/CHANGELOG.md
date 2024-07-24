@@ -1,5 +1,11 @@
 # livekit-plugins-elevenlabs
 
+## 0.7.0-dev.3
+
+### Patch Changes
+
+- bump versions to update dependencies - [#510](https://github.com/livekit/agents/pull/510) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.7.0-dev.2
 
 ### Patch Changes
