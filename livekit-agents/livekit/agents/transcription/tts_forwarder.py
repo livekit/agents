@@ -95,7 +95,6 @@ class TTSSegmentsForwarder:
         elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
             track = track.sid
 
-        # 3.83 is the "baseline"
         speed = speed * STANDARD_SPEECH_RATE
         self._opts = _TTSOptions(
             room=room,

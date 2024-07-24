@@ -90,7 +90,7 @@ class _ImplOptions:
     transcription: AssistantTranscriptionOptions
 
 
-@dataclass
+@dataclass(frozen=True)
 class AssistantTranscriptionOptions:
     user_transcription: bool = True
     """Whether to forward the user transcription to the client"""
@@ -344,7 +344,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         def _on_final_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_text += ev.alternatives[0].text
-            self._synthesize_answer(user_transcript=self._transcribed_text)
+
+            if self._opts.preemptive_synthesis:
+                self._synthesize_answer(user_transcript=self._transcribed_text)
 
         self._human_input.on("start_of_speech", _on_start_of_speech)
         self._human_input.on("vad_inference_done", _on_vad_updated)
@@ -395,13 +397,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         Check if the user speech should be validated/played
         """
         if (
-            self._agent_answer_speech is None
-            or self._agent_answer_speech.synthesis_handle.interrupted
+            self._agent_answer_speech is not None
+            and not self._agent_answer_speech.synthesis_handle.interrupted
         ):
-            return
-
-        self._playout_ch.send_nowait(self._agent_answer_speech)
-        self._agent_answer_speech = None
+            self._playout_ch.send_nowait(self._agent_answer_speech)
+            self._agent_answer_speech = None
+        elif not self._opts.preemptive_synthesis and self._transcribed_text:
+            self._synthesize_answer(user_transcript=self._transcribed_text)
 
     def _interrupt_if_needed(self) -> None:
         """
