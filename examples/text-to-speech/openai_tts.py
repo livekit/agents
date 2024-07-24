@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from livekit import rtc
-from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
+from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.plugins import openai
 
 
@@ -15,23 +15,20 @@ async def entrypoint(job: JobContext):
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
+
+    await job.connect()
     await job.room.local_participant.publish_track(track, options)
 
     await asyncio.sleep(1)
     logging.info('Saying "Hello!"')
     async for output in tts.synthesize("Hello!"):
-        await source.capture_frame(output.data)
+        await source.capture_frame(output.frame)
 
     await asyncio.sleep(1)
     logging.info('Saying "Goodbye."')
     async for output in tts.synthesize("Goodbye."):
-        await source.capture_frame(output.data)
-
-
-async def request_fnc(req: JobRequest) -> None:
-    logging.info("received request %s", req)
-    await req.accept(entrypoint)
+        await source.capture_frame(output.frame)
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(request_fnc=request_fnc))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

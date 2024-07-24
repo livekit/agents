@@ -1,10 +1,9 @@
 import asyncio
 import logging
 
-from livekit import agents, rtc
+from livekit import rtc
 from livekit.agents import (
     JobContext,
-    JobRequest,
     WorkerOptions,
     cli,
     stt,
@@ -45,6 +44,8 @@ async def entrypoint(job: JobContext):
         async for ev in audio_stream:
             stt_stream.push_frame(ev.frame)
 
+    await job.connect(auto_subscribe="audio_only")
+
     @job.room.on("track_subscribed")
     def on_track_subscribed(
         track: rtc.Track,
@@ -55,9 +56,5 @@ async def entrypoint(job: JobContext):
             tasks.append(asyncio.create_task(transcribe_track(participant, track)))
 
 
-async def request_fnc(req: JobRequest) -> None:
-    await req.accept(entrypoint, auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
-
-
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(request_fnc=request_fnc))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

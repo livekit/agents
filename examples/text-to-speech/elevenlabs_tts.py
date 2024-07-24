@@ -3,7 +3,7 @@ import logging
 from typing import Optional
 
 from livekit import rtc
-from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, tts
+from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.plugins import elevenlabs
 
 
@@ -46,17 +46,19 @@ async def entrypoint(job: JobContext):
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
+
+    await job.connect()
     await job.room.local_participant.publish_track(track, options)
 
     await asyncio.sleep(1)
     logging.info('Saying "Bonjour, comment allez-vous?"')
     async for output in tts_11labs.synthesize("Bonjour, comment allez-vous?"):
-        await source.capture_frame(output.data)
+        await source.capture_frame(output.frame)
 
     await asyncio.sleep(1)
     logging.info('Saying "Au revoir."')
     async for output in tts_11labs.synthesize("Au revoir."):
-        await source.capture_frame(output.data)
+        await source.capture_frame(output.frame)
 
     await asyncio.sleep(1)
     streamed_text = (
@@ -69,31 +71,23 @@ async def entrypoint(job: JobContext):
     ):  # split into chunk just for the demonstration
         stream.push_text(chunk)
 
-    stream.mark_segment_end()
+    stream.flush()
+    stream.end_input()
 
     playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
 
     async def _synth_task():
         async for ev in stream:
-            if ev.type != tts.SynthesisEventType.AUDIO:
-                continue
-            assert ev.audio is not None
-
-            playout_q.put_nowait(ev.audio.data)
+            playout_q.put_nowait(ev.frame)
 
         playout_q.put_nowait(None)
 
     synth_task = asyncio.create_task(_synth_task())
     playout_task = asyncio.create_task(_playout_task(playout_q, source))
 
-    await stream.aclose(wait=True)
     await asyncio.gather(synth_task, playout_task)
-
-
-async def request_fnc(req: JobRequest) -> None:
-    logging.info("received request %s", req)
-    await req.accept(entrypoint)
+    await stream.aclose()
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(request_fnc=request_fnc))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
