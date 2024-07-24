@@ -350,6 +350,7 @@ async def test_job_graceful_shutdown():
 
     fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
+    await asyncio.sleep(1.0)
     await proc.aclose()
 
     assert proc.exitcode == 0, "process should have exited cleanly"
