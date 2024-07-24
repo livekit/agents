@@ -1,5 +1,11 @@
 # livekit-plugins-elevenlabs
 
+## 0.7.0-dev.2
+
+### Patch Changes
+
+- dev fixes - multiprocessing & voiceassistant - [#493](https://github.com/livekit/agents/pull/493) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.7.0-dev.1
 
 ### Minor Changes
