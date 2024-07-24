@@ -13,6 +13,9 @@ from .. import tokenize, utils
 from ..log import logger
 from . import _utils
 
+# 3.83 is the "baseline", the number of hyphenes per second TTS returns in avg.
+STANDARD_SPEECH_RATE = 3.83
+
 
 @dataclass
 class _TTSOptions:
@@ -93,7 +96,7 @@ class TTSSegmentsForwarder:
             track = track.sid
 
         # 3.83 is the "baseline"
-        speed = speed * 3.83
+        speed = speed * STANDARD_SPEECH_RATE
         self._opts = _TTSOptions(
             room=room,
             participant_identity=identity,
