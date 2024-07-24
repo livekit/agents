@@ -335,10 +335,8 @@ class Worker(utils.EventEmitter[EventTypes]):
             """periodically check load and update worker status"""
             interval = utils.aio.interval(UPDATE_LOAD_INTERVAL)
             current_status = agent.WorkerStatus.WS_AVAILABLE
-            id = utils.shortuuid()
             while True:
                 await interval.tick()
-                print(id)
 
                 old_status = current_status
                 current_load = await asyncio.get_event_loop().run_in_executor(
