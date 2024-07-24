@@ -7,7 +7,7 @@ import multiprocessing as mp
 import time
 import uuid
 from dataclasses import dataclass
-from multiprocessing.context import ForkServerContext, SpawnContext
+from multiprocessing.context import BaseContext
 from typing import ClassVar
 
 import psutil
@@ -109,7 +109,7 @@ class _StartArgs:
     update_ev: mp.Condition
 
 
-def _new_start_args(mp_ctx: SpawnContext | ForkServerContext) -> _StartArgs:
+def _new_start_args(mp_ctx: BaseContext) -> _StartArgs:
     return _StartArgs(
         initialize_counter=mp_ctx.Value(ctypes.c_uint),
         entrypoint_counter=mp_ctx.Value(ctypes.c_uint),
@@ -293,7 +293,7 @@ async def test_slow_initialization():
 def _create_proc(
     *,
     close_timeout: float,
-    mp_ctx: SpawnContext | ForkServerContext,
+    mp_ctx: BaseContext,
     initialize_timeout: float = 20.0,
 ) -> (ipc.supervised_proc.SupervisedProc, _StartArgs):
     start_args = _new_start_args(mp_ctx)

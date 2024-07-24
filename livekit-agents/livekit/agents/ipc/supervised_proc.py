@@ -6,7 +6,7 @@ import logging
 import multiprocessing as mp
 import sys
 import threading
-from multiprocessing.context import ForkServerContext, SpawnContext
+from multiprocessing.context import BaseContext
 from typing import Any, Callable, Coroutine
 
 from .. import utils
@@ -64,7 +64,7 @@ class SupervisedProc:
         job_entrypoint_fnc: Callable[[JobContext], Coroutine],
         initialize_timeout: float,
         close_timeout: float,
-        mp_ctx: SpawnContext | ForkServerContext,
+        mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._loop = loop
@@ -86,7 +86,7 @@ class SupervisedProc:
             asyncio_debug=loop.get_debug(),
         )
 
-        self._proc = mp_ctx.Process(
+        self._proc = mp_ctx.Process(  # type: ignore
             target=proc_main.main, args=(self._proc_args,), name="job_proc"
         )
         self._running_job: RunningJobInfo | None = None

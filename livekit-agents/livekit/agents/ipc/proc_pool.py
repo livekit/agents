@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from multiprocessing.context import ForkServerContext, SpawnContext
+from multiprocessing.context import BaseContext
 from typing import Any, Callable, Coroutine, Literal
 
 from .. import utils
@@ -24,7 +24,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
-        mp_ctx: ForkServerContext | SpawnContext,
+        mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
