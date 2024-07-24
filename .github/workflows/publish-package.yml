@@ -77,6 +77,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
 
       - name: Set up Python
         uses: actions/setup-python@v3
