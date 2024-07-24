@@ -589,6 +589,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     transcript=_llm_stream_to_str_iterable(answer_stream)
                 )
                 # make sure users can interrupt the fnc calls answer
+                # TODO(theomonnom): maybe we should add a new fnc_call_answer field to _SpeechInfo?
                 self._agent_playing_speech.synthesis_handle = answer_synthesis
                 play_handle = answer_synthesis.play()
                 await play_handle.join()
