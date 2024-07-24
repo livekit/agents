@@ -61,7 +61,7 @@ class JobContext:
         self._room = room
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
-        self._shutdown_callbacks = []
+        self._shutdown_callbacks: list[Callable[[], Coroutine]] = []
 
     @property
     def proc(self) -> JobProcess:
