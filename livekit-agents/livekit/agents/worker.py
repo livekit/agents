@@ -78,7 +78,6 @@ class WorkerOptions:
     num_idle_processes: int = 3
     shutdown_process_timeout: float = 60.0
     initialize_process_timeout: float = 10.0
-    namespace: str = "default"
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     worker_type: agent.JobType = agent.JobType.JT_ROOM
     max_retry: int = MAX_RECONNECT_ATTEMPTS
@@ -298,7 +297,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                         agent=True,
                     )
                 )
-                req.register.namespace = self._opts.namespace
+                req.register.namespace = "default"
                 req.register.version = __version__
                 await ws.send_bytes(req.SerializeToString())
 
