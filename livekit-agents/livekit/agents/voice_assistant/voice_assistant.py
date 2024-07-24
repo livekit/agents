@@ -482,6 +482,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     async def _play_speech(self, speech_info: _SpeechInfo) -> None:
         logger.debug("VoiceAssistant._play_speech started")
+
+        assert self._agent_playing_speech is not None
+
         MIN_TIME_PLAYED_FOR_COMMIT = 1.5
 
         assert (
@@ -497,7 +500,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         play_handle = synthesis_handle.play()
         join_fut = play_handle.join()
-        self._playing_synthesis = synthesis_handle
 
         def _commit_user_message_if_needed() -> None:
             nonlocal user_speech_commited
@@ -589,7 +591,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 answer_synthesis = self._agent_synthesize(
                     transcript=_llm_stream_to_str_iterable(answer_stream)
                 )
-                self._playing_synthesis = answer_synthesis
+                # make sure users can interrupt the fnc calls answer
+                # TODO(theomonnom): maybe we should add a new fnc_call_answer field to _SpeechInfo?
+                self._agent_playing_speech.synthesis_handle = answer_synthesis
                 play_handle = answer_synthesis.play()
                 await play_handle.join()
 
