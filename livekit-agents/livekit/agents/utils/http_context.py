@@ -32,7 +32,9 @@ def http_session() -> aiohttp.ClientSession:
 
     val = _ContextVar.get(None)  # type: ignore
     if val is None:
-        raise RuntimeError("no http_session() context available")
+        raise RuntimeError(
+            "Attempted to use an http session outside of a job context. This is probably because you are trying to use a plugin without using the agent worker api. You may need to create your own aiohttp.ClientSession, pass it into the plugin constructor as a kwarg, and manage its lifecycle."
+        )
 
     return val()  # type: ignore
 
