@@ -154,8 +154,8 @@ jobs:
 
     runs-on: ubuntu-latest
     env:
-      package: $(sed 's/^.*\///' <<< ${{ matrix.package.name }})
-      module: $(tr '-' '/' <<< $package)
+      package: ${{ matrix.package.name }}
+      module: $(echo "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}" | tr '-' '/')
 
     steps:
       - uses: actions/checkout@v4
