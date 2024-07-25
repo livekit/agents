@@ -31,10 +31,10 @@ def http_session() -> aiohttp.ClientSession:
     """
 
     val = _ContextVar.get(None)  # type: ignore
-    if val is None:
-        raise RuntimeError("no http_session() context available")
+    if val:
+        return val()
 
-    return val()  # type: ignore
+    return _new_session_ctx()()
 
 
 async def _close_http_ctx():
