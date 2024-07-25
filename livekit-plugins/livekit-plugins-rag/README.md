@@ -1,13 +1,9 @@
-# LiveKit Plugins OpenAI
+# LiveKit Plugins RAG
 
-Agent Framework plugin for services from OpenAI. Currently supports STT, TTS, and Dalle 3.
+Agent Framework plugin for RAG utilities.
 
 ## Installation
 
 ```bash
-pip install livekit-plugins-openai
+pip install livekit-plugins-rag
 ```
-
-## Pre-requisites
-
-You'll need an API key from OpenAI. It can be set as an environment variable: `OPENAI_API_KEY`
