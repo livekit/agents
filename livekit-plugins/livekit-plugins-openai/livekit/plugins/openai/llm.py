@@ -47,7 +47,9 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
     ) -> None:
         self._opts = LLMOptions(model=model)
-        self._client = client or openai.AsyncClient(base_url=get_base_url(base_url))
+        self._client = client or openai.AsyncClient(
+            base_url=get_base_url(base_url), timeout=5.0
+        )
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
     @staticmethod

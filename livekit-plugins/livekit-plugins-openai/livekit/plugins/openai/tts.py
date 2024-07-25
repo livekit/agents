@@ -56,7 +56,9 @@ class TTS(tts.TTS):
             num_channels=OPENAI_TTS_CHANNELS,
         )
 
-        self._client = client or openai.AsyncClient(base_url=get_base_url(base_url))
+        self._client = client or openai.AsyncClient(
+            base_url=get_base_url(base_url), timeout=5.0
+        )
 
         self._opts = _TTSOptions(
             model=model,
