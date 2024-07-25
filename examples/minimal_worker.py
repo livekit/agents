@@ -6,6 +6,9 @@ from livekit.agents import JobContext, WorkerOptions, cli
 async def entrypoint(ctx: JobContext):
     logging.info("starting entrypoint")
 
+    # Connect to the room
+    await ctx.connect()
+
     # Add your agent logic here!
 
 
