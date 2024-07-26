@@ -144,11 +144,20 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         # wrap with StreamAdapter automatically when streaming is not supported on a specific TTS
         # to override StreamAdapter options, create the adapter manually
+
         if not tts.capabilities.streaming:
             from .. import tts as text_to_speech
 
             tts = text_to_speech.StreamAdapter(
                 tts=tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
+            )
+
+        if not stt.capabilities.streaming:
+            from .. import stt as speech_to_text
+
+            stt = speech_to_text.StreamAdapter(
+                stt=stt,
+                vad=vad,
             )
 
         self._stt, self._vad, self._llm, self._tts = stt, vad, llm, tts
