@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import datetime
 import io
 import json
 import os
@@ -24,6 +24,7 @@ from livekit.agents import stt, utils
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE
+from pydub import AudioSegment
 
 from .common import resample_audio
 from .log import logger
@@ -96,10 +97,9 @@ class STT(stt.STT):
             ) as response:
                 response_data = await response.json()
                 end = time.time()
-                logger.info(f"{url} -> total_seconds: {end - start}")
                 text = response_data.get("text")
                 confidence = response_data.get("confidence")
-
+                logger.info(f"{text} | {confidence} | total_seconds: {end - start}")
                 if not text or "error" in response_data:
                     raise ValueError(f"Unexpected response: {response_data}")
                 if confidence < self.threshold:
@@ -111,7 +111,7 @@ class STT(stt.STT):
         except Exception as ex:
             logger.error(f"{ex}")
             return self._transcription_to_speech_event(
-                event_type=stt.SpeechEventType.END_OF_SPEECH, text=""
+                event_type=stt.SpeechEventType.FINAL_TRANSCRIPT, text=""
             )
 
     def _transcription_to_speech_event(
