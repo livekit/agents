@@ -1,2 +1,2 @@
-livekit-agents~=0.7.2
-livekit-plugins-openai~=0.6.0
+livekit-agents>=0.8.1
+livekit-plugins-openai>=0.7.1

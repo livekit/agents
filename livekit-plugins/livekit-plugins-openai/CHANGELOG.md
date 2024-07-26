@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.7.1
+
+### Patch Changes
+
+- set timeout to 5 seconds - [#524](https://github.com/livekit/agents/pull/524) ([@nbsp](https://github.com/nbsp))
+
 ## 0.7.0
 
 ### Minor Changes
