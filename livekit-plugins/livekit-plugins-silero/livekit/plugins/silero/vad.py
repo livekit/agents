@@ -125,6 +125,9 @@ class VADStream(agents.vad.VADStream):
         (Buffered if the window size is not reached yet)
         """
         async for frame in self._input_ch:
+            if not isinstance(frame, rtc.AudioFrame):
+                continue
+
             if frame.sample_rate != 8000 and frame.sample_rate % 16000 != 0:
                 logger.error("only 8KHz and 16KHz*X sample rates are supported")
                 continue
