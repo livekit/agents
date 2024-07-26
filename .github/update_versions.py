@@ -1,8 +1,9 @@
 import json
 import pathlib
+import re
 
 
-def update_version(project_root: pathlib.Path, py_version_path: pathlib.Path):
+def update_py_version(project_root: pathlib.Path, py_version_path: pathlib.Path) -> str:
     with open(project_root / "package.json") as f:
         package = json.load(f)
         version = package["version"]
@@ -17,17 +18,51 @@ def update_version(project_root: pathlib.Path, py_version_path: pathlib.Path):
     with open(py_version_path, "w") as f:
         f.writelines(lines)
 
+    return version
+
+
+def update_requirements_txt(example_dir: pathlib.Path, last_versions: dict[str, str]):
+    # recursively find all requirements.txt files
+    requirements_files = example_dir.rglob("requirements.txt")
+
+    for req_file in requirements_files:
+        with open(req_file, "r") as f:
+            lines = f.readlines()
+
+        for i, line in enumerate(lines):
+            parts = re.split(r"(>=|==|<=|~=|!=|>)", line.strip())
+            if len(parts) <= 1:
+                continue
+
+            pkg_name = parts[0].strip()
+            if pkg_name in last_versions:
+                lines[i] = f"{pkg_name}>={last_versions[pkg_name]}\n"
+
+        with open(req_file, "w") as f:
+            f.writelines(lines)
+
 
 if __name__ == "__main__":
-    livekit_agents = pathlib.Path.cwd() / "livekit-agents"
-    update_version(livekit_agents, livekit_agents / "livekit" / "agents" / "version.py")
+    package_versions = {}
 
+    agents_root = pathlib.Path.cwd() / "livekit-agents"
     plugins_root = pathlib.Path.cwd() / "livekit-plugins"
-    plugins = plugins_root.iterdir()
-    for plugin in plugins:
+    examples_root = pathlib.Path.cwd() / "examples"
+
+    agent_version = update_py_version(
+        agents_root, agents_root / "livekit" / "agents" / "version.py"
+    )
+    package_versions["livekit-agents"] = agent_version
+
+    for plugin in plugins_root.iterdir():
         if not plugin.is_dir():
             continue
 
         plugin_name = plugin.name.split("-")[-1]
-        py_version_path = plugin / "livekit" / "plugins" / plugin_name / "version.py"
-        update_version(plugin, py_version_path)
+        version = update_py_version(
+            plugin, plugin / "livekit" / "plugins" / plugin_name / "version.py"
+        )
+        package_versions[plugin.name] = version
+
+    # update requirements.txt of our examples
+    update_requirements_txt(examples_root, package_versions)

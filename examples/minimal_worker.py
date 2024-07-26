@@ -1,15 +1,18 @@
 import logging
 
-from livekit.agents import JobContext, WorkerOptions, cli
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
+
+logger = logging.getLogger("my-worker")
+logger.setLevel(logging.INFO)
 
 
 async def entrypoint(ctx: JobContext):
-    logging.info("starting entrypoint")
+    logger.info("starting entrypoint")
 
-    # Connect to the room
-    await ctx.connect()
+    await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
 
-    # Add your agent logic here!
+    logger.info("connected to the room")
+    # add your agent logic here!
 
 
 if __name__ == "__main__":

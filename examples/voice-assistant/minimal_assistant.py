@@ -1,13 +1,12 @@
 import asyncio
 
-from livekit.agents import JobContext, WorkerOptions, cli
-from livekit.agents.llm import ChatContext
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 
 async def entrypoint(ctx: JobContext):
-    initial_ctx = ChatContext().append(
+    initial_ctx = llm.ChatContext().append(
         role="system",
         text=(
             "You are a voice assistant created by LiveKit. Your interface with users will be voice. "
@@ -15,7 +14,7 @@ async def entrypoint(ctx: JobContext):
         ),
     )
 
-    await ctx.connect()
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     assistant = VoiceAssistant(
         vad=silero.VAD.load(),
