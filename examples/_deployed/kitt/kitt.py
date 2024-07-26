@@ -15,7 +15,6 @@ NO_IMAGE_MESSAGE_GENERIC = (
 
 
 def prewarm(p: JobProcess):
-    print("NEIL prewarm")
     vad = silero.VAD.load()
     p.userdata["vad"] = vad
 
