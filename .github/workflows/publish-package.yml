@@ -36,6 +36,11 @@ jobs:
           node-version: 20
           cache: "pnpm"
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
       - name: Install pnpm dependencies
         run: pnpm install
 
@@ -89,9 +94,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
 
       - name: Set up Python
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.9"
 
       - name: Install dependencies
         run: |
