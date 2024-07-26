@@ -101,9 +101,7 @@ class TTS(tts.TTS):
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False  # punctuation can help for intonation
         ),
-        # default value of 11labs is [120, 160, 250, 290], but we want faster responses by default
-        # (range is 50-500)
-        chunk_length_schedule: list[int] = [80, 120, 200, 260],
+        chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -208,8 +206,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         opts: _TTSOptions,
     ):
         super().__init__()
-        self._opts = opts
-        self._session = session
+        self._opts, self._session = opts, session
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
     @utils.log_exceptions(logger=logger)
@@ -222,31 +219,39 @@ class SynthesizeStream(tts.SynthesizeStream):
             word_stream = None
             async for input in self._input_ch:
                 if isinstance(input, str):
-                    if not word_stream:
+                    if word_stream is None:
+                        # new segment (after flush for e.g)
                         word_stream = self._opts.word_tokenizer.stream()
                         self._segments_ch.send_nowait(word_stream)
 
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
-                    word_stream.end_input()
+                    if word_stream is not None:
+                        word_stream.end_input()
+
                     word_stream = None
 
             self._segments_ch.close()
 
+        @utils.log_exceptions(logger=logger)
         async def _run():
             async for word_stream in self._segments_ch:
                 await self._run_ws(word_stream)
 
-        await asyncio.gather(_tokenize_input(), _run(), return_exceptions=True)
+        tasks = [
+            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_run()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(
         self,
         word_stream: tokenize.WordStream,
-        max_retry: int = 1,
+        max_retry: int = 3,
     ) -> None:
-        request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
-
         ws_conn: aiohttp.ClientWebSocketResponse | None = None
         for try_i in range(max_retry):
             retry_delay = 5
@@ -268,6 +273,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         if ws_conn is None:
             raise Exception(f"failed to connect to 11labs after {max_retry} retries")
 
+        request_id = utils.shortuuid()
+        segment_id = utils.shortuuid()
+
+        # 11labs protocol expects the first message to be an "init msg"
         init_pkt = dict(
             text=" ",
             try_trigger_generation=True,
@@ -291,7 +300,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     text=f"{data.token} ",  # must always end with a space
                     try_trigger_generation=False,
                 )
-                print(data_pkt)
                 await ws_conn.send_str(json.dumps(data_pkt))
 
             # no more token, mark eos
@@ -300,6 +308,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             eos_sent = True
 
         async def recv_task():
+            nonlocal eos_sent
+
             while True:
                 msg = await ws_conn.receive()
                 if msg.type in (

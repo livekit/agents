@@ -16,6 +16,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 
+from livekit import rtc
 from livekit.agents import stt, utils
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
@@ -102,7 +103,8 @@ class SpeechStream(stt.SpeechStream):
     async def _main_task(self) -> None:
         try:
             async for input in self._input_ch:
-                self._stream.write(input.data.tobytes())
+                if isinstance(input, rtc.AudioFrame):
+                    self._stream.write(input.data.tobytes())
 
             self._stream.close()
             await self._done_event.wait()
