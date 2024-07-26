@@ -1,5 +1,5 @@
-import pathlib
 import json
+import pathlib
 
 
 def update_version(project_root: pathlib.Path, py_version_path: pathlib.Path):
