@@ -56,7 +56,7 @@ class TTS(tts.TTS):
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(
-                streaming=True,
+                streaming=False,
             ),
             sample_rate=sample_rate,
             num_channels=1,
