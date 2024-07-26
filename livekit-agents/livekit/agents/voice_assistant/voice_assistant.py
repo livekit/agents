@@ -41,6 +41,7 @@ EventTypes = Literal[
     "agent_speech_interrupted",
     "function_calls_collected",
     "function_calls_finished",
+    "data_received",
 ]
 
 
@@ -101,7 +102,7 @@ class AssistantTranscriptionOptions:
     We try to mimic the agent's speech speed by adjusting the transcription speed."""
     sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
     """The tokenizer used to split the speech into sentences. 
-    This is used to device when to mark a transcript as final for the agent transcription."""
+    This is used to decide when to mark a transcript as final for the agent transcription."""
     word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer()
     """The tokenizer used to split the speech into words.
     This is used to simulate the "interim results" of the agent transcription."""
@@ -213,6 +214,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             raise RuntimeError("voice assistant already started")
 
         room.on("participant_connected", self._on_participant_connected)
+        room.on("data_received", self._on_data_received)
         self._room, self._participant = room, participant
 
         if participant is not None:
@@ -277,6 +279,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 - agent_speech_interrupted: the agent speech was interrupted
                 - function_calls_collected: received the complete set of functions to be executed
                 - function_calls_finished: all function calls have been completed
+                - data_received: received data from a participant
             callback: the callback to call when the event is emitted
         """
         return super().on(event, callback)
@@ -287,6 +290,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         self._room.off("participant_connected", self._on_participant_connected)
+        self._room.off("data_received", self._on_data_received)
         await self._deferred_validation.aclose()
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
@@ -294,6 +298,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         self._link_participant(participant.identity)
+
+    async def _on_data_received(self, data: bytes, participant: rtc.RemoteParticipant, kind: rtc.DataPacket.Kind):
+        """Handle data received from a participant"""
+        self.emit("data_received", data.decode('utf-8'))
 
     def _link_participant(self, identity: str) -> None:
         participant = self._room.remote_participants.get(identity)
@@ -503,18 +511,18 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         user_question = speech_info.user_question
-        user_speech_commited = False
+        user_speech_committed = False
 
         play_handle = synthesis_handle.play()
         join_fut = play_handle.join()
 
         def _commit_user_message_if_needed() -> None:
-            nonlocal user_speech_commited
+            nonlocal user_speech_committed
 
             if (
                 not user_question
                 or synthesis_handle.interrupted
-                or user_speech_commited
+                or user_speech_committed
             ):
                 return
 
@@ -536,7 +544,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self.emit("user_speech_committed", user_msg)
 
             self._transcribed_text = self._transcribed_text[len(user_question) :]
-            user_speech_commited = True
+            user_speech_committed = True
 
         # wait for the play_handle to finish and check every 1s if the user question should be committed
         while not join_fut.done():
@@ -561,7 +569,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if is_using_tools and not interrupted:
             assert isinstance(speech_info.source, LLMStream)
             assert (
-                user_speech_commited
+                user_speech_committed
             ), "user speech should be committed before using tools"
 
             # execute functions
@@ -607,7 +615,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 collected_text = answer_synthesis.collected_text
                 interrupted = answer_synthesis.interrupted
 
-        if speech_info.add_to_chat_ctx and (not user_question or user_speech_commited):
+        if speech_info.add_to_chat_ctx and (not user_question or user_speech_committed):
             self._chat_ctx.messages.extend(extra_tools_messages)
 
             msg = ChatMessage.create(text=collected_text, role="assistant")
