@@ -36,7 +36,7 @@ def update_requirements_txt(example_dir: pathlib.Path, last_versions: dict[str, 
 
             pkg_name = parts[0].strip()
             if pkg_name in last_versions:
-                lines[i] = f"{pkg_name}=={last_versions[pkg_name]}\n"
+                lines[i] = f"{pkg_name}>={last_versions[pkg_name]}\n"
 
         with open(req_file, "w") as f:
             f.writelines(lines)
