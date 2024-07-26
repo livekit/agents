@@ -50,9 +50,14 @@ class LLM(llm.LLM):
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient(
             base_url=get_base_url(base_url),
-            timeout=5.0,
-            limits=httpx.Limits(
-                max_connections=1000, max_keepalive_connections=100, keepalive_expiry=15
+            http_client=httpx.AsyncClient(
+                timeout=5.0,
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=1000,
+                    max_keepalive_connections=100,
+                    keepalive_expiry=120,
+                ),
             ),
         )
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
