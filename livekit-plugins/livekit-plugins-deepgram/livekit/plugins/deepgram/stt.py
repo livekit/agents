@@ -25,9 +25,9 @@ from typing import List
 from urllib.parse import urlencode
 
 import aiohttp
+from livekit import rtc
 from livekit.agents import stt, utils
 from livekit.agents.utils import AudioBuffer, merge_frames
-from livekit import rtc
 
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
