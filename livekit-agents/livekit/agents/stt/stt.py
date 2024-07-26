@@ -62,8 +62,7 @@ class STT(ABC):
 
     def stream(self, *, language: str | None = None) -> "SpeechStream":
         raise NotImplementedError(
-            "streaming is not supported by this STT, please use \
-            a different STT or use a StreamAdapter"
+            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
         )
 
     async def aclose(self) -> None:
