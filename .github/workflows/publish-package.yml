@@ -103,12 +103,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install build
 
-      - name: Bump version.py
-        run: |
-          export module=$(echo "${{ matrix.package.name }}" | tr '-' '/')
-          export version=$(sed 's|-\([0-9]*\)$|\1|' <<< ${{ matrix.package.version }})
-          sed -i "s/__version__.*/__version__ = \"$version\"/" $module/version.py
-
       - name: Commit changes to
         uses: EndBug/add-and-commit@v9
         with:
