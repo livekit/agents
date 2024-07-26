@@ -36,6 +36,11 @@ jobs:
           node-version: 20
           cache: "pnpm"
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
       - name: Install pnpm dependencies
         run: pnpm install
 
@@ -89,28 +94,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
 
       - name: Set up Python
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.9"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install build
-
-      - name: Bump version.py
-        run: |
-          export module=$(echo "${{ matrix.package.name }}" | tr '-' '/')
-          export version=$(sed 's|-\([0-9]*\)$|\1|' <<< ${{ matrix.package.version }})
-          sed -i "s/__version__.*/__version__ = \"$version\"/" $module/version.py
-
-      - name: Commit changes to
-        uses: EndBug/add-and-commit@v9
-        with:
-          add: '["."]'
-          pull: "--rebase --autostash"
-          default_author: github_actions
-          message: "Update ${{ matrix.package.name }} to ${{ matrix.package.version }}"
 
       - name: Build package
         run: python -m build
