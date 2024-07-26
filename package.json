@@ -5,7 +5,7 @@
   "scripts": {
     "changeset": "changeset",
     "ci:publish": "changeset publish",
-    "ci:version": "changeset version"
+    "ci:version": "changeset version && python3 .github/update_versions.py"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.1",
