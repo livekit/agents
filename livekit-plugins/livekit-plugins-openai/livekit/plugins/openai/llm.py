@@ -19,6 +19,7 @@ import base64
 from dataclasses import dataclass
 from typing import Any, Awaitable, MutableSet
 
+import httpx
 from livekit import rtc
 from livekit.agents import llm, utils
 
@@ -47,7 +48,18 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
     ) -> None:
         self._opts = LLMOptions(model=model)
-        self._client = client or openai.AsyncClient(base_url=get_base_url(base_url))
+        self._client = client or openai.AsyncClient(
+            base_url=get_base_url(base_url),
+            http_client=httpx.AsyncClient(
+                timeout=5.0,
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=1000,
+                    max_keepalive_connections=100,
+                    keepalive_expiry=120,
+                ),
+            ),
+        )
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
     @staticmethod

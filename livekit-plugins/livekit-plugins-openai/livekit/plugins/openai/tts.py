@@ -18,6 +18,7 @@ import os
 from dataclasses import dataclass
 from typing import AsyncContextManager
 
+import httpx
 from livekit.agents import tts, utils
 
 import openai
@@ -56,7 +57,18 @@ class TTS(tts.TTS):
             num_channels=OPENAI_TTS_CHANNELS,
         )
 
-        self._client = client or openai.AsyncClient(base_url=get_base_url(base_url))
+        self._client = client or openai.AsyncClient(
+            base_url=get_base_url(base_url),
+            http_client=httpx.AsyncClient(
+                timeout=5.0,
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=1000,
+                    max_keepalive_connections=100,
+                    keepalive_expiry=120,
+                ),
+            ),
+        )
 
         self._opts = _TTSOptions(
             model=model,
