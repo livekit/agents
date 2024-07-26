@@ -59,8 +59,9 @@ if __name__ == "__main__":
             continue
 
         plugin_name = plugin.name.split("-")[-1]
-        py_version_path = plugin / "livekit" / "plugins" / plugin_name / "version.py"
-        version = update_py_version(plugin, py_version_path)
+        version = update_py_version(
+            plugin, plugin / "livekit" / "plugins" / plugin_name / "version.py"
+        )
         package_versions[plugin.name] = version
 
     # update requirements.txt of our examples
