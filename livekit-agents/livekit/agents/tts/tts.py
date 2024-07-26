@@ -115,8 +115,7 @@ class SynthesizeStream(ABC):
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
-        self._check_input_not_ended()
-        self._check_not_closed()
+        self.flush()
         self._input_ch.close()
 
     async def aclose(self) -> None:

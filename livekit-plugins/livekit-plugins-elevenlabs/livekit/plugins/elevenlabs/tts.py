@@ -101,9 +101,7 @@ class TTS(tts.TTS):
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False  # punctuation can help for intonation
         ),
-        # default value of 11labs is [120, 160, 250, 290], but we want faster responses by default
-        # (range is 50-500)
-        chunk_length_schedule: list[int] = [80, 120, 200, 260],
+        chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -233,11 +231,19 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             self._segments_ch.close()
 
+        @utils.log_exceptions(logger=logger)
         async def _run():
             async for word_stream in self._segments_ch:
                 await self._run_ws(word_stream)
 
-        await asyncio.gather(_tokenize_input(), _run(), return_exceptions=True)
+        tasks = [
+            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_run()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(
         self,
@@ -291,7 +297,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     text=f"{data.token} ",  # must always end with a space
                     try_trigger_generation=False,
                 )
-                print(data_pkt)
                 await ws_conn.send_str(json.dumps(data_pkt))
 
             # no more token, mark eos
