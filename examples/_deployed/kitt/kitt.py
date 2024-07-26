@@ -1,11 +1,11 @@
 import asyncio
 from collections import deque
-from typing import Annotated, List
+from typing import Annotated
 
 from livekit import agents, rtc
 from livekit.agents import JobContext, JobProcess, WorkerOptions, cli
 from livekit.agents.llm import ChatContext, ChatMessage
-from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.agents.voice_assistant import VoiceAssistant, AssistantCallContext
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 MAX_IMAGES = 3
@@ -33,7 +33,7 @@ class AssistantFnc(agents.llm.FunctionContext):
         """
         Called when asked to evaluate something that would require vision capabilities.
         """
-        return user_msg
+        return None
 
 
 async def entrypoint(ctx: JobContext):
