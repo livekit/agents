@@ -49,7 +49,9 @@ if __name__ == "__main__":
     plugins_root = pathlib.Path.cwd() / "livekit-plugins"
     examples_root = pathlib.Path.cwd() / "examples"
 
-    agent_version = update_py_version(agents_root, agents_root / "livekit" / "agents" / "version.py")
+    agent_version = update_py_version(
+        agents_root, agents_root / "livekit" / "agents" / "version.py"
+    )
     package_versions["livekit-agents"] = agent_version
 
     for plugin in plugins_root.iterdir():
