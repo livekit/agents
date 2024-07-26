@@ -30,7 +30,7 @@ async def entrypoint(job: JobContext):
             frame = rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, argb_frame)
             source.capture_frame(frame)
 
-    asyncio.create_task(_draw_color())
+    await _draw_color()
 
 
 if __name__ == "__main__":

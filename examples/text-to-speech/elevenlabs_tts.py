@@ -6,6 +6,9 @@ from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.plugins import elevenlabs
 
+logger = logging.getLogger("elevenlabs-tts-demo")
+logger.setLevel(logging.INFO)
+
 
 def _text_to_chunks(text: str) -> list[str]:
     """Split the text into chunks of 2, 3, and 4 words"""
@@ -51,12 +54,12 @@ async def entrypoint(job: JobContext):
     await job.room.local_participant.publish_track(track, options)
 
     await asyncio.sleep(1)
-    logging.info('Saying "Bonjour, comment allez-vous?"')
+    logger.info('Saying "Bonjour, comment allez-vous?"')
     async for output in tts_11labs.synthesize("Bonjour, comment allez-vous?"):
         await source.capture_frame(output.frame)
 
     await asyncio.sleep(1)
-    logging.info('Saying "Au revoir."')
+    logger.info('Saying "Au revoir."')
     async for output in tts_11labs.synthesize("Au revoir."):
         await source.capture_frame(output.frame)
 
@@ -64,7 +67,7 @@ async def entrypoint(job: JobContext):
     streamed_text = (
         "Bonjour, ceci est un autre example avec la méthode utilisant un websocket."
     )
-    logging.info('Streaming text "%s"', streamed_text)
+    logger.info('Streaming text "%s"', streamed_text)
     stream = tts_11labs.stream()
     for chunk in _text_to_chunks(
         streamed_text
