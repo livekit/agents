@@ -62,8 +62,7 @@ class STT(ABC):
 
     def stream(self, *, language: str | None = None) -> "SpeechStream":
         raise NotImplementedError(
-            "streaming is not supported by this STT, please use \
-            a different STT or use a StreamAdapter"
+            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
         )
 
     async def aclose(self) -> None:
@@ -100,8 +99,7 @@ class SpeechStream(ABC):
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
-        self._check_input_not_ended()
-        self._check_not_closed()
+        self.flush()
         self._input_ch.close()
 
     async def aclose(self) -> None:

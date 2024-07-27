@@ -25,6 +25,7 @@ from typing import List
 from urllib.parse import urlencode
 
 import aiohttp
+from livekit import rtc
 from livekit.agents import stt, utils
 from livekit.agents.utils import AudioBuffer, merge_frames
 
@@ -238,9 +239,7 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.sleep(retry_delay)
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """
-        This method could throw ws errors, these are handled inside the _run method
-        """
+        """This method could throw ws errors, these are handled inside the _run method"""
 
         closing_ws = False
 
@@ -261,13 +260,14 @@ class SpeechStream(stt.SpeechStream):
             # if we receive a close message, signal it to deepgram and break.
             # the recv task will then make sure to process the remaining audio and stop
             async for data in self._input_ch:
-                # TODO(theomonnom): The remix_and_resample method is low quality
-                # and should be replaced with a continuous resampling
-                frame = data.remix_and_resample(
-                    self._opts.sample_rate, self._opts.num_channels
-                )
+                if isinstance(data, rtc.AudioFrame):
+                    # TODO(theomonnom): The remix_and_resample method is low quality
+                    # and should be replaced with a continuous resampling
+                    frame = data.remix_and_resample(
+                        self._opts.sample_rate, self._opts.num_channels
+                    )
 
-                await ws.send_bytes(frame.data.tobytes())
+                    await ws.send_bytes(frame.data.tobytes())
 
             closing_ws = True
             await ws.send_str(
@@ -298,7 +298,16 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("failed to process deepgram message")
 
-        await asyncio.gather(send_task(), recv_task(), keepalive_task())
+        tasks = [
+            asyncio.create_task(send_task()),
+            asyncio.create_task(recv_task()),
+            asyncio.create_task(keepalive_task()),
+        ]
+
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
 
     def _process_stream_event(self, data: dict) -> None:
         assert self._opts.language is not None

@@ -1,7 +1,7 @@
 import asyncio
 import pickle
 
-from livekit.agents import JobContext, WorkerOptions, cli, llm
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, rag, silero
 
@@ -24,13 +24,10 @@ async def entrypoint(ctx: JobContext):
         )
 
         result = annoy_index.query(user_embedding[0].embedding, n=1)[0]
-
-        print(result.distance)
         paragraph = paragraphs_by_uuid[result.userdata]
         user_msg.content = (
             "Context:\n" + paragraph + "\n\nUser question: " + user_msg.content
         )
-        print(user_msg)
         return assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
 
     initial_ctx = llm.ChatContext().append(
@@ -38,20 +35,21 @@ async def entrypoint(ctx: JobContext):
         text=(
             "You are a voice assistant created by LiveKit. Your interface with users will be voice. "
             "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
+            "Use the provided context to answer the user's question if needed."
         ),
     )
 
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+
     assistant = VoiceAssistant(
         chat_ctx=initial_ctx,
-        vad=silero.VAD(),
+        vad=silero.VAD.load(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=openai.TTS(),
         will_synthesize_assistant_reply=_will_synthesize_assistant_answer,
-        plotting=True,
     )
 
-    await ctx.connect()
     assistant.start(ctx.room)
 
     await asyncio.sleep(1)

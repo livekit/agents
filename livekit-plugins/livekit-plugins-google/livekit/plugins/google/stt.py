@@ -20,7 +20,7 @@ import os
 from dataclasses import dataclass
 from typing import AsyncIterable, List, Union
 
-from livekit import agents
+from livekit import agents, rtc
 from livekit.agents import stt, utils
 
 from google.cloud.speech_v2 import SpeechAsyncClient
@@ -225,12 +225,13 @@ class SpeechStream(stt.SpeechStream):
                         )
 
                         async for frame in self._input_ch:
-                            frame = frame.remix_and_resample(
-                                self._sample_rate, self._num_channels
-                            )
-                            yield cloud_speech.StreamingRecognizeRequest(
-                                audio=frame.data.tobytes()
-                            )
+                            if isinstance(frame, rtc.AudioFrame):
+                                frame = frame.remix_and_resample(
+                                    self._sample_rate, self._num_channels
+                                )
+                                yield cloud_speech.StreamingRecognizeRequest(
+                                    audio=frame.data.tobytes()
+                                )
 
                     except Exception:
                         logger.exception(
