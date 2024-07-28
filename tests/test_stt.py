@@ -9,7 +9,7 @@ import time
 
 import pytest
 from livekit import agents, rtc
-from livekit.plugins import azure, deepgram, google, openai, silero
+from livekit.plugins import azure, deepgram, google, openai, silero, aws
 
 from .utils import wer
 
@@ -59,6 +59,7 @@ STREAM_STT = [
     google.STT(),
     agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
     azure.STT(),
+    aws.STT(),
 ]
 
 

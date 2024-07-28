@@ -21,6 +21,7 @@ from typing import Optional
 from livekit import rtc
 from livekit.agents import tts, utils
 from livekit.agents.utils import codecs
+import boto3
 from aiobotocore.session import get_session, AioSession
 
 from .log import logger
@@ -45,8 +46,8 @@ class TTS(tts.TTS):
         voice: str | None = "Ruth",
         aws_session: AioSession | None = None,
         output_format: str = "pcm",
-        speech_engine: str = "generative" | None,
-        speech_region: str | None,
+        speech_engine: str = "generative",
+        speech_region: str = "us-east-1",
         speech_key: str | None = None,
         speech_secret: str | None = None,
     ) -> None:
@@ -55,12 +56,13 @@ class TTS(tts.TTS):
             sample_rate=TTS_SAMPLE_RATE,
             num_channels=TTS_NUM_CHANNELS,
         )
+        credentials = boto3.Session().get_credentials()
 
-        speech_key = speech_key or os.environ.get("AWS_ACCESS_KEY_ID")
+        speech_key = speech_key or os.environ.get("AWS_ACCESS_KEY_ID") or credentials.access_key
         if not speech_key:
             raise ValueError("AWS_ACCESS_KEY_ID must be set")
 
-        speech_secret = speech_secret or os.environ.get("AWS_SECRET_ACCESS_KEY")
+        speech_secret = speech_secret or os.environ.get("AWS_SECRET_ACCESS_KEY") or credentials.secret_key
         if not speech_secret:
             raise ValueError("AWS_SECRET_ACCESS_KEY must be set")
 

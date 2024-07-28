@@ -49,6 +49,9 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents~=0.7",
+        "aiobotocore~=2.13.1",
+        "boto3~=1.34.149",
+        "amazon-transcribe~=0.6.2",
     ],
     project_urls={
         "Documentation": "https://docs.livekit.io",
