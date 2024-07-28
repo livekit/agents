@@ -123,9 +123,7 @@ def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) ->
             _subscribe_if_needed(pub)
 
     @room.on("track_published")
-    async def on_track_published(
-        pub: rtc.RemoteTrackPublication, _: rtc.RemoteParticipant
-    ):
+    def on_track_published(pub: rtc.RemoteTrackPublication, _: rtc.RemoteParticipant):
         _subscribe_if_needed(pub)
 
 
