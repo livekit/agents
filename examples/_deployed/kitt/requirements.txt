@@ -1,4 +1,4 @@
-livekit-agents>=0.8.1
+livekit-agents>=0.8.2
 livekit-plugins-openai>=0.7.1
 livekit-plugins-deepgram>=0.6.1
 livekit-plugins-elevenlabs>=0.7.1
