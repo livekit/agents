@@ -5,13 +5,16 @@ import contextlib
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Deque, Optional
 
 from livekit import rtc
 
-from .. import aio, tokenize, utils
+from .. import tokenize, utils
 from ..log import logger
 from . import _utils
+
+# 3.83 is the "baseline", the number of hyphens per second TTS returns in avg.
+STANDARD_SPEECH_RATE = 3.83
 
 
 @dataclass
@@ -35,7 +38,7 @@ class _SegmentData:
     pushed_duration: float = 0.0
     real_speed: float | None = None
     processed_sentences: int = 0
-    processed_hyphenes: int = 0
+    processed_hyphens: int = 0
     validated: bool = False
     forward_start_time: float | None = 0.0
 
@@ -62,7 +65,7 @@ class TTSSegmentsForwarder:
         participant: rtc.Participant | str,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
         language: str = "",
-        speed: float = 3.83,
+        speed: float = 1.0,
         new_sentence_delay: float = 0.4,
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
         sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
@@ -82,7 +85,7 @@ class TTSSegmentsForwarder:
                 to start the transcription.
             word_tokenizer: word tokenizer used to split the text into words
             sentence_tokenizer: sentence tokenizer used to split the text into sentences
-            hyphenate_word: function that returns a list of hyphenes for a given word
+            hyphenate_word: function that returns a list of hyphens for a given word
 
         """
         identity = participant if isinstance(participant, str) else participant.identity
@@ -92,6 +95,7 @@ class TTSSegmentsForwarder:
         elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
             track = track.sid
 
+        speed = speed * STANDARD_SPEECH_RATE
         self._opts = _TTSOptions(
             room=room,
             participant_identity=identity,
@@ -105,26 +109,24 @@ class TTSSegmentsForwarder:
         )
         self._closed = False
         self._loop = loop or asyncio.get_event_loop()
-        self._close_future = asyncio.Future()
+        self._close_future = asyncio.Future[None]()
 
         self._next_segment_index = 0
         self._playing_seg_index = -1
         self._finshed_seg_index = -1
 
         first_segment = self._create_segment()
-        segments_q = deque()
+        segments_q: Deque[_SegmentData] = deque()
         segments_q.append(first_segment)
 
         self._forming_segments = _FormingSegments(
-            audio=first_segment,
-            text=first_segment,
-            q=segments_q,
+            audio=first_segment, text=first_segment, q=segments_q
         )
 
         self._seg_queue = asyncio.Queue[Optional[_SegmentData]]()
         self._seg_queue.put_nowait(first_segment)
         self._main_atask = self._loop.create_task(self._main_task())
-        self._task_set = aio.TaskSet(loop)
+        self._task_set = utils.aio.TaskSet(loop)
 
     def segment_playout_started(self) -> None:
         """
@@ -177,8 +179,7 @@ class TTSSegmentsForwarder:
     def mark_text_segment_end(self) -> None:
         self._check_not_closed()
         stream = self._forming_segments.text.sentence_stream
-        stream.mark_segment_end()
-        self._task_set.create_task(stream.aclose())
+        stream.end_input()
 
         # create a new segment on "mark_text_segment_end"
         # further text can already be pushed even if mark_audio_segment_end has not been
@@ -188,7 +189,14 @@ class TTSSegmentsForwarder:
         self._forming_segments.q.append(new_seg)
         self._seg_queue.put_nowait(new_seg)
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     async def aclose(self) -> None:
+        if self._closed:
+            return
+
         self._closed = True
         self._close_future.set_result(None)
         self._seg_queue.put_nowait(None)
@@ -213,9 +221,8 @@ class TTSSegmentsForwarder:
 
                 tr = rtc.Transcription(
                     participant_identity=self._opts.participant_identity,
-                    track_id=self._opts.track_id,
+                    track_sid=self._opts.track_id,
                     segments=[seg],  # no history for now, only one segment
-                    language=self._opts.language,
                 )
                 await self._opts.room.local_participant.publish_transcription(tr)
 
@@ -237,8 +244,7 @@ class TTSSegmentsForwarder:
             seg.forward_start_time = time.time()
 
             async for ev in sentence_stream:
-                if ev.type == tokenize.TokenEventType.TOKEN:
-                    await self._sync_sentence_co(seg, ev.token, rtc_seg_q)
+                await self._sync_sentence_co(seg, ev.token, rtc_seg_q)
 
         rtc_seg_q.put_nowait(None)
         await forward_task
@@ -255,7 +261,7 @@ class TTSSegmentsForwarder:
         # put each sentence in a different transcription segment
         seg_id = _utils.segment_uuid()
         words = self._opts.word_tokenizer.tokenize(text=tokenized_sentence)
-        processed_words = []
+        processed_words: list[str] = []
 
         text = ""
         for word in words:
@@ -268,14 +274,14 @@ class TTSSegmentsForwarder:
                 # transcription closed, early
                 return
 
-            word_hyphenes = len(self._opts.hyphenate_word(word))
+            word_hyphens = len(self._opts.hyphenate_word(word))
             processed_words.append(word)
 
             # elapsed time since the start of the seg
             elapsed_time = time.time() - seg.forward_start_time
             text = self._opts.word_tokenizer.format_words(processed_words)
 
-            delay = 0
+            delay = 0.0
             speed = self._opts.speed
             if seg.real_speed is not None:
                 speed = seg.real_speed
@@ -284,12 +290,12 @@ class TTSSegmentsForwarder:
                 )
                 hyph_pauses = estimated_pauses_s * speed
 
-                target_hyphenes = round(speed * elapsed_time)
-                dt = target_hyphenes - seg.processed_hyphenes - hyph_pauses
-                to_wait_hyphenes = max(0, word_hyphenes - dt)
-                delay = to_wait_hyphenes / speed
+                target_hyphens = round(speed * elapsed_time)
+                dt = target_hyphens - seg.processed_hyphens - hyph_pauses
+                to_wait_hyphens = max(0, word_hyphens - dt)
+                delay = to_wait_hyphens / speed
             else:
-                delay = word_hyphenes / speed
+                delay = word_hyphens / speed
 
             first_delay = min(delay / 2, 2 / speed)
             await self._sleep_if_not_closed(first_delay)
@@ -300,10 +306,11 @@ class TTSSegmentsForwarder:
                     start_time=0,
                     end_time=0,
                     final=False,
+                    language=self._opts.language,
                 )
             )
             await self._sleep_if_not_closed(delay - first_delay)
-            seg.processed_hyphenes += word_hyphenes
+            seg.processed_hyphens += word_hyphens
 
         rtc_seg_q.put_nowait(
             rtc.TranscriptionSegment(
@@ -312,6 +319,7 @@ class TTSSegmentsForwarder:
                 start_time=0,
                 end_time=0,
                 final=True,
+                language=self._opts.language,
             )
         )
 
@@ -323,13 +331,13 @@ class TTSSegmentsForwarder:
             await asyncio.wait([self._close_future], timeout=delay)
 
     def _calc_hyphens(self, text: str) -> list[str]:
-        hyphenes = []
+        hyphens: list[str] = []
         words = self._opts.word_tokenizer.tokenize(text=text)
         for word in words:
             new = self._opts.hyphenate_word(word)
-            hyphenes.extend(new)
+            hyphens.extend(new)
 
-        return hyphenes
+        return hyphens
 
     def _create_segment(self) -> _SegmentData:
         data = _SegmentData(

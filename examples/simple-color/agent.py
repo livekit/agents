@@ -2,12 +2,7 @@ import asyncio
 import logging
 
 from livekit import rtc
-from livekit.agents import (
-    JobContext,
-    JobRequest,
-    WorkerOptions,
-    cli,
-)
+from livekit.agents import JobContext, WorkerOptions, cli
 
 WIDTH = 640
 HEIGHT = 480
@@ -17,6 +12,8 @@ COLOR = bytes([0, 255, 0, 255])
 
 
 async def entrypoint(job: JobContext):
+    await job.connect()
+
     room = job.room
     source = rtc.VideoSource(WIDTH, HEIGHT)
     track = rtc.LocalVideoTrack.create_video_track("single-color", source)
@@ -33,12 +30,8 @@ async def entrypoint(job: JobContext):
             frame = rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, argb_frame)
             source.capture_frame(frame)
 
-    asyncio.create_task(_draw_color())
-
-
-async def request_fnc(req: JobRequest) -> None:
-    await req.accept(entrypoint)
+    await _draw_color()
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(request_fnc=request_fnc))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

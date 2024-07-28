@@ -10,6 +10,5 @@ TTSEncoding = Literal[
 
 
 TTSModels = Literal["sonic-english", "sonic-multilingual"]
-
-# Customer Support Lady
-TTSDefaultVoiceID: str = "829ccd10-f8b3-43cd-b8a0-4aeaa81f3b30"
+TTSLanguages = Literal["en", "es", "fr", "de", "pt", "zh", "ja"]
+TTSDefaultVoiceId = "248be419-c632-4f23-adf1-5324ed7dbf1d"

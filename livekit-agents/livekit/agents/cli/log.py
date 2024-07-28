@@ -9,6 +9,8 @@ from datetime import date, datetime, time, timezone
 from inspect import istraceback
 from typing import Any, Dict, Tuple
 
+from ..log import logger
+
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
 _RESERVED_ATTRS: Tuple[str, ...] = (
@@ -38,10 +40,7 @@ _RESERVED_ATTRS: Tuple[str, ...] = (
 )
 
 
-def _merge_record_extra(
-    record: logging.LogRecord,
-    target: Dict,
-):
+def _merge_record_extra(record: logging.LogRecord, target: Dict[Any, Any]):
     for key, value in record.__dict__.items():
         if key not in _RESERVED_ATTRS and not (
             hasattr(key, "startswith") and key.startswith("_")
@@ -68,12 +67,12 @@ def _parse_style(formatter: logging.Formatter) -> list[str]:
 
 class JsonFormatter(logging.Formatter):
     class JsonEncoder(json.JSONEncoder):
-        def default(self, o):
+        def default(self, o: Any):
             if isinstance(o, (date, datetime, time)):
                 return o.isoformat()
             elif istraceback(o):
                 return "".join(traceback.format_tb(o)).strip()
-            elif type(o) == Exception or isinstance(o, Exception) or type(o) == type:
+            elif type(o) is Exception or isinstance(o, Exception) or type(o) is type:
                 return str(o)
 
             # extra values are formatted as str() if the encoder raises TypeError
@@ -116,20 +115,13 @@ class JsonFormatter(logging.Formatter):
             log_record[field] = record.__dict__.get(field)
 
         log_record.update(message_dict)
-        _merge_record_extra(
-            record,
-            log_record,
-        )
+        _merge_record_extra(record, log_record)
 
         log_record["timestamp"] = datetime.fromtimestamp(
             record.created, tz=timezone.utc
         )
 
-        return json.dumps(
-            log_record,
-            cls=JsonFormatter.JsonEncoder,
-            ensure_ascii=True,
-        )
+        return json.dumps(log_record, cls=JsonFormatter.JsonEncoder, ensure_ascii=True)
 
 
 class ColoredFormatter(logging.Formatter):
@@ -152,6 +144,7 @@ class ColoredFormatter(logging.Formatter):
             "WARNING": self._esc_codes["esc_yellow"],
             "ERROR": self._esc_codes["esc_red"],
             "CRITICAL": self._esc_codes["esc_bold_red"],
+            "DEV": self._esc_codes["esc_purple"],
         }
 
         self._required_fields = _parse_style(self)
@@ -163,7 +156,7 @@ class ColoredFormatter(logging.Formatter):
     def formatMessage(self, record: logging.LogRecord) -> str:
         """Formats a log record with colors"""
 
-        extra = {}
+        extra: Dict[Any, Any] = {}
         _merge_record_extra(record, extra)
 
         args = {}
@@ -192,15 +185,17 @@ def setup_logging(log_level: str, production: bool = True) -> None:
 
     if not production:
         # colorful logs for dev (improves readability)
-        formatter = ColoredFormatter(
-            "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(extra)s",
+        colored_formatter = ColoredFormatter(
+            "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(extra)s"
         )
-        handler.setFormatter(formatter)
+        handler.setFormatter(colored_formatter)
     else:
         # production logs (serialized of json)
-        formatter = JsonFormatter()
-        handler.setFormatter(formatter)
+        json_formatter = JsonFormatter()
+        handler.setFormatter(json_formatter)
 
     root = logging.getLogger()
     root.addHandler(handler)
-    root.setLevel(log_level)
+    root.setLevel(logging.WARN)
+
+    logger.setLevel(log_level)

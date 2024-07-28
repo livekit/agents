@@ -6,11 +6,7 @@ from typing import Annotated, List
 
 from livekit import agents, rtc
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli
-from livekit.agents.llm import (
-    ChatContext,
-    ChatMessage,
-    ChatRole,
-)
+from livekit.agents.llm import ChatContext, ChatMessage, ChatRole
 from livekit.agents.voice_assistant import AssistantContext, VoiceAssistant
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 
@@ -74,9 +70,7 @@ async def entrypoint(ctx: JobContext):
         ]
     )
 
-    gpt = openai.LLM(
-        model="gpt-4o",
-    )
+    gpt = openai.LLM(model="gpt-4o")
     latest_image: rtc.VideoFrame | None = None
     img_msg_queue: deque[agents.llm.ChatMessage] = deque()
     assistant = VoiceAssistant(
