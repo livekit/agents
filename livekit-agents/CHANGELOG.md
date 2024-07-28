@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.8.2
+
+### Patch Changes
+
+- fix: remove unnecessary async function - [#540](https://github.com/livekit/agents/pull/540) ([@Nabil372](https://github.com/Nabil372))
+
 ## 0.8.1
 
 ### Patch Changes
