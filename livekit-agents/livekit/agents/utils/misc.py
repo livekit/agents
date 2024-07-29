@@ -1,5 +1,5 @@
-import time
 import platform
+import time
 import uuid
 from typing import List, Union
 

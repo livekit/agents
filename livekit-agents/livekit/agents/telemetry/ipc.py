@@ -1,8 +1,8 @@
 from __future__ import annotations
-from .. import utils
 
 import prometheus_client
 
+from .. import utils
 
 PROC_PREWARM_TIME = prometheus_client.Histogram(
     "lk_agents_proc_warm_time_seconds",

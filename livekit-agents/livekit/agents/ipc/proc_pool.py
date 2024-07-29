@@ -4,7 +4,7 @@ import asyncio
 from multiprocessing.context import BaseContext
 from typing import Any, Callable, Coroutine, Literal
 
-from .. import utils, telemetry
+from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio

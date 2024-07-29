@@ -7,9 +7,9 @@ import multiprocessing as mp
 import sys
 import threading
 from multiprocessing.context import BaseContext
-from typing import Any, Callable, Coroutine, Literal
+from typing import Any, Callable, Coroutine
 
-from .. import utils, telemetry
+from .. import telemetry, utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from . import channel, proc_main, proto

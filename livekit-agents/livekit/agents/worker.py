@@ -30,7 +30,7 @@ import psutil
 from livekit import api
 from livekit.protocol import agent, models
 
-from . import ipc, utils, telemetry
+from . import ipc, telemetry, utils
 from .exceptions import AssignmentTimeoutError
 from .job import JobAcceptArguments, JobContext, JobProcess, JobRequest, RunningJobInfo
 from .log import DEV_LEVEL, logger

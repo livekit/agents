@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from livekit import rtc
 
-from .. import utils, telemetry
+from .. import telemetry, utils
 from ..job import JobContext, JobProcess
 from ..log import logger
 from . import channel, proto

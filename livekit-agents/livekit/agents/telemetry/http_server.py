@@ -3,16 +3,15 @@ from __future__ import annotations
 import asyncio
 
 import aiohttp.web_request
-
-from .. import utils
 from aiohttp import web
-
 from prometheus_client import (
+    CONTENT_TYPE_LATEST,
     CollectorRegistry,
     generate_latest,
-    CONTENT_TYPE_LATEST,
     multiprocess,
 )
+
+from .. import utils
 
 
 async def metrics(_request: aiohttp.web_request.Request):
