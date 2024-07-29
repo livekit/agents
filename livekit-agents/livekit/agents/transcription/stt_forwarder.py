@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-from typing import Optional
 
 from livekit import rtc
 
-from .. import stt
+from .. import stt, utils
 from ..log import logger
 from . import _utils
 
@@ -22,6 +20,7 @@ class STTSegmentsForwarder:
         room: rtc.Room,
         participant: rtc.Participant | str,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
+        interim_transcript_timeout: float = 7.5,
     ):
         identity = participant if isinstance(participant, str) else participant.identity
         if track is None:
@@ -32,62 +31,57 @@ class STTSegmentsForwarder:
         self._room = room
         self._participant_identity = identity
         self._track_id = track
-        self._queue = asyncio.Queue[Optional[rtc.TranscriptionSegment]]()
+
+        self._queue = asyncio.Queue[rtc.TranscriptionSegment]()
         self._main_task = asyncio.create_task(self._run())
         self._current_id = _utils.segment_uuid()
 
-    async def _run(self):
-        try:
-            while True:
-                seg = await self._queue.get()
-                if seg is None:
-                    break
+        self._invalidate_interim_timeout: utils.aio.Sleep | None = None
 
-                transcription = rtc.Transcription(
+    @utils.log_exceptions(logger=logger)
+    async def _run(self):
+        while True:
+            seg = await self._queue.get()
+            await self._room.local_participant.publish_transcription(
+                transcription=rtc.Transcription(
                     participant_identity=self._participant_identity,
                     track_sid=self._track_id,
                     segments=[seg],  # no history for now
                 )
-                await self._room.local_participant.publish_transcription(transcription)
-
-        except Exception:
-            logger.exception("error in stt transcription")
+            )
 
     def update(self, ev: stt.SpeechEvent):
         if ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-            # TODO(theomonnom): We always take the first alternative, we should mb expose opt to the
-            # user?
-            text = ev.alternatives[0].text
+            # first alternative is always the "most likely to be true"
+
+            if self._invalidate_interim_timeout is not None:
+                self._invalidate_interim_timeout.reset()
+
+            alt = ev.alternatives[0]
             self._queue.put_nowait(
                 rtc.TranscriptionSegment(
                     id=self._current_id,
-                    text=text,
+                    text=alt.text,
                     start_time=0,
                     end_time=0,
                     final=False,
-                    language="",  # TODO
+                    language=alt.language,
                 )
             )
         elif ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-            text = ev.alternatives[0].text
+            alt = ev.alternatives[0]
             self._queue.put_nowait(
                 rtc.TranscriptionSegment(
                     id=self._current_id,
-                    text=text,
+                    text=alt.text,
                     start_time=0,
                     end_time=0,
                     final=True,
-                    language="",  # TODO
+                    language=alt.language,
                 )
             )
 
             self._current_id = _utils.segment_uuid()
 
-    async def aclose(self, *, wait: bool = True) -> None:
-        self._queue.put_nowait(None)
-
-        if not wait:
-            self._main_task.cancel()
-
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
+    async def aclose(self) -> None:
+        await utils.aio.gracefully_cancel(self._main_task)

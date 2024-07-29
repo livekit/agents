@@ -30,7 +30,7 @@ import psutil
 from livekit import api
 from livekit.protocol import agent, models
 
-from . import http_server, ipc, utils
+from . import ipc, utils, telemetry
 from .exceptions import AssignmentTimeoutError
 from .job import JobAcceptArguments, JobContext, JobProcess, JobRequest, RunningJobInfo
 from .log import DEV_LEVEL, logger
@@ -41,19 +41,6 @@ ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_LOAD_INTERVAL = 10.0
 
 
-def _default_initialize_process_fnc(proc: JobProcess) -> Any:
-    return
-
-
-async def _default_request_fnc(ctx: JobRequest) -> None:
-    await ctx.accept()
-
-
-def _default_cpu_load_fnc() -> float:
-    percent = psutil.cpu_percent(1.0)
-    return percent / 100
-
-
 @dataclass
 class WorkerPermissions:
     can_publish: bool = True
@@ -62,6 +49,20 @@ class WorkerPermissions:
     can_update_metadata: bool = True
     can_publish_sources: list[models.TrackSource] = field(default_factory=list)
     hidden: bool = False
+
+
+def _default_cpu_load_fnc() -> float:
+    percent = psutil.cpu_percent(1.0)
+    return percent / 100
+
+
+def _default_initialize_process_fnc(proc: JobProcess) -> None:
+    # empty, default is initialize nothing
+    ...
+
+
+async def _default_request_fnc(ctx: JobRequest) -> None:
+    await ctx.accept()
 
 
 # NOTE: this object must be pickle-able
@@ -83,6 +84,7 @@ class WorkerOptions:
     api_secret: str | None = None
     host: str = ""  # default to all interfaces
     port: int = 8081
+    prometheus_port: int = 9090
 
 
 EventTypes = Literal["worker_registered"]
@@ -137,15 +139,28 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         self._api: api.LiveKitAPI | None = None
         self._http_session: aiohttp.ClientSession | None = None
-        self._http_server = http_server.HttpServer(
+
+        self._http_server = utils.http_server.HttpServer(
             opts.host, opts.port, loop=self._loop
+        )
+
+        async def _health_check(_: Any):
+            return aiohttp.web.Response(text="OK")
+
+        self._http_server.app.add_routes([aiohttp.web.get("/", _health_check)])
+
+        self._prometheus_server = telemetry.http_server.HttpServer(
+            opts.host, opts.prometheus_port, loop=self._loop
         )
 
     async def run(self):
         if not self._closed:
             raise Exception("worker is already running")
 
-        logger.info("starting worker", extra={"version": __version__})
+        logger.info(
+            "starting worker",
+            extra={"version": __version__, "nodename": utils.nodename()},
+        )
 
         self._closed = False
         self._proc_pool.start()
@@ -155,10 +170,19 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._http_session = aiohttp.ClientSession()
         self._close_future = asyncio.Future(loop=self._loop)
 
+        tasks = [
+            asyncio.create_task(self._worker_task(), name="worker_task"),
+            asyncio.create_task(self._prometheus_server.run()),
+            asyncio.create_task(self._http_server.run()),
+        ]
+
         try:
-            await asyncio.gather(self._worker_task(), self._http_server.run())
+            await asyncio.gather(*tasks)
         finally:
-            self._close_future.set_result(None)
+            await utils.aio.gracefully_cancel(*tasks)
+
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._close_future.set_result(None)
 
     @property
     def id(self) -> str:
@@ -190,9 +214,8 @@ class Worker(utils.EventEmitter[EventTypes]):
                     await proc.join()
 
         if timeout:
-            await asyncio.wait_for(
-                _join_jobs(), timeout
-            )  # raises asyncio.TimeoutError on timeout
+            # raises asyncio.TimeoutError on timeout
+            await asyncio.wait_for(_join_jobs(), timeout)
         else:
             await _join_jobs()
 
@@ -232,6 +255,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         await self._proc_pool.aclose()
         await self._http_session.close()
         await self._http_server.aclose()
+        await self._prometheus_server.aclose()
         await self._api.aclose()
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
@@ -511,7 +535,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         logger.info(
             "received job request",
-            extra={"job_request": msg.job, "resuming": msg.resuming},
+            extra={"job_request": job_req, "resuming": msg.resuming},
         )
 
         @utils.log_exceptions(logger=logger)

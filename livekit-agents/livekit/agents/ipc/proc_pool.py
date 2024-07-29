@@ -4,7 +4,7 @@ import asyncio
 from multiprocessing.context import BaseContext
 from typing import Any, Callable, Coroutine, Literal
 
-from .. import utils
+from .. import utils, telemetry
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
@@ -28,12 +28,11 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
-        self._mp_ctx = mp_ctx
+        self._mp_ctx, self._loop = mp_ctx, loop
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._close_timeout = close_timeout
         self._initialize_timeout = initialize_timeout
-        self._loop = loop
 
         self._proc_needed_sem = asyncio.Semaphore(num_idle_processes)
         self._warmed_proc_queue = asyncio.Queue[SupervisedProc]()
@@ -79,6 +78,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             self.emit("process_started", proc)
             try:
                 await proc.initialize()
+
                 # process where initialization times out will never fire "process_ready"
                 # neither be used to launch jobs
                 self.emit("process_ready", proc)

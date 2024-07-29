@@ -1,4 +1,5 @@
 import time
+import platform
 import uuid
 from typing import List, Union
 
@@ -46,5 +47,9 @@ def time_ms() -> int:
     return int(time.time() * 1000)
 
 
-def shortuuid() -> str:
-    return str(uuid.uuid4().hex)[:12]
+def shortuuid(prefix: str = "") -> str:
+    return f"{prefix}{str(uuid.uuid4().hex)[:12]}"
+
+
+def nodename():
+    return platform.node()

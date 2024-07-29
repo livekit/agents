@@ -7,53 +7,12 @@ import multiprocessing as mp
 import sys
 import threading
 from multiprocessing.context import BaseContext
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, Literal
 
-from .. import utils
+from .. import utils, telemetry
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from . import channel, proc_main, proto
-
-
-class LogQueueListener:
-    _sentinel = None
-
-    def __init__(
-        self, queue: mp.Queue, prepare_fnc: Callable[[logging.LogRecord], None]
-    ):
-        self._thread: threading.Thread | None = None
-        self._q = queue
-        self._prepare_fnc = prepare_fnc
-
-    def start(self) -> None:
-        self._thread = t = threading.Thread(
-            target=self._monitor, daemon=True, name="log_listener"
-        )
-        t.start()
-
-    def stop(self) -> None:
-        if self._thread is None:
-            return
-        self._q.put_nowait(self._sentinel)
-        self._thread.join()
-        self._thread = None
-
-    def handle(self, record: logging.LogRecord) -> None:
-        self._prepare_fnc(record)
-
-        lger = logging.getLogger(record.name)
-        if not lger.isEnabledFor(record.levelno):
-            return
-
-        lger.callHandlers(record)
-
-    def _monitor(self):
-        while True:
-            record = self._q.get()
-            if record is self._sentinel:
-                break
-
-            self.handle(record)
 
 
 class SupervisedProc:
@@ -224,10 +183,20 @@ class SupervisedProc:
 
     async def launch_job(self, info: RunningJobInfo) -> None:
         """start/assign a job to the process"""
+        if not self.started:
+            raise RuntimeError("process not started")
+
         if self._running_job is not None:
             raise RuntimeError("process already has a running job")
 
+        if self._closing:
+            raise RuntimeError("process is closing")
+
+        if not self._initialize_fut.done():
+            raise RuntimeError("process isn't initialized")
+
         self._running_job = info
+        telemetry.ipc.job_started()
         start_req = proto.StartJobRequest()
         start_req.running_job = info
         await self._pch.asend(start_req)
@@ -262,6 +231,7 @@ class SupervisedProc:
         monitor_task = asyncio.create_task(self._monitor_task(pong_timeout))
 
         await self._join_fut
+        # proc ended
         self._exitcode = self._proc.exitcode
         self._proc.close()
         await utils.aio.gracefully_cancel(ping_task, monitor_task)
@@ -273,6 +243,9 @@ class SupervisedProc:
                 f"job process exited with non-zero exit code {self.exitcode}",
                 extra=self.logging_extra(),
             )
+
+        if self._running_job is not None:
+            telemetry.ipc.job_ended()
 
     @utils.log_exceptions(logger=logger)
     async def _monitor_task(self, pong_timeout: utils.aio.Sleep) -> None:
@@ -322,3 +295,43 @@ class SupervisedProc:
             extra["job_id"] = self._running_job.job.id
 
         return extra
+
+
+class LogQueueListener:
+    _sentinel = None
+
+    def __init__(
+        self, queue: mp.Queue, prepare_fnc: Callable[[logging.LogRecord], None]
+    ):
+        self._thread: threading.Thread | None = None
+        self._q, self._prepare_fnc = queue, prepare_fnc
+
+    def start(self) -> None:
+        self._thread = t = threading.Thread(
+            target=self._monitor, daemon=True, name="log_listener"
+        )
+        t.start()
+
+    def stop(self) -> None:
+        if self._thread is None:
+            return
+        self._q.put_nowait(self._sentinel)
+        self._thread.join()
+        self._thread = None
+
+    def handle(self, record: logging.LogRecord) -> None:
+        self._prepare_fnc(record)
+
+        lger = logging.getLogger(record.name)
+        if not lger.isEnabledFor(record.levelno):
+            return
+
+        lger.callHandlers(record)
+
+    def _monitor(self):
+        while True:
+            record = self._q.get()
+            if record is self._sentinel:
+                break
+
+            self.handle(record)

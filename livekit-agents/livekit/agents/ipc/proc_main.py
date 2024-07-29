@@ -5,11 +5,12 @@ import contextlib
 import copy
 import logging
 import multiprocessing as mp
+import time
 from dataclasses import dataclass
 
 from livekit import rtc
 
-from .. import utils
+from .. import utils, telemetry
 from ..job import JobContext, JobProcess
 from ..log import logger
 from . import channel, proto
@@ -197,9 +198,16 @@ def main(args: proto.ProcStartArgs) -> None:
     ), "first message must be InitializeRequest"
 
     job_proc = JobProcess(start_arguments=args.user_arguments)
+
     logger.debug("initializing process", extra={"pid": job_proc.pid})
+    start_time = time.time()
     args.initialize_process_fnc(job_proc)
-    logger.debug("process initialized", extra={"pid": job_proc.pid})
+    elapsed = time.time() - start_time
+    telemetry.ipc.proc_initialized(elapsed)
+    logger.debug(
+        "process initialized",
+        extra={"pid": job_proc.pid, "elapsed": elapsed},
+    )
 
     # signal to the ProcPool that is worker is now ready to receive jobs
     loop.run_until_complete(cch.asend(proto.InitializeResponse()))
