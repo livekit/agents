@@ -644,6 +644,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._pending_agent_reply is not None
             and not self._pending_agent_reply.synthesis_handle.interrupted
         ):
+            # in some timing, we could end up with two pushed agent replies inside the speech queue.
+            # so make sure we directly interrupt every reply when pushing a new one
+            for speech in self._speech_q:
+                if speech.allow_interruptions and speech.is_reply:
+                    speech.synthesis_handle.interrupt()
+
             self._add_speech_for_playout(self._pending_agent_reply)
             self._pending_agent_reply = None
         elif not self._opts.preemptive_synthesis and self._transcribed_text:
