@@ -8,9 +8,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-load_dotenv()
-
-
 async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
         role="system",
