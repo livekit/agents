@@ -158,7 +158,7 @@ class VADStream(agents.vad.VADStream):
                 to_copy = min(remaining_samples, og_needed_samples)
                 remaining_samples -= to_copy
                 og_needed_samples -= to_copy
-                og_window_data[-og_needed_samples:] = frame_data[:to_copy]
+                og_window_data[:-og_needed_samples] = frame_data[:to_copy]
 
                 if og_needed_samples != 0:
                     continue
