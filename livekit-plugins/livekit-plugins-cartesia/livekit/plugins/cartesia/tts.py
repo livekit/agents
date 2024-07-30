@@ -254,7 +254,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal eos_sent
 
             async for data in sentence_stream:
-                data_pkt["transcript"] = f"{data.token} " # add a space to separate words
+                if not data.token.endswith(" "): # ensure token ends with space
+                    data.token += " "
+                data_pkt["transcript"] = data.token
                 data_pkt["continue"] = True # continue to send more tokens
                 await ws_conn.send_str(json.dumps(data_pkt))
 
