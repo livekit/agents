@@ -127,6 +127,9 @@ class VADStream(agents.vad.VADStream):
         pub_silence_duration = 0.0
         pub_current_sample = 0
 
+        speech_threshold_duration = 0.0
+        silence_threshold_duration = 0.0
+
         async for frame in self._input_ch:
             if not isinstance(frame, rtc.AudioFrame):
                 continue  # ignore flush sentinel for now
@@ -156,12 +159,17 @@ class VADStream(agents.vad.VADStream):
             remaining_samples = len(frame_data)
             while remaining_samples > 0:
                 to_copy = min(remaining_samples, og_needed_samples)
+
+                index = len(og_window_data) - og_needed_samples
+                og_window_data[index:index + to_copy] = frame_data[:to_copy]
+
                 remaining_samples -= to_copy
                 og_needed_samples -= to_copy
-                og_window_data[:-og_needed_samples] = frame_data[:to_copy]
 
                 if og_needed_samples != 0:
                     continue
+
+                og_needed_samples = og_window_size_samples
 
                 # copy the data to the inference buffer by sampling at each index_step & convert to float
                 np.divide(
@@ -187,34 +195,11 @@ class VADStream(agents.vad.VADStream):
                     )
 
                 pub_current_sample += og_window_size_samples
-                og_needed_samples = og_window_size_samples
 
-                # update speech states if needed & emit events
-                if raw_prob >= self._opts.activation_threshold:
+                if pub_speaking:
                     pub_speech_duration += window_duration
-                    pub_silence_duration = 0
-                    speech_buffer_index += og_window_size_samples
-
-                    to_copy = min(
-                        og_window_size_samples, len(speech_buffer) - speech_buffer_index
-                    )
-                    if to_copy > 0:
-                        speech_buffer[speech_buffer_index:to_copy] = og_window_data
-
-                    if (
-                        not pub_speaking
-                        and pub_speech_duration >= self._opts.min_speech_duration
-                    ):
-                        pub_speaking = True
-                        self._event_ch.send_nowait(
-                            agents.vad.VADEvent(
-                                type=agents.vad.VADEventType.START_OF_SPEECH,
-                                samples_index=pub_current_sample,
-                                silence_duration=pub_silence_duration,
-                                speech_duration=pub_speech_duration,
-                                speaking=True,
-                            )
-                        )
+                else:
+                    pub_silence_duration += window_duration
 
                 self._event_ch.send_nowait(
                     agents.vad.VADEvent(
@@ -228,16 +213,48 @@ class VADStream(agents.vad.VADStream):
                     )
                 )
 
-                if raw_prob < self._opts.activation_threshold:
-                    pub_silence_duration += window_duration
-                    pub_speech_duration = 0
-                    speech_buffer_index = 0
+                # update speech states if needed & emit events
+                if raw_prob >= self._opts.activation_threshold:
+                    speech_threshold_duration += window_duration
+                    silence_threshold_duration = 0.0
+
+                    to_copy = min(
+                        og_window_size_samples, len(speech_buffer) - speech_buffer_index
+                    )
+                    if to_copy > 0:
+                        speech_buffer[speech_buffer_index:speech_buffer_index+to_copy] = og_window_data
+
+                    speech_buffer_index += og_window_size_samples
+
+                    if (
+                            not pub_speaking
+                            and speech_threshold_duration >= self._opts.min_speech_duration
+                    ):
+                        pub_speaking = True
+                        pub_silence_duration = 0.0
+                        pub_speech_duration = speech_threshold_duration
+
+                        self._event_ch.send_nowait(
+                            agents.vad.VADEvent(
+                                type=agents.vad.VADEventType.START_OF_SPEECH,
+                                samples_index=pub_current_sample,
+                                silence_duration=pub_silence_duration,
+                                speech_duration=pub_speech_duration,
+                                speaking=True,
+                            )
+                        )
+                else:  # < self._opts.activation_threshold
+                    silence_threshold_duration += window_duration
+                    speech_threshold_duration = 0.0
 
                     if (
                         pub_speaking
-                        and pub_silence_duration >= self._opts.min_silence_duration
+                        and silence_threshold_duration >= self._opts.min_silence_duration
                     ):
                         pub_speaking = False
+                        pub_speech_duration = 0.0
+                        pub_silence_duration = silence_threshold_duration
+
                         self._event_ch.send_nowait(
                             agents.vad.VADEvent(
                                 type=agents.vad.VADEventType.END_OF_SPEECH,
@@ -255,3 +272,6 @@ class VADStream(agents.vad.VADStream):
                                 speaking=False,
                             )
                         )
+
+                        speech_buffer_index = 0
+
