@@ -40,6 +40,7 @@ class _TTSOptions:
     voice: str | list[float]
     api_key: str
     language: str
+    sentence_tokenizer: tokenize.SentenceTokenizer
 
 
 class TTS(tts.TTS):
@@ -53,6 +54,7 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -71,6 +73,7 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             voice=voice,
             api_key=api_key,
+            sentence_tokenizer=sentence_tokenizer,
         )
         self._session = http_session
 
@@ -159,32 +162,32 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
         @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
-            """tokenize text from the input_ch to words"""
-            word_stream = None
+            """tokenize text from the input_ch to sentences"""
+            sentence_stream = None
             async for input in self._input_ch:
                 if isinstance(input, str):
-                    if word_stream is None:
+                    if sentence_stream is None:
                         # new segment (after flush for e.g)
-                        word_stream = self._opts.word_tokenizer.stream()
-                        self._segments_ch.send_nowait(word_stream)
+                        sentence_stream = self._opts.sentence_tokenizer.stream()
+                        self._segments_ch.send_nowait(sentence_stream)
 
-                    word_stream.push_text(input)
+                    sentence_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
-                    if word_stream is not None:
-                        word_stream.end_input()
+                    if sentence_stream is not None:
+                        sentence_stream.end_input()
 
-                    word_stream = None
+                    sentence_stream = None
 
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
         async def _run():
-            async for word_stream in self._segments_ch:
-                await self._run_ws(word_stream)
+            async for sentence_stream in self._segments_ch:
+                await self._run_ws(sentence_stream)
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
@@ -197,7 +200,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run_ws(
         self,
-        word_stream: tokenize.WordStream,
+        sentence_stream: tokenize.SentenceStream,
         max_retry: int = 3,
     ) -> None:
         ws_conn: aiohttp.ClientWebSocketResponse | None = None
@@ -250,7 +253,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def send_task():
             nonlocal eos_sent
 
-            async for data in word_stream:
+            async for data in sentence_stream:
                 data_pkt["transcript"] = f"{data.token} " # add a space to separate words
                 data_pkt["continue"] = True # continue to send more tokens
                 await ws_conn.send_str(json.dumps(data_pkt))
