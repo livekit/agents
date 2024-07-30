@@ -63,6 +63,9 @@ class SynthesisHandle:
 
     def interrupt(self) -> None:
         """Interrupt the speech"""
+        if self.interrupted:
+            return
+
         if self._play_handle is not None:
             self._play_handle.interrupt()
 
