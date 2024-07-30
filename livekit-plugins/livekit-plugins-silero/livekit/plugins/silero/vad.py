@@ -161,7 +161,7 @@ class VADStream(agents.vad.VADStream):
                 to_copy = min(remaining_samples, og_needed_samples)
 
                 index = len(og_window_data) - og_needed_samples
-                og_window_data[index:index + to_copy] = frame_data[:to_copy]
+                og_window_data[index : index + to_copy] = frame_data[:to_copy]
 
                 remaining_samples -= to_copy
                 og_needed_samples -= to_copy
@@ -222,13 +222,15 @@ class VADStream(agents.vad.VADStream):
                         og_window_size_samples, len(speech_buffer) - speech_buffer_index
                     )
                     if to_copy > 0:
-                        speech_buffer[speech_buffer_index:speech_buffer_index+to_copy] = og_window_data
+                        speech_buffer[
+                            speech_buffer_index : speech_buffer_index + to_copy
+                        ] = og_window_data
 
                     speech_buffer_index += og_window_size_samples
 
                     if (
-                            not pub_speaking
-                            and speech_threshold_duration >= self._opts.min_speech_duration
+                        not pub_speaking
+                        and speech_threshold_duration >= self._opts.min_speech_duration
                     ):
                         pub_speaking = True
                         pub_silence_duration = 0.0
@@ -249,7 +251,8 @@ class VADStream(agents.vad.VADStream):
 
                     if (
                         pub_speaking
-                        and silence_threshold_duration >= self._opts.min_silence_duration
+                        and silence_threshold_duration
+                        >= self._opts.min_silence_duration
                     ):
                         pub_speaking = False
                         pub_speech_duration = 0.0
@@ -274,4 +277,3 @@ class VADStream(agents.vad.VADStream):
                         )
 
                         speech_buffer_index = 0
-
