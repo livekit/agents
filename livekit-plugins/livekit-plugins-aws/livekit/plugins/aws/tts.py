@@ -12,15 +12,11 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 from livekit import rtc
 from livekit.agents import tts, utils
-from livekit.agents.utils import codecs
 import boto3
 from aiobotocore.session import get_session, AioSession
 
@@ -52,7 +48,9 @@ class TTS(tts.TTS):
         speech_secret: str | None = None,
     ) -> None:
         super().__init__(
-            streaming_supported=False,
+            capabilities=tts.TTSCapabilities(
+                streaming=False,
+            ),
             sample_rate=TTS_SAMPLE_RATE,
             num_channels=TTS_NUM_CHANNELS,
         )
@@ -95,87 +93,43 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self, text: str, opts: _TTSOptions, session: AioSession
     ) -> None:
-        self._opts = opts
-        self._text = text
-        self._session = session
-        self._decoder = codecs.Mp3StreamDecoder()
-        self._main_task: asyncio.Task | None = None
-        self._queue = asyncio.Queue[Optional[tts.SynthesizedAudio]]()
+        super().__init__()
+        self._text, self._opts, self._session = text, opts, session
 
-    async def _run(self):
-        try:
-            async with self._session.create_client('polly', region_name=self._opts.speech_region) as client:
-                response = await client.synthesize_speech(
-                    Text=self._text, OutputFormat=self._opts.output_format, Engine=self._opts.speech_engine,
-                    VoiceId=self._opts.voice, TextType="text", SampleRate=str(TTS_SAMPLE_RATE)
-                )
-                if "AudioStream" in response:
-                    async with response['AudioStream'] as resp:
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
+        request_id = utils.shortuuid()
+        segment_id = utils.shortuuid()
+
+        async with self._session.create_client('polly', region_name=self._opts.speech_region) as client:
+            response = await client.synthesize_speech(
+                Text=self._text, OutputFormat=self._opts.output_format, Engine=self._opts.speech_engine,
+                VoiceId=self._opts.voice, TextType="text", SampleRate=str(TTS_SAMPLE_RATE)
+            )
+            if "AudioStream" in response:
+                decoder = utils.codecs.Mp3StreamDecoder()
+                async with response['AudioStream'] as resp:
+                    async for data, _ in resp.content.iter_chunks():
                         if self._opts.output_format == "mp3":
-                            async for data, _ in resp.content.iter_chunks():
-                                frames = self._decoder.decode_chunk(data)
-                                for frame in frames:
-                                    self._queue.put_nowait(
-                                        tts.SynthesizedAudio(text=self._text, data=frame)
-                                    )
-                        else:
-                            bytes_per_frame = (self._opts.sample_rate // 100) * 2
-                            buf = bytearray()
-
-                            async for data, _ in resp.content.iter_chunks():
-                                buf.extend(data)
-
-                                while len(buf) >= bytes_per_frame:
-                                    frame_data = buf[:bytes_per_frame]
-                                    buf = buf[bytes_per_frame:]
-
-                                    self._queue.put_nowait(
-                                        tts.SynthesizedAudio(
-                                            text=self._text,
-                                            data=rtc.AudioFrame(
-                                                data=frame_data,
-                                                sample_rate=self._opts.sample_rate,
-                                                num_channels=1,
-                                                samples_per_channel=len(frame_data) // 2,
-                                            ),
-                                        )
-                                    )
-
-                            # send any remaining data
-                            if len(buf) > 0:
-                                self._queue.put_nowait(
+                            frames = decoder.decode_chunk(data)
+                            for frame in frames:
+                                self._event_ch.send_nowait(
                                     tts.SynthesizedAudio(
-                                        text=self._text,
-                                        data=rtc.AudioFrame(
-                                            data=buf,
-                                            sample_rate=self._opts.sample_rate,
-                                            num_channels=1,
-                                            samples_per_channel=len(buf) // 2,
-                                        ),
+                                        request_id=request_id, segment_id=segment_id, frame=frame
                                     )
                                 )
-                else:
-                    logger.error("polly tts failed to synthesizes speech")
-
-        except Exception:
-            logger.exception("polly tts main task failed in chunked stream")
-        finally:
-            self._queue.put_nowait(None)
-
-    async def __anext__(self) -> tts.SynthesizedAudio:
-        if not self._main_task:
-            self._main_task = asyncio.create_task(self._run())
-
-        frame = await self._queue.get()
-        if frame is None:
-            raise StopAsyncIteration
-
-        return frame
-
-    async def aclose(self) -> None:
-        if not self._main_task:
-            return
-
-        self._main_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
+                        else:
+                            self._event_ch.send_nowait(
+                                tts.SynthesizedAudio(
+                                    request_id=request_id,
+                                    segment_id=segment_id,
+                                    frame=rtc.AudioFrame(
+                                        data=data,
+                                        sample_rate=TTS_SAMPLE_RATE,
+                                        num_channels=1,
+                                        samples_per_channel=len(data) // 2,  # 16-bit
+                                    ),
+                                )
+                            )
+            else:
+                logger.error("polly tts failed to synthesizes speech")

@@ -48,9 +48,9 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "livekit-agents~=0.7",
-        "aiobotocore~=2.13.1",
-        "boto3~=1.34.149",
+        "livekit-agents>=0.8.0.dev0",
+        "aiobotocore==2.13.1",
+        "boto3==1.34.131",
         "amazon-transcribe~=0.6.2",
     ],
     project_urls={
