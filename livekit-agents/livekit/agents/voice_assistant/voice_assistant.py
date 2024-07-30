@@ -381,6 +381,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             self._deferred_validation.on_human_final_transcript(ev.alternatives[0].text)
 
+            words = self._opts.transcription.word_tokenizer.tokenize(
+                text=ev.alternatives[0].text
+            )
+            if len(words) >= 3:
+                # VAD can sometimes not detect that the human is speaking
+                # to make the interruption more reliable, we also interrupt on the final transcript.
+                self._interrupt_if_possible()
+
         self._human_input.on("start_of_speech", _on_start_of_speech)
         self._human_input.on("vad_inference_done", _on_vad_updated)
         self._human_input.on("end_of_speech", _on_end_of_speech)
