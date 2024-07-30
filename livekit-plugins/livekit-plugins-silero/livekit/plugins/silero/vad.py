@@ -117,9 +117,8 @@ class VADStream(agents.vad.VADStream):
             self._model.window_size_samples, dtype=np.float32
         )
 
-        speech_buffer: np.ndarray | None = (
-            None  # a copy is exposed to the user in END_OF_SPEECH
-        )
+        # a copy is exposed to the user in END_OF_SPEECH
+        speech_buffer: np.ndarray | None = None
         speech_buffer_index: int = 0
 
         # "pub_" means public, these values are exposed to the users through events
