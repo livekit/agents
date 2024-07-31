@@ -53,7 +53,7 @@ async def test_recognize(stt: agents.stt.STT):
     assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
 
 
-STREAM_VAD = silero.VAD.load()
+STREAM_VAD = silero.VAD.load(min_silence_duration=0.75)
 STREAM_STT = [
     deepgram.STT(),
     google.STT(),
