@@ -11,7 +11,7 @@ from livekit import rtc
 from .. import stt, tokenize, tts, utils, vad
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
 from .agent_output import AgentOutput, SynthesisHandle
-from .cancellable_source import CancellableAudioSource
+from .agent_playout import AgentPlayout
 from .human_input import HumanInput
 from .log import logger
 from .plotter import AssistantPlotter
@@ -19,6 +19,7 @@ from .plotter import AssistantPlotter
 
 @dataclass
 class _SpeechInfo:
+    id: str  # useful to recognize a specific speech in logs
     source: str | LLMStream | AsyncIterable[str]
     allow_interruptions: bool
     add_to_chat_ctx: bool
@@ -305,6 +306,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         await self._track_published_fut
         self._add_speech_for_playout(
             _SpeechInfo(
+                id=utils.shortuuid(),
                 source=source,
                 allow_interruptions=allow_interruptions,
                 add_to_chat_ctx=add_to_chat_ctx,
@@ -354,9 +356,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             tv = 1.0
             if self._opts.allow_interruptions:
                 tv = max(0.0, 1.0 - ev.probability)
-                self._agent_output.audio_source.target_volume = tv
+                self._agent_output.playout.target_volume = tv
 
-            smoothed_tv = self._agent_output.audio_source.smoothed_volume
+            smoothed_tv = self._agent_output.playout.smoothed_volume
 
             self._plotter.plot_value("raw_vol", tv)
             self._plotter.plot_value("smoothed_vol", smoothed_tv)
@@ -406,10 +408,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         )
 
-        cancellable_audio_source = CancellableAudioSource(source=audio_source)
+        agent_playout = AgentPlayout(source=audio_source)
         self._agent_output = AgentOutput(
             room=self._room,
-            source=cancellable_audio_source,
+            agent_playout=agent_playout,
             llm=self._llm,
             tts=self._tts,
         )
@@ -422,8 +424,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("agent_stopped_speaking")
             self.emit("agent_stopped_speaking")
 
-        cancellable_audio_source.on("playout_started", _on_playout_started)
-        cancellable_audio_source.on("playout_stopped", _on_playout_stopped)
+        agent_playout.on("playout_started", _on_playout_started)
+        agent_playout.on("playout_stopped", _on_playout_stopped)
 
         self._track_published_fut.set_result(None)
 
@@ -464,12 +466,22 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 )
 
             reply = _SpeechInfo(
+                id=utils.shortuuid(),
                 source=llm_stream,
                 allow_interruptions=self._opts.allow_interruptions,
                 add_to_chat_ctx=True,
                 synthesis_handle=self._synthesize_agent_speech(llm_stream),
                 is_reply=True,
                 user_question=user_transcript,
+            )
+
+            logger.debug(
+                "synthesizing agent reply",
+                extra={
+                    "speech_id": reply.id,
+                    "user_transcript": user_transcript,
+                    "validated": validated,
+                },
             )
 
             if validated:
@@ -493,7 +505,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if synthesis_handle.interrupted:
             return
 
-        logger.debug("VoiceAssistant._play_speech started")
+        logger.debug("_play_speech started", extra={"speech_id": speech_info.id})
 
         user_question = speech_info.user_question
         user_speech_commited = False
@@ -527,6 +539,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ):
                 return
 
+            logger.debug(
+                "committed user transcript", extra={"user_transcript": user_question}
+            )
             user_msg = ChatMessage.create(text=user_question, role="user")
             self._chat_ctx.messages.append(user_msg)
             self.emit("user_speech_committed", user_msg)
@@ -567,9 +582,24 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             call_ctx = AssistantCallContext(self, speech_info.source)
             tk = _CallContextVar.set(call_ctx)
             self.emit("function_calls_collected", speech_info.source.function_calls)
-            called_fncs = speech_info.source.execute_functions()
-            tasks = [called_fnc.task for called_fnc in called_fncs]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            called_fncs_info = speech_info.source.function_calls
+
+            called_fncs = []
+            for fnc in called_fncs_info:
+                called_fnc = fnc.execute()
+                called_fncs.append(called_fnc)
+                logger.debug(
+                    "executed ai function",
+                    extra={
+                        "function": fnc.function_info.name,
+                        "speech_id": speech_info.id,
+                    },
+                )
+                try:
+                    await called_fnc.task
+                except Exception:
+                    pass
+
             self.emit("function_calls_finished", called_fncs)
             _CallContextVar.reset(tk)
 
@@ -616,7 +646,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             else:
                 self.emit("agent_speech_committed", msg)
 
-        logger.debug("VoiceAssistant._play_speech ended")
+            logger.debug(
+                "committed agent speech",
+                extra={"speech_id": speech_info.id, "interrupted": interrupted},
+            )
+
+        logger.debug("_play_speech ended", extra={"speech_id": speech_info.id})
 
     def _synthesize_agent_speech(
         self,
@@ -650,6 +685,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 if speech.allow_interruptions and speech.is_reply:
                     speech.synthesis_handle.interrupt()
 
+            logger.debug(
+                "validated agent reply",
+                extra={"speech_id": self._pending_agent_reply.id},
+            )
             self._add_speech_for_playout(self._pending_agent_reply)
             self._pending_agent_reply = None
         elif not self._opts.preemptive_synthesis and self._transcribed_text:

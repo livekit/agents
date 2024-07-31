@@ -9,7 +9,7 @@ from datetime import date, datetime, time, timezone
 from inspect import istraceback
 from typing import Any, Dict, Tuple
 
-from ..log import logger
+from ..plugin import Plugin
 
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
@@ -196,6 +196,25 @@ def setup_logging(log_level: str, production: bool = True) -> None:
 
     root = logging.getLogger()
     root.addHandler(handler)
-    root.setLevel(logging.WARN)
 
-    logger.setLevel(log_level)
+    if root.level == logging.NOTSET:
+        root.setLevel(logging.WARN)
+
+    from ..log import logger
+
+    if logger.level == logging.NOTSET:
+        logger.setLevel(log_level)
+
+    from ..voice_assistant.log import logger
+
+    if logger.level == logging.NOTSET:
+        logger.setLevel(log_level)
+
+    def _configure_plugin_logger(plugin: Plugin) -> None:
+        if plugin.logger is not None and plugin.logger.level == logging.NOTSET:
+            plugin.logger.setLevel(log_level)
+
+    for plugin in Plugin.registered_plugins:
+        _configure_plugin_logger(plugin)
+
+    Plugin.emitter.on("plugin_registered", _configure_plugin_logger)

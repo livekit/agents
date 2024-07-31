@@ -14,6 +14,7 @@ EventTypes = Literal["playout_started", "playout_stopped"]
 class PlayoutHandle:
     def __init__(
         self,
+        speech_id: str,
         playout_source: AsyncIterable[rtc.AudioFrame],
         transcription_fwd: transcription.TTSSegmentsForwarder | None = None,
     ) -> None:
@@ -22,6 +23,11 @@ class PlayoutHandle:
         self._interrupted = False
         self._time_played = 0.0
         self._done_fut = asyncio.Future[None]()
+        self._speech_id = speech_id
+
+    @property
+    def speech_id(self) -> str:
+        return self._speech_id
 
     @property
     def interrupted(self) -> bool:
@@ -44,7 +50,7 @@ class PlayoutHandle:
         return self._done_fut
 
 
-class CancellableAudioSource(utils.EventEmitter[EventTypes]):
+class AgentPlayout(utils.EventEmitter[EventTypes]):
     def __init__(self, *, source: rtc.AudioSource, alpha: float = 0.95) -> None:
         super().__init__()
         self._source = source
@@ -76,6 +82,7 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
 
     def play(
         self,
+        speech_id: str,
         playout_source: AsyncIterable[rtc.AudioFrame],
         transcription_fwd: transcription.TTSSegmentsForwarder | None = None,
     ) -> PlayoutHandle:
@@ -83,7 +90,9 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
             raise ValueError("cancellable source is closed")
 
         handle = PlayoutHandle(
-            playout_source=playout_source, transcription_fwd=transcription_fwd
+            speech_id=speech_id,
+            playout_source=playout_source,
+            transcription_fwd=transcription_fwd,
         )
         self._playout_atask = asyncio.create_task(
             self._playout_task(self._playout_atask, handle)
@@ -106,12 +115,15 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
             if old_task is not None:
                 await utils.aio.gracefully_cancel(old_task)
 
-            logger.debug("CancellableAudioSource._playout_task: started")
-
             async for frame in handle._playout_source:
                 if first_frame:
                     if handle._tr_fwd is not None:
                         handle._tr_fwd.segment_playout_started()
+
+                    logger.debug(
+                        "AgentPlayout: first frame started playing",
+                        extra={"speech_id": handle.speech_id},
+                    )
 
                     self.emit("playout_started")
                     first_frame = False
@@ -156,4 +168,8 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
             handle._done_fut.set_result(None)
             if handle._tr_fwd is not None:
                 await handle._tr_fwd.aclose()
-            logger.debug("CancellableAudioSource._playout_task: ended")
+
+            logger.debug(
+                "AgentPlayout: done playing",
+                extra={"speech_id": handle.speech_id, "cancelled": cancelled},
+            )
