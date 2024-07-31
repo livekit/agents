@@ -257,8 +257,9 @@ class VADStream(agents.vad.VADStream):
                         pub_speech_duration = 0.0
                         pub_silence_duration = silence_threshold_duration
 
-                        speech_buffer_index = 0
-                        speech_data = speech_buffer[:speech_buffer_index].tobytes()  # copy the data from speech_buffer
+                        speech_data = speech_buffer[
+                            :speech_buffer_index
+                        ].tobytes()  # copy the data from speech_buffer
 
                         self._event_ch.send_nowait(
                             agents.vad.VADEvent(
@@ -270,7 +271,7 @@ class VADStream(agents.vad.VADStream):
                                     rtc.AudioFrame(
                                         sample_rate=og_sample_rate,
                                         num_channels=1,
-                                        samples_per_channel=len(speech_data),
+                                        samples_per_channel=speech_buffer_index,
                                         data=speech_data,
                                     )
                                 ],
@@ -278,3 +279,4 @@ class VADStream(agents.vad.VADStream):
                             )
                         )
 
+                        speech_buffer_index = 0
