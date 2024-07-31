@@ -304,13 +304,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             add_to_chat_ctx: Whether to add the speech to the chat context.
         """
         await self._track_published_fut
+        speech_id = utils.shortuuid()
         self._add_speech_for_playout(
             _SpeechInfo(
-                id=utils.shortuuid(),
+                id=speech_id,
                 source=source,
                 allow_interruptions=allow_interruptions,
                 add_to_chat_ctx=add_to_chat_ctx,
-                synthesis_handle=self._synthesize_agent_speech(source),
+                synthesis_handle=self._synthesize_agent_speech(speech_id, source),
             )
         )
 
@@ -465,12 +466,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     self, chat_ctx=copied_ctx
                 )
 
+            speech_id = utils.shortuuid()
             reply = _SpeechInfo(
-                id=utils.shortuuid(),
+                id=speech_id,
                 source=llm_stream,
                 allow_interruptions=self._opts.allow_interruptions,
                 add_to_chat_ctx=True,
-                synthesis_handle=self._synthesize_agent_speech(llm_stream),
+                synthesis_handle=self._synthesize_agent_speech(speech_id, llm_stream),
                 is_reply=True,
                 user_question=user_transcript,
             )
@@ -626,7 +628,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 answer_llm_stream = self._llm.chat(
                     chat_ctx=chat_ctx, fnc_ctx=self._fnc_ctx
                 )
-                answer_synthesis = self._synthesize_agent_speech(answer_llm_stream)
+                answer_synthesis = self._synthesize_agent_speech(
+                    speech_info.id, answer_llm_stream
+                )
                 # replace the synthesis handle with the new one to allow interruption
                 speech_info.synthesis_handle = answer_synthesis
                 play_handle = answer_synthesis.play()
@@ -655,6 +659,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     def _synthesize_agent_speech(
         self,
+        speech_id: str,
         source: str | LLMStream | AsyncIterable[str],
     ) -> SynthesisHandle:
         assert (
@@ -665,6 +670,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             source = _llm_stream_to_str_iterable(source)
 
         return self._agent_output.synthesize(
+            speech_id=speech_id,
             transcript=source,
             transcription=self._opts.transcription.agent_transcription,
             transcription_speed=self._opts.transcription.agent_transcription_speed,
