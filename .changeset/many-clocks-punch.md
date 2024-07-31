@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-voiceassistant: cleanup validation behaviour
+voiceassistant: cleanup validation behaviour #545
