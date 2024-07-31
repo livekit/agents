@@ -591,7 +591,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 called_fnc = fnc.execute()
                 called_fncs.append(called_fnc)
                 logger.debug(
-                    "executed ai function",
+                    "executing ai function",
                     extra={
                         "function": fnc.function_info.name,
                         "speech_id": speech_info.id,

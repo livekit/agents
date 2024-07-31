@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
+from .. import utils
 from . import function_context
 from .chat_context import ChatContext, ChatRole
 
@@ -65,7 +66,7 @@ class LLMStream(abc.ABC):
         return self._fnc_ctx
 
     def execute_functions(self) -> list[function_context.CalledFunction]:
-        """Run all functions in this stream."""
+        """Execute all functions concurrently of this stream."""
         called_functions: list[function_context.CalledFunction] = []
         for fnc_info in self._function_calls_info:
             called_fnc = fnc_info.execute()
@@ -76,10 +77,7 @@ class LLMStream(abc.ABC):
         return called_functions
 
     async def aclose(self) -> None:
-        for task in self._tasks:
-            task.cancel()
-
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+        await utils.aio.gracefully_cancel(*self._tasks)
 
     def __aiter__(self) -> AsyncIterator[ChatChunk]:
         return self
