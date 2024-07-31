@@ -18,7 +18,7 @@ def new_inference_session(force_cpu: bool) -> onnxruntime.InferenceSession:
         / "silero_vad.onnx"
     )
     ctx = importlib.resources.as_file(res)
-    path = _resource_files.enter_context(ctx)
+    path = str(_resource_files.enter_context(ctx))
 
     opts = onnxruntime.SessionOptions()
     opts.inter_op_num_threads = 1
@@ -27,10 +27,10 @@ def new_inference_session(force_cpu: bool) -> onnxruntime.InferenceSession:
 
     if force_cpu and "CPUExecutionProvider" in onnxruntime.get_available_providers():
         session = onnxruntime.InferenceSession(
-            str(path), providers=["CPUExecutionProvider"], ess_options=opts
+            path, providers=["CPUExecutionProvider"], ess_options=opts
         )
     else:
-        session = onnxruntime.InferenceSession(str(path), sess_options=opts)
+        session = onnxruntime.InferenceSession(path, sess_options=opts)
 
     return session
 
@@ -52,7 +52,16 @@ class OnnxModel:
             self._window_size_samples = 512
             self._context_size = 64
 
-        self.reset_states()
+        self._sample_rate_nd = np.array(sample_rate, dtype=np.int64)
+        self._context = np.zeros((1, self._context_size), dtype=np.float32)
+        self._rnn_state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._input_buffer = np.zeros(
+            (1, self._context_size + self._window_size_samples), dtype=np.float32
+        )
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
 
     @property
     def window_size_samples(self) -> int:
@@ -62,25 +71,15 @@ class OnnxModel:
     def context_size(self) -> int:
         return self._context_size
 
-    def reset_states(self) -> None:
-        self._state = np.zeros((2, 1, 128), dtype=np.float32)
-        self._context = np.zeros((1, self._context_size), dtype=np.float32)
-
     def __call__(self, x: np.ndarray) -> float:
-        if x.ndim == 1:
-            x = np.expand_dims(x, axis=0)
+        self._input_buffer[:, : self._context_size] = self._context
+        self._input_buffer[:, self._context_size :] = x
 
-        if x.shape[1] != self._window_size_samples:
-            raise ValueError(
-                f"Input shape must be (N, {self._window_size_samples}), got {x.shape}"
-            )
-
-        x = np.concatenate([self._context, x], axis=1)
         ort_inputs = {
-            "input": x,
-            "state": self._state,
-            "sr": np.array(self._sample_rate, dtype=np.int64),
+            "input": self._input_buffer,
+            "state": self._rnn_state,
+            "sr": self._sample_rate_nd,
         }
         out, self._state = self._sess.run(None, ort_inputs)
-        self._context = x[..., -self._context_size :]
+        self._context = self._input_buffer[:, -self._context_size :]
         return out.item()
