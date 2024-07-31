@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
 import onnxruntime  # type: ignore
 from livekit import agents, rtc
-from livekit.agents import utils
 
 from . import onnx_model
 from .log import logger
@@ -96,206 +96,196 @@ class VAD(agents.vad.VAD):
         )
 
 
-@dataclass
-class _WindowData:
-    inference_data: np.ndarray
-    # data returned to the user are the original frames (int16)
-    original_data: np.ndarray
-
-
 class VADStream(agents.vad.VADStream):
     def __init__(self, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
         super().__init__()
         self._opts, self._model = opts, model
-        self._original_sample_rate: int | None = None
-        self._window_data: _WindowData | None = None
-        self._remaining_samples = model.window_size_samples
+        self._loop = asyncio.get_event_loop()
+
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._task.add_done_callback(lambda _: self._executor.shutdown(wait=False))
 
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self):
-        window_ch = utils.aio.Chan[_WindowData]()
-        await asyncio.gather(
-            self._run_inference(window_ch), self._forward_input(window_ch)
+        og_sample_rate = 0
+        og_needed_samples = 0  # needed samples to complete the window data
+        og_window_size_samples = 0  # size in samples of og_window_data
+        og_window_data: np.ndarray | None = None
+
+        index_step = 0
+        inference_window_data = np.empty(
+            self._model.window_size_samples, dtype=np.float32
         )
 
-    async def _forward_input(self, window_tx: utils.aio.ChanSender[_WindowData]):
-        """
-        Push frame to the VAD stream for processing.
-        The frames are split into chunks of the given window size and processed.
-        (Buffered if the window size is not reached yet)
-        """
+        # a copy is exposed to the user in END_OF_SPEECH
+        speech_buffer: np.ndarray | None = None
+        speech_buffer_index: int = 0
+
+        # "pub_" means public, these values are exposed to the users through events
+        pub_speaking = False
+        pub_speech_duration = 0.0
+        pub_silence_duration = 0.0
+        pub_current_sample = 0
+
+        speech_threshold_duration = 0.0
+        silence_threshold_duration = 0.0
+
         async for frame in self._input_ch:
             if not isinstance(frame, rtc.AudioFrame):
-                continue
+                continue  # ignore flush sentinel for now
 
             if frame.sample_rate != 8000 and frame.sample_rate % 16000 != 0:
                 logger.error("only 8KHz and 16KHz*X sample rates are supported")
                 continue
+            elif og_window_data is None:
+                # alloc the og buffers now that we know the pushed sample rate
+                og_sample_rate = frame.sample_rate
+                og_window_size_samples = int(
+                    (self._model.window_size_samples / self._model.sample_rate)
+                    * og_sample_rate
+                )
+                og_window_data = np.empty(og_window_size_samples, dtype=np.int16)
+                og_needed_samples = og_window_size_samples
+                index_step = frame.sample_rate // 16000
 
-            if (
-                self._original_sample_rate is not None
-                and self._original_sample_rate != frame.sample_rate
-            ):
-                raise ValueError("a frame with another sample rate was already pushed")
+                speech_buffer = np.empty(
+                    int(self._opts.max_buffered_speech * og_sample_rate), dtype=np.int16
+                )
+            elif og_sample_rate != frame.sample_rate:
+                logger.error("a frame with another sample rate was already pushed")
+                continue
 
-            self._original_sample_rate = frame.sample_rate
-            step = frame.sample_rate // 16000
+            frame_data = np.frombuffer(frame.data, dtype=np.int16)
+            remaining_samples = len(frame_data)
+            while remaining_samples > 0:
+                to_copy = min(remaining_samples, og_needed_samples)
 
-            if self._window_data is None:
-                self._window_data = _WindowData(
-                    inference_data=np.zeros(
-                        self._model.window_size_samples, dtype=np.float32
-                    ),
-                    original_data=np.zeros(
-                        self._model.window_size_samples * step, dtype=np.int16
-                    ),
+                index = len(og_window_data) - og_needed_samples
+                og_window_data[index : index + to_copy] = frame_data[:to_copy]
+
+                remaining_samples -= to_copy
+                og_needed_samples -= to_copy
+
+                if og_needed_samples != 0:
+                    continue
+
+                og_needed_samples = og_window_size_samples
+
+                # copy the data to the inference buffer by sampling at each index_step & convert to float
+                np.divide(
+                    og_window_data[::index_step],
+                    np.iinfo(np.int16).max,
+                    out=inference_window_data,
+                    dtype=np.float32,
                 )
 
-            if frame.num_channels != 1:
-                raise ValueError("vad currently only supports mono audio frames")
-
-            og_frame = np.frombuffer(frame.data, dtype=np.int16)
-            if_frame = og_frame[::step].astype(np.float32) / np.iinfo(np.int16).max
-
-            remaining_data = len(if_frame)
-            while remaining_data > 0:
-                i = self._model.window_size_samples - self._remaining_samples
-                to_copy = min(remaining_data, self._remaining_samples)
-                self._remaining_samples -= to_copy
-                remaining_data -= to_copy
-
-                self._window_data.original_data[
-                    i * step : i * step + to_copy * step
-                ] = og_frame[: to_copy * step]
-                self._window_data.inference_data[i : i + to_copy] = if_frame[:to_copy]
-
-                if self._remaining_samples == 0:
-                    window_tx.send_nowait(self._window_data)
-                    self._window_data = _WindowData(
-                        inference_data=np.zeros(
-                            self._model.window_size_samples, dtype=np.float32
-                        ),
-                        original_data=np.zeros(
-                            self._model.window_size_samples * step, dtype=np.int16
-                        ),
+                # run the inference
+                start_time = time.time()
+                raw_prob = await self._loop.run_in_executor(
+                    self._executor, self._model, inference_window_data
+                )
+                inference_duration = time.time() - start_time
+                window_duration = (
+                    self._model.window_size_samples / self._opts.sample_rate
+                )
+                if inference_duration > window_duration:
+                    logger.warning(
+                        "vad inference took too long - slower than realtime: %f",
+                        inference_duration,
                     )
-                    self._remaining_samples = self._model.window_size_samples
 
-        window_tx.close()
+                pub_current_sample += og_window_size_samples
 
-    async def _run_inference(self, window_rx: utils.aio.ChanReceiver[_WindowData]):
-        pub_speaking = False
-        pub_speech_duration = 0.0
-        pub_silence_duration = 0.0
-        pub_speech_buf = np.array([], dtype=np.int16)
+                def _copy_window():
+                    nonlocal speech_buffer_index
+                    to_copy = min(
+                        og_window_size_samples,
+                        len(speech_buffer) - speech_buffer_index,
+                    )
+                    if to_copy <= 0:
+                        # max_buffered_speech reached
+                        return
 
-        may_start_at_sample = -1
-        may_end_at_sample = -1
+                    speech_buffer[
+                        speech_buffer_index : speech_buffer_index + to_copy
+                    ] = og_window_data
+                    speech_buffer_index += og_window_size_samples
 
-        min_speech_samples = int(
-            self._opts.min_speech_duration * self._opts.sample_rate
-        )
-        min_silence_samples = int(
-            self._opts.min_silence_duration * self._opts.sample_rate
-        )
+                if pub_speaking:
+                    pub_speech_duration += window_duration
+                    _copy_window()
+                else:
+                    pub_silence_duration += window_duration
 
-        current_sample = 0
-
-        async for window_data in window_rx:
-            inference_data = window_data.inference_data
-            start_time = time.time()
-            raw_prob = await asyncio.to_thread(lambda: self._model(inference_data))
-            inference_duration = time.time() - start_time
-
-            window_duration = self._model.window_size_samples / self._opts.sample_rate
-            if inference_duration > window_duration:
-                # slower than realtime
-                logger.warning(
-                    "vad inference took too long - slower than realtime: %f",
-                    inference_duration,
+                self._event_ch.send_nowait(
+                    agents.vad.VADEvent(
+                        type=agents.vad.VADEventType.INFERENCE_DONE,
+                        samples_index=pub_current_sample,
+                        silence_duration=pub_silence_duration,
+                        speech_duration=pub_speech_duration,
+                        probability=raw_prob,
+                        inference_duration=inference_duration,
+                        speaking=pub_speaking,
+                    )
                 )
 
-            # append new data to current speech buffer
-            pub_speech_buf = np.append(pub_speech_buf, window_data.original_data)
-            max_data_s = self._opts.padding_duration
-            if not pub_speaking:
-                max_data_s += self._opts.min_speech_duration
-            else:
-                max_data_s += self._opts.max_buffered_speech
+                if raw_prob >= self._opts.activation_threshold:
+                    speech_threshold_duration += window_duration
+                    silence_threshold_duration = 0.0
 
-            assert self._original_sample_rate is not None
-            cl = int(max_data_s) * self._original_sample_rate
-            if len(pub_speech_buf) > cl:
-                pub_speech_buf = pub_speech_buf[-cl:]
+                    if not pub_speaking:
+                        _copy_window()
 
-            # dispatch start/end when needed
-            if raw_prob >= self._opts.activation_threshold:
-                may_end_at_sample = -1
+                        if speech_threshold_duration >= self._opts.min_speech_duration:
+                            pub_speaking = True
+                            pub_silence_duration = 0.0
+                            pub_speech_duration = speech_threshold_duration
 
-                if may_start_at_sample == -1:
-                    may_start_at_sample = current_sample + min_speech_samples
+                            self._event_ch.send_nowait(
+                                agents.vad.VADEvent(
+                                    type=agents.vad.VADEventType.START_OF_SPEECH,
+                                    samples_index=pub_current_sample,
+                                    silence_duration=pub_silence_duration,
+                                    speech_duration=pub_speech_duration,
+                                    speaking=True,
+                                )
+                            )
+                else:
+                    silence_threshold_duration += window_duration
+                    speech_threshold_duration = 0.0
 
-                if may_start_at_sample <= current_sample and not pub_speaking:
-                    pub_speaking = True
-                    self._event_ch.send_nowait(
-                        agents.vad.VADEvent(
-                            type=agents.vad.VADEventType.START_OF_SPEECH,
-                            silence_duration=pub_silence_duration,
-                            speech_duration=0.0,
-                            samples_index=current_sample,
-                            speaking=True,
+                    if not pub_speaking:
+                        speech_buffer_index = 0
+
+                    if (
+                        pub_speaking
+                        and silence_threshold_duration
+                        >= self._opts.min_silence_duration
+                    ):
+                        pub_speaking = False
+                        pub_speech_duration = 0.0
+                        pub_silence_duration = silence_threshold_duration
+
+                        speech_data = speech_buffer[
+                            :speech_buffer_index
+                        ].tobytes()  # copy the data from speech_buffer
+
+                        self._event_ch.send_nowait(
+                            agents.vad.VADEvent(
+                                type=agents.vad.VADEventType.END_OF_SPEECH,
+                                samples_index=pub_current_sample,
+                                silence_duration=pub_silence_duration,
+                                speech_duration=pub_speech_duration,
+                                frames=[
+                                    rtc.AudioFrame(
+                                        sample_rate=og_sample_rate,
+                                        num_channels=1,
+                                        samples_per_channel=speech_buffer_index,
+                                        data=speech_data,
+                                    )
+                                ],
+                                speaking=False,
+                            )
                         )
-                    )
 
-                    pub_silence_duration = 0
-                    pub_speech_duration += self._opts.min_speech_duration
-
-            if pub_speaking:
-                pub_speech_duration += window_duration
-            else:
-                pub_silence_duration = 0
-
-            self._event_ch.send_nowait(
-                agents.vad.VADEvent(
-                    type=agents.vad.VADEventType.INFERENCE_DONE,
-                    samples_index=current_sample,
-                    silence_duration=0.0,
-                    speech_duration=pub_speech_duration,
-                    probability=raw_prob,
-                    inference_duration=inference_duration,
-                    speaking=pub_speaking,
-                )
-            )
-
-            if raw_prob < self._opts.activation_threshold:
-                may_start_at_sample = -1
-
-                if may_end_at_sample == -1:
-                    may_end_at_sample = current_sample + min_silence_samples
-
-                if may_end_at_sample <= current_sample and pub_speaking:
-                    pub_speaking = False
-
-                    frame = rtc.AudioFrame(
-                        sample_rate=self._original_sample_rate,
-                        num_channels=1,
-                        samples_per_channel=len(pub_speech_buf),
-                        data=pub_speech_buf.tobytes(),
-                    )
-
-                    self._event_ch.send_nowait(
-                        agents.vad.VADEvent(
-                            type=agents.vad.VADEventType.END_OF_SPEECH,
-                            samples_index=current_sample,
-                            silence_duration=0.0,
-                            speech_duration=pub_speech_duration,
-                            frames=[frame],
-                            speaking=False,
-                        )
-                    )
-
-                    pub_speech_buf = np.array([], dtype=np.int16)
-                    pub_speech_duration = 0
-                    pub_silence_duration += self._opts.min_silence_duration
-
-            current_sample += self._model.window_size_samples
+                        speech_buffer_index = 0

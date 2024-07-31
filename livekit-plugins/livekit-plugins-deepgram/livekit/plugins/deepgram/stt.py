@@ -25,7 +25,6 @@ from typing import List
 from urllib.parse import urlencode
 
 import aiohttp
-from livekit import rtc
 from livekit.agents import stt, utils
 from livekit.agents.utils import AudioBuffer, merge_frames
 
@@ -256,23 +255,27 @@ class SpeechStream(stt.SpeechStream):
 
         async def send_task():
             nonlocal closing_ws
-            # forward inputs to deepgram
-            # if we receive a close message, signal it to deepgram and break.
-            # the recv task will then make sure to process the remaining audio and stop
-            async for data in self._input_ch:
-                if isinstance(data, rtc.AudioFrame):
-                    # TODO(theomonnom): The remix_and_resample method is low quality
-                    # and should be replaced with a continuous resampling
-                    frame = data.remix_and_resample(
-                        self._opts.sample_rate, self._opts.num_channels
-                    )
 
+            # forward audio to deepgram in chunks of 200ms
+            ms200 = self._opts.sample_rate // 5 * self._opts.num_channels
+            audio_bstream = utils.audio.AudioByteStream(
+                sample_rate=self._opts.sample_rate,
+                num_channels=self._opts.num_channels,
+                samples_per_frame=ms200,
+            )
+
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    frames = audio_bstream.flush()
+                else:
+                    frames = audio_bstream.write(data.data)
+
+                for frame in frames:
                     await ws.send_bytes(frame.data.tobytes())
 
+            # tell deepgram we are done sending audio/inputs
             closing_ws = True
-            await ws.send_str(
-                SpeechStream._CLOSE_MSG
-            )  # tell deepgram we are done with inputs
+            await ws.send_str(SpeechStream._CLOSE_MSG)
 
         async def recv_task():
             nonlocal closing_ws
