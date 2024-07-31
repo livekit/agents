@@ -63,7 +63,7 @@ class SynthesisHandle:
             raise RuntimeError("synthesis was interrupted")
 
         self._play_handle = self._agent_playout.play(
-            self._buf_ch, transcription_fwd=self._tr_fwd
+            self._speech_id, self._buf_ch, transcription_fwd=self._tr_fwd
         )
         return self._play_handle
 
