@@ -71,7 +71,7 @@ class WorkerOptions:
     request_fnc: Callable[[JobRequest], Coroutine] = _default_request_fnc
     prewarm_fnc: Callable[[JobProcess], Any] = _default_initialize_process_fnc
     load_fnc: Callable[[], float] = _default_cpu_load_fnc
-    load_threshold: float = 0.8
+    load_threshold: float = 0.65
     num_idle_processes: int = 3
     shutdown_process_timeout: float = 60.0
     initialize_process_timeout: float = 10.0
