@@ -499,7 +499,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         user_speech_commited = False
 
         play_handle = synthesis_handle.play()
-        join_fut = play_handle.join()
 
         def _commit_user_question_if_needed() -> None:
             nonlocal user_speech_commited
@@ -518,9 +517,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             # make sure at least some speech was played before committing the user message
             # since we try to validate as fast as possible it is possible the agent gets interrupted
             # really quickly (barely audible), we don't want to mark this question as "answered".
-            if not is_using_tools and (
-                play_handle.time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
-                and not join_fut.done()
+            if (
+                speech_info.allow_interruptions
+                and not is_using_tools
+                and (
+                    play_handle.time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
+                    and not join_fut.done()
+                )
             ):
                 return
 
@@ -532,6 +535,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             user_speech_commited = True
 
         # wait for the play_handle to finish and check every 1s if the user question should be committed
+        _commit_user_question_if_needed()
+
+        join_fut = play_handle.join()
         while not join_fut.done():
             await asyncio.wait(
                 [join_fut], return_when=asyncio.FIRST_COMPLETED, timeout=1.0
