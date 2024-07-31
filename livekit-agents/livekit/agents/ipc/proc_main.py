@@ -95,6 +95,16 @@ def _start_job(
             args.job_entrypoint_fnc(job_ctx), name="job_entrypoint"
         )
 
+        async def _unconnected_task():
+            await asyncio.sleep(10)
+            if not ctx_connect and not ctx_shutdown:
+                logger.warn(
+                    "connect not called after 10 seconds, did you forget to call job_ctx.connect()?"
+                )
+
+        unconnected_task = asyncio.create_task(_unconnected_task())
+        job_entry_task.add_done_callback(lambda _: unconnected_task.cancel())
+
         def log_exception(t: asyncio.Task) -> None:
             if not t.cancelled() and t.exception():
                 logger.error(
