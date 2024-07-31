@@ -258,7 +258,7 @@ class VADStream(agents.vad.VADStream):
                         pub_silence_duration = silence_threshold_duration
 
                         speech_buffer_index = 0
-                        speech_data = speech_buffer[:speech_buffer_index].tobytes()
+                        speech_data = speech_buffer[:speech_buffer_index].tobytes()  # copy the data from speech_buffer
 
                         self._event_ch.send_nowait(
                             agents.vad.VADEvent(
@@ -271,7 +271,7 @@ class VADStream(agents.vad.VADStream):
                                         sample_rate=og_sample_rate,
                                         num_channels=1,
                                         samples_per_channel=len(speech_data),
-                                        data=speech_data,  # copy the data inside speech_buffer
+                                        data=speech_data,
                                     )
                                 ],
                                 speaking=False,
