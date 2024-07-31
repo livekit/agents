@@ -567,9 +567,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             call_ctx = AssistantCallContext(self, speech_info.source)
             tk = _CallContextVar.set(call_ctx)
             self.emit("function_calls_collected", speech_info.source.function_calls)
-            called_fncs = speech_info.source.execute_functions()
-            tasks = [called_fnc.task for called_fnc in called_fncs]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            called_fncs_info = speech_info.source.function_calls
+
+            called_fncs = []
+            for fnc in called_fncs_info:
+                called_fnc = fnc.execute()
+                called_fncs.append(called_fnc)
+                try:
+                    await called_fnc.task
+                except Exception:
+                    pass
+
             self.emit("function_calls_finished", called_fncs)
             _CallContextVar.reset(tk)
 
