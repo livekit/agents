@@ -7,8 +7,6 @@ from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
 
-load_dotenv()
-
 
 async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(

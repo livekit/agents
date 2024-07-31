@@ -438,7 +438,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             self._speech_q_changed.clear()
 
-
     def _synthesize_agent_reply(self, *, validated: bool = False) -> None:
         """Synthesize the agent reply to the user question, also make sure only one reply
         is synthesized/played at a time"""
