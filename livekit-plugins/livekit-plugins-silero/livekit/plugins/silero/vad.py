@@ -213,7 +213,6 @@ class VADStream(agents.vad.VADStream):
                     )
                 )
 
-                # update speech states if needed & emit events
                 if raw_prob >= self._opts.activation_threshold:
                     speech_threshold_duration += window_duration
                     silence_threshold_duration = 0.0
@@ -245,7 +244,7 @@ class VADStream(agents.vad.VADStream):
                                 speaking=True,
                             )
                         )
-                else:  # < self._opts.activation_threshold
+                else:
                     silence_threshold_duration += window_duration
                     speech_threshold_duration = 0.0
 
@@ -258,6 +257,9 @@ class VADStream(agents.vad.VADStream):
                         pub_speech_duration = 0.0
                         pub_silence_duration = silence_threshold_duration
 
+                        speech_buffer_index = 0
+                        speech_data = speech_buffer[:speech_buffer_index].tobytes()
+
                         self._event_ch.send_nowait(
                             agents.vad.VADEvent(
                                 type=agents.vad.VADEventType.END_OF_SPEECH,
@@ -268,12 +270,11 @@ class VADStream(agents.vad.VADStream):
                                     rtc.AudioFrame(
                                         sample_rate=og_sample_rate,
                                         num_channels=1,
-                                        samples_per_channel=len(speech_buffer),
-                                        data=speech_buffer.tobytes(),  # copy the data inside speech_buffer
+                                        samples_per_channel=len(speech_data),
+                                        data=speech_data.tobytes(),  # copy the data inside speech_buffer
                                     )
                                 ],
                                 speaking=False,
                             )
                         )
 
-                        speech_buffer_index = 0
