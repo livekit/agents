@@ -315,10 +315,11 @@ async def test_shutdown_no_job():
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
     proc.start()
     await proc.initialize()
+    await asyncio.sleep(1.0)
     await proc.aclose()
 
-    assert not proc.killed
     assert proc.exitcode == 0
+    assert not proc.killed
     assert (
         start_args.shutdown_counter.value == 0
     ), "shutdown_cb isn't called when there is no job"
@@ -331,6 +332,7 @@ async def test_job_slow_shutdown():
 
     proc.start()
     await proc.initialize()
+    await asyncio.sleep(1.0)
 
     fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
@@ -348,6 +350,7 @@ async def test_job_graceful_shutdown():
     start_args.shutdown_simulate_work_time = 1.0
     proc.start()
     await proc.initialize()
+    await asyncio.sleep(1.0)
 
     fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
