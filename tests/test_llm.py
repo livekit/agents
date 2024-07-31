@@ -165,7 +165,7 @@ async def test_calls_arrays():
     llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
-        llm, "Can you select all currencies in Europe?", fnc_ctx
+        llm, "Can you select all currencies in Europe at once?", fnc_ctx
     )
     fns = stream.execute_functions()
     await asyncio.gather(*[f.task for f in fns])
