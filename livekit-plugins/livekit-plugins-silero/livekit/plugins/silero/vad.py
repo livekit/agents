@@ -271,7 +271,7 @@ class VADStream(agents.vad.VADStream):
                                         sample_rate=og_sample_rate,
                                         num_channels=1,
                                         samples_per_channel=len(speech_data),
-                                        data=speech_data.tobytes(),  # copy the data inside speech_buffer
+                                        data=speech_data,  # copy the data inside speech_buffer
                                     )
                                 ],
                                 speaking=False,
