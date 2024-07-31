@@ -9,7 +9,7 @@ from livekit import rtc
 from .. import llm, tokenize, utils
 from .. import transcription as agent_transcription
 from .. import tts as text_to_speech
-from .cancellable_source import CancellableAudioSource, PlayoutHandle
+from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
 
 SpeechSource = Union[AsyncIterable[str], str]
@@ -19,14 +19,15 @@ class SynthesisHandle:
     def __init__(
         self,
         *,
+        speech_id: str,
         speech_source: SpeechSource,
-        audio_source: CancellableAudioSource,
+        agent_playout: AgentPlayout,
         tts: text_to_speech.TTS,
         transcription_fwd: agent_transcription.TTSSegmentsForwarder | None = None,
     ) -> None:
-        self._speech_source, self._audio_source, self._tts, self._tr_fwd = (
+        self._speech_source, self._agent_playout, self._tts, self._tr_fwd = (
             speech_source,
-            audio_source,
+            agent_playout,
             tts,
             transcription_fwd,
         )
@@ -34,6 +35,11 @@ class SynthesisHandle:
         self._play_handle: PlayoutHandle | None = None
         self._interrupt_fut = asyncio.Future[None]()
         self._collected_text = ""  # collected text from the async stream
+        self._speech_id = speech_id
+
+    @property
+    def speech_id(self) -> str:
+        return self._speech_id
 
     @property
     def validated(self) -> bool:
@@ -56,8 +62,8 @@ class SynthesisHandle:
         if self.interrupted:
             raise RuntimeError("synthesis was interrupted")
 
-        self._play_handle = self._audio_source.play(
-            self._buf_ch, transcription_fwd=self._tr_fwd
+        self._play_handle = self._agent_playout.play(
+            self._speech_id, self._buf_ch, transcription_fwd=self._tr_fwd
         )
         return self._play_handle
 
@@ -65,6 +71,11 @@ class SynthesisHandle:
         """Interrupt the speech"""
         if self.interrupted:
             return
+
+        logger.debug(
+            "SynthesisHandle.interrupt: interrupting synthesis",
+            extra={"speech_id": self.speech_id},
+        )
 
         if self._play_handle is not None:
             self._play_handle.interrupt()
@@ -77,16 +88,21 @@ class AgentOutput:
         self,
         *,
         room: rtc.Room,
-        source: CancellableAudioSource,
+        agent_playout: AgentPlayout,
         llm: llm.LLM,
         tts: text_to_speech.TTS,
     ) -> None:
-        self._room, self._source, self._llm, self._tts = room, source, llm, tts
+        self._room, self._agent_playout, self._llm, self._tts = (
+            room,
+            agent_playout,
+            llm,
+            tts,
+        )
         self._tasks = set[asyncio.Task[Any]]()
 
     @property
-    def audio_source(self) -> CancellableAudioSource:
-        return self._source
+    def playout(self) -> AgentPlayout:
+        return self._agent_playout
 
     async def aclose(self) -> None:
         for task in self._tasks:
@@ -97,6 +113,7 @@ class AgentOutput:
     def synthesize(
         self,
         *,
+        speech_id: str,
         transcript: SpeechSource,
         transcription: bool,
         transcription_speed: float,
@@ -117,9 +134,10 @@ class AgentOutput:
 
         handle = SynthesisHandle(
             speech_source=transcript,
-            audio_source=self._source,
+            agent_playout=self._agent_playout,
             tts=self._tts,
             transcription_fwd=transcription_fwd,
+            speech_id=speech_id,
         )
 
         task = asyncio.create_task(self._synthesize_task(handle))
@@ -160,8 +178,13 @@ async def _str_synthesis_task(text: str, handle: SynthesisHandle) -> None:
         async for audio in handle._tts.synthesize(text):
             if first_frame:
                 first_frame = False
-                dt = time.time() - start_time
-                logger.debug(f"AgentOutput._str_synthesis_task: TTFB in {dt:.2f}s")
+                logger.debug(
+                    "AgentOutput._str_synthesis_task: received first frame of TTS",
+                    extra={
+                        "speech_id": handle.speech_id,
+                        "elapsed": time.time() - start_time,
+                    },
+                )
 
             frame = audio.frame
 
@@ -187,8 +210,13 @@ async def _stream_synthesis_task(
         async for audio in tts_stream:
             if first_frame:
                 first_frame = False
-                dt = time.time() - start_time
-                logger.debug(f"AgentOutput._stream_synthesis_task: TTFB in {dt:.2f}s")
+                logger.debug(
+                    "AgentOutput._stream_synthesis_task: received first frame of TTS",
+                    extra={
+                        "speech_id": handle.speech_id,
+                        "elapsed": time.time() - start_time,
+                    },
+                )
 
             if handle._tr_fwd and not handle._tr_fwd.closed:
                 handle._tr_fwd.push_audio(audio.frame)
