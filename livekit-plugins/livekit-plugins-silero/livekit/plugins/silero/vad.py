@@ -44,7 +44,7 @@ class VAD(agents.vad.VAD):
         cls,
         *,
         min_speech_duration: float = 0.05,
-        min_silence_duration: float = 0.1,
+        min_silence_duration: float = 0.25,
         padding_duration: float = 0.1,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.25,
@@ -105,7 +105,7 @@ class VADStream(agents.vad.VADStream):
 
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._task.add_done_callback(lambda _: self._executor.shutdown(wait=False))
-        self._exp_filter = utils.ExpFilter(alpha=0.5)
+        self._exp_filter = utils.ExpFilter(alpha=0.35)
 
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self):
@@ -188,7 +188,7 @@ class VADStream(agents.vad.VADStream):
                 )
 
                 prob_change = abs(raw_prob - self._exp_filter.filtered())
-                exp = 0.4 if prob_change > 0.45 else 1
+                exp = 0.5 if prob_change > 0.25 else 1
                 raw_prob = self._exp_filter.apply(exp=exp, sample=raw_prob)
 
                 inference_duration = time.time() - start_time
