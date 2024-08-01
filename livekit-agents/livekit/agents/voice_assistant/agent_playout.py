@@ -121,7 +121,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                         handle._tr_fwd.segment_playout_started()
 
                     logger.debug(
-                        "AgentPlayout: first frame started playing",
+                        "started playing the first frame",
                         extra={"speech_id": handle.speech_id},
                     )
 
@@ -170,6 +170,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 await handle._tr_fwd.aclose()
 
             logger.debug(
-                "AgentPlayout: done playing",
+                "playout finished",
                 extra={"speech_id": handle.speech_id, "cancelled": cancelled},
             )

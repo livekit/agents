@@ -73,7 +73,7 @@ class SynthesisHandle:
             return
 
         logger.debug(
-            "SynthesisHandle.interrupt: interrupting synthesis",
+            "interrupting synthesis/playout",
             extra={"speech_id": self.speech_id},
         )
 
@@ -179,10 +179,11 @@ async def _str_synthesis_task(text: str, handle: SynthesisHandle) -> None:
             if first_frame:
                 first_frame = False
                 logger.debug(
-                    "AgentOutput._str_synthesis_task: received first frame of TTS",
+                    "received first TTS frame",
                     extra={
                         "speech_id": handle.speech_id,
                         "elapsed": time.time() - start_time,
+                        "streamed": False,
                     },
                 )
 
@@ -211,10 +212,11 @@ async def _stream_synthesis_task(
             if first_frame:
                 first_frame = False
                 logger.debug(
-                    "AgentOutput._stream_synthesis_task: received first frame of TTS",
+                    "first TTS frame",
                     extra={
                         "speech_id": handle.speech_id,
                         "elapsed": time.time() - start_time,
+                        "streamed": True,
                     },
                 )
 
