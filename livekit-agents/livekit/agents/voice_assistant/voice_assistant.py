@@ -825,7 +825,7 @@ class _DeferredReplyValidation:
 
     def _end_with_punctuation(self) -> bool:
         return (
-            self._last_final_transcript
+            len(self._last_final_transcript) > 0
             and self._last_final_transcript[-1] in self.PUNCTUATION
         )
 
