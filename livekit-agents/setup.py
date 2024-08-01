@@ -47,24 +47,24 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "click~=8.1.0",
-        "livekit~=0.9",
-        "livekit-api~=0.4",
-        "livekit-protocol~=0.4",
+        "click~=8.1",
+        "livekit~=0.12",
+        "livekit-api~=0.6",
+        "livekit-protocol~=0.6",
         "protobuf>=3",
+        "pyjwt>=2.0.0",
         "types-protobuf>=4,<5",
-        "python-json-logger~=2.0",
-        "attrs~=23.0",
-        "watchfiles~=0.21",
-        "colorlog~=6.0",
+        "watchfiles~=0.22",
         "psutil~=5.9",
     ],
     extras_require={
+        ':sys_platform=="win32"': [
+            "colorama"
+        ],  # fix logs color on windows (devmode only)
         "codecs": ["av>=11.0.0"],
+        "images": ["pillow~=10.3.0"],
     },
-    package_data={
-        "livekit.agents": ["py.typed"],
-    },
+    package_data={"livekit.agents": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

@@ -14,24 +14,35 @@ on:
 jobs:
   tests:
     name: Run tests
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-4vcpu-cache
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
           lfs: true
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.9'
+          cache: 'pip'
+
       - name: install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: install packages
         run: |
           pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
-          for dir in livekit-plugins/*; do
-            pip3 install $dir
-          done
+          pip3 install -r ./tests/test-requirements.txt
+          pip3 install ./livekit-agents \
+                      ./livekit-plugins/livekit-plugins-openai \
+                      ./livekit-plugins/livekit-plugins-deepgram \
+                      ./livekit-plugins/livekit-plugins-google \
+                      ./livekit-plugins/livekit-plugins-nltk \
+                      ./livekit-plugins/livekit-plugins-silero \
+                      ./livekit-plugins/livekit-plugins-elevenlabs \
+                      ./livekit-plugins/livekit-plugins-cartesia \
+                      ./livekit-plugins/livekit-plugins-azure
+
       - name: Run tests
         env:
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
@@ -40,6 +51,9 @@ jobs:
           DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ELEVEN_API_KEY: ${{ secrets.ELEVEN_API_KEY }}
+          CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }} # nit: doesn't have to be secret
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
         run: |

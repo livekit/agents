@@ -12,20 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .models import TTSEncoding, TTSModels
 from .tts import DEFAULT_VOICE, TTS, Voice, VoiceSettings
 from .version import __version__
 
-__all__ = ["TTS", "Voice", "VoiceSettings", "DEFAULT_VOICE", "__version__"]
+__all__ = [
+    "TTS",
+    "Voice",
+    "VoiceSettings",
+    "TTSEncoding",
+    "TTSModels",
+    "DEFAULT_VOICE",
+    "__version__",
+]
 
 from livekit.agents import Plugin
+
+from .log import logger
 
 
 class ElevenLabsPlugin(Plugin):
     def __init__(self):
-        super().__init__(__name__, __version__, __package__)
-
-    def download_files(self):
-        pass
+        super().__init__(__name__, __version__, __package__, logger)
 
 
 Plugin.register_plugin(ElevenLabsPlugin())

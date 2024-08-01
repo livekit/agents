@@ -1,15 +1,19 @@
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import List
+from enum import Enum, unique
+from typing import AsyncIterator, List, Union
 
 from livekit import rtc
 
+from .utils import aio
 
-class VADEventType(Enum):
-    START_OF_SPEECH = 1
-    SPEAKING = 2
-    END_OF_SPEECH = 3
+
+@unique
+class VADEventType(str, Enum):
+    START_OF_SPEECH = "start_of_speech"
+    INFERENCE_DONE = "inference_done"
+    END_OF_SPEECH = "end_of_speech"
 
 
 @dataclass
@@ -17,58 +21,87 @@ class VADEvent:
     type: VADEventType
     """type of the event"""
     samples_index: int
-    """index of the samples of the event (when the event was fired)"""
-    duration: float = 0.0
-    """duration of the speech in seconds (only for END_SPEAKING event)"""
-    speech: List[rtc.AudioFrame] = field(default_factory=list)
+    """index of the samples when the event was fired"""
+    speech_duration: float
+    """duration of the speech in seconds"""
+    silence_duration: float
+    """duration of the silence in seconds"""
+    frames: List[rtc.AudioFrame] = field(default_factory=list)
     """list of audio frames of the speech"""
+    probability: float = 0.0
+    """smoothed probability of the speech (only for INFERENCE_DONE event)"""
+    inference_duration: float = 0.0
+    """duration of the inference in seconds (only for INFERENCE_DONE event)"""
+    speaking: bool = False
+    """whether speech was detected in the frames"""
+
+
+@dataclass
+class VADCapabilities:
+    update_interval: float
 
 
 class VAD(ABC):
-    def __init__(self) -> None:
-        pass
+    def __init__(self, *, capabilities: VADCapabilities) -> None:
+        self._capabilities = capabilities
+
+    @property
+    def capabilities(self) -> VADCapabilities:
+        return self._capabilities
 
     @abstractmethod
-    def stream(
-        self,
-        *,
-        min_speaking_duration: float = 0.5,
-        min_silence_duration: float = 0.5,
-        padding_duration: float = 0.1,
-        sample_rate: int = 16000,
-        max_buffered_speech: float = 45.0,
-    ) -> "VADStream":
-        """Returns a VADStream that can be used to push audio frames and receive VAD events
-        Args:
-          min_speaking_duration: minimum duration of speech to trigger a START_SPEAKING event
-
-          min_silence_duration: in the end of each speech chunk wait for min_silence_duration_ms before separating it
-              the padding is not always precise, it is generally rounded to the nearest 40ms depending on the vad implementation
-
-          padding_duration: frames to pad the start and end of the speech with
-
-          sample_rate: sample rate of the inference/processing
-
-          max_buffered_speech: max buffered speech in seconds that we keep until the END_SPEAKING event is triggered
-              it is unrecommended to use 0.0 as it may cause OOM if the user doesn't stop speaking"""
+    def stream(self) -> "VADStream":
         pass
 
 
 class VADStream(ABC):
-    def __init__(self) -> None:
+    class _FlushSentinel:
         pass
 
+    def __init__(self):
+        self._input_ch = aio.Chan[Union[rtc.AudioFrame, VADStream._FlushSentinel]]()
+        self._event_ch = aio.Chan[VADEvent]()
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
     @abstractmethod
+    def _main_task(self) -> None: ...
+
     def push_frame(self, frame: rtc.AudioFrame) -> None:
-        pass
+        """Push some text to be synthesized"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(frame)
 
-    @abstractmethod
-    async def aclose(self, *, wait: bool = True) -> None:
-        pass
+    def flush(self) -> None:
+        """Mark the end of the current segment"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._FlushSentinel())
 
-    @abstractmethod
+    def end_input(self) -> None:
+        """Mark the end of input, no more text will be pushed"""
+        self.flush()
+        self._input_ch.close()
+
+    async def aclose(self) -> None:
+        """Close ths stream immediately"""
+        self._input_ch.close()
+        await aio.gracefully_cancel(self._task)
+        self._event_ch.close()
+
     async def __anext__(self) -> VADEvent:
-        raise StopAsyncIteration
+        return await self._event_ch.__anext__()
 
-    def __aiter__(self) -> "VADStream":
+    def __aiter__(self) -> AsyncIterator[VADEvent]:
         return self
+
+    def _check_not_closed(self) -> None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
+
+    def _check_input_not_ended(self) -> None:
+        if self._input_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
