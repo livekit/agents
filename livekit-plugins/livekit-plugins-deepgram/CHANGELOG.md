@@ -1,5 +1,13 @@
 # livekit-plugins-deepgram
 
+## 0.6.2
+
+### Patch Changes
+
+- deepgram: reduce chunks size to 100ms - [#561](https://github.com/livekit/agents/pull/561) ([@theomonnom](https://github.com/theomonnom))
+
+- deepgram: segment audio frames into 200ms intervals before sending to the websocket #549 - [#553](https://github.com/livekit/agents/pull/553) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.1
 
 ### Patch Changes

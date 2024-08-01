@@ -1,5 +1,15 @@
 # livekit-plugins-silero
 
+## 0.6.2
+
+### Patch Changes
+
+- silero: tiny tweaks - [#565](https://github.com/livekit/agents/pull/565) ([@theomonnom](https://github.com/theomonnom))
+
+- silero: optimize numpy input buffers - [#550](https://github.com/livekit/agents/pull/550) ([@theomonnom](https://github.com/theomonnom))
+
+- silero: bring back expfilter - [#562](https://github.com/livekit/agents/pull/562) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.1
 
 ### Patch Changes
