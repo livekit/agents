@@ -191,7 +191,7 @@ class VADStream(agents.vad.VADStream):
                 )
 
                 prob_change = abs(raw_prob - self._exp_filter.filtered())
-                exp = 0.5 if prob_change > 0.35 else 1
+                exp = 0.5 if prob_change > 0.4 else 1
                 raw_prob = self._exp_filter.apply(exp=exp, sample=raw_prob)
 
                 inference_duration = time.time() - start_time
