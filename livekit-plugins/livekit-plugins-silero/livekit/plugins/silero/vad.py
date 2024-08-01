@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import numpy as np
 import onnxruntime  # type: ignore
 from livekit import agents, rtc
+from livekit.agents import utils
 
 from . import onnx_model
 from .log import logger
@@ -104,6 +105,7 @@ class VADStream(agents.vad.VADStream):
 
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._task.add_done_callback(lambda _: self._executor.shutdown(wait=False))
+        self._exp_filter = utils.ExpFilter(alpha=0.5)
 
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self):
@@ -184,6 +186,11 @@ class VADStream(agents.vad.VADStream):
                 raw_prob = await self._loop.run_in_executor(
                     self._executor, self._model, inference_window_data
                 )
+
+                prob_change = abs(raw_prob - self._exp_filter.filtered())
+                exp = 0.4 if prob_change > 0.45 else 1
+                raw_prob = self._exp_filter.apply(exp=exp, sample=raw_prob)
+
                 inference_duration = time.time() - start_time
                 window_duration = (
                     self._model.window_size_samples / self._opts.sample_rate
