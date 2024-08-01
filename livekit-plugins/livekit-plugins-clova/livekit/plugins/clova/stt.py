@@ -21,7 +21,7 @@ from typing import Optional, Union
 
 import aiohttp
 from livekit.agents import stt, utils
-from livekit.agents.stt import SpeechEventType
+from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE
 from pydub import AudioSegment
@@ -41,7 +41,9 @@ class STT(stt.STT):
         http_session: Optional[aiohttp.ClientSession] = None,
         threshold: float = 0.5,
     ):
-        super().__init__(streaming_supported=False)
+        super().__init__(
+            capabilities=STTCapabilities(streaming=False, interim_results=True)
+        )
         self._secret = secret or os.environ.get("CLOVA_STT_SECRET_KEY")
         self._invoke_url = invoke_url or os.environ.get("CLOVA_STT_INVOKE_URL")
         self._language = clova_languages_mapping.get(language, language)
