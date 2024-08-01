@@ -159,6 +159,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     ):
         super().__init__()
         self._opts, self._session = opts, session
+        self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -186,6 +187,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         @utils.log_exceptions(logger=logger)
         async def _run():
+            self._ws_conn = await self._init_ws()
             async for sentence_stream in self._segments_ch:
                 await self._run_ws(sentence_stream)
 
@@ -197,12 +199,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
-
-    async def _run_ws(
-        self,
-        sentence_stream: tokenize.SentenceStream,
-        max_retry: int = 3,
-    ) -> None:
+            
+    async def _init_ws(self, max_retry: int = 3,) -> aiohttp.ClientWebSocketResponse:
         ws_conn: aiohttp.ClientWebSocketResponse | None = None
         for try_i in range(max_retry):
             retry_delay = 5
@@ -213,7 +211,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ws_conn = await self._session.ws_connect(
                     f"wss://api.cartesia.ai/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}",
                 )
-                break
+                return ws_conn
             except Exception as e:
                 logger.warning(
                     f"failed to connect to Cartesia, retrying in {retry_delay}s",
@@ -223,6 +221,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         if ws_conn is None:
             raise Exception(f"failed to connect to Cartesia after {max_retry} retries")
 
+    async def _run_ws(
+        self,
+        sentence_stream: tokenize.SentenceStream,
+    ) -> None:
+        # refresh websocket if connection is closed
+        if self._ws_conn.closed:
+            self._ws_conn = await self._init_ws()
+        
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
         
@@ -258,20 +264,20 @@ class SynthesizeStream(tts.SynthesizeStream):
                     data.token += " "
                 data_pkt["transcript"] = data.token
                 data_pkt["continue"] = True # continue to send more tokens
-                await ws_conn.send_str(json.dumps(data_pkt))
+                await self._ws_conn.send_str(json.dumps(data_pkt))
 
             # no more token, mark eos
             eos_pkt = data_pkt.copy()
             eos_pkt["transcript"] = ""
             eos_pkt["continue"] = False
-            await ws_conn.send_str(json.dumps(eos_pkt))
+            await self._ws_conn.send_str(json.dumps(eos_pkt))
             eos_sent = True
 
         async def recv_task():
             nonlocal eos_sent
 
             while True:
-                msg = await ws_conn.receive()
+                msg = await self._ws_conn.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
