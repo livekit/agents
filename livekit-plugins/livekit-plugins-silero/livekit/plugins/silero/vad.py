@@ -35,7 +35,6 @@ class _VADOptions:
     padding_duration: float
     max_buffered_speech: float
     activation_threshold: float
-    probability_alpha: float
     sample_rate: int
 
 
@@ -50,7 +49,6 @@ class VAD(agents.vad.VAD):
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.25,
         sample_rate: int = 16000,
-        probability_alpha: float = 0.35,
         force_cpu: bool = True,
     ) -> "VAD":
         """
@@ -76,7 +74,6 @@ class VAD(agents.vad.VAD):
             padding_duration=padding_duration,
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
-            probability_alpha=probability_alpha,
             sample_rate=sample_rate,
         )
         return cls(session=session, opts=opts)
@@ -108,7 +105,7 @@ class VADStream(agents.vad.VADStream):
 
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._task.add_done_callback(lambda _: self._executor.shutdown(wait=False))
-        self._exp_filter = utils.ExpFilter(alpha=self._opts.probability_alpha)
+        self._exp_filter = utils.ExpFilter(alpha=0.4)
 
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self):
