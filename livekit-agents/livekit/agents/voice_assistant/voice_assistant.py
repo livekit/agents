@@ -128,7 +128,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
-        interrupt_speech_duration: float = 0.6,
+        interrupt_speech_duration: float = 0.45,
         interrupt_min_words: int = 0,
         preemptive_synthesis: bool = True,
         transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
@@ -434,9 +434,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             await self._speech_q_changed.wait()
 
             while self._speech_q:
-                speech = self._speech_q.pop(0)
+                speech = self._speech_q[0]
                 self._playing_speech = speech
                 await self._play_speech(speech)
+                self._speech_q.pop(0)  # Remove the element only after playing
                 self._playing_speech = None
 
             self._speech_q_changed.clear()
@@ -480,9 +481,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             logger.debug(
                 "synthesizing agent reply",
                 extra={
-                    "speech_id": reply.id,
                     "user_transcript": user_transcript,
                     "validated": validated,
+                    "speech_id": reply.id,
                 },
             )
 
@@ -507,12 +508,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if synthesis_handle.interrupted:
             return
 
-        logger.debug("_play_speech started", extra={"speech_id": speech_info.id})
-
         user_question = speech_info.user_question
         user_speech_commited = False
 
         play_handle = synthesis_handle.play()
+        join_fut = play_handle.join()
 
         def _commit_user_question_if_needed() -> None:
             nonlocal user_speech_commited
@@ -554,7 +554,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         # wait for the play_handle to finish and check every 1s if the user question should be committed
         _commit_user_question_if_needed()
 
-        join_fut = play_handle.join()
         while not join_fut.done():
             await asyncio.wait(
                 [join_fut], return_when=asyncio.FIRST_COMPLETED, timeout=1.0
@@ -652,10 +651,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             logger.debug(
                 "committed agent speech",
-                extra={"speech_id": speech_info.id, "interrupted": interrupted},
+                extra={
+                    "agent_transcript": collected_text,
+                    "interrupted": interrupted,
+                    "speech_id": speech_info.id,
+                },
             )
-
-        logger.debug("_play_speech ended", extra={"speech_id": speech_info.id})
 
     def _synthesize_agent_speech(
         self,
@@ -667,7 +668,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         ), "agent output should be initialized when ready"
 
         if isinstance(source, LLMStream):
-            source = _llm_stream_to_str_iterable(source)
+            source = _llm_stream_to_str_iterable(speech_id, source)
 
         return self._agent_output.synthesize(
             speech_id=speech_id,
@@ -729,11 +730,22 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._speech_q_changed.set()
 
 
-async def _llm_stream_to_str_iterable(stream: LLMStream) -> AsyncIterable[str]:
+async def _llm_stream_to_str_iterable(
+    speech_id: str, stream: LLMStream
+) -> AsyncIterable[str]:
+    start_time = time.time()
+    first_frame = True
     async for chunk in stream:
         content = chunk.choices[0].delta.content
         if content is None:
             continue
+
+        if first_frame:
+            first_frame = False
+            logger.debug(
+                "first LLM token",
+                extra={"speech_id": speech_id, "elapsed": time.time() - start_time},
+            )
 
         yield content
 
@@ -743,9 +755,11 @@ class _DeferredReplyValidation:
 
     # if the STT gives us punctuation, we can try validate the reply faster.
     PUNCTUATION = ".!?"
-    DEFER_DELAY_WITH_PUNCTUATION = 0.1
-    DEFER_DELAY = 0.2
-    LATE_TRANSCRIPT_TOLERANCE = 5
+    PUNCTUATION_REDUCE_FACTOR = 0.8
+
+    DEFER_DELAY_END_OF_SPEECH = 0.2
+    DEFER_DELAY_FINAL_TRANSCRIPT = 1.0
+    LATE_TRANSCRIPT_TOLERANCE = 1.5  # late compared to end of speech
 
     def __init__(
         self, validate_fnc: Callable[[], None], loop: asyncio.AbstractEventLoop
@@ -756,6 +770,7 @@ class _DeferredReplyValidation:
         self._validating_task: asyncio.Task | None = None
         self._last_final_transcript: str = ""
         self._last_recv_end_of_speech_time: float = 0.0
+        self._speaking = False
 
     @property
     def validating(self) -> bool:
@@ -764,26 +779,43 @@ class _DeferredReplyValidation:
     def on_human_final_transcript(self, transcript: str) -> None:
         self._last_final_transcript = transcript.strip()  # type: ignore
 
-        if self.validating:
-            self._run(self._get_defer_delay())  # debounce
-        elif (
-            self._last_recv_end_of_speech_time
-            and time.time() - self._last_recv_end_of_speech_time
+        if self._speaking:
+            return
+
+        has_recent_end_of_speech = (
+            time.time() - self._last_recv_end_of_speech_time
             < self.LATE_TRANSCRIPT_TOLERANCE
-        ):
-            # final transcript was received after human stopped speaking
-            self._run(self._get_defer_delay())
+        )
+        delay = (
+            self.DEFER_DELAY_END_OF_SPEECH
+            if has_recent_end_of_speech
+            else self.DEFER_DELAY_FINAL_TRANSCRIPT
+        )
+        delay = (
+            delay * self.PUNCTUATION_REDUCE_FACTOR
+            if self._end_with_punctuation()
+            else 1.0
+        )
+
+        self._run(delay)
 
     def on_human_start_of_speech(self, ev: vad.VADEvent) -> None:
+        self._speaking = True
         if self.validating:
             assert self._validating_task is not None
             self._validating_task.cancel()
 
     def on_human_end_of_speech(self, ev: vad.VADEvent) -> None:
+        self._speaking = False
         self._last_recv_end_of_speech_time = time.time()
 
         if self._last_final_transcript:
-            self._run(self._get_defer_delay())
+            delay = (
+                self.DEFER_DELAY_END_OF_SPEECH * self.PUNCTUATION_REDUCE_FACTOR
+                if self._end_with_punctuation()
+                else 1.0
+            )
+            self._run(delay)
 
     async def aclose(self) -> None:
         if self._validating_task is not None:
@@ -791,14 +823,11 @@ class _DeferredReplyValidation:
 
         await self._tasks_set.aclose()
 
-    def _get_defer_delay(self) -> float:
-        if (
-            self._last_final_transcript
+    def _end_with_punctuation(self) -> bool:
+        return (
+            len(self._last_final_transcript) > 0
             and self._last_final_transcript[-1] in self.PUNCTUATION
-        ):
-            return self.DEFER_DELAY_WITH_PUNCTUATION
-
-        return self.DEFER_DELAY
+        )
 
     def _reset_states(self) -> None:
         self._last_final_transcript = ""
