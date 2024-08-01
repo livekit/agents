@@ -12,17 +12,16 @@ class AudioByteStream:
         self,
         sample_rate: int,
         num_channels: int,
-        samples_per_frame: int | None = None,
+        samples_per_channel: int | None = None,
     ) -> None:
         self._sample_rate = sample_rate
         self._num_channels = num_channels
 
-        if samples_per_frame is None:
-            samples_per_frame = sample_rate // 100  # 10ms by default
+        if samples_per_channel is None:
+            samples_per_channel = sample_rate // 50  # 20ms by default
 
-        self._samples_per_frame = samples_per_frame
         self._bytes_per_frame = (
-            num_channels * samples_per_frame * ctypes.sizeof(ctypes.c_int16)
+            num_channels * samples_per_channel * ctypes.sizeof(ctypes.c_int16)
         )
         self._buf = bytearray()
 
