@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import numpy as np
 import onnxruntime  # type: ignore
 from livekit import agents, rtc
+from livekit.agents import utils
 
 from . import onnx_model
 from .log import logger
@@ -34,6 +35,7 @@ class _VADOptions:
     padding_duration: float
     max_buffered_speech: float
     activation_threshold: float
+    probability_alpha: float
     sample_rate: int
 
 
@@ -48,6 +50,7 @@ class VAD(agents.vad.VAD):
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.25,
         sample_rate: int = 16000,
+        probability_alpha: float = 0.95,
         force_cpu: bool = True,
     ) -> "VAD":
         """
@@ -73,6 +76,7 @@ class VAD(agents.vad.VAD):
             padding_duration=padding_duration,
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
+            probability_alpha=probability_alpha,
             sample_rate=sample_rate,
         )
         return cls(session=session, opts=opts)
@@ -104,6 +108,7 @@ class VADStream(agents.vad.VADStream):
 
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._task.add_done_callback(lambda _: self._executor.shutdown(wait=False))
+        self._exp_filter = utils.ExpFilter(alpha=self._opts.probability_alpha)
 
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self):
@@ -184,6 +189,8 @@ class VADStream(agents.vad.VADStream):
                 raw_prob = await self._loop.run_in_executor(
                     self._executor, self._model, inference_window_data
                 )
+                raw_prob = self._exp_filter.apply(raw_prob)
+
                 inference_duration = time.time() - start_time
                 window_duration = (
                     self._model.window_size_samples / self._opts.sample_rate
