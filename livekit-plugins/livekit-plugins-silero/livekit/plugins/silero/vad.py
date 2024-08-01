@@ -50,7 +50,7 @@ class VAD(agents.vad.VAD):
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.25,
         sample_rate: int = 16000,
-        probability_alpha: float = 0.95,
+        probability_alpha: float = 0.35,
         force_cpu: bool = True,
     ) -> "VAD":
         """
@@ -189,7 +189,10 @@ class VADStream(agents.vad.VADStream):
                 raw_prob = await self._loop.run_in_executor(
                     self._executor, self._model, inference_window_data
                 )
-                raw_prob = self._exp_filter.apply(raw_prob)
+
+                prob_change = abs(raw_prob - self._exp_filter.filtered())
+                exp = 0.5 if prob_change > 0.35 else 1
+                raw_prob = self._exp_filter.apply(exp=exp, sample=raw_prob)
 
                 inference_duration = time.time() - start_time
                 window_duration = (
