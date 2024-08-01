@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import datetime
 import io
 import json
 import os
@@ -24,7 +23,6 @@ from livekit.agents import stt, utils
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE
-from pydub import AudioSegment
 
 from .common import resample_audio
 from .log import logger
