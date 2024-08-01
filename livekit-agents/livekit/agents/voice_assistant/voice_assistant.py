@@ -827,7 +827,7 @@ class _DeferredReplyValidation:
 
         await self._tasks_set.aclose()
 
-    def _end_with_punctuation(self) -> float:
+    def _end_with_punctuation(self) -> bool:
         return (
             self._last_final_transcript
             and self._last_final_transcript[-1] in self.PUNCTUATION
