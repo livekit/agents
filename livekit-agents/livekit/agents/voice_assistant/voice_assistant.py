@@ -508,8 +508,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if synthesis_handle.interrupted:
             return
 
-        logger.debug("start of speech", extra={"speech_id": speech_info.id})
-
         user_question = speech_info.user_question
         user_speech_commited = False
 
@@ -659,8 +657,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     "speech_id": speech_info.id,
                 },
             )
-
-        logger.debug("end of speech", extra={"speech_id": speech_info.id})
 
     def _synthesize_agent_speech(
         self,

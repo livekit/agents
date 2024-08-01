@@ -3,9 +3,12 @@ import enum
 import logging
 from typing import Annotated
 
+from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
+
+load_dotenv()
 
 logger = logging.getLogger("function-calling-demo")
 logger.setLevel(logging.INFO)
