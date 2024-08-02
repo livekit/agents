@@ -82,7 +82,9 @@ class WorkerOptions:
     num_idle_processes: int = 3
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 60.0
+    """Maximum amount of time to wait for a job to shut down gracefully"""
     initialize_process_timeout: float = 10.0
+    """Maximum amount of time to wait for a process to initialize/prewarm"""
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
     worker_type: agent.JobType = agent.JobType.JT_ROOM
