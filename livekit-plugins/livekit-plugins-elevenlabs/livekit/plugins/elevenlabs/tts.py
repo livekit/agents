@@ -181,6 +181,10 @@ class ChunkedStream(tts.ChunkedStream):
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
             json=data,
         ) as resp:
+            if resp.content_type != "audio/pcm":
+                content = await resp.text()
+                logger.error("11labs returned non-PCM data: %s", content)
+                return
             async for bytes_data, _ in resp.content.iter_chunks():
                 for frame in bstream.write(bytes_data):
                     self._event_ch.send_nowait(
