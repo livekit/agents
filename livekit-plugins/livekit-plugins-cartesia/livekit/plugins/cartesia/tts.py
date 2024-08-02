@@ -57,7 +57,7 @@ class TTS(tts.TTS):
         sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
     ) -> None:
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
             num_channels=1,
         )
@@ -85,13 +85,14 @@ class TTS(tts.TTS):
 
     def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(text, self._opts, self._ensure_session())
-    
+
     def stream(self) -> "SynthesizeStream":
         return SynthesizeStream(self._ensure_session(), self._opts)
 
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize chunked text using the bytes endpoint"""
+
     def __init__(
         self, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
     ) -> None:
@@ -149,6 +150,7 @@ class ChunkedStream(tts.ChunkedStream):
                     )
                 )
 
+
 class SynthesizeStream(tts.SynthesizeStream):
     """Streamed API using websockets"""
 
@@ -187,7 +189,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         @utils.log_exceptions(logger=logger)
         async def _run():
-            self._ws_conn = await self._init_ws()
             async for sentence_stream in self._segments_ch:
                 await self._run_ws(sentence_stream)
 
@@ -199,8 +200,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
-            
-    async def _init_ws(self, max_retry: int = 3,) -> aiohttp.ClientWebSocketResponse:
+
+    async def _init_ws(
+        self,
+        max_retry: int = 3,
+    ) -> aiohttp.ClientWebSocketResponse:
         ws_conn: aiohttp.ClientWebSocketResponse | None = None
         for try_i in range(max_retry):
             retry_delay = 5
@@ -226,16 +230,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         sentence_stream: tokenize.SentenceStream,
     ) -> None:
         # refresh websocket if connection is closed
-        if self._ws_conn.closed:
+        if self._ws_conn is None or self._ws_conn.closed:
             self._ws_conn = await self._init_ws()
-        
+
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
-        
+
         eos_sent = False
-        
-        context_id = utils.shortuuid()
-        
+
         voice = {}
         if isinstance(self._opts.voice, str):
             voice["mode"] = "id"
@@ -243,8 +245,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         else:
             voice["mode"] = "embedding"
             voice["embedding"] = self._opts.voice
-        
-        data_pkt = {
+
+        data_pkt: dict = {
             "model_id": self._opts.model,
             "voice": voice,
             "output_format": {
@@ -253,17 +255,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 "sample_rate": self._opts.sample_rate,
             },
             "language": self._opts.language,
-            "context_id": context_id,
+            "context_id": segment_id,
         }
 
         async def send_task():
             nonlocal eos_sent
 
             async for data in sentence_stream:
-                if not data.token.endswith(" "): # ensure token ends with space
+                if not data.token.endswith(" "):  # ensure token ends with space
                     data.token += " "
                 data_pkt["transcript"] = data.token
-                data_pkt["continue"] = True # continue to send more tokens
+                data_pkt["continue"] = True  # continue to send more tokens
                 await self._ws_conn.send_str(json.dumps(data_pkt))
 
             # no more token, mark eos
@@ -297,17 +299,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                     data=json.loads(msg.data),
                     request_id=request_id,
                     segment_id=segment_id,
-                    context_id=context_id,
                 )
 
         await asyncio.gather(send_task(), recv_task())
 
     def _process_stream_event(
-        self, *, data: dict, request_id: str, segment_id: str, context_id: str
+        self, *, data: dict, request_id: str, segment_id: str
     ) -> None:
-        if data.get("context_id") != context_id: # ignore messages for other contexts, this should not happen
+        if data.get("context_id") != segment_id:
+            # ignore messages for other contexts, this should not happen
             logger.warning("received message for unknown context %s", data)
             return
+
         if data.get("audio"):
             b64data = base64.b64decode(data["audio"])
             chunk_frame = rtc.AudioFrame(
@@ -323,7 +326,5 @@ class SynthesizeStream(tts.SynthesizeStream):
                     frame=chunk_frame,
                 )
             )
-        elif data.get("error"):
-            logger.error("Cartesia reported an error: %s", data["error"])
         elif not data.get("done"):
             logger.error("unexpected Cartesia message %s", data)
