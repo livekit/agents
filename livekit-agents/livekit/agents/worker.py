@@ -91,14 +91,22 @@ class WorkerOptions:
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = MAX_RECONNECT_ATTEMPTS
     ws_url: str = "ws://localhost:7880"
-    """URL to connect to the LiveKit server. Uses LIVEKIT_URL from environment"""
+    """URL to connect to the LiveKit server.
+
+    By default it uses ``LIVEKIT_URL`` from environment"""
     api_key: str | None = None
-    """API key to authenticate with LiveKit. Uses LIVEKIT_API_KEY from environment"""
+    """API key to authenticate with LiveKit.
+
+    By default it uses ``LIVEKIT_API_KEY`` from environment"""
     api_secret: str | None = None
-    """API secret to authenticate with LiveKit. Uses LIVEKIT_API_SECRET from environment"""
+    """API secret to authenticate with LiveKit.
+
+    By default it uses ``LIVEKIT_API_SECRET`` from environment"""
     host: str = ""  # default to all interfaces
     port: int = 8081
-    """Port for local HTTP server to listen on. """
+    """Port for local HTTP server to listen on.
+
+    The HTTP server is used as a health check endpoint."""
 
 
 EventTypes = Literal["worker_registered"]
