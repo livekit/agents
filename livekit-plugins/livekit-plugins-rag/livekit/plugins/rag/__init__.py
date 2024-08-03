@@ -20,13 +20,12 @@ __all__ = ["SentenceChunker", "annoy", "__version__"]
 
 from livekit.agents import Plugin
 
+from .log import logger
+
 
 class RAGPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
-
-    def download_files(self) -> None:
-        pass
+        super().__init__(__name__, __version__, __package__, logger)
 
 
 Plugin.register_plugin(RAGPlugin())

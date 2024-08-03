@@ -10,8 +10,8 @@ from livekit import rtc
 
 from .. import stt, tokenize, tts, utils, vad
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
-from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
-from .cancellable_source import CancellableAudioSource
+from .agent_output import AgentOutput, SynthesisHandle
+from .agent_playout import AgentPlayout
 from .human_input import HumanInput
 from .log import logger
 from .plotter import AssistantPlotter
@@ -19,11 +19,15 @@ from .plotter import AssistantPlotter
 
 @dataclass
 class _SpeechInfo:
+    id: str  # useful to recognize a specific speech in logs
     source: str | LLMStream | AsyncIterable[str]
-    user_question: str  # empty when the speech isn't an answer
     allow_interruptions: bool
     add_to_chat_ctx: bool
     synthesis_handle: SynthesisHandle
+
+    # is_reply = True when the speech is answering to a user question
+    is_reply: bool = False
+    user_question: str = ""
 
 
 WillSynthesizeAssistantReply = Callable[
@@ -111,6 +115,9 @@ class AssistantTranscriptionOptions:
 
 
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
+    MIN_TIME_PLAYED_FOR_COMMIT = 1.5
+    """Minimum time played for the user speech to be committed to the chat context"""
+
     def __init__(
         self,
         *,
@@ -121,7 +128,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
-        interrupt_speech_duration: float = 0.6,
+        interrupt_speech_duration: float = 0.45,
         interrupt_min_words: int = 0,
         preemptive_synthesis: bool = True,
         transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
@@ -129,6 +136,27 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
+        """
+        Create a new VoiceAssistant.
+
+        Args:
+            vad: Voice Activity Detection (VAD) instance.
+            stt: Speech-to-Text (STT) instance.
+            llm: Large Language Model (LLM) instance.
+            tts: Text-to-Speech (TTS) instance.
+            chat_ctx: Chat context for the assistant.
+            fnc_ctx: Function context for the assistant.
+            allow_interruptions: Whether to allow the user to interrupt the assistant.
+            interrupt_speech_duration: Minimum duration of speech to consider for interruption.
+            interrupt_min_words: Minimum number of words to consider for interruption.
+                Defaults to 0 as this may increase the latency depending on the STT.
+            preemptive_synthesis: Whether to preemptively synthesize responses.
+            transcription: Options for assistant transcription.
+            will_synthesize_assistant_reply: Callback called when the assistant is about to synthesize a reply.
+                This can be used to customize the reply (e.g: inject context/RAG).
+            plotting: Whether to enable plotting for debugging. matplotlib must be installed.
+            loop: Event loop to use. Default to asyncio.get_event_loop().
+        """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
         self._opts = _ImplOptions(
@@ -142,8 +170,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         )
         self._plotter = AssistantPlotter(self._loop)
 
-        # wrap with StreamAdapter automatically when streaming is not supported on a specific TTS
-        # to override StreamAdapter options, create the adapter manually
+        # wrap with StreamAdapter automatically when streaming is not supported on a specific TTS/STT.
+        # To override StreamAdapter options, create the adapter manually.
 
         if not tts.capabilities.streaming:
             from .. import tts as text_to_speech
@@ -167,18 +195,22 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._human_input: HumanInput | None = None
         self._agent_output: AgentOutput | None = None
+
+        # done when the agent output track is published
         self._track_published_fut = asyncio.Future[None]()
 
-        self._agent_answer_speech: _SpeechInfo | None = None
-        self._agent_playing_speech: _SpeechInfo | None = None
-        self._agent_answer_atask: asyncio.Task[None] | None = None
-        self._playout_ch = utils.aio.Chan[_SpeechInfo]()
+        self._pending_agent_reply: _SpeechInfo | None = None
+        self._pending_agent_reply_task: asyncio.Task[None] | None = None
 
+        self._playing_speech: _SpeechInfo | None = None
         self._transcribed_text, self._transcribed_interim_text = "", ""
 
-        self._deferred_validation = _DeferredAnswerValidation(
-            self._validate_answer_if_needed, loop=self._loop
+        self._deferred_validation = _DeferredReplyValidation(
+            self._validate_reply_if_possible, loop=self._loop
         )
+
+        self._speech_q: list[_SpeechInfo] = []
+        self._speech_q_changed = asyncio.Event()
 
     @property
     def fnc_ctx(self) -> FunctionContext | None:
@@ -230,47 +262,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             else:
                 self._link_participant(participant)
         else:
-            # no participant provided, try to find the first in the room
+            # no participant provided, try to find the first participant in the room
             for participant in self._room.remote_participants.values():
                 self._link_participant(participant.identity)
                 break
 
         self._main_atask = asyncio.create_task(self._main_task())
-
-    async def say(
-        self,
-        source: str | LLMStream | AsyncIterable[str],
-        *,
-        allow_interruptions: bool = True,
-        add_to_chat_ctx: bool = True,
-    ) -> None:
-        """
-        Make the assistant say something.
-        The source can be a string, an LLMStream or an AsyncIterable[str]
-
-        Args:
-            source: the source of the speech
-            allow_interruptions: whether the speech can be interrupted
-            add_to_chat_ctx: whether to add the speech to the chat context
-        """
-        await self._track_published_fut
-        assert (
-            self._agent_output is not None
-        ), "agent output should be initialized when ready"
-
-        speech_source = source
-        if isinstance(speech_source, LLMStream):
-            speech_source = _llm_stream_to_str_iterable(speech_source)
-
-        synthesis_handle = self._agent_synthesize(transcript=speech_source)
-        speech = _SpeechInfo(
-            source=source,
-            user_question="",
-            allow_interruptions=allow_interruptions,
-            add_to_chat_ctx=add_to_chat_ctx,
-            synthesis_handle=synthesis_handle,
-        )
-        self._playout_ch.send_nowait(speech)
 
     def on(self, event: EventTypes, callback: Callable[[Any], None] | None = None):
         """Register a callback for an event
@@ -289,6 +286,34 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             callback: the callback to call when the event is emitted
         """
         return super().on(event, callback)
+
+    async def say(
+        self,
+        source: str | LLMStream | AsyncIterable[str],
+        *,
+        allow_interruptions: bool = True,
+        add_to_chat_ctx: bool = True,
+    ) -> None:
+        """
+        Play a speech source through the voice assistant.
+
+        Args:
+            source: The source of the speech to play.
+                It can be a string, an LLMStream, or an asynchronous iterable of strings.
+            allow_interruptions: Whether to allow interruptions during the speech playback.
+            add_to_chat_ctx: Whether to add the speech to the chat context.
+        """
+        await self._track_published_fut
+        speech_id = utils.shortuuid()
+        self._add_speech_for_playout(
+            _SpeechInfo(
+                id=speech_id,
+                source=source,
+                allow_interruptions=allow_interruptions,
+                add_to_chat_ctx=add_to_chat_ctx,
+                synthesis_handle=self._synthesize_agent_speech(speech_id, source),
+            )
+        )
 
     async def aclose(self) -> None:
         """Close the voice assistant"""
@@ -332,16 +357,16 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             tv = 1.0
             if self._opts.allow_interruptions:
                 tv = max(0.0, 1.0 - ev.probability)
-                self._agent_output.audio_source.target_volume = tv
+                self._agent_output.playout.target_volume = tv
 
-            smoothed_tv = self._agent_output.audio_source.smoothed_volume
+            smoothed_tv = self._agent_output.playout.smoothed_volume
 
             self._plotter.plot_value("raw_vol", tv)
             self._plotter.plot_value("smoothed_vol", smoothed_tv)
             self._plotter.plot_value("vad_probability", ev.probability)
 
             if ev.speech_duration >= self._opts.int_speech_duration:
-                self._interrupt_if_needed()
+                self._interrupt_if_possible()
 
         def _on_end_of_speech(ev: vad.VADEvent) -> None:
             self._plotter.plot_event("user_stopped_speaking")
@@ -355,9 +380,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._transcribed_text += ev.alternatives[0].text
 
             if self._opts.preemptive_synthesis:
-                self._synthesize_answer(
-                    user_transcript=self._transcribed_text, force_play=False
-                )
+                self._synthesize_agent_reply()
+
+            self._deferred_validation.on_human_final_transcript(ev.alternatives[0].text)
+
+            words = self._opts.transcription.word_tokenizer.tokenize(
+                text=ev.alternatives[0].text
+            )
+            if len(words) >= 3:
+                # VAD can sometimes not detect that the human is speaking
+                # to make the interruption more reliable, we also interrupt on the final transcript.
+                self._interrupt_if_possible()
 
         self._human_input.on("start_of_speech", _on_start_of_speech)
         self._human_input.on("vad_inference_done", _on_vad_updated)
@@ -376,10 +409,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         )
 
-        cancellable_audio_source = CancellableAudioSource(source=audio_source)
+        agent_playout = AgentPlayout(source=audio_source)
         self._agent_output = AgentOutput(
             room=self._room,
-            source=cancellable_audio_source,
+            agent_playout=agent_playout,
             llm=self._llm,
             tts=self._tts,
         )
@@ -392,68 +425,31 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("agent_stopped_speaking")
             self.emit("agent_stopped_speaking")
 
-        cancellable_audio_source.on("playout_started", _on_playout_started)
-        cancellable_audio_source.on("playout_stopped", _on_playout_stopped)
+        agent_playout.on("playout_started", _on_playout_started)
+        agent_playout.on("playout_stopped", _on_playout_stopped)
 
         self._track_published_fut.set_result(None)
 
-        # play validated speeches
-        async for speech in self._playout_ch:
-            self._agent_playing_speech = speech
-            await self._play_speech(speech)
-            self._agent_playing_speech = None
+        while True:
+            await self._speech_q_changed.wait()
 
-    def _validate_answer_if_needed(self) -> None:
-        """
-        Check if the user speech should be validated/played
-        """
-        if (
-            self._agent_answer_speech is not None
-            and not self._agent_answer_speech.synthesis_handle.interrupted
-        ):
-            self._playout_ch.send_nowait(self._agent_answer_speech)
-            self._agent_answer_speech = None
-        elif not self._opts.preemptive_synthesis and self._transcribed_text:
-            self._synthesize_answer(
-                user_transcript=self._transcribed_text, force_play=True
-            )
+            while self._speech_q:
+                speech = self._speech_q[0]
+                self._playing_speech = speech
+                await self._play_speech(speech)
+                self._speech_q.pop(0)  # Remove the element only after playing
+                self._playing_speech = None
 
-    def _interrupt_if_needed(self) -> None:
-        """
-        Check whether the current assistant speech should be interrupted
-        """
-        if (
-            self._agent_playing_speech is None
-            or not self._agent_playing_speech.allow_interruptions
-            or self._agent_playing_speech.synthesis_handle.interrupted
-        ):
-            return
+            self._speech_q_changed.clear()
 
-        if self._opts.int_min_words != 0:
-            # check the final/interim transcribed text for the minimum word count
-            # to interrupt the agent speech
-            interim_words = self._opts.transcription.word_tokenizer.tokenize(
-                text=self._transcribed_interim_text
-            )
-            if len(interim_words) < self._opts.int_min_words:
-                return
-
-        self._agent_playing_speech.synthesis_handle.interrupt()
-
-    def _synthesize_answer(self, *, user_transcript: str, force_play: bool) -> None:
-        """
-        Synthesize the answer to the user question and make sure
-        only one answer is synthesized at a time
-        """
+    def _synthesize_agent_reply(self, *, validated: bool = False) -> None:
+        """Synthesize the agent reply to the user question, also make sure only one reply
+        is synthesized/played at a time"""
 
         @utils.log_exceptions(logger=logger)
-        async def _synthesize_answer_task(old_task: asyncio.Task[None]) -> None:
-            # Use an async task to synthesize the agent answer to
-            # allow users to execute async code inside the will_create_llm_stream callback
-            assert (
-                self._agent_output is not None
-            ), "agent output should be initialized when ready"
-
+        async def _synthesize_answer_task(
+            old_task: asyncio.Task[None], user_transcript: str
+        ) -> None:
             if old_task is not None:
                 await utils.aio.gracefully_cancel(old_task)
 
@@ -471,42 +467,43 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     self, chat_ctx=copied_ctx
                 )
 
-            synthesis = self._agent_synthesize(
-                transcript=_llm_stream_to_str_iterable(llm_stream)
-            )
-            self._agent_answer_speech = _SpeechInfo(
+            speech_id = utils.shortuuid()
+            reply = _SpeechInfo(
+                id=speech_id,
                 source=llm_stream,
-                user_question=user_transcript,
                 allow_interruptions=self._opts.allow_interruptions,
                 add_to_chat_ctx=True,
-                synthesis_handle=synthesis,
+                synthesis_handle=self._synthesize_agent_speech(speech_id, llm_stream),
+                is_reply=True,
+                user_question=user_transcript,
             )
-            self._deferred_validation.on_new_synthesis(user_transcript)
 
-            if force_play:
-                self._playout_ch.send_nowait(self._agent_answer_speech)
+            logger.debug(
+                "synthesizing agent reply",
+                extra={
+                    "user_transcript": user_transcript,
+                    "validated": validated,
+                    "speech_id": reply.id,
+                },
+            )
 
-        if self._agent_answer_speech is not None:
-            self._agent_answer_speech.synthesis_handle.interrupt()
+            if validated:
+                self._add_speech_for_playout(reply)
+            else:
+                self._pending_agent_reply = reply
 
-        self._agent_answer_speech = None
-        old_task = self._agent_answer_atask
+        # interrupt the current reply synthesis
+        if self._pending_agent_reply is not None:
+            self._pending_agent_reply.synthesis_handle.interrupt()
+            self._pending_agent_reply = None
 
-        self._agent_answer_atask = asyncio.create_task(
-            _synthesize_answer_task(old_task)
+        self._pending_agent_reply_task = asyncio.create_task(
+            _synthesize_answer_task(
+                self._pending_agent_reply_task, self._transcribed_text
+            )
         )
 
     async def _play_speech(self, speech_info: _SpeechInfo) -> None:
-        logger.debug("VoiceAssistant._play_speech started")
-
-        assert self._agent_playing_speech is not None
-
-        MIN_TIME_PLAYED_FOR_COMMIT = 1.5
-
-        assert (
-            self._agent_output is not None
-        ), "agent output should be initialized when ready"
-
         synthesis_handle = speech_info.synthesis_handle
         if synthesis_handle.interrupted:
             return
@@ -517,7 +514,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         play_handle = synthesis_handle.play()
         join_fut = play_handle.join()
 
-        def _commit_user_message_if_needed() -> None:
+        def _commit_user_question_if_needed() -> None:
             nonlocal user_speech_committed
 
             if (
@@ -534,12 +531,19 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             # make sure at least some speech was played before committing the user message
             # since we try to validate as fast as possible it is possible the agent gets interrupted
             # really quickly (barely audible), we don't want to mark this question as "answered".
-            if not is_using_tools and (
-                play_handle.time_played < MIN_TIME_PLAYED_FOR_COMMIT
-                and not join_fut.done()
+            if (
+                speech_info.allow_interruptions
+                and not is_using_tools
+                and (
+                    play_handle.time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
+                    and not join_fut.done()
+                )
             ):
                 return
 
+            logger.debug(
+                "committed user transcript", extra={"user_transcript": user_question}
+            )
             user_msg = ChatMessage.create(text=user_question, role="user")
             self._chat_ctx.messages.append(user_msg)
             self.emit("user_speech_committed", user_msg)
@@ -548,14 +552,16 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             user_speech_committed = True
 
         # wait for the play_handle to finish and check every 1s if the user question should be committed
+        _commit_user_question_if_needed()
+
         while not join_fut.done():
             await asyncio.wait(
                 [join_fut], return_when=asyncio.FIRST_COMPLETED, timeout=1.0
             )
 
-            _commit_user_message_if_needed()
+            _commit_user_question_if_needed()
 
-        _commit_user_message_if_needed()
+        _commit_user_question_if_needed()
 
         collected_text = speech_info.synthesis_handle.collected_text
         interrupted = speech_info.synthesis_handle.interrupted
@@ -571,15 +577,30 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             assert isinstance(speech_info.source, LLMStream)
             assert (
                 user_speech_committed
-            ), "user speech should be committed before using tools"
+            ), "user speech should have been committed before using tools"
 
             # execute functions
             call_ctx = AssistantCallContext(self, speech_info.source)
             tk = _CallContextVar.set(call_ctx)
             self.emit("function_calls_collected", speech_info.source.function_calls)
-            called_fncs = speech_info.source.execute_functions()
-            tasks = [called_fnc.task for called_fnc in called_fncs]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            called_fncs_info = speech_info.source.function_calls
+
+            called_fncs = []
+            for fnc in called_fncs_info:
+                called_fnc = fnc.execute()
+                called_fncs.append(called_fnc)
+                logger.debug(
+                    "executing ai function",
+                    extra={
+                        "function": fnc.function_info.name,
+                        "speech_id": speech_info.id,
+                    },
+                )
+                try:
+                    await called_fnc.task
+                except Exception:
+                    pass
+
             self.emit("function_calls_finished", called_fncs)
             _CallContextVar.reset(tk)
 
@@ -603,13 +624,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 chat_ctx = speech_info.source.chat_ctx.copy()
                 chat_ctx.messages.extend(extra_tools_messages)
 
-                answer_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self._fnc_ctx)
-                answer_synthesis = self._agent_synthesize(
-                    transcript=_llm_stream_to_str_iterable(answer_stream)
+                answer_llm_stream = self._llm.chat(
+                    chat_ctx=chat_ctx, fnc_ctx=self._fnc_ctx
                 )
-                # make sure users can interrupt the fnc calls answer
-                # TODO(theomonnom): maybe we should add a new fnc_call_answer field to _SpeechInfo?
-                self._agent_playing_speech.synthesis_handle = answer_synthesis
+                answer_synthesis = self._synthesize_agent_speech(
+                    speech_info.id, answer_llm_stream
+                )
+                # replace the synthesis handle with the new one to allow interruption
+                speech_info.synthesis_handle = answer_synthesis
                 play_handle = answer_synthesis.play()
                 await play_handle.join()
 
@@ -627,15 +649,30 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             else:
                 self.emit("agent_speech_committed", msg)
 
-        logger.debug("VoiceAssistant._play_speech ended")
+            logger.debug(
+                "committed agent speech",
+                extra={
+                    "agent_transcript": collected_text,
+                    "interrupted": interrupted,
+                    "speech_id": speech_info.id,
+                },
+            )
 
-    def _agent_synthesize(self, *, transcript: SpeechSource) -> SynthesisHandle:
+    def _synthesize_agent_speech(
+        self,
+        speech_id: str,
+        source: str | LLMStream | AsyncIterable[str],
+    ) -> SynthesisHandle:
         assert (
             self._agent_output is not None
         ), "agent output should be initialized when ready"
 
+        if isinstance(source, LLMStream):
+            source = _llm_stream_to_str_iterable(speech_id, source)
+
         return self._agent_output.synthesize(
-            transcript=transcript,
+            speech_id=speech_id,
+            transcript=source,
             transcription=self._opts.transcription.agent_transcription,
             transcription_speed=self._opts.transcription.agent_transcription_speed,
             sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
@@ -643,24 +680,86 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             hyphenate_word=self._opts.transcription.hyphenate_word,
         )
 
+    def _validate_reply_if_possible(self) -> None:
+        """Check if the new agent speech should be played"""
+        if (
+            self._pending_agent_reply is not None
+            and not self._pending_agent_reply.synthesis_handle.interrupted
+        ):
+            # in some timing, we could end up with two pushed agent replies inside the speech queue.
+            # so make sure we directly interrupt every reply when pushing a new one
+            for speech in self._speech_q:
+                if speech.allow_interruptions and speech.is_reply:
+                    speech.synthesis_handle.interrupt()
 
-async def _llm_stream_to_str_iterable(stream: LLMStream) -> AsyncIterable[str]:
+            logger.debug(
+                "validated agent reply",
+                extra={"speech_id": self._pending_agent_reply.id},
+            )
+            self._add_speech_for_playout(self._pending_agent_reply)
+            self._pending_agent_reply = None
+        elif not self._opts.preemptive_synthesis and self._transcribed_text:
+            # validated=True is going to call _add_speech_for_playout
+            self._synthesize_agent_reply(validated=True)
+
+        # self._transcribed_text is reset after MIN_TIME_PLAYED_FOR_COMMIT, see self._play_speech
+        self._transcribed_interim_text = ""
+
+    def _interrupt_if_possible(self) -> None:
+        """Check whether the current assistant speech should be interrupted"""
+        if (
+            self._playing_speech is None
+            or not self._playing_speech.allow_interruptions
+            or self._playing_speech.synthesis_handle.interrupted
+        ):
+            return
+
+        if self._opts.int_min_words != 0:
+            # check the final/interim transcribed text for the minimum word count
+            # to interrupt the agent speech
+            interim_words = self._opts.transcription.word_tokenizer.tokenize(
+                text=self._transcribed_interim_text
+            )
+            if len(interim_words) < self._opts.int_min_words:
+                return
+
+        self._playing_speech.synthesis_handle.interrupt()
+
+    def _add_speech_for_playout(self, speech: _SpeechInfo) -> None:
+        self._speech_q.append(speech)
+        self._speech_q_changed.set()
+
+
+async def _llm_stream_to_str_iterable(
+    speech_id: str, stream: LLMStream
+) -> AsyncIterable[str]:
+    start_time = time.time()
+    first_frame = True
     async for chunk in stream:
         content = chunk.choices[0].delta.content
         if content is None:
             continue
 
+        if first_frame:
+            first_frame = False
+            logger.debug(
+                "first LLM token",
+                extra={"speech_id": speech_id, "elapsed": time.time() - start_time},
+            )
+
         yield content
 
 
-class _DeferredAnswerValidation:
-    # if the STT gives us punctuation, we can validate faster, we can be more confident
-    # about the end of the sentence (naive way to increase the default DEFER_DELAY to allow the user
-    # to say longer sentences without being interrupted by the assistant)
+class _DeferredReplyValidation:
+    """This class is used to try to find the best time to validate the agent reply."""
+
+    # if the STT gives us punctuation, we can try validate the reply faster.
     PUNCTUATION = ".!?"
-    DEFER_DELAY_WITH_PUNCTUATION = 0.15
-    DEFER_DELAY = 0.2
-    LATE_TRANSCRIPT_TOLERANCE = 5
+    PUNCTUATION_REDUCE_FACTOR = 0.8
+
+    DEFER_DELAY_END_OF_SPEECH = 0.2
+    DEFER_DELAY_FINAL_TRANSCRIPT = 1.0
+    LATE_TRANSCRIPT_TOLERANCE = 1.5  # late compared to end of speech
 
     def __init__(
         self, validate_fnc: Callable[[], None], loop: asyncio.AbstractEventLoop
@@ -671,47 +770,52 @@ class _DeferredAnswerValidation:
         self._validating_task: asyncio.Task | None = None
         self._last_final_transcript: str = ""
         self._last_recv_end_of_speech_time: float = 0.0
+        self._speaking = False
 
     @property
     def validating(self) -> bool:
         return self._validating_task is not None and not self._validating_task.done()
 
-    def _get_defer_delay(self) -> float:
-        if (
-            self._last_final_transcript
-            and self._last_final_transcript[-1] in self.PUNCTUATION
-        ):
-            return self.DEFER_DELAY_WITH_PUNCTUATION
+    def on_human_final_transcript(self, transcript: str) -> None:
+        self._last_final_transcript = transcript.strip()  # type: ignore
 
-        return self.DEFER_DELAY
+        if self._speaking:
+            return
 
-    def _reset_states(self) -> None:
-        self._last_final_transcript = ""
-        self._last_recv_end_of_speech_time = 0.0
-
-    def on_new_synthesis(self, user_msg: str) -> None:
-        self._last_final_transcript = user_msg.strip()  # type: ignore
-
-        if self.validating:
-            self._run(self._get_defer_delay())  # debounce
-        elif (
-            self._last_recv_end_of_speech_time
-            and time.time() - self._last_recv_end_of_speech_time
+        has_recent_end_of_speech = (
+            time.time() - self._last_recv_end_of_speech_time
             < self.LATE_TRANSCRIPT_TOLERANCE
-        ):
-            # final transcript was received after human stopped speaking
-            self._run(self._get_defer_delay())
+        )
+        delay = (
+            self.DEFER_DELAY_END_OF_SPEECH
+            if has_recent_end_of_speech
+            else self.DEFER_DELAY_FINAL_TRANSCRIPT
+        )
+        delay = (
+            delay * self.PUNCTUATION_REDUCE_FACTOR
+            if self._end_with_punctuation()
+            else 1.0
+        )
+
+        self._run(delay)
 
     def on_human_start_of_speech(self, ev: vad.VADEvent) -> None:
+        self._speaking = True
         if self.validating:
             assert self._validating_task is not None
             self._validating_task.cancel()
 
     def on_human_end_of_speech(self, ev: vad.VADEvent) -> None:
+        self._speaking = False
         self._last_recv_end_of_speech_time = time.time()
 
         if self._last_final_transcript:
-            self._run(self._get_defer_delay())
+            delay = (
+                self.DEFER_DELAY_END_OF_SPEECH * self.PUNCTUATION_REDUCE_FACTOR
+                if self._end_with_punctuation()
+                else 1.0
+            )
+            self._run(delay)
 
     async def aclose(self) -> None:
         if self._validating_task is not None:
@@ -719,16 +823,24 @@ class _DeferredAnswerValidation:
 
         await self._tasks_set.aclose()
 
-    @utils.log_exceptions(logger=logger)
-    async def _run_task(self, delay: float) -> None:
-        await asyncio.sleep(delay)
+    def _end_with_punctuation(self) -> bool:
+        return (
+            len(self._last_final_transcript) > 0
+            and self._last_final_transcript[-1] in self.PUNCTUATION
+        )
+
+    def _reset_states(self) -> None:
         self._last_final_transcript = ""
-        self._received_end_of_speech = False
-        self._validate_fnc()
-        logger.debug("_DeferredAnswerValidation speech validated")
+        self._last_recv_end_of_speech_time = 0.0
 
     def _run(self, delay: float) -> None:
+        @utils.log_exceptions(logger=logger)
+        async def _run_task(delay: float) -> None:
+            await asyncio.sleep(delay)
+            self._reset_states()
+            self._validate_fnc()
+
         if self._validating_task is not None:
             self._validating_task.cancel()
 
-        self._validating = self._tasks_set.create_task(self._run_task(delay))
+        self._validating = self._tasks_set.create_task(_run_task(delay))

@@ -14,15 +14,13 @@
 
 from livekit.agents import Plugin
 
+from .log import logger
 from .version import __version__
 
 
 class MinimalPlugin(Plugin):
     def __init__(self):
-        super().__init__(__name__, __version__, __package__)
-
-    def download_files(self):
-        pass
+        super().__init__(__name__, __version__, __package__, logger)
 
 
 Plugin.register_plugin(MinimalPlugin())

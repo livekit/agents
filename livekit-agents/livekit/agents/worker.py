@@ -77,7 +77,7 @@ class WorkerOptions:
     """A function to perform any necessary initialization before the job starts."""
     load_fnc: Callable[[], float] = _default_cpu_load_fnc
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
-    load_threshold: float = 0.8
+    load_threshold: float = 0.65
     """When the load exceeds this threshold, the worker will be marked as unavailable."""
     num_idle_processes: int = 3
     """Number of idle processes to keep warm."""
