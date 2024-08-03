@@ -21,13 +21,15 @@ def new_inference_session(force_cpu: bool) -> onnxruntime.InferenceSession:
     path = str(_resource_files.enter_context(ctx))
 
     opts = onnxruntime.SessionOptions()
+    opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    opts.add_session_config_entry("session.inter_op.allow_spinning", "0")
     opts.inter_op_num_threads = 1
     opts.intra_op_num_threads = 1
-    opts.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+    opts.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
 
     if force_cpu and "CPUExecutionProvider" in onnxruntime.get_available_providers():
         session = onnxruntime.InferenceSession(
-            path, providers=["CPUExecutionProvider"], ess_options=opts
+            path, providers=["CPUExecutionProvider"], sess_options=opts
         )
     else:
         session = onnxruntime.InferenceSession(path, sess_options=opts)
