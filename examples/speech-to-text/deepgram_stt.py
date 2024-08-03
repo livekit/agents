@@ -32,7 +32,6 @@ async def _forward_transcription(
 async def entrypoint(ctx: JobContext):
     logger.info("starting speech-to-text example")
     stt = deepgram.STT()
-    tasks = []
 
     async def transcribe_track(participant: rtc.RemoteParticipant, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
@@ -40,10 +39,7 @@ async def entrypoint(ctx: JobContext):
             room=ctx.room, participant=participant, track=track
         )
         stt_stream = stt.stream()
-        stt_task = asyncio.create_task(
-            _forward_transcription(stt_stream, stt_forwarder)
-        )
-        tasks.append(stt_task)
+        asyncio.create_task(_forward_transcription(stt_stream, stt_forwarder))
 
         async for ev in audio_stream:
             stt_stream.push_frame(ev.frame)
@@ -57,7 +53,7 @@ async def entrypoint(ctx: JobContext):
         participant: rtc.RemoteParticipant,
     ):
         if track.kind == rtc.TrackKind.KIND_AUDIO:
-            tasks.append(asyncio.create_task(transcribe_track(participant, track)))
+            asyncio.create_task(transcribe_track(participant, track))
 
 
 if __name__ == "__main__":
