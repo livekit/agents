@@ -52,8 +52,9 @@ class VAD(agents.vad.VAD):
         force_cpu: bool = True,
     ) -> "VAD":
         """
-        Initialize the Silero VAD with the given options.
-        The options are already set to strong defaults.
+        Initialize the Silero VAD.
+
+        When options are not provided, sane defaults are used.
 
         Args:
             min_speech_duration: minimum duration of speech to start a new speech chunk

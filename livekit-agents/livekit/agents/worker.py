@@ -68,21 +68,45 @@ class WorkerPermissions:
 @dataclass
 class WorkerOptions:
     entrypoint_fnc: Callable[[JobContext], Coroutine]
+    """Entrypoint function that will be called when a job is assigned to this worker."""
     request_fnc: Callable[[JobRequest], Coroutine] = _default_request_fnc
+    """Inspect the request and decide if the current worker should handle it.
+
+    When left empty, all jobs are accepted."""
     prewarm_fnc: Callable[[JobProcess], Any] = _default_initialize_process_fnc
+    """A function to perform any necessary initialization before the job starts."""
     load_fnc: Callable[[], float] = _default_cpu_load_fnc
+    """Called to determine the current load of the worker. Should return a value between 0 and 1."""
     load_threshold: float = 0.65
+    """When the load exceeds this threshold, the worker will be marked as unavailable."""
     num_idle_processes: int = 3
+    """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 60.0
+    """Maximum amount of time to wait for a job to shut down gracefully"""
     initialize_process_timeout: float = 10.0
+    """Maximum amount of time to wait for a process to initialize/prewarm"""
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
+    """Permissions that the agent should join the room with."""
     worker_type: agent.JobType = agent.JobType.JT_ROOM
+    """Whether to spin up an agent for each room or publisher."""
     max_retry: int = MAX_RECONNECT_ATTEMPTS
     ws_url: str = "ws://localhost:7880"
+    """URL to connect to the LiveKit server.
+
+    By default it uses ``LIVEKIT_URL`` from environment"""
     api_key: str | None = None
+    """API key to authenticate with LiveKit.
+
+    By default it uses ``LIVEKIT_API_KEY`` from environment"""
     api_secret: str | None = None
+    """API secret to authenticate with LiveKit.
+
+    By default it uses ``LIVEKIT_API_SECRET`` from environment"""
     host: str = ""  # default to all interfaces
     port: int = 8081
+    """Port for local HTTP server to listen on.
+
+    The HTTP server is used as a health check endpoint."""
 
 
 EventTypes = Literal["worker_registered"]
