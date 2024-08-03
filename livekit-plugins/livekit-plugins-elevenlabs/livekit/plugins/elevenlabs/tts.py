@@ -408,11 +408,11 @@ def _synthesize_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
     voice_id = opts.voice.id
     model_id = opts.model_id
-    sample_rate = _sample_rate_from_format(opts.encoding)
+    output_format = opts.encoding
     latency = opts.streaming_latency
     return (
         f"{base_url}/text-to-speech/{voice_id}/stream?"
-        f"model_id={model_id}&output_format=pcm_{sample_rate}&optimize_streaming_latency={latency}"
+        f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}"
     )
 
 
