@@ -20,7 +20,7 @@ audio, video, and data streams.
 
 The framework includes plugins for common workflows, such as voice activity detection and speech-to-text.
 
-Agents integrates seamlessly with [LiveKit server](https://github.com/livekit/livekit), offloading job queuing and scheduling responsibilities to it. This eliminates the need for additional queuing infrastructure. Agent code developed on your local machine can scale to support thousands of concurrent sessions when deployed to a server in production.
+Agents integrates seamlessly with Cloud or self-hosted [LiveKit](https://livekit.io/) server, offloading job queuing and scheduling responsibilities to it. This eliminates the need for additional queuing infrastructure. Agent code developed on your local machine can scale to support thousands of concurrent sessions when deployed to a server in production.
 
 > This SDK is currently in Developer Preview. During this period, you may encounter bugs and the APIs may change.
 >
@@ -32,6 +32,9 @@ Agents integrates seamlessly with [LiveKit server](https://github.com/livekit/li
 - [Quickstart](https://docs.livekit.io/agents/quickstart)
 - [Working with plugins](https://docs.livekit.io/agents/plugins)
 - [Deploying agents](https://docs.livekit.io/agents/deployment)
+
+> [!NOTE]
+> There are breaking API changes between versions 0.7.x and 0.8.x. Please refer to the [0.8 migration guide](0.8-migration-guide.md) for a detailed overview of the changes.
 
 ## Examples
 
@@ -81,12 +84,18 @@ The framework exposes a CLI interface to run your agent. To get started, you'll 
 - LIVEKIT_API_KEY
 - LIVEKIT_API_SECRET
 
-### Running the worker
+### Starting the worker
 
 This will start the worker and wait for users to connect to your LiveKit server:
 
 ```bash
 python my_agent.py start
+```
+
+To run the worker in dev-mode (with hot code reloading), you can use the dev command:
+
+```bash
+python my_agent.py dev
 ```
 
 ### Using playground for your agent UI
