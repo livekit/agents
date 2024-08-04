@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import os
 import urllib.parse
 import wave
 from dataclasses import dataclass
@@ -64,7 +65,9 @@ class STT(stt.STT):
             detect_language=detect_language,
             model=model,
             api_key=api_key,
-            endpoint=urllib.parse.urljoin(get_base_url(base_url), "audio/transcriptions"),
+            endpoint=urllib.parse.urljoin(
+                get_base_url(base_url), "audio/transcriptions"
+            ),
         )
         self._session = http_session
 
