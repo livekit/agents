@@ -54,6 +54,7 @@ jobs:
         run: choco install ffmpeg
 
       - name: Install packages
+        shell: bash
         run: |
           pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
           pip3 install -r ./tests/test-requirements.txt
