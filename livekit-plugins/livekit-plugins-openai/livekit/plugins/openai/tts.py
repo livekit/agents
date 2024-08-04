@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-import os
+import urllib.parse
 from dataclasses import dataclass
 from typing import AsyncContextManager
 
@@ -73,7 +73,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             model=model,
             voice=voice,
-            endpoint=os.path.join(get_base_url(base_url), "audio/speech"),
+            endpoint=urllib.parse.urljoin(get_base_url(base_url), "audio/speech"),
             speed=speed,
         )
 
