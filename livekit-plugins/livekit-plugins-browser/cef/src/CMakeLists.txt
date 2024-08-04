@@ -1,6 +1,6 @@
 set(LKCEF_SRCS app.cpp app.hpp utils.cpp utils.hpp handler.hpp handler.cpp)
 set(LKCEF_SRCS_LINUX main_linux.cpp)
-set(LKCEF_SRCS_MAC main_mac.mm handler_mac.mm app_mac.mm)
+set(LKCEF_SRCS_MAC handler_mac.mm app_mac.mm)
 set(LKCEF_SRCS_WINDOWS main_win.cpp )
 append_platform_sources(LKCEF_SRCS)
 source_group(lkcef FILES ${LKCEF_SRCS})
@@ -173,6 +173,4 @@ set_target_properties(lkcef_python PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
 target_include_directories(lkcef_python PRIVATE ${CEF_INCLUDE_PATH})
 target_link_libraries(lkcef_python PUBLIC lkcef)
 target_link_libraries(lkcef_python PUBLIC libcef_dll_wrapper ${CEF_STANDARD_LIBS})
-
-
-
+add_dependencies(lkcef_python libcef_dll_wrapper)
