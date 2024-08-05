@@ -421,7 +421,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("agent_started_speaking")
             self.emit("agent_started_speaking")
 
-        def _on_playout_stopped(cancelled: bool) -> None:
+        def _on_playout_stopped(interrupted: bool) -> None:
             self._plotter.plot_event("agent_stopped_speaking")
             self.emit("agent_stopped_speaking")
 
