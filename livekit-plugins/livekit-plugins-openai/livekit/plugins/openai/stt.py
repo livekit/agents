@@ -16,18 +16,17 @@ from __future__ import annotations
 
 import dataclasses
 import io
-import os
 import wave
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 
-import aiohttp
+import httpx
 from livekit import agents
-from livekit.agents import stt, utils
+from livekit.agents import stt
 from livekit.agents.utils import AudioBuffer
 
+import openai
+
 from .models import WhisperModels
-from .utils import get_base_url
 
 
 @dataclass
@@ -35,8 +34,6 @@ class _STTOptions:
     language: str
     detect_language: bool
     model: WhisperModels
-    api_key: str
-    endpoint: str
 
 
 class STT(stt.STT):
@@ -46,37 +43,35 @@ class STT(stt.STT):
         language: str = "en",
         detect_language: bool = False,
         model: WhisperModels = "whisper-1",
-        api_key: str | None = None,
         base_url: str | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        api_key: str | None = None,
+        client: openai.AsyncClient | None = None,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False)
         )
-        api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY must be set")
-
         if detect_language:
             language = ""
-
-        base = PurePosixPath(get_base_url(base_url))
-        endpoint = str(base / "audio/transcriptions")
 
         self._opts = _STTOptions(
             language=language,
             detect_language=detect_language,
             model=model,
-            api_key=api_key,
-            endpoint=endpoint,
         )
-        self._session = http_session
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._session:
-            self._session = utils.http_context.http_session()
-
-        return self._session
+        self._client = client or openai.AsyncClient(
+            api_key=api_key,
+            base_url=base_url,
+            http_client=httpx.AsyncClient(
+                timeout=5.0,
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=1000,
+                    max_keepalive_connections=100,
+                    keepalive_expiry=120,
+                ),
+            ),
+        )
 
     def _sanitize_options(self, *, language: str | None = None) -> _STTOptions:
         config = dataclasses.replace(self._opts)
@@ -87,7 +82,6 @@ class STT(stt.STT):
         self, buffer: AudioBuffer, *, language: str | None = None
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
-
         buffer = agents.utils.merge_frames(buffer)
         io_buffer = io.BytesIO()
         with wave.open(io_buffer, "wb") as wav:
@@ -96,29 +90,14 @@ class STT(stt.STT):
             wav.setframerate(buffer.sample_rate)
             wav.writeframes(buffer.data)
 
-        form = aiohttp.FormData()
-        form.add_field("file", io_buffer.getvalue(), filename="my_file.wav")
-        form.add_field("model", config.model)
+        resp = await self._client.audio.transcriptions.create(
+            file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
+            model=self._opts.model,
+            language=config.language,
+            response_format="json",
+        )
 
-        if config.language:
-            form.add_field("language", config.language)
-
-        form.add_field("response_format", "json")
-
-        async with self._ensure_session().post(
-            self._opts.endpoint,
-            headers={"Authorization": f"Bearer {config.api_key}"},
-            data=form,
-        ) as resp:
-            data = await resp.json()
-            if "text" not in data or "error" in data:
-                raise ValueError(f"Unexpected response: {data}")
-
-            return _transcription_to_speech_event(data, config.language)
-
-
-def _transcription_to_speech_event(transcription: dict, language) -> stt.SpeechEvent:
-    return stt.SpeechEvent(
-        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-        alternatives=[stt.SpeechData(text=transcription["text"], language=language)],
-    )
+        return stt.SpeechEvent(
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[stt.SpeechData(text=resp.text, language=language or "")],
+        )

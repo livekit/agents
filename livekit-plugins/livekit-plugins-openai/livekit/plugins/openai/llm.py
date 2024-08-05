@@ -29,7 +29,7 @@ from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
 from .models import ChatModels
-from .utils import AsyncAzureADTokenProvider, get_base_url
+from .utils import AsyncAzureADTokenProvider
 
 
 @dataclass
@@ -49,7 +49,7 @@ class LLM(llm.LLM):
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient(
             api_key=api_key,
-            base_url=get_base_url(base_url),
+            base_url=base_url,
             http_client=httpx.AsyncClient(
                 timeout=5.0,
                 follow_redirects=True,
