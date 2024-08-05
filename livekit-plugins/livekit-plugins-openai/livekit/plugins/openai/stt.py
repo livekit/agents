@@ -91,9 +91,10 @@ class STT(stt.STT):
             wav.writeframes(buffer.data)
 
         resp = await self._client.audio.transcriptions.create(
-            file=(None, io_buffer.getvalue(), "audio/wav"),
+            file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
             model=self._opts.model,
             language=config.language,
+            response_format="json"
         )
 
         return stt.SpeechEvent(
