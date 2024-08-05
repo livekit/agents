@@ -558,7 +558,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         while not join_fut.done():
             await asyncio.wait(
-                [join_fut], return_when=asyncio.FIRST_COMPLETED, timeout=1.0
+                [join_fut], return_when=asyncio.FIRST_COMPLETED, timeout=0.5
             )
 
             _commit_user_question_if_needed()
@@ -578,7 +578,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if is_using_tools and not interrupted:
             assert isinstance(speech_info.source, LLMStream)
             assert (
-                user_speech_committed
+                not user_question or user_speech_committed
             ), "user speech should have been committed before using tools"
 
             # execute functions
