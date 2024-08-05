@@ -168,5 +168,8 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
 
             logger.debug(
                 "playout finished",
-                extra={"speech_id": handle.speech_id, "interrupted": handle.interrupted},
+                extra={
+                    "speech_id": handle.speech_id,
+                    "interrupted": handle.interrupted,
+                },
             )
