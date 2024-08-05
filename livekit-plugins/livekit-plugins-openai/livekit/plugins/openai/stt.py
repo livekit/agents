@@ -34,7 +34,6 @@ class _STTOptions:
     language: str
     detect_language: bool
     model: WhisperModels
-    api_key: str
 
 
 class STT(stt.STT):
@@ -58,7 +57,6 @@ class STT(stt.STT):
             language=language,
             detect_language=detect_language,
             model=model,
-            api_key=api_key,
         )
 
         self._client = client or openai.AsyncClient(
@@ -100,5 +98,5 @@ class STT(stt.STT):
 
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(text=resp.text, language=language)],
+            alternatives=[stt.SpeechData(text=resp.text, language=language or "")],
         )
