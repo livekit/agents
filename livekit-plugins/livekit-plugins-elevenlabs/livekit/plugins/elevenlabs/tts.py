@@ -93,7 +93,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: Voice = DEFAULT_VOICE,
-        model_id: TTSModels = "eleven_turbo_v2",
+        model_id: TTSModels = "eleven_turbo_v2_5",
         api_key: str | None = None,
         base_url: str | None = None,
         encoding: TTSEncoding = "mp3_22050_32",
