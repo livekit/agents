@@ -1,22 +1,24 @@
-#ifndef LKCEF_APP_HPP
-#define LKCEF_APP_HPP
+#ifndef LKCEF_DEV_RENDERER_HPP
+#define LKCEF_DEV_RENDERER_HPP
 
 #include "handler.hpp"
 
 #define GL_SILENCE_DEPRECATION
 #include <GLFW/glfw3.h>  // Will drag system OpenGL headers
 
-static void glfw_error_callback(int error, const char* description) {
-  fprintf(stderr, "GLFW Error %d: %s\n", error, description);
-}
 
 class DevRenderer {
  public:
   DevRenderer();
 
+  bool Start();
+  void Update();
+  bool Close();
 
  private:
-  GLFWwindow* window_;
+  bool started_;
+
+  GLFWwindow* window_ = nullptr;
 };
 
-#endif // LKCEF_APP_HPP
+#endif // LKCEF_DEV_RENDERER_HPP

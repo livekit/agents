@@ -119,7 +119,6 @@ int AgentApp::run() {
 
     settings.no_sandbox = true;  // No sandbox for MacOS, for livekit-agents,
                                  // we're only going to support Linux
-
     CefRefPtr<AgentApp> app(new AgentApp);
 
     // Initialize the CEF browser process. May return false if initialization
@@ -140,7 +139,8 @@ int AgentApp::run() {
                                withObject:nil
                             waitUntilDone:NO];
 
-    CefRunMessageLoop();
+    app->Run();
+
     CefShutdown();
 
     cef_unload_library();

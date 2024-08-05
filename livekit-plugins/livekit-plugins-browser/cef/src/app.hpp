@@ -2,6 +2,7 @@
 #define LKCEF_APP_HPP
 
 #include "handler.hpp"
+#include "dev_renderer.hpp"
 #include "include/cef_app.h"
 #include "include/cef_base.h"
 #include "include/cef_browser_process_handler.h"
@@ -10,7 +11,7 @@
 
 class AgentApp : public CefApp, public CefBrowserProcessHandler {
 public:
-  AgentApp();
+  AgentApp(bool dev_mode);
 
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
     return this;
@@ -22,12 +23,15 @@ public:
   void OnContextInitialized() override;
   CefRefPtr<CefClient> GetDefaultClient() override;
 
-  static int run();
+  int Run();
 
 private:
   IMPLEMENT_REFCOUNTING(AgentApp);
 
   CefRefPtr<AgentHandler> client_;
+  std::unique_ptr<DevRenderer> dev_renderer_;
+
+  bool dev_mode_;
 };
 
 #endif // LKCEF_APP_HPP
