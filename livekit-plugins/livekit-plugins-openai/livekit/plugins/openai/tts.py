@@ -47,6 +47,7 @@ class TTS(tts.TTS):
         voice: TTSVoices = "alloy",
         speed: float = 1.0,
         base_url: str | None = None,
+        api_key: str | None = None,
         client: openai.AsyncClient | None = None,
     ) -> None:
         super().__init__(
@@ -58,6 +59,7 @@ class TTS(tts.TTS):
         )
 
         self._client = client or openai.AsyncClient(
+            api_key=api_key,
             base_url=get_base_url(base_url),
             http_client=httpx.AsyncClient(
                 timeout=5.0,
