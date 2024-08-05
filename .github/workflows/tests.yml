@@ -45,6 +45,7 @@ jobs:
         if: ${{ matrix.platform == 'linux' }}
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
+      # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
       - name: Install libssl 1.1 (Linux 22.04)
         if: ${{ matrix.os == 'namespace-profile-default-arm64' }}
         run: |
