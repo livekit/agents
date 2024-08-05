@@ -35,7 +35,6 @@ class _STTOptions:
     detect_language: bool
     model: WhisperModels
     api_key: str
-    endpoint: str
 
 
 class STT(stt.STT):
