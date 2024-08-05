@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import AsyncContextManager
 
@@ -35,7 +34,6 @@ OPENAI_TTS_CHANNELS = 1
 class _TTSOptions:
     model: TTSModels
     voice: TTSVoices
-    endpoint: str
     speed: float
 
 
@@ -73,7 +71,6 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             model=model,
             voice=voice,
-            endpoint=os.path.join(get_base_url(base_url), "audio/speech"),
             speed=speed,
         )
 

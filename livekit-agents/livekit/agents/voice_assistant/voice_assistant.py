@@ -378,7 +378,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         def _on_final_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_text += (
-                ' ' if self._transcribed_text else ''
+                " " if self._transcribed_text else ""
             ) + ev.alternatives[0].text
 
             if self._opts.preemptive_synthesis:

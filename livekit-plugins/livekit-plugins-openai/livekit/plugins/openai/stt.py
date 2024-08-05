@@ -19,6 +19,7 @@ import io
 import os
 import wave
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 import aiohttp
 from livekit import agents
@@ -59,12 +60,15 @@ class STT(stt.STT):
         if detect_language:
             language = ""
 
+        base = PurePosixPath(get_base_url(base_url))
+        endpoint = str(base / "audio/transcriptions")
+
         self._opts = _STTOptions(
             language=language,
             detect_language=detect_language,
             model=model,
             api_key=api_key,
-            endpoint=os.path.join(get_base_url(base_url), "audio/transcriptions"),
+            endpoint=endpoint,
         )
         self._session = http_session
 
