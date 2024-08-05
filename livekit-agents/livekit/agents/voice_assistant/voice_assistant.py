@@ -767,8 +767,6 @@ class _DeferredReplyValidation:
         self, validate_fnc: Callable[[], None], loop: asyncio.AbstractEventLoop
     ) -> None:
         self._validate_fnc = validate_fnc
-        self._tasks_set = utils.aio.TaskSet(loop=loop)
-
         self._validating_task: asyncio.Task | None = None
         self._last_final_transcript: str = ""
         self._last_recv_end_of_speech_time: float = 0.0
@@ -821,9 +819,7 @@ class _DeferredReplyValidation:
 
     async def aclose(self) -> None:
         if self._validating_task is not None:
-            self._validating_task.cancel()
-
-        await self._tasks_set.aclose()
+            await utils.aio.gracefully_cancel(self._validating_task)
 
     def _end_with_punctuation(self) -> bool:
         return (
@@ -845,4 +841,4 @@ class _DeferredReplyValidation:
         if self._validating_task is not None:
             self._validating_task.cancel()
 
-        self._validating = self._tasks_set.create_task(_run_task(delay))
+        self._validating_task = asyncio.create_task(_run_task(delay))
