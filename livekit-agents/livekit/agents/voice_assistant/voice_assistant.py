@@ -818,7 +818,8 @@ class _DeferredReplyValidation:
             self._run(delay)
 
     async def aclose(self) -> None:
-        await utils.aio.gracefully_cancel(self._validating_task)
+        if self._validating_task is not None:
+            await utils.aio.gracefully_cancel(self._validating_task)
 
     def _end_with_punctuation(self) -> bool:
         return (
