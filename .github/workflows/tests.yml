@@ -45,6 +45,12 @@ jobs:
         if: ${{ matrix.platform == 'linux' }}
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
+      - name: Install libssl 1.1 (Linux 22.04)
+        if: ${{ matrix.os == 'namespace-profile-default-arm64' }}
+        run: |
+          wget https://old-releases.ubuntu.com/ubuntu/pool/main/o/openssl/libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
+          sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
+
       - name: Install ffmpeg (macOS)
         if: ${{ matrix.platform == 'macos' }}
         run: brew update && brew install ffmpeg
