@@ -31,8 +31,6 @@ from .log import logger
 from .models import ChatModels
 from .utils import AsyncAzureADTokenProvider, get_base_url
 
-DEFAULT_MODEL = "gpt-4o"
-
 
 @dataclass
 class LLMOptions:
@@ -43,12 +41,14 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = DEFAULT_MODEL,
+        model: str | ChatModels = "gpt-4o",
+        api_key: str | None = None,
         base_url: str | None = None,
         client: openai.AsyncClient | None = None,
     ) -> None:
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient(
+            api_key=api_key,
             base_url=get_base_url(base_url),
             http_client=httpx.AsyncClient(
                 timeout=5.0,
@@ -65,7 +65,7 @@ class LLM(llm.LLM):
     @staticmethod
     def create_azure_client(
         *,
-        model: str | ChatModels = DEFAULT_MODEL,
+        model: str | ChatModels = "gpt-4o",
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
