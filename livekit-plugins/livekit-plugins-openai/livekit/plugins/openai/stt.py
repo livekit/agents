@@ -94,7 +94,7 @@ class STT(stt.STT):
             file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
             model=self._opts.model,
             language=config.language,
-            response_format="json"
+            response_format="json",
         )
 
         return stt.SpeechEvent(
