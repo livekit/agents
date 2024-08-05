@@ -109,7 +109,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             return handle.interrupted and self._vol_filter.filtered() <= eps
 
         first_frame = True
-        cancelled = False
 
         try:
             if old_task is not None:
@@ -129,7 +128,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                     first_frame = False
 
                 if _should_break():
-                    cancelled = True
                     break
 
                 # divide the frame by chunks of 20ms
@@ -137,7 +135,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 i = 0
                 while i < len(frame.data):
                     if _should_break():
-                        cancelled = True
                         break
 
                     rem = min(ms20, len(frame.data) - i)
@@ -160,10 +157,10 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                     handle._time_played += rem / frame.sample_rate
         finally:
             if not first_frame:
-                if handle._tr_fwd is not None and not cancelled:
+                if handle._tr_fwd is not None and not handle.interrupted:
                     handle._tr_fwd.segment_playout_finished()
 
-                self.emit("playout_stopped", cancelled)
+                self.emit("playout_stopped", handle.interrupted)
 
             handle._done_fut.set_result(None)
             if handle._tr_fwd is not None:
@@ -171,5 +168,8 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
 
             logger.debug(
                 "playout finished",
-                extra={"speech_id": handle.speech_id, "cancelled": cancelled},
+                extra={
+                    "speech_id": handle.speech_id,
+                    "interrupted": handle.interrupted,
+                },
             )
