@@ -41,7 +41,7 @@ class SynthesisHandle:
         return self._speech_id
 
     @property
-    def tr_fwd(self) -> agent_transcription.TTSSegmentsForwarder:
+    def tts_forwarder(self) -> agent_transcription.TTSSegmentsForwarder:
         return self._tr_fwd
 
     @property
@@ -173,9 +173,9 @@ class AgentOutput:
 @utils.log_exceptions(logger=logger)
 async def _str_synthesis_task(text: str, handle: SynthesisHandle) -> None:
     """synthesize speech from a string"""
-    if not handle.tr_fwd.closed:
-        handle.tr_fwd.push_text(text)
-        handle.tr_fwd.mark_text_segment_end()
+    if not handle.tts_forwarder.closed:
+        handle.tts_forwarder.push_text(text)
+        handle.tts_forwarder.mark_text_segment_end()
 
     start_time = time.time()
     first_frame = True
@@ -196,12 +196,12 @@ async def _str_synthesis_task(text: str, handle: SynthesisHandle) -> None:
             frame = audio.frame
 
             handle._buf_ch.send_nowait(frame)
-            if not handle.tr_fwd.closed:
-                handle.tr_fwd.push_audio(frame)
+            if not handle.tts_forwarder.closed:
+                handle.tts_forwarder.push_audio(frame)
 
     finally:
-        if not handle.tr_fwd.closed:
-            handle.tr_fwd.mark_audio_segment_end()
+        if not handle.tts_forwarder.closed:
+            handle.tts_forwarder.mark_audio_segment_end()
 
 
 @utils.log_exceptions(logger=logger)
@@ -237,19 +237,19 @@ async def _stream_synthesis_task(
 
     try:
         async for seg in streamed_text:
-            if not handle.tr_fwd.closed:
-                handle.tr_fwd.push_text(seg)
+            if not handle.tts_forwarder.closed:
+                handle.tts_forwarder.push_text(seg)
 
             tts_stream.push_text(seg)
     finally:
         tts_stream.end_input()
 
-        if not handle.tr_fwd.closed:
-            handle.tr_fwd.mark_text_segment_end()
+        if not handle.tts_forwarder.closed:
+            handle.tts_forwarder.mark_text_segment_end()
 
         await read_atask
         await tts_stream.aclose()
 
-        if not handle.tr_fwd.closed:
+        if not handle.tts_forwarder.closed:
             # mark_audio_segment_end must be called *after* mart_text_segment_end
-            handle.tr_fwd.mark_audio_segment_end()
+            handle.tts_forwarder.mark_audio_segment_end()

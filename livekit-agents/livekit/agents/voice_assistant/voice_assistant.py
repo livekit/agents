@@ -565,7 +565,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         _commit_user_question_if_needed()
 
-        collected_text = speech_info.synthesis_handle.tr_fwd.played_text
+        collected_text = speech_info.synthesis_handle.tts_forwarder.played_text
         interrupted = speech_info.synthesis_handle.interrupted
         is_using_tools = isinstance(speech_info.source, LLMStream) and len(
             speech_info.source.function_calls
@@ -637,7 +637,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 play_handle = answer_synthesis.play()
                 await play_handle.join()
 
-                collected_text = answer_synthesis.tr_fwd.played_text
+                collected_text = answer_synthesis.tts_forwarder.played_text
                 interrupted = answer_synthesis.interrupted
 
         if speech_info.add_to_chat_ctx and (not user_question or user_speech_committed):
