@@ -643,6 +643,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if speech_info.add_to_chat_ctx and (not user_question or user_speech_committed):
             self._chat_ctx.messages.extend(extra_tools_messages)
 
+            if interrupted:
+                collected_text += "..."
+
             msg = ChatMessage.create(text=collected_text, role="assistant")
             self._chat_ctx.messages.append(msg)
 
@@ -757,7 +760,7 @@ class _DeferredReplyValidation:
 
     # if the STT gives us punctuation, we can try validate the reply faster.
     PUNCTUATION = ".!?"
-    PUNCTUATION_REDUCE_FACTOR = 0.8
+    PUNCTUATION_REDUCE_FACTOR = 0.5
 
     DEFER_DELAY_END_OF_SPEECH = 0.2
     DEFER_DELAY_FINAL_TRANSCRIPT = 1.0
