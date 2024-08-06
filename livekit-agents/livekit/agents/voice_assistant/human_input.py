@@ -101,13 +101,20 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
 
-        stt_forwarder = None
-        if self._transcription:
-            stt_forwarder = transcription.STTSegmentsForwarder(
-                room=self._room,
-                participant=self._participant,
-                track=self._subscribed_track,
-            )
+        def _will_forward_transcription(
+            fwd: transcription.STTSegmentsForwarder, transcription: rtc.Transcription
+        ):
+            if not self._transcription:
+                transcription.segments = []
+
+            return transcription
+
+        stt_forwarder = transcription.STTSegmentsForwarder(
+            room=self._room,
+            participant=self._participant,
+            track=self._subscribed_track,
+            will_forward_transcription=_will_forward_transcription,
+        )
 
         async def _audio_stream_co() -> None:
             # forward the audio stream to the VAD and STT streams
@@ -129,8 +136,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
 
         async def _stt_stream_co() -> None:
             async for ev in stt_stream:
-                if stt_forwarder is not None:
-                    stt_forwarder.update(ev)
+                stt_forwarder.update(ev)
 
                 if ev.type == speech_to_text.SpeechEventType.FINAL_TRANSCRIPT:
                     self.emit("final_transcript", ev)
@@ -147,8 +153,6 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
-            if stt_forwarder is not None:
-                await stt_forwarder.aclose()
-
+            await stt_forwarder.aclose()
             await stt_stream.aclose()
             await vad_stream.aclose()

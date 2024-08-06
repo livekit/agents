@@ -128,7 +128,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
-        interrupt_speech_duration: float = 0.45,
+        interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
         preemptive_synthesis: bool = True,
         transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
@@ -565,7 +565,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         _commit_user_question_if_needed()
 
-        collected_text = speech_info.synthesis_handle.collected_text
+        collected_text = speech_info.synthesis_handle.tr_fwd.played_text
         interrupted = speech_info.synthesis_handle.interrupted
         is_using_tools = isinstance(speech_info.source, LLMStream) and len(
             speech_info.source.function_calls
@@ -637,7 +637,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 play_handle = answer_synthesis.play()
                 await play_handle.join()
 
-                collected_text = answer_synthesis.collected_text
+                collected_text = answer_synthesis.tr_fwd.played_text
                 interrupted = answer_synthesis.interrupted
 
         if speech_info.add_to_chat_ctx and (not user_question or user_speech_committed):
