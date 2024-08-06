@@ -16,7 +16,7 @@ class PlayoutHandle:
         self,
         speech_id: str,
         playout_source: AsyncIterable[rtc.AudioFrame],
-        transcription_fwd: transcription.TTSSegmentsForwarder | None = None,
+        transcription_fwd: transcription.TTSSegmentsForwarder,
     ) -> None:
         self._playout_source = playout_source
         self._tr_fwd = transcription_fwd
