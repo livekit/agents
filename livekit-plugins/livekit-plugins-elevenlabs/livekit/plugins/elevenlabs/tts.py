@@ -403,8 +403,10 @@ def _dict_to_voices_list(data: dict[str, Any]):
         )
     return voices
 
+
 def _strip_nones(data: dict[str, Any]):
     return {k: v for k, v in data.items() if v is not None}
+
 
 def _synthesize_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
