@@ -182,7 +182,7 @@ async def _str_synthesis_task(text: str, handle: SynthesisHandle) -> None:
                     "received first TTS frame",
                     extra={
                         "speech_id": handle.speech_id,
-                        "elapsed": time.time() - start_time,
+                        "elapsed": round(time.time() - start_time, 3),
                         "streamed": False,
                     },
                 )
@@ -215,7 +215,7 @@ async def _stream_synthesis_task(
                     "first TTS frame",
                     extra={
                         "speech_id": handle.speech_id,
-                        "elapsed": time.time() - start_time,
+                        "elapsed": round(time.time() - start_time, 3),
                         "streamed": True,
                     },
                 )
@@ -225,27 +225,36 @@ async def _stream_synthesis_task(
 
             handle._buf_ch.send_nowait(audio.frame)
 
+        if handle._tr_fwd and not handle._tr_fwd.closed:
+            # mark_audio_segment_end must be called *after* mart_text_segment_end
+            handle._tr_fwd.mark_audio_segment_end()
+
     # otherwise, stream the text to the TTS
     tts_stream = handle._tts.stream()
-    read_atask = asyncio.create_task(_read_generated_audio_task())
+    read_atask: asyncio.Task | None = None
 
     try:
         async for seg in streamed_text:
             handle._collected_text += seg
 
+            if read_atask is None:
+                # start the task when we receive the first text segment (so start_time is more accurate)
+                read_atask = asyncio.create_task(_read_generated_audio_task())
+
             if handle._tr_fwd and not handle._tr_fwd.closed:
                 handle._tr_fwd.push_text(seg)
 
             tts_stream.push_text(seg)
-    finally:
-        tts_stream.end_input()
 
         if handle._tr_fwd and not handle._tr_fwd.closed:
             handle._tr_fwd.mark_text_segment_end()
 
-        await read_atask
-        await tts_stream.aclose()
+        tts_stream.end_input()
 
-        if handle._tr_fwd and not handle._tr_fwd.closed:
-            # mark_audio_segment_end must be called *after* mart_text_segment_end
-            handle._tr_fwd.mark_audio_segment_end()
+        if read_atask is not None:
+            await read_atask
+    finally:
+        if read_atask is not None:
+            await utils.aio.gracefully_cancel(read_atask)
+
+        await tts_stream.aclose()

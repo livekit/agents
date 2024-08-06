@@ -212,6 +212,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._speech_q: list[_SpeechInfo] = []
         self._speech_q_changed = asyncio.Event()
 
+        self._last_end_of_speech_time: float | None = None
+
     @property
     def fnc_ctx(self) -> FunctionContext | None:
         return self._fnc_ctx
@@ -372,22 +374,24 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("user_stopped_speaking")
             self.emit("user_stopped_speaking")
             self._deferred_validation.on_human_end_of_speech(ev)
+            self._last_end_of_speech_time = time.time()
 
         def _on_interim_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_interim_text = ev.alternatives[0].text
 
         def _on_final_transcript(ev: stt.SpeechEvent) -> None:
+            new_transcript = ev.alternatives[0].text
             self._transcribed_text += (
                 " " if self._transcribed_text else ""
-            ) + ev.alternatives[0].text
+            ) + new_transcript
 
             if self._opts.preemptive_synthesis:
                 self._synthesize_agent_reply()
 
-            self._deferred_validation.on_human_final_transcript(ev.alternatives[0].text)
+            self._deferred_validation.on_human_final_transcript(new_transcript)
 
             words = self._opts.transcription.word_tokenizer.tokenize(
-                text=ev.alternatives[0].text
+                text=new_transcript
             )
             if len(words) >= 3:
                 # VAD can sometimes not detect that the human is speaking
@@ -480,12 +484,18 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 user_question=user_transcript,
             )
 
+            if self._last_end_of_speech_time is not None:
+                elapsed = round(time.time() - self._last_end_of_speech_time, 3)
+            else:
+                elapsed = -1.0
+
             logger.debug(
                 "synthesizing agent reply",
                 extra={
                     "user_transcript": user_transcript,
                     "validated": validated,
                     "speech_id": reply.id,
+                    "elapsed": elapsed,
                 },
             )
 
@@ -746,7 +756,10 @@ async def _llm_stream_to_str_iterable(
             first_frame = False
             logger.debug(
                 "first LLM token",
-                extra={"speech_id": speech_id, "elapsed": time.time() - start_time},
+                extra={
+                    "speech_id": speech_id,
+                    "elapsed": round(time.time() - start_time, 3),
+                },
             )
 
         yield content

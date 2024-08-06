@@ -67,4 +67,11 @@ class StreamAdapterWrapper(SynthesizeStream):
                 async for audio in self._tts.synthesize(ev.token):
                     self._event_ch.send_nowait(audio)
 
-        await asyncio.gather(_forward_input(), _synthesize())
+        tasks = [
+            asyncio.create_task(_forward_input()),
+            asyncio.create_task(_synthesize()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
