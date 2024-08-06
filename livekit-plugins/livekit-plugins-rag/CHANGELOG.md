@@ -1,5 +1,11 @@
 # livekit-plugins-rag
 
+## 0.2.1
+
+### Patch Changes
+
+- rag: add missing logger file - [#571](https://github.com/livekit/agents/pull/571) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.2.0
 
 ### Minor Changes
