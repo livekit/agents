@@ -359,6 +359,7 @@ class TTSSegmentsForwarder:
                 language=self._opts.language,
             )
         )
+        self._played_text = f"{og_text} {tokenized_sentence}"
 
         await self._sleep_if_not_closed(self._opts.new_sentence_delay)
         seg.processed_sentences += 1
