@@ -484,13 +484,18 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 user_question=user_transcript,
             )
 
+            if self._last_end_of_speech_time is not None:
+                elapsed = round(time.time() - self._last_end_of_speech_time, 3)
+            else:
+                elapsed = -1.0
+
             logger.debug(
                 "synthesizing agent reply",
                 extra={
                     "user_transcript": user_transcript,
                     "validated": validated,
                     "speech_id": reply.id,
-                    "elapsed": round(time.time() - self._last_end_of_speech_time, 3),
+                    "elapsed": elapsed,
                 },
             )
 
