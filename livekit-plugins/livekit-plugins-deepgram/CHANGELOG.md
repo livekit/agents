@@ -1,5 +1,11 @@
 # livekit-plugins-deepgram
 
+## 0.6.3
+
+### Patch Changes
+
+- deepgram: update default model to nova-2-conversationalai - [#576](https://github.com/livekit/agents/pull/576) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.2
 
 ### Patch Changes
