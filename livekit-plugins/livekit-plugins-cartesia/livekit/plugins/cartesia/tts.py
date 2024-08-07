@@ -212,7 +212,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if len(words) < BUFFERED_WORDS_COUNT + 1:
                         continue
 
-                    data = self._opts.word_tokenizer.format_words(words[:-1])
+                    data = self._opts.word_tokenizer.format_words(words[:-1]) + " "
                     self._buf = words[-1]
 
                     token_pkt = base_pkt.copy()
@@ -284,7 +284,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 
 def _to_cartesia_options(opts: _TTSOptions) -> dict:
-    voice = {}
+    voice: dict = {}
     if isinstance(opts.voice, str):
         voice["mode"] = "id"
         voice["id"] = opts.voice

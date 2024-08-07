@@ -45,7 +45,7 @@ class AudioByteStream:
         return frames
 
     def flush(self) -> list[rtc.AudioFrame]:
-        if len(self._buf) % 2 * self._num_channels != 0:
+        if len(self._buf) % (2 * self._num_channels) != 0:
             logger.warning("AudioByteStream: incomplete frame during flush, dropping")
             return []
 
