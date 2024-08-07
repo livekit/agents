@@ -103,21 +103,23 @@ class FallbackSynthesizeStream(SynthesizeStream):
         async def _pass_output():
             while True:
                 try:
-                    # TODO(nbsp): this errors at end of transcription, TimeoutError swallows CancelledError
+                    # TODO(nbsp): elevenlabs _stream._run_ws()#_recv_task() simply exits when it's
+                    #             done, and the iterator hangs indefinitely until it times out.
+                    #             probably needs a change to SynthesizeStream to make it work
                     item = await asyncio.wait_for(
                         self._stream.__anext__(), self._timeout
                     )
                     self._timeout = self._keepalive_timeout
                     self._event_ch.send_nowait(item)
                 except Exception as e:
-                    if isinstance(e, asyncio.TimeoutError):
+                    if isinstance(e, asyncio.TimeoutError) or isinstance(
+                        e, TimeoutError
+                    ):
                         if self._current_provider + 1 < len(self._providers):
                             self._current_provider += 1
                             self._init_tts()
                         else:
                             raise Exception("all providers failed")
-                    else:
-                        return
 
         tasks = [
             asyncio.create_task(_pass_input()),
