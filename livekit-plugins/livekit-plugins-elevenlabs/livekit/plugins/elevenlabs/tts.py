@@ -353,7 +353,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     segment_id=segment_id,
                 )
 
-        await asyncio.gather(send_task(), recv_task())
+        tasks = [
+            asyncio.create_task(send_task()),
+            asyncio.create_task(recv_task()),
+        ]
+
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
 
     def _process_stream_event(
         self, *, data: dict, request_id: str, segment_id: str
