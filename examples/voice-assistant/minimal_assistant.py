@@ -10,20 +10,20 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    initial_ctx = llm.ChatContext().append(
-        role="system",
-        text=(
-            "You are a voice assistant created by LiveKit. Your interface with users will be voice. "
-            "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
-        ),
-    )
+    initial_ctx = llm.ChatContext()
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     assistant = VoiceAssistant(
         vad=silero.VAD.load(),
         stt=deepgram.STT(),
-        llm=openai.LLM(),
+        llm=openai.AssistantLLM(
+            assistant_opts=openai.AssistantCreateOptions(
+                model="gpt-4o",
+                instructions="You are a voice assistant created by LiveKit. Your interface with users will be voice.",
+                name="KITT",
+            )
+        ),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
     )
