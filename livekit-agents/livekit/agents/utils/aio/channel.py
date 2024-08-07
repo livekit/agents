@@ -153,6 +153,7 @@ class Chan(Generic[T]):
     #        await self._finished_ev.wait()
 
     def qsize(self) -> int:
+        """the number of elements queued (unread) in the channel buffer"""
         return len(self._queue)
 
     def full(self) -> bool:

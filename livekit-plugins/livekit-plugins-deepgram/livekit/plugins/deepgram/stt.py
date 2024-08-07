@@ -188,7 +188,7 @@ class SpeechStream(stt.SpeechStream):
         """
 
         retry_count = 0
-        while not self._input_ch.closed:
+        while self._input_ch.qsize() or not self._input_ch.closed:
             try:
                 live_config = {
                     "model": self._opts.model,
@@ -219,9 +219,6 @@ class SpeechStream(stt.SpeechStream):
 
                 await self._run_ws(ws)
             except Exception as e:
-                if self._session.closed:
-                    break
-
                 if retry_count >= max_retry:
                     logger.exception(
                         f"failed to connect to deepgram after {max_retry} tries"
@@ -318,7 +315,7 @@ class SpeechStream(stt.SpeechStream):
         if data["type"] == "SpeechStarted":
             # This is a normal case. Deepgram's SpeechStarted events
             # are not correlated with speech_final or utterance end.
-            # It's poossible that we receive two in a row without an endpoint
+            # It's possible that we receive two in a row without an endpoint
             # It's also possible we receive a transcript without a SpeechStarted event.
             if self._speaking:
                 return
