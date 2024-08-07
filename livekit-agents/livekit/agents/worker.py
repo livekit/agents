@@ -185,7 +185,9 @@ class Worker(utils.EventEmitter[EventTypes]):
         ]
 
         if self._opts.port != 0:
-            tasks.append(asyncio.create_task(self._http_server.run(), name="http_server"))
+            tasks.append(
+                asyncio.create_task(self._http_server.run(), name="http_server")
+            )
 
         try:
             await asyncio.gather(*tasks)
