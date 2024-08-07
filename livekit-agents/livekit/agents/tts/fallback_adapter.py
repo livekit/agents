@@ -43,6 +43,7 @@ class FallbackAdapter(TTS):
             keepalive_timeout=self._keepalive_timeout,
         )
 
+
 class FallbackChunkedStream(ChunkedStream):
     def __init__(
         self,
@@ -64,9 +65,7 @@ class FallbackChunkedStream(ChunkedStream):
             timeout = self._connect_timeout
             while True:
                 try:
-                    item = await asyncio.wait_for(
-                        stream.__anext__(), timeout
-                    )
+                    item = await asyncio.wait_for(stream.__anext__(), timeout)
                     timeout = self._keepalive_timeout
                     self._event_ch.send_nowait(item)
                 except Exception as e:
@@ -74,6 +73,7 @@ class FallbackChunkedStream(ChunkedStream):
                         break
                     return
         raise Exception("all providers failed")
+
 
 class FallbackSynthesizeStream(SynthesizeStream):
     def __init__(
