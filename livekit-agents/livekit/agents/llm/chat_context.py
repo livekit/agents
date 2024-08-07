@@ -41,6 +41,7 @@ class ChatMessage:
     content: str | list[str | ChatImage] | None = None
     tool_calls: list[function_context.FunctionCallInfo] | None = None
     tool_call_id: str | None = None
+    _metadata: dict[str, Any] = field(default_factory=dict, repr=False, init=False)
 
     @staticmethod
     def create_tool_from_called_function(
