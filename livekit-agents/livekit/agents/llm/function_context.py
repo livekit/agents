@@ -168,7 +168,7 @@ class FunctionContext:
                 # the argument info for default would be None
                 th = inner_type
 
-            elif issubclass(th, enum.Enum) and not choices:
+            if issubclass(th, enum.Enum) and not choices:
                 # the enum must be a str or int (and at least one value)
                 # this is verified by is_type_supported
                 choices = [item.value for item in th]
