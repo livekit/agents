@@ -1,5 +1,13 @@
 # livekit-plugins-elevenlabs
 
+## 0.7.3
+
+### Patch Changes
+
+- elevenlabs: fix send_task not closing properly - [#596](https://github.com/livekit/agents/pull/596) ([@theomonnom](https://github.com/theomonnom))
+
+- Fix elevenlabs voice settings breaking - [#586](https://github.com/livekit/agents/pull/586) ([@nbsp](https://github.com/nbsp))
+
 ## 0.7.2
 
 ### Patch Changes

@@ -1,5 +1,15 @@
 # livekit-plugins-deepgram
 
+## 0.6.4
+
+### Patch Changes
+
+- deepgram: add support for keywords boost/penalty - [#599](https://github.com/livekit/agents/pull/599) ([@theomonnom](https://github.com/theomonnom))
+
+- fix log warnings & cartesia end of speech - [#603](https://github.com/livekit/agents/pull/603) ([@theomonnom](https://github.com/theomonnom))
+
+- stt/tts: fix unread inputs when the input channel is closed - [#594](https://github.com/livekit/agents/pull/594) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.3
 
 ### Patch Changes
