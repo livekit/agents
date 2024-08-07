@@ -161,8 +161,8 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
 
                 self.emit("playout_stopped", handle.interrupted)
 
-            handle._done_fut.set_result(None)
             await handle._tr_fwd.aclose()
+            handle._done_fut.set_result(None)
 
             logger.debug(
                 "playout finished",
