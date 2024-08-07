@@ -36,9 +36,8 @@ from .job import JobAcceptArguments, JobContext, JobProcess, JobRequest, Running
 from .log import DEV_LEVEL, logger
 from .version import __version__
 
-MAX_RECONNECT_ATTEMPTS = 3
 ASSIGNMENT_TIMEOUT = 7.5
-UPDATE_LOAD_INTERVAL = 10.0
+UPDATE_LOAD_INTERVAL = 5.0
 
 
 def _default_initialize_process_fnc(proc: JobProcess) -> Any:
@@ -89,7 +88,8 @@ class WorkerOptions:
     """Permissions that the agent should join the room with."""
     worker_type: agent.JobType = agent.JobType.JT_ROOM
     """Whether to spin up an agent for each room or publisher."""
-    max_retry: int = MAX_RECONNECT_ATTEMPTS
+    max_retry: int = 16
+    """Maximum number of retries to connect to LiveKit before giving up."""
     ws_url: str = "ws://localhost:7880"
     """URL to connect to the LiveKit server.
 
@@ -103,8 +103,9 @@ class WorkerOptions:
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
     host: str = ""  # default to all interfaces
-    port: int = 8081
-    """Port for local HTTP server to listen on.
+    """The host aadress for the local HTTP server to listen on."""
+    port: int = 0
+    """Port for the local HTTP server to listen on. Setting it to 0 will disable the HTTP server.
 
     The HTTP server is used as a health check endpoint."""
 
@@ -179,9 +180,17 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._http_session = aiohttp.ClientSession()
         self._close_future = asyncio.Future(loop=self._loop)
 
+        tasks = [
+            asyncio.create_task(self._worker_task(), name="worker"),
+        ]
+
+        if self._opts.port != 0:
+            tasks.append(asyncio.create_task(self._http_server.run(), name="http_server"))
+
         try:
-            await asyncio.gather(self._worker_task(), self._http_server.run())
+            await asyncio.gather(*tasks)
         finally:
+            await utils.aio.gracefully_cancel(*tasks)
             self._close_future.set_result(None)
 
     @property
