@@ -105,6 +105,7 @@ class ChatMessage:
 @dataclass
 class ChatContext:
     messages: list[ChatMessage] = field(default_factory=list)
+    _metadata: dict[str, Any] = field(default_factory=dict, repr=False, init=False)
 
     def append(
         self, *, text: str = "", images: list[ChatImage] = [], role: ChatRole = "system"

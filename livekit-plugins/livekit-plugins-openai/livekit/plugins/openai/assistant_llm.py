@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, MutableSet
 
@@ -22,14 +23,17 @@ import httpx
 from livekit.agents import llm
 
 from openai import AsyncAssistantEventHandler, AsyncClient
-from openai.types.beta.threads import Text, TextDelta
+from openai.types.beta.threads import Message, Text, TextDelta
+from openai.types.beta.threads.run_create_params import AdditionalMessage
 from openai.types.beta.threads.runs import ToolCall, ToolCallDelta
 
+from .log import logger
 from .models import AssistantTools, ChatModels
 from .utils import build_oai_message
 
 DEFAULT_MODEL = "gpt-4o"
-MESSAGE_THREAD_KEY = "__openai_message_thread__"
+MESSAGE_ID_KEY = "__openai_message_id__"
+MESSAGES_ADDED_KEY = "__openai_messages_added__"
 
 
 @dataclass
@@ -112,9 +116,12 @@ class AssistantLLM(llm.LLM):
 class AssistantLLMStream(llm.LLMStream):
     class EventHandler(AsyncAssistantEventHandler):
         def __init__(
-            self, output_queue: asyncio.Queue[llm.ChatChunk | Exception | None]
+            self,
+            output_queue: asyncio.Queue[llm.ChatChunk | Exception | None],
+            chat_ctx: llm.ChatContext,
         ):
             super().__init__()
+            self._chat_ctx = chat_ctx
             self._output_queue = output_queue
 
         async def on_text_delta(self, delta: TextDelta, snapshot: Text):
@@ -127,7 +134,6 @@ class AssistantLLMStream(llm.LLMStream):
                     ]
                 )
             )
-            print("NEIL text delta", delta.value, snapshot.value)
 
         async def on_tool_call_created(self, tool_call: ToolCall):
             print(f"\nassistant > {tool_call.type}\n", flush=True)
@@ -159,35 +165,74 @@ class AssistantLLMStream(llm.LLMStream):
         self._create_stream_task = asyncio.create_task(self._create_stream())
         self._sync_openai_task = sync_openai_task
 
-    async def _sync_thread(self) -> None:
-        load_options = await self._sync_openai_task
-        for msg in self._chat_ctx.messages:
-            if msg.role == "assistant":
-                continue
-            if MESSAGE_THREAD_KEY not in msg._metadata:
-                msg._metadata[MESSAGE_THREAD_KEY] = set[str]()
-            if self._thread_id not in msg._metadata[MESSAGE_THREAD_KEY]:
-                converted_msg = build_oai_message(msg, self._cache_key)
-                await self._client.beta.threads.messages.create(
-                    thread_id=load_options.thread_id,
-                    role=msg.role,
-                    content=converted_msg["content"],
-                )
-                msg._metadata[MESSAGE_THREAD_KEY].add(self._thread_id)
+        # Running stream is used to ensure that we only have one stream running at a time
+        self._running_stream: asyncio.Future[None] = asyncio.Future()
+        self._running_stream.set_result(None)
 
     async def _create_stream(self) -> None:
+        await self._running_stream
+        self._running_stream = asyncio.Future[None]()
         try:
-            await self._sync_thread()
             load_options = await self._sync_openai_task
+            self._thread_id = load_options.thread_id
+            self._assistant_id = load_options.assistant_id
 
+            # At the chat_ctx level, create a map of thread_id to message_ids
+            # This is used to keep track of which messages have been added to the thread
+            # and which we may need to delete from OpenAI
+            if MESSAGES_ADDED_KEY not in self._chat_ctx._metadata:
+                self._chat_ctx._metadata[MESSAGES_ADDED_KEY] = dict[str, set[str]()]()
+
+            if self._thread_id not in self._chat_ctx._metadata[MESSAGES_ADDED_KEY]:
+                self._chat_ctx._metadata[MESSAGES_ADDED_KEY][self._thread_id] = set()
+
+            added_messages_set: set[str] = self._chat_ctx._metadata[MESSAGES_ADDED_KEY][
+                self._thread_id
+            ]
+            # Note: this will add latency unfortunately. Usually it's just one message so we loop it but
+            # it will create an extra round trip to OpenAI before being able to run inference.
+            for msg in self._chat_ctx.messages:
+                msg_id = msg._metadata.get(MESSAGE_ID_KEY)
+                if msg_id and msg_id not in added_messages_set:
+                    await self._client.beta.threads.messages.delete(
+                        thread_id=load_options.thread_id,
+                        message_id=msg_id,
+                    )
+                    added_messages_set.remove(msg_id)
+
+            for msg in self._chat_ctx.messages:
+                if msg.role != "user":
+                    continue
+
+                msg_id = str(uuid.uuid4())
+                if MESSAGE_ID_KEY not in msg._metadata:
+                    converted_msg = build_oai_message(msg, self._cache_key)
+                    converted_msg["private_message_id"] = msg_id
+                    new_msg = await self._client.beta.threads.messages.create(
+                        thread_id=self._thread_id,
+                        role="user",
+                        content=converted_msg["content"],
+                    )
+                    msg._metadata[MESSAGE_ID_KEY] = new_msg.id
+                    self._chat_ctx._metadata[MESSAGES_ADDED_KEY][self._thread_id].add(
+                        new_msg.id
+                    )
+
+            eh = AssistantLLMStream.EventHandler(
+                self._output_queue, chat_ctx=self._chat_ctx
+            )
             async with self._client.beta.threads.runs.stream(
                 thread_id=load_options.thread_id,
                 assistant_id=load_options.assistant_id,
-                event_handler=AssistantLLMStream.EventHandler(self._output_queue),
+                event_handler=eh,
             ) as stream:
                 await stream.until_done()
+
+            await self._output_queue.put(None)
         except Exception as e:
             await self._output_queue.put(e)
+        finally:
+            self._running_stream.set_result(None)
 
     async def aclose(self) -> None:
         pass
