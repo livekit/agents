@@ -193,9 +193,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             current_segment_id: str | None = _new_segment()
 
             async for data in self._input_ch:
-                if (
-                    isinstance(data, self._FlushSentinel)
-                ):
+                if isinstance(data, self._FlushSentinel):
                     if current_segment_id is None:
                         continue
 
@@ -285,6 +283,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+
 
 def _to_cartesia_options(opts: _TTSOptions) -> dict:
     voice: dict = {}
