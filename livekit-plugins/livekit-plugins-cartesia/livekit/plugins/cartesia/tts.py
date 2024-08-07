@@ -203,6 +203,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await ws.send_str(json.dumps(end_pkt))
 
                     current_segment_id = None
+                    self._buf = ""
                 elif data:
                     if current_segment_id is None:
                         current_segment_id = _new_segment()
