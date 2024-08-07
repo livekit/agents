@@ -23,11 +23,9 @@ import httpx
 from livekit.agents import llm
 
 from openai import AsyncAssistantEventHandler, AsyncClient
-from openai.types.beta.threads import Message, Text, TextDelta
-from openai.types.beta.threads.run_create_params import AdditionalMessage
+from openai.types.beta.threads import Text, TextDelta
 from openai.types.beta.threads.runs import ToolCall, ToolCallDelta
 
-from .log import logger
 from .models import AssistantTools, ChatModels
 from .utils import build_oai_message
 
