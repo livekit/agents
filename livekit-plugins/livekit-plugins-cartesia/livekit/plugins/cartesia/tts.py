@@ -158,8 +158,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 retry_count = 0  # connected successfully, reset the retry_count
 
                 await self._run_ws(ws)
+                break
             except Exception as e:
-                if self._session.closed:
+                if self._input_ch.closed:
                     break
 
                 if retry_count >= max_retry:
@@ -194,8 +195,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for data in self._input_ch:
                 if (
                     isinstance(data, self._FlushSentinel)
-                    and current_segment_id is not None
                 ):
+                    if current_segment_id is None:
+                        continue
+
                     end_pkt = base_pkt.copy()
                     end_pkt["context_id"] = current_segment_id
                     end_pkt["transcript"] = self._buf
@@ -282,7 +285,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
-
 
 def _to_cartesia_options(opts: _TTSOptions) -> dict:
     voice: dict = {}
