@@ -14,14 +14,20 @@ EventTypes = Literal["playout_started", "playout_stopped"]
 class PlayoutHandle:
     def __init__(
         self,
+        speech_id: str,
         playout_source: AsyncIterable[rtc.AudioFrame],
-        transcription_fwd: transcription.TTSSegmentsForwarder | None = None,
+        transcription_fwd: transcription.TTSSegmentsForwarder,
     ) -> None:
         self._playout_source = playout_source
         self._tr_fwd = transcription_fwd
         self._interrupted = False
         self._time_played = 0.0
         self._done_fut = asyncio.Future[None]()
+        self._speech_id = speech_id
+
+    @property
+    def speech_id(self) -> str:
+        return self._speech_id
 
     @property
     def interrupted(self) -> bool:
@@ -44,7 +50,7 @@ class PlayoutHandle:
         return self._done_fut
 
 
-class CancellableAudioSource(utils.EventEmitter[EventTypes]):
+class AgentPlayout(utils.EventEmitter[EventTypes]):
     def __init__(self, *, source: rtc.AudioSource, alpha: float = 0.95) -> None:
         super().__init__()
         self._source = source
@@ -76,14 +82,17 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
 
     def play(
         self,
+        speech_id: str,
         playout_source: AsyncIterable[rtc.AudioFrame],
-        transcription_fwd: transcription.TTSSegmentsForwarder | None = None,
+        transcription_fwd: transcription.TTSSegmentsForwarder,
     ) -> PlayoutHandle:
         if self._closed:
             raise ValueError("cancellable source is closed")
 
         handle = PlayoutHandle(
-            playout_source=playout_source, transcription_fwd=transcription_fwd
+            speech_id=speech_id,
+            playout_source=playout_source,
+            transcription_fwd=transcription_fwd,
         )
         self._playout_atask = asyncio.create_task(
             self._playout_task(self._playout_atask, handle)
@@ -100,24 +109,24 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
             return handle.interrupted and self._vol_filter.filtered() <= eps
 
         first_frame = True
-        cancelled = False
 
         try:
             if old_task is not None:
                 await utils.aio.gracefully_cancel(old_task)
 
-            logger.debug("CancellableAudioSource._playout_task: started")
-
             async for frame in handle._playout_source:
                 if first_frame:
-                    if handle._tr_fwd is not None:
-                        handle._tr_fwd.segment_playout_started()
+                    handle._tr_fwd.segment_playout_started()
+
+                    logger.debug(
+                        "started playing the first frame",
+                        extra={"speech_id": handle.speech_id},
+                    )
 
                     self.emit("playout_started")
                     first_frame = False
 
                 if _should_break():
-                    cancelled = True
                     break
 
                 # divide the frame by chunks of 20ms
@@ -125,7 +134,6 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
                 i = 0
                 while i < len(frame.data):
                     if _should_break():
-                        cancelled = True
                         break
 
                     rem = min(ms20, len(frame.data) - i)
@@ -148,12 +156,18 @@ class CancellableAudioSource(utils.EventEmitter[EventTypes]):
                     handle._time_played += rem / frame.sample_rate
         finally:
             if not first_frame:
-                if handle._tr_fwd is not None and not cancelled:
+                if not handle.interrupted:
                     handle._tr_fwd.segment_playout_finished()
 
-                self.emit("playout_stopped", cancelled)
+                self.emit("playout_stopped", handle.interrupted)
 
             handle._done_fut.set_result(None)
-            if handle._tr_fwd is not None:
-                await handle._tr_fwd.aclose()
-            logger.debug("CancellableAudioSource._playout_task: ended")
+            await handle._tr_fwd.aclose()
+
+            logger.debug(
+                "playout finished",
+                extra={
+                    "speech_id": handle.speech_id,
+                    "interrupted": handle.interrupted,
+                },
+            )

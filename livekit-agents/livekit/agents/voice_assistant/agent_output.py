@@ -9,7 +9,7 @@ from livekit import rtc
 from .. import llm, tokenize, utils
 from .. import transcription as agent_transcription
 from .. import tts as text_to_speech
-from .cancellable_source import CancellableAudioSource, PlayoutHandle
+from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
 
 SpeechSource = Union[AsyncIterable[str], str]
@@ -19,21 +19,30 @@ class SynthesisHandle:
     def __init__(
         self,
         *,
+        speech_id: str,
         speech_source: SpeechSource,
-        audio_source: CancellableAudioSource,
+        agent_playout: AgentPlayout,
         tts: text_to_speech.TTS,
-        transcription_fwd: agent_transcription.TTSSegmentsForwarder | None = None,
+        transcription_fwd: agent_transcription.TTSSegmentsForwarder,
     ) -> None:
-        self._speech_source, self._audio_source, self._tts, self._tr_fwd = (
+        self._speech_source, self._agent_playout, self._tts, self._tr_fwd = (
             speech_source,
-            audio_source,
+            agent_playout,
             tts,
             transcription_fwd,
         )
         self._buf_ch = utils.aio.Chan[rtc.AudioFrame]()
         self._play_handle: PlayoutHandle | None = None
         self._interrupt_fut = asyncio.Future[None]()
-        self._collected_text = ""  # collected text from the async stream
+        self._speech_id = speech_id
+
+    @property
+    def speech_id(self) -> str:
+        return self._speech_id
+
+    @property
+    def tts_forwarder(self) -> agent_transcription.TTSSegmentsForwarder:
+        return self._tr_fwd
 
     @property
     def validated(self) -> bool:
@@ -44,10 +53,6 @@ class SynthesisHandle:
         return self._interrupt_fut.done()
 
     @property
-    def collected_text(self) -> str:
-        return self._collected_text
-
-    @property
     def play_handle(self) -> PlayoutHandle | None:
         return self._play_handle
 
@@ -56,13 +61,21 @@ class SynthesisHandle:
         if self.interrupted:
             raise RuntimeError("synthesis was interrupted")
 
-        self._play_handle = self._audio_source.play(
-            self._buf_ch, transcription_fwd=self._tr_fwd
+        self._play_handle = self._agent_playout.play(
+            self._speech_id, self._buf_ch, transcription_fwd=self._tr_fwd
         )
         return self._play_handle
 
     def interrupt(self) -> None:
         """Interrupt the speech"""
+        if self.interrupted:
+            return
+
+        logger.debug(
+            "interrupting synthesis/playout",
+            extra={"speech_id": self.speech_id},
+        )
+
         if self._play_handle is not None:
             self._play_handle.interrupt()
 
@@ -74,16 +87,21 @@ class AgentOutput:
         self,
         *,
         room: rtc.Room,
-        source: CancellableAudioSource,
+        agent_playout: AgentPlayout,
         llm: llm.LLM,
         tts: text_to_speech.TTS,
     ) -> None:
-        self._room, self._source, self._llm, self._tts = room, source, llm, tts
+        self._room, self._agent_playout, self._llm, self._tts = (
+            room,
+            agent_playout,
+            llm,
+            tts,
+        )
         self._tasks = set[asyncio.Task[Any]]()
 
     @property
-    def audio_source(self) -> CancellableAudioSource:
-        return self._source
+    def playout(self) -> AgentPlayout:
+        return self._agent_playout
 
     async def aclose(self) -> None:
         for task in self._tasks:
@@ -94,6 +112,7 @@ class AgentOutput:
     def synthesize(
         self,
         *,
+        speech_id: str,
         transcript: SpeechSource,
         transcription: bool,
         transcription_speed: float,
@@ -101,22 +120,31 @@ class AgentOutput:
         word_tokenizer: tokenize.WordTokenizer,
         hyphenate_word: Callable[[str], list[str]],
     ) -> SynthesisHandle:
-        transcription_fwd = None
-        if transcription:
-            transcription_fwd = agent_transcription.TTSSegmentsForwarder(
-                room=self._room,
-                participant=self._room.local_participant,
-                speed=transcription_speed,
-                sentence_tokenizer=sentence_tokenizer,
-                word_tokenizer=word_tokenizer,
-                hyphenate_word=hyphenate_word,
-            )
+        def _will_forward_transcription(
+            fwd: agent_transcription.TTSSegmentsForwarder,
+            transcription: rtc.Transcription,
+        ):
+            if not transcription:
+                transcription.segments = []
+
+            return transcription
+
+        transcription_fwd = agent_transcription.TTSSegmentsForwarder(
+            room=self._room,
+            participant=self._room.local_participant,
+            speed=transcription_speed,
+            sentence_tokenizer=sentence_tokenizer,
+            word_tokenizer=word_tokenizer,
+            hyphenate_word=hyphenate_word,
+            will_forward_transcription=_will_forward_transcription,
+        )
 
         handle = SynthesisHandle(
             speech_source=transcript,
-            audio_source=self._source,
+            agent_playout=self._agent_playout,
             tts=self._tts,
             transcription_fwd=transcription_fwd,
+            speech_id=speech_id,
         )
 
         task = asyncio.create_task(self._synthesize_task(handle))
@@ -145,30 +173,35 @@ class AgentOutput:
 @utils.log_exceptions(logger=logger)
 async def _str_synthesis_task(text: str, handle: SynthesisHandle) -> None:
     """synthesize speech from a string"""
-    if handle._tr_fwd and not handle._tr_fwd.closed:
-        handle._tr_fwd.push_text(text)
-        handle._tr_fwd.mark_text_segment_end()
+    if not handle.tts_forwarder.closed:
+        handle.tts_forwarder.push_text(text)
+        handle.tts_forwarder.mark_text_segment_end()
 
     start_time = time.time()
     first_frame = True
-    handle._collected_text = text
 
     try:
         async for audio in handle._tts.synthesize(text):
             if first_frame:
                 first_frame = False
-                dt = time.time() - start_time
-                logger.debug(f"AgentOutput._str_synthesis_task: TTFB in {dt:.2f}s")
+                logger.debug(
+                    "received first TTS frame",
+                    extra={
+                        "speech_id": handle.speech_id,
+                        "elapsed": round(time.time() - start_time, 3),
+                        "streamed": False,
+                    },
+                )
 
             frame = audio.frame
 
             handle._buf_ch.send_nowait(frame)
-            if handle._tr_fwd and not handle._tr_fwd.closed:
-                handle._tr_fwd.push_audio(frame)
+            if not handle.tts_forwarder.closed:
+                handle.tts_forwarder.push_audio(frame)
 
     finally:
-        if handle._tr_fwd and not handle._tr_fwd.closed:
-            handle._tr_fwd.mark_audio_segment_end()
+        if not handle.tts_forwarder.closed:
+            handle.tts_forwarder.mark_audio_segment_end()
 
 
 @utils.log_exceptions(logger=logger)
@@ -184,35 +217,48 @@ async def _stream_synthesis_task(
         async for audio in tts_stream:
             if first_frame:
                 first_frame = False
-                dt = time.time() - start_time
-                logger.debug(f"AgentOutput._stream_synthesis_task: TTFB in {dt:.2f}s")
+                logger.debug(
+                    "first TTS frame",
+                    extra={
+                        "speech_id": handle.speech_id,
+                        "elapsed": round(time.time() - start_time, 3),
+                        "streamed": True,
+                    },
+                )
 
-            if handle._tr_fwd and not handle._tr_fwd.closed:
+            if not handle._tr_fwd.closed:
                 handle._tr_fwd.push_audio(audio.frame)
 
             handle._buf_ch.send_nowait(audio.frame)
 
-    # otherwise, stream the text to the TTS
-    tts_stream = handle._tts.stream()
-    read_atask = asyncio.create_task(_read_generated_audio_task())
-
-    try:
-        async for seg in streamed_text:
-            handle._collected_text += seg
-
-            if handle._tr_fwd and not handle._tr_fwd.closed:
-                handle._tr_fwd.push_text(seg)
-
-            tts_stream.push_text(seg)
-    finally:
-        tts_stream.end_input()
-
-        if handle._tr_fwd and not handle._tr_fwd.closed:
-            handle._tr_fwd.mark_text_segment_end()
-
-        await read_atask
-        await tts_stream.aclose()
-
         if handle._tr_fwd and not handle._tr_fwd.closed:
             # mark_audio_segment_end must be called *after* mart_text_segment_end
             handle._tr_fwd.mark_audio_segment_end()
+
+    # otherwise, stream the text to the TTS
+    tts_stream = handle._tts.stream()
+    read_atask: asyncio.Task | None = None
+
+    try:
+        async for seg in streamed_text:
+            if not handle.tts_forwarder.closed:
+                handle.tts_forwarder.push_text(seg)
+
+            if read_atask is None:
+                # start the task when we receive the first text segment (so start_time is more accurate)
+                read_atask = asyncio.create_task(_read_generated_audio_task())
+
+            tts_stream.push_text(seg)
+
+        if not handle.tts_forwarder.closed:
+            handle.tts_forwarder.mark_text_segment_end()
+
+        tts_stream.end_input()
+
+        if read_atask is not None:
+            await read_atask
+    finally:
+        if read_atask is not None:
+            await utils.aio.gracefully_cancel(read_atask)
+
+        await tts_stream.aclose()

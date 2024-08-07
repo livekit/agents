@@ -12,7 +12,7 @@ from . import channel
 
 PING_INTERVAL = 5
 PING_TIMEOUT = 90
-HIGH_PING_THRESHOLD = 0.02  # 20ms
+HIGH_PING_THRESHOLD = 0.15  # 150ms
 
 
 @dataclass

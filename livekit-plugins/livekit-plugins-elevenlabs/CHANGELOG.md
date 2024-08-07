@@ -1,5 +1,13 @@
 # livekit-plugins-elevenlabs
 
+## 0.7.2
+
+### Patch Changes
+
+- elevenlabs: update default model to eleven_turbo_v2_5 - [#578](https://github.com/livekit/agents/pull/578) ([@theomonnom](https://github.com/theomonnom))
+
+- gracefully error on non-PCM data - [#567](https://github.com/livekit/agents/pull/567) ([@nbsp](https://github.com/nbsp))
+
 ## 0.7.1
 
 ### Patch Changes

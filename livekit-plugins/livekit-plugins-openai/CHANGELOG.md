@@ -1,5 +1,17 @@
 # livekit-plugins-openai
 
+## 0.8.0
+
+### Minor Changes
+
+- openai: use openai client for stt - [#583](https://github.com/livekit/agents/pull/583) ([@theomonnom](https://github.com/theomonnom))
+
+### Patch Changes
+
+- openai: add api_key argument - [#580](https://github.com/livekit/agents/pull/580) ([@theomonnom](https://github.com/theomonnom))
+
+- openai: fix incorrect API urls on Windows - [#575](https://github.com/livekit/agents/pull/575) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.7.1
 
 ### Patch Changes
