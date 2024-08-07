@@ -49,7 +49,7 @@ class STTOptions:
     filler_words: bool
     sample_rate: int
     num_channels: int
-    keywords: list[Keyword]
+    keywords: list[Tuple[str, float]]
 
 
 class STT(stt.STT):
