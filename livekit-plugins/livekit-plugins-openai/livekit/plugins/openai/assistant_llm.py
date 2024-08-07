@@ -20,7 +20,7 @@ from typing import Any, MutableSet
 
 from livekit.agents import llm
 
-from openai import AssistantEventHandler, AsyncClient
+from openai import AsyncAssistantEventHandler, AsyncClient
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.thread import Thread
 from openai.types.beta.threads import Text, TextDelta
@@ -73,17 +73,22 @@ class AssistantLLM(llm.LLM):
 
 
 class AssistantLLMStream(llm.LLMStream):
-    class EventHandler(AssistantEventHandler):
-        def on_text_created(self, text: Text) -> None:
+    class EventHandler(AsyncAssistantEventHandler):
+        def __init__(
+            self, output_queue: asyncio.Queue[llm.ChatChunk | Exception | None]
+        ):
+            self._output_queue = output_queue
+
+        async def on_text_created(self, text: Text) -> None:
             print("NEIL text", text.value)
 
-        def on_text_delta(self, delta: TextDelta, snapshot: Text):
+        async def on_text_delta(self, delta: TextDelta, snapshot: Text):
             print("NEIL text delta", delta.value, snapshot.value)
 
-        def on_tool_call_created(self, tool_call: ToolCall):
+        async def on_tool_call_created(self, tool_call: ToolCall):
             print(f"\nassistant > {tool_call.type}\n", flush=True)
 
-        def on_tool_call_delta(self, delta: ToolCallDelta, snapshot: ToolCall):
+        async def on_tool_call_delta(self, delta: ToolCallDelta, snapshot: ToolCall):
             if delta.type == "code_interpreter":
                 pass
 
@@ -130,6 +135,7 @@ class AssistantLLMStream(llm.LLMStream):
                 thread_id=self._thread.id,
                 assistant_id=self._assistant.id,
                 instructions=self._instructions,
+                event_handler=AssistantLLMStream.EventHandler(self._output_queue),
             ) as stream:
                 await stream.until_done()
         except Exception as e:
