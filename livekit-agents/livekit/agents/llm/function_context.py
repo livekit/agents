@@ -181,7 +181,6 @@ class FunctionContext:
                 default=param.default,
                 choices=choices,
             )
-            print(args[name])
 
         self._fncs[metadata.name] = FunctionInfo(
             name=metadata.name,
