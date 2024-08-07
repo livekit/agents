@@ -158,8 +158,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 retry_count = 0  # connected successfully, reset the retry_count
 
                 await self._run_ws(ws)
+                break
             except Exception as e:
-                if self._session.closed:
+                if self._input_ch.closed:
                     break
 
                 if retry_count >= max_retry:
@@ -192,10 +193,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             current_segment_id: str | None = _new_segment()
 
             async for data in self._input_ch:
-                if (
-                    isinstance(data, self._FlushSentinel)
-                    and current_segment_id is not None
-                ):
+                if isinstance(data, self._FlushSentinel):
+                    if current_segment_id is None:
+                        continue
+
                     end_pkt = base_pkt.copy()
                     end_pkt["context_id"] = current_segment_id
                     end_pkt["transcript"] = self._buf
@@ -203,6 +204,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await ws.send_str(json.dumps(end_pkt))
 
                     current_segment_id = None
+                    self._buf = ""
                 elif data:
                     if current_segment_id is None:
                         current_segment_id = _new_segment()
@@ -212,7 +214,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if len(words) < BUFFERED_WORDS_COUNT + 1:
                         continue
 
-                    data = self._opts.word_tokenizer.format_words(words[:-1])
+                    data = self._opts.word_tokenizer.format_words(words[:-1]) + " "
                     self._buf = words[-1]
 
                     token_pkt = base_pkt.copy()
@@ -284,7 +286,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 
 def _to_cartesia_options(opts: _TTSOptions) -> dict:
-    voice = {}
+    voice: dict = {}
     if isinstance(opts.voice, str):
         voice["mode"] = "id"
         voice["id"] = opts.voice
