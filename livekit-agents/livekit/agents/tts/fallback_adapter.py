@@ -16,8 +16,8 @@ class FallbackAdapter(TTS):
     def __init__(
         self,
         *providers: TTS,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        connect_timeout: float = 5.0,
+        keepalive_timeout: float = 120.0,
     ) -> None:
         if len(providers) == 0:
             raise ValueError("FallbackAdapter requires at least one provider")
