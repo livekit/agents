@@ -62,7 +62,7 @@ class FallbackChunkedStream(ChunkedStream):
     def __init__(
         self,
         *,
-        providers: list[TTS],
+        providers: tuple[TTS, ...],
         connect_timeout: float,
         keepalive_timeout: float,
         text: str,
@@ -87,7 +87,9 @@ class FallbackChunkedStream(ChunkedStream):
                     if isinstance(e, asyncio.TimeoutError):
                         break
                     return
-            logger.warn(f"provider {provider.__class__.__module__} failed, attempting to switch")
+            logger.warn(
+                f"provider {provider.__class__.__module__} failed, attempting to switch"
+            )
         raise Exception("all providers failed")
 
 
@@ -95,7 +97,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
     def __init__(
         self,
         *,
-        providers: list[TTS],
+        providers: tuple[TTS, ...],
         connect_timeout: float,
         keepalive_timeout: float,
     ) -> None:
@@ -132,7 +134,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
                     if isinstance(e, asyncio.TimeoutError) or isinstance(
                         e, TimeoutError
                     ):
-                        logger.warn(f"provider {self._stream.__class__.__module__} failed, attempting to switch")
+                        logger.warn(
+                            f"provider {self._stream.__class__.__module__} failed, attempting to switch"
+                        )
                         if self._current_provider + 1 < len(self._providers):
                             self._current_provider += 1
                             self._init_tts()
