@@ -195,7 +195,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     end_pkt = base_pkt.copy()
                     end_pkt["context_id"] = current_segment_id
-                    end_pkt["transcript"] = self._buf
+                    end_pkt["transcript"] = self._buf + " "
                     end_pkt["continue"] = False
                     await ws.send_str(json.dumps(end_pkt))
 
