@@ -27,7 +27,7 @@ from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
 from .models import ChatModels
-from .utils import AsyncAzureADTokenProvider, get_base_url, build_oai_message
+from .utils import AsyncAzureADTokenProvider, build_oai_message
 
 DEFAULT_MODEL = "gpt-4o"
 
