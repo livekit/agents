@@ -20,7 +20,7 @@ import functools
 import inspect
 import typing
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Tuple
 
 from ..log import logger
 
@@ -262,7 +262,7 @@ def is_type_supported(t: type) -> bool:
     return False
 
 
-def _is_optional_type(typ) -> (bool, typing.Type):
+def _is_optional_type(typ) -> Tuple[bool, typing.Type]:
     """return is_optional, inner_type"""
     origin = typing.get_origin(typ)
 
