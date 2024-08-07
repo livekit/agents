@@ -91,6 +91,7 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Formats a log record and serializes to json"""
         message_dict: Dict[str, Any] = {}
+        message_dict["level"] = record.levelname
 
         if isinstance(record.msg, dict):
             message_dict = record.msg
@@ -105,7 +106,6 @@ class JsonFormatter(logging.Formatter):
             message_dict["exc_info"] = self.formatException(record.exc_info)
         if not message_dict.get("exc_info") and record.exc_text:
             message_dict["exc_info"] = record.exc_text
-
         if record.stack_info and not message_dict.get("stack_info"):
             message_dict["stack_info"] = self.formatStack(record.stack_info)
 
