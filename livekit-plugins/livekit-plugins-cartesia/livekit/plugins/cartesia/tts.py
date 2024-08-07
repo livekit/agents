@@ -151,18 +151,14 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _main_task(self) -> None:
         retry_count = 0
         max_retry = 3
-        while not self._input_ch.closed:
+        while self._input_ch.qsize() or not self._input_ch.closed:
             try:
                 url = f"wss://api.cartesia.ai/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
                 ws = await self._session.ws_connect(url)
                 retry_count = 0  # connected successfully, reset the retry_count
 
                 await self._run_ws(ws)
-                break
             except Exception as e:
-                if self._input_ch.closed:
-                    break
-
                 if retry_count >= max_retry:
                     logger.exception(
                         f"failed to connect to Cartesia after {max_retry} tries"
@@ -269,6 +265,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     pending_segments.remove(segment_id)
                     if len(pending_segments) == 0 and self._input_ch.closed:
+                        # we're not going to receive more frames, close the connection
                         await ws.close()
                         break
                 else:

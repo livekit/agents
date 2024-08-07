@@ -212,7 +212,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self, max_retry: int) -> None:
         retry_count = 0
-        while not self._input_ch.closed:
+        while self._input_ch.qsize() or not self._input_ch.closed:
             try:
                 # google requires a async generator when calling streaming_recognize
                 # this function basically convert the queue into a async generator
