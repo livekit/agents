@@ -20,11 +20,10 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    llm_plugin = openai.LLM()
     assistant = VoiceAssistant(
         vad=silero.VAD.load(),
         stt=deepgram.STT(),
-        llm=llm_plugin,
+        llm=openai.LLM(),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
     )
@@ -37,7 +36,7 @@ async def entrypoint(ctx: JobContext):
     async def answer_from_text(txt: str):
         chat_ctx = assistant.chat_ctx.copy()
         chat_ctx.append(role="user", text=txt)
-        stream = llm_plugin.chat(chat_ctx=chat_ctx)
+        stream = assistant.llm.chat(chat_ctx=chat_ctx)
         await assistant.say(stream)
 
     @chat.on("message_received")

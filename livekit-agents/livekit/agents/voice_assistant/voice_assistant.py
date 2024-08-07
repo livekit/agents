@@ -128,7 +128,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
-        interrupt_speech_duration: float = 0.45,
+        interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
         preemptive_synthesis: bool = True,
         transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
@@ -211,6 +211,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._speech_q: list[_SpeechInfo] = []
         self._speech_q_changed = asyncio.Event()
+
+        self._last_end_of_speech_time: float | None = None
 
     @property
     def fnc_ctx(self) -> FunctionContext | None:
@@ -372,22 +374,24 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("user_stopped_speaking")
             self.emit("user_stopped_speaking")
             self._deferred_validation.on_human_end_of_speech(ev)
+            self._last_end_of_speech_time = time.time()
 
         def _on_interim_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_interim_text = ev.alternatives[0].text
 
         def _on_final_transcript(ev: stt.SpeechEvent) -> None:
+            new_transcript = ev.alternatives[0].text
             self._transcribed_text += (
                 " " if self._transcribed_text else ""
-            ) + ev.alternatives[0].text
+            ) + new_transcript
 
             if self._opts.preemptive_synthesis:
                 self._synthesize_agent_reply()
 
-            self._deferred_validation.on_human_final_transcript(ev.alternatives[0].text)
+            self._deferred_validation.on_human_final_transcript(new_transcript)
 
             words = self._opts.transcription.word_tokenizer.tokenize(
-                text=ev.alternatives[0].text
+                text=new_transcript
             )
             if len(words) >= 3:
                 # VAD can sometimes not detect that the human is speaking
@@ -423,7 +427,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("agent_started_speaking")
             self.emit("agent_started_speaking")
 
-        def _on_playout_stopped(cancelled: bool) -> None:
+        def _on_playout_stopped(interrupted: bool) -> None:
             self._plotter.plot_event("agent_stopped_speaking")
             self.emit("agent_stopped_speaking")
 
@@ -480,12 +484,18 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 user_question=user_transcript,
             )
 
+            if self._last_end_of_speech_time is not None:
+                elapsed = round(time.time() - self._last_end_of_speech_time, 3)
+            else:
+                elapsed = -1.0
+
             logger.debug(
                 "synthesizing agent reply",
                 extra={
                     "user_transcript": user_transcript,
                     "validated": validated,
                     "speech_id": reply.id,
+                    "elapsed": elapsed,
                 },
             )
 
@@ -558,14 +568,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         while not join_fut.done():
             await asyncio.wait(
-                [join_fut], return_when=asyncio.FIRST_COMPLETED, timeout=1.0
+                [join_fut], return_when=asyncio.FIRST_COMPLETED, timeout=0.5
             )
 
             _commit_user_question_if_needed()
 
         _commit_user_question_if_needed()
 
-        collected_text = speech_info.synthesis_handle.collected_text
+        collected_text = speech_info.synthesis_handle.tts_forwarder.played_text
         interrupted = speech_info.synthesis_handle.interrupted
         is_using_tools = isinstance(speech_info.source, LLMStream) and len(
             speech_info.source.function_calls
@@ -578,7 +588,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if is_using_tools and not interrupted:
             assert isinstance(speech_info.source, LLMStream)
             assert (
-                user_speech_committed
+                not user_question or user_speech_committed
             ), "user speech should have been committed before using tools"
 
             # execute functions
@@ -637,11 +647,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 play_handle = answer_synthesis.play()
                 await play_handle.join()
 
-                collected_text = answer_synthesis.collected_text
+                collected_text = answer_synthesis.tts_forwarder.played_text
                 interrupted = answer_synthesis.interrupted
 
         if speech_info.add_to_chat_ctx and (not user_question or user_speech_committed):
             self._chat_ctx.messages.extend(extra_tools_messages)
+
+            if interrupted:
+                collected_text += "..."
 
             msg = ChatMessage.create(text=collected_text, role="assistant")
             self._chat_ctx.messages.append(msg)
@@ -746,7 +759,10 @@ async def _llm_stream_to_str_iterable(
             first_frame = False
             logger.debug(
                 "first LLM token",
-                extra={"speech_id": speech_id, "elapsed": time.time() - start_time},
+                extra={
+                    "speech_id": speech_id,
+                    "elapsed": round(time.time() - start_time, 3),
+                },
             )
 
         yield content
@@ -757,7 +773,7 @@ class _DeferredReplyValidation:
 
     # if the STT gives us punctuation, we can try validate the reply faster.
     PUNCTUATION = ".!?"
-    PUNCTUATION_REDUCE_FACTOR = 0.8
+    PUNCTUATION_REDUCE_FACTOR = 0.5
 
     DEFER_DELAY_END_OF_SPEECH = 0.2
     DEFER_DELAY_FINAL_TRANSCRIPT = 1.0
@@ -767,8 +783,6 @@ class _DeferredReplyValidation:
         self, validate_fnc: Callable[[], None], loop: asyncio.AbstractEventLoop
     ) -> None:
         self._validate_fnc = validate_fnc
-        self._tasks_set = utils.aio.TaskSet(loop=loop)
-
         self._validating_task: asyncio.Task | None = None
         self._last_final_transcript: str = ""
         self._last_recv_end_of_speech_time: float = 0.0
@@ -821,9 +835,7 @@ class _DeferredReplyValidation:
 
     async def aclose(self) -> None:
         if self._validating_task is not None:
-            self._validating_task.cancel()
-
-        await self._tasks_set.aclose()
+            await utils.aio.gracefully_cancel(self._validating_task)
 
     def _end_with_punctuation(self) -> bool:
         return (
@@ -845,4 +857,4 @@ class _DeferredReplyValidation:
         if self._validating_task is not None:
             self._validating_task.cancel()
 
-        self._validating = self._tasks_set.create_task(_run_task(delay))
+        self._validating_task = asyncio.create_task(_run_task(delay))

@@ -1,5 +1,11 @@
 # livekit-plugins-silero
 
+## 0.6.3
+
+### Patch Changes
+
+- silero: fix high cpu usage - [#569](https://github.com/livekit/agents/pull/569) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.2
 
 ### Patch Changes

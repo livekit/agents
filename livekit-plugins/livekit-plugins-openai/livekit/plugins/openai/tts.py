@@ -24,7 +24,7 @@ import openai
 
 from .log import logger
 from .models import TTSModels, TTSVoices
-from .utils import AsyncAzureADTokenProvider, get_base_url
+from .utils import AsyncAzureADTokenProvider
 
 OPENAI_TTS_SAMPLE_RATE = 24000
 OPENAI_TTS_CHANNELS = 1
@@ -45,6 +45,7 @@ class TTS(tts.TTS):
         voice: TTSVoices = "alloy",
         speed: float = 1.0,
         base_url: str | None = None,
+        api_key: str | None = None,
         client: openai.AsyncClient | None = None,
     ) -> None:
         super().__init__(
@@ -56,7 +57,8 @@ class TTS(tts.TTS):
         )
 
         self._client = client or openai.AsyncClient(
-            base_url=get_base_url(base_url),
+            api_key=api_key,
+            base_url=base_url,
             http_client=httpx.AsyncClient(
                 timeout=5.0,
                 follow_redirects=True,
