@@ -262,7 +262,7 @@ def is_type_supported(t: type) -> bool:
     return False
 
 
-def _is_optional_type(typ) -> Tuple[bool, typing.Type]:
+def _is_optional_type(typ) -> Tuple[bool, Any]:
     """return is_optional, inner_type"""
     origin = typing.get_origin(typ)
 
