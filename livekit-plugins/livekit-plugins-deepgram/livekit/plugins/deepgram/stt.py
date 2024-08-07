@@ -21,7 +21,7 @@ import json
 import os
 import wave
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
 from urllib.parse import urlencode
 
 import aiohttp
@@ -30,6 +30,9 @@ from livekit.agents.utils import AudioBuffer, merge_frames
 
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
+
+BASE_URL = "https://api.deepgram.com/v1/listen"
+BASE_URL_WS = "wss://api.deepgram.com/v1/listen"
 
 
 @dataclass
@@ -45,6 +48,7 @@ class STTOptions:
     filler_words: bool
     sample_rate: int
     num_channels: int
+    keywords: list[Tuple[str, float]]
 
 
 class STT(stt.STT):
@@ -60,6 +64,7 @@ class STT(stt.STT):
         no_delay: bool = True,
         endpointing_ms: int = 25,
         filler_words: bool = False,
+        keywords: list[Tuple[str, float]] = [],
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -87,6 +92,7 @@ class STT(stt.STT):
             filler_words=filler_words,
             sample_rate=48000,
             num_channels=1,
+            keywords=keywords,
         )
         self._session = http_session
 
@@ -106,15 +112,10 @@ class STT(stt.STT):
             "punctuate": config.punctuate,
             "detect_language": config.detect_language,
             "smart_format": config.smart_format,
+            "keywords": self._opts.keywords,
         }
         if config.language:
             recognize_config["language"] = config.language
-
-        # seems like lower after encoding the parameters is needed
-        # otherwise Deepgram returns a bad request
-        url = (
-            f"https://api.deepgram.com/v1/listen?{urlencode(recognize_config).lower()}"
-        )
 
         buffer = merge_frames(buffer)
         io_buffer = io.BytesIO()
@@ -127,7 +128,7 @@ class STT(stt.STT):
         data = io_buffer.getvalue()
 
         async with self._ensure_session().post(
-            url=url,
+            url=_to_deepgram_url(recognize_config),
             data=data,
             headers={
                 "Authorization": f"Token {self._api_key}",
@@ -204,17 +205,16 @@ class SpeechStream(stt.SpeechStream):
                     if self._opts.endpointing_ms == 0
                     else self._opts.endpointing_ms,
                     "filler_words": self._opts.filler_words,
+                    "keywords": self._opts.keywords,
                 }
 
                 if self._opts.language:
                     live_config["language"] = self._opts.language
 
                 headers = {"Authorization": f"Token {self._api_key}"}
-
-                url = (
-                    f"wss://api.deepgram.com/v1/listen?{urlencode(live_config).lower()}"
+                ws = await self._session.ws_connect(
+                    _to_deepgram_url(live_config, websocket=True), headers=headers
                 )
-                ws = await self._session.ws_connect(url, headers=headers)
                 retry_count = 0  # connected successfully, reset the retry_count
 
                 await self._run_ws(ws)
@@ -411,3 +411,16 @@ def prerecorded_transcription_to_speech_event(
             for alt in dg_alts
         ],
     )
+
+
+def _to_deepgram_url(opts: dict, *, websocket: bool = False) -> str:
+    if opts.get("keywords"):
+        # convert keywords to a list of "keyword:intensifier"
+        opts["keywords"] = [
+            f"{keyword}:{intensifier}" for (keyword, intensifier) in opts["keywords"]
+        ]
+
+    # lowercase bools
+    opts = {k: str(v).lower() if isinstance(v, bool) else v for k, v in opts.items()}
+    base_url = BASE_URL_WS if websocket else BASE_URL
+    return f"{base_url}?{urlencode(opts, doseq=True)}"
