@@ -31,7 +31,6 @@ from livekit.agents.utils import AudioBuffer, merge_frames
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
 
-
 BASE_URL = "https://api.deepgram.com/v1/listen"
 BASE_URL_WS = "wss://api.deepgram.com/v1/listen"
 
@@ -118,9 +117,6 @@ class STT(stt.STT):
         if config.language:
             recognize_config["language"] = config.language
 
-        url = _to_deepgram_url(recognize_config)
-
-        print(url)
         buffer = merge_frames(buffer)
         io_buffer = io.BytesIO()
         with wave.open(io_buffer, "wb") as wav:
@@ -132,7 +128,7 @@ class STT(stt.STT):
         data = io_buffer.getvalue()
 
         async with self._ensure_session().post(
-            url=url,
+            url=_to_deepgram_url(recognize_config),
             data=data,
             headers={
                 "Authorization": f"Token {self._api_key}",
@@ -216,9 +212,9 @@ class SpeechStream(stt.SpeechStream):
                     live_config["language"] = self._opts.language
 
                 headers = {"Authorization": f"Token {self._api_key}"}
-                url = _to_deepgram_url(live_config, websocket=True)
-                print(url)
-                ws = await self._session.ws_connect(url, headers=headers)
+                ws = await self._session.ws_connect(
+                    _to_deepgram_url(live_config, websocket=True), headers=headers
+                )
                 retry_count = 0  # connected successfully, reset the retry_count
 
                 await self._run_ws(ws)
