@@ -78,6 +78,7 @@ jobs:
                       ./livekit-plugins/livekit-plugins-azure
 
       - name: Run tests
+        shell: bash
         env:
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
