@@ -165,6 +165,8 @@ class Worker(utils.EventEmitter[EventTypes]):
             opts.host, opts.port, loop=self._loop
         )
 
+        self._main_task: asyncio.Task | None = None
+
     async def run(self):
         if not self._closed:
             raise Exception("worker is already running")
@@ -179,10 +181,17 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._http_session = aiohttp.ClientSession()
         self._close_future = asyncio.Future(loop=self._loop)
 
+        self._main_task = asyncio.create_task(self._worker_task(), name="worker_task")
+        tasks = [
+            self._main_task,
+            asyncio.create_task(self._http_server.run(), name="http_server"),
+        ]
         try:
-            await asyncio.gather(self._worker_task(), self._http_server.run())
+            await asyncio.gather(*tasks)
         finally:
-            self._close_future.set_result(None)
+            await utils.aio.gracefully_cancel(*tasks)
+            if not self._close_future.done():
+                self._close_future.set_result(None)
 
     @property
     def id(self) -> str:
@@ -252,14 +261,16 @@ class Worker(utils.EventEmitter[EventTypes]):
         assert self._api is not None
 
         self._closed = True
+        self._main_task.cancel()
 
         await self._proc_pool.aclose()
         await self._http_session.close()
         await self._http_server.aclose()
         await self._api.aclose()
+
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
-        await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
+        #await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
         self._msg_chan.close()
         await self._close_future
 
@@ -278,6 +289,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         assert self._http_session is not None
 
         retry_count = 0
+        ws: aiohttp.ClientWebSocketResponse | None = None
         while not self._closed:
             try:
                 self._connecting = True
@@ -349,6 +361,9 @@ class Worker(utils.EventEmitter[EventTypes]):
                     f"failed to connect to livekit, retrying in {retry_delay}s: {e}"
                 )
                 await asyncio.sleep(retry_delay)
+            finally:
+                if ws is not None:
+                    await ws.close()
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse):
         closing_ws = False

@@ -68,6 +68,7 @@ class SupervisedProc:
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._loop = loop
+
         log_q = mp_ctx.Queue()
         log_q.cancel_join_thread()
         mp_pch, mp_cch = mp_ctx.Pipe(duplex=True)
@@ -140,7 +141,8 @@ class SupervisedProc:
             for key, value in extra.items():
                 setattr(record, key, value)
 
-        log_listener = LogQueueListener(self._proc_args.log_q, _add_proc_ctx_log)
+        log_q = self._proc_args.log_q
+        log_listener = LogQueueListener(log_q, _add_proc_ctx_log)
         log_listener.start()
 
         self._proc.start()
@@ -150,7 +152,11 @@ class SupervisedProc:
         def _sync_run():
             self._proc.join()
             log_listener.stop()
-            self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
+            log_q.close()
+            try:
+                self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
+            except RuntimeError:
+                pass
 
         thread = threading.Thread(target=_sync_run)
         thread.start()
@@ -256,7 +262,7 @@ class SupervisedProc:
             # this happens when the initialization takes longer than self._initialize_timeout
             pass
 
-        # the process is killed if it doesn't respond to pings within this time
+        # the process is killed if it doesn't respond to ping requests
         pong_timeout = utils.aio.sleep(proto.PING_TIMEOUT)
         ping_task = asyncio.create_task(self._ping_pong_task(pong_timeout))
         monitor_task = asyncio.create_task(self._monitor_task(pong_timeout))

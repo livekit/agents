@@ -220,16 +220,12 @@ def main(args: proto.ProcStartArgs) -> None:
         main_task = loop.create_task(
             _async_main(args, job_proc, cch), name="job_proc_main"
         )
-        try:
-            loop.run_until_complete(main_task)
-        except KeyboardInterrupt:
-            # ignore the keyboard interrupt, we handle the process shutdown ourselves
-            # (this signal can be sent by watchfiles on dev mode)
-            loop.run_until_complete(main_task)
+        while not main_task.done():
+            try:
+                loop.run_until_complete(main_task)
+            except KeyboardInterrupt:
+                # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
+                pass
     finally:
-        # try:
         loop.run_until_complete(loop.shutdown_default_executor())
-        loop.run_until_complete(cch.aclose())
-        # finally:
-        # loop.close()
-        # pass
+        #loop.run_until_complete(cch.aclose())
