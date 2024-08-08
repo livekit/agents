@@ -17,6 +17,7 @@ from .assistant_llm import (
     AssistantLLM,
     AssistantLLMStream,
     AssistantLoadOptions,
+    AssistantOptions,
 )
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
@@ -30,6 +31,7 @@ __all__ = [
     "TTS",
     "LLM",
     "LLMStream",
+    "AssistantOptions",
     "AssistantCreateOptions",
     "AssistantLoadOptions",
     "AssistantLLM",

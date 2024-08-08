@@ -43,10 +43,19 @@ class LLMOptions:
 
 
 @dataclass
+class AssistantOptions:
+    """Options for creating (on-the-fly) or loading an assistant. Only one of create_options or load_options should be set."""
+
+    create_options: AssistantCreateOptions | None = None
+    load_options: AssistantLoadOptions | None = None
+
+
+@dataclass
 class AssistantCreateOptions:
     name: str
     instructions: str
     model: ChatModels
+    temperature: float | None = None
     tools: list[AssistantTools] = field(default_factory=list)
 
 
@@ -60,7 +69,7 @@ class AssistantLLM(llm.LLM):
     def __init__(
         self,
         *,
-        assistant_opts: AssistantCreateOptions | AssistantLoadOptions,
+        assistant_opts: AssistantOptions,
         client: AsyncClient | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
@@ -85,17 +94,25 @@ class AssistantLLM(llm.LLM):
         self._done_futures = list[asyncio.Future[None]]()
 
     async def _sync_openai(self) -> AssistantLoadOptions:
-        if isinstance(self._assistant_opts, AssistantCreateOptions):
-            assistant = await self._client.beta.assistants.create(
-                model=self._assistant_opts.model,
-                name=self._assistant_opts.name,
-                instructions=self._assistant_opts.instructions,
-                tools=[{"type": t} for t in self._assistant_opts.tools],
-            )
+        if self._assistant_opts.create_options:
+            kwargs: dict[str, Any] = {
+                "model": self._assistant_opts.create_options.model,
+                "name": self._assistant_opts.create_options.name,
+                "instructions": self._assistant_opts.create_options.instructions,
+                "tools": [
+                    {"type": t} for t in self._assistant_opts.create_options.tools
+                ],
+            }
+            if self._assistant_opts.create_options.temperature:
+                kwargs["temperature"] = self._assistant_opts.create_options.temperature
+            assistant = await self._client.beta.assistants.create(**kwargs)
+
             thread = await self._client.beta.threads.create()
             return AssistantLoadOptions(assistant_id=assistant.id, thread_id=thread.id)
-        else:
-            return self._assistant_opts
+        elif self._assistant_opts.load_options:
+            return self._assistant_opts.load_options
+
+        raise Exception("One of create_options or load_options must be set")
 
     def chat(
         self,
@@ -106,7 +123,16 @@ class AssistantLLM(llm.LLM):
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
     ):
+        if n is not None:
+            logger.warning("OpenAI Assistants does not support the 'n' parameter")
+
+        if parallel_tool_calls is not None:
+            logger.warning(
+                "OpenAI Assistants does not support the 'parallel_tool_calls' parameter"
+            )
+
         return AssistantLLMStream(
+            temperature=temperature,
             assistant_llm=self,
             sync_openai_task=self._sync_openai_task,
             client=self._client,
@@ -152,10 +178,12 @@ class AssistantLLMStream(llm.LLMStream):
         sync_openai_task: asyncio.Task[AssistantLoadOptions],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
+        temperature: float | None,
     ) -> None:
         super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._llm = assistant_llm
         self._client = client
+        self._temperature = temperature
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
@@ -265,6 +293,7 @@ class AssistantLLMStream(llm.LLMStream):
                 thread_id=load_options.thread_id,
                 assistant_id=load_options.assistant_id,
                 event_handler=eh,
+                temperature=self._temperature,
             ) as stream:
                 await stream.until_done()
 
