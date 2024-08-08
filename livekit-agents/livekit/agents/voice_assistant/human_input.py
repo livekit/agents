@@ -101,6 +101,8 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
 
+        import wave
+
         def _will_forward_transcription(
             fwd: transcription.STTSegmentsForwarder, transcription: rtc.Transcription
         ):
@@ -117,10 +119,20 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         )
 
         async def _audio_stream_co() -> None:
+            file = None
             # forward the audio stream to the VAD and STT streams
             async for ev in audio_stream:
+                if file is None:
+                    file = wave.open(f"output-{self._subscribed_track.sid}.wav", "wb")
+                    file.setnchannels(ev.frame.num_channels)
+                    file.setsampwidth(2)
+                    file.setframerate(ev.frame.sample_rate)
+                file.writeframes(ev.frame.data)
+
                 stt_stream.push_frame(ev.frame)
                 vad_stream.push_frame(ev.frame)
+            if file:
+                file.close()
 
         async def _vad_stream_co() -> None:
             async for ev in vad_stream:
