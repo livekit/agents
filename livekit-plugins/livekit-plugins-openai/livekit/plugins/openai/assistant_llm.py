@@ -79,6 +79,7 @@ class AssistantLLM(llm.LLM):
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
         self._sync_openai_task = asyncio.create_task(self._sync_openai())
+        self._done_futures = list[asyncio.Future[None]]()
 
     async def _sync_openai(self) -> AssistantLoadOptions:
         if isinstance(self._assistant_opts, AssistantCreateOptions):
@@ -103,7 +104,7 @@ class AssistantLLM(llm.LLM):
         parallel_tool_calls: bool | None = None,
     ):
         return AssistantLLMStream(
-            cache_key=id(self),
+            assistant_llm=self,
             sync_openai_task=self._sync_openai_task,
             client=self._client,
             chat_ctx=chat_ctx,
@@ -143,14 +144,14 @@ class AssistantLLMStream(llm.LLMStream):
     def __init__(
         self,
         *,
-        cache_key: int,
+        assistant_llm: AssistantLLM,
         client: AsyncClient,
         sync_openai_task: asyncio.Task[AssistantLoadOptions],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
     ) -> None:
         super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
-        self._cache_key = cache_key
+        self._llm = assistant_llm
         self._client = client
         self._thread_id: str | None = None
         self._assistant_id: str | None = None
@@ -164,14 +165,14 @@ class AssistantLLMStream(llm.LLMStream):
         self._sync_openai_task = sync_openai_task
 
         # Running stream is used to ensure that we only have one stream running at a time
-        self._running_stream: asyncio.Future[None] = asyncio.Future()
-        self._running_stream.set_result(None)
+        self._done_future: asyncio.Future[None] = asyncio.Future()
 
     async def _create_stream(self) -> None:
-        await self._running_stream
-        self._running_stream = asyncio.Future[None]()
         try:
             load_options = await self._sync_openai_task
+            await asyncio.gather(*self._llm._done_futures)
+            self._llm._done_futures.clear()
+            self._llm._done_futures.append(self._done_future)
             self._thread_id = load_options.thread_id
             self._assistant_id = load_options.assistant_id
 
@@ -204,7 +205,7 @@ class AssistantLLMStream(llm.LLMStream):
 
                 msg_id = str(uuid.uuid4())
                 if MESSAGE_ID_KEY not in msg._metadata:
-                    converted_msg = build_oai_message(msg, self._cache_key)
+                    converted_msg = build_oai_message(msg, id(self._llm))
                     converted_msg["private_message_id"] = msg_id
                     new_msg = await self._client.beta.threads.messages.create(
                         thread_id=self._thread_id,
@@ -230,7 +231,7 @@ class AssistantLLMStream(llm.LLMStream):
         except Exception as e:
             await self._output_queue.put(e)
         finally:
-            self._running_stream.set_result(None)
+            self._done_future.set_result(None)
 
     async def aclose(self) -> None:
         pass
