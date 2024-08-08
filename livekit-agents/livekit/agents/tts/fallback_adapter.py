@@ -16,7 +16,22 @@ from .tts import (
 @dataclass
 class TTSProvider:
     tts: TTS
-    active: bool = True
+    cooldown: float
+    _active: bool = True
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    def deactivate(self) -> None:
+        async def _wait_and_reactivate():
+            await asyncio.sleep(self.cooldown)
+            logger.info(f"provider {self.tts.__class__.__module__} reactivated")
+            self._active = True
+
+        self._active = False
+        if self.cooldown > 0:
+            asyncio.create_task(_wait_and_reactivate())
 
 
 class FallbackAdapter(TTS):
@@ -25,6 +40,7 @@ class FallbackAdapter(TTS):
         *providers: TTS,
         connect_timeout: float = 5.0,
         keepalive_timeout: float = 120.0,
+        cooldown: float = 60.0,
     ) -> None:
         if len(providers) == 0:
             raise ValueError("FallbackAdapter requires at least one provider")
@@ -41,7 +57,7 @@ class FallbackAdapter(TTS):
             sample_rate=providers[0].sample_rate,
             num_channels=providers[0].num_channels,
         )
-        self._providers = [TTSProvider(tts=x) for x in providers]
+        self._providers = [TTSProvider(tts=x, cooldown=cooldown) for x in providers]
         self._connect_timeout = connect_timeout
         self._keepalive_timeout = keepalive_timeout
 
@@ -83,8 +99,9 @@ class FallbackChunkedStream(ChunkedStream):
         self._init_tts()
 
     def _init_tts(self) -> None:
-        self._index = next((i for i, x in enumerate(self._providers) if x.active), None)
-        if self._index is not None:
+        index = next((i for i, x in enumerate(self._providers) if x.active), None)
+        if index is not None:
+            self._index = index
             self._stream = self._providers[self._index].tts.synthesize(self._text)
             self._timeout = self._connect_timeout
         else:
@@ -102,7 +119,7 @@ class FallbackChunkedStream(ChunkedStream):
                     logger.warn(
                         f"provider {self._stream.__class__.__module__} failed, attempting to switch"
                     )
-                    self._providers[self._index].active = False
+                    self._providers[self._index].deactivate()
                     self._init_tts()
                 else:
                     return
@@ -124,8 +141,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
         self._init_tts()
 
     def _init_tts(self) -> None:
-        self._index = next((i for i, x in enumerate(self._providers) if x.active), None)
-        if self._index is not None:
+        index = next((i for i, x in enumerate(self._providers) if x.active), None)
+        if index is not None:
+            self._index = index
             self._stream = self._providers[self._index].tts.stream()
             self._timeout = self._connect_timeout
         else:
@@ -155,7 +173,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                         logger.warn(
                             f"provider {self._stream.__class__.__module__} failed, attempting to switch"
                         )
-                        self._providers[self._index].active = False
+                        self._providers[self._index].deactivate()
                         self._init_tts()
 
         tasks = [
