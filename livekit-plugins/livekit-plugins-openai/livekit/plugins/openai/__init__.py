@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .assistant_llm import (
+    AssistantCreateOptions,
+    AssistantLLM,
+    AssistantLLMStream,
+    AssistantLoadOptions,
+    AssistantOptions,
+)
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
 from .models import TTSModels, TTSVoices, WhisperModels
@@ -24,6 +31,11 @@ __all__ = [
     "TTS",
     "LLM",
     "LLMStream",
+    "AssistantOptions",
+    "AssistantCreateOptions",
+    "AssistantLoadOptions",
+    "AssistantLLM",
+    "AssistantLLMStream",
     "WhisperModels",
     "TTSModels",
     "TTSVoices",
