@@ -24,14 +24,17 @@ from livekit.agents import llm
 
 from openai import AsyncAssistantEventHandler, AsyncClient
 from openai.types.beta.threads import Text, TextDelta
+from openai.types.beta.threads.run_create_params import AdditionalMessage
 from openai.types.beta.threads.runs import ToolCall, ToolCallDelta
 
+from .log import logger
 from .models import AssistantTools, ChatModels
 from .utils import build_oai_message
 
 DEFAULT_MODEL = "gpt-4o"
-MESSAGE_ID_KEY = "__openai_message_id__"
-MESSAGES_ADDED_KEY = "__openai_messages_added__"
+OPEN_AI_MESSAGE_ID_KEY = "__openai_message_id__"
+LIVEKIT_MESSAGE_ID_KEY = "__livekit_message_id__"
+OPENAI_MESSAGES_ADDED_KEY = "__openai_messages_added__"
 
 
 @dataclass
@@ -153,8 +156,6 @@ class AssistantLLMStream(llm.LLMStream):
         super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._llm = assistant_llm
         self._client = client
-        self._thread_id: str | None = None
-        self._assistant_id: str | None = None
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
@@ -168,59 +169,99 @@ class AssistantLLMStream(llm.LLMStream):
         self._done_future: asyncio.Future[None] = asyncio.Future()
 
     async def _create_stream(self) -> None:
+        # This function's complexity is due to the fact that we need to sync chat_ctx messages with OpenAI.
+        # OpenAI also does not allow us to modify messages while a stream is running. So we need to make sure streams run
+        # sequentially. The strategy is as follows:
+        #
+        # 1. ensure that we have a thread_id and assistant_id from OpenAI. This comes from the _sync_openai_task
+        # 2. make sure all previous streams are done before starting a new one
+        # 3. delete messages that are no longer in the chat_ctx but are still in OpenAI by using the OpenAI message id
+        # 4. add new messages to OpenAI that are in the chat_ctx but not in OpenAI. We don't know the OpenAI message id yet
+        #    so we create a random uuid (we call it the LiveKit message id) and set that in the metdata.
+        # 5. start the stream and wait for it to finish
+        # 6. get the OpenAI message ids for the messages we added to OpenAI by using the metadata
+        # 7. Resolve the OpenAI message id with all messages that have a LiveKit message id.
         try:
             load_options = await self._sync_openai_task
+
+            # The assistants api does not let us modify messages while a stream is running.
+            # So we have to make sure previous streams are done before starting a new one.
             await asyncio.gather(*self._llm._done_futures)
             self._llm._done_futures.clear()
             self._llm._done_futures.append(self._done_future)
-            self._thread_id = load_options.thread_id
-            self._assistant_id = load_options.assistant_id
 
             # At the chat_ctx level, create a map of thread_id to message_ids
             # This is used to keep track of which messages have been added to the thread
             # and which we may need to delete from OpenAI
-            if MESSAGES_ADDED_KEY not in self._chat_ctx._metadata:
-                self._chat_ctx._metadata[MESSAGES_ADDED_KEY] = dict[str, set[str]()]()
+            if OPENAI_MESSAGES_ADDED_KEY not in self._chat_ctx._metadata:
+                self._chat_ctx._metadata[OPENAI_MESSAGES_ADDED_KEY] = dict[
+                    str, set[str]()
+                ]()
 
-            if self._thread_id not in self._chat_ctx._metadata[MESSAGES_ADDED_KEY]:
-                self._chat_ctx._metadata[MESSAGES_ADDED_KEY][self._thread_id] = set()
+            if (
+                load_options.thread_id
+                not in self._chat_ctx._metadata[OPENAI_MESSAGES_ADDED_KEY]
+            ):
+                self._chat_ctx._metadata[OPENAI_MESSAGES_ADDED_KEY][
+                    load_options.thread_id
+                ] = set()
 
-            added_messages_set: set[str] = self._chat_ctx._metadata[MESSAGES_ADDED_KEY][
-                self._thread_id
-            ]
-            # Note: this will add latency unfortunately. Usually it's just one message so we loop it but
+            # Keep this handy to make the code more readable later on
+            openai_addded_messages_set: set[str] = self._chat_ctx._metadata[
+                OPENAI_MESSAGES_ADDED_KEY
+            ][load_options.thread_id]
+
+            # Keep track of messages that are no longer in the chat_ctx but are still in OpenAI
+            # Note: Unfortuneately, this will add latency unfortunately. Usually it's just one message so we loop it but
             # it will create an extra round trip to OpenAI before being able to run inference.
+            # TODO: parallelize it?
             for msg in self._chat_ctx.messages:
-                msg_id = msg._metadata.get(MESSAGE_ID_KEY)
-                if msg_id and msg_id not in added_messages_set:
+                msg_id = msg._metadata.get(OPEN_AI_MESSAGE_ID_KEY, {}).get(
+                    load_options.thread_id
+                )
+                if msg_id and msg_id not in openai_addded_messages_set:
                     await self._client.beta.threads.messages.delete(
                         thread_id=load_options.thread_id,
                         message_id=msg_id,
                     )
-                    added_messages_set.remove(msg_id)
+                    logger.debug(
+                        f"Deleted message '{msg_id}' in thread '{load_options.thread_id}'"
+                    )
+                    openai_addded_messages_set.remove(msg_id)
 
+            # Keep track of the new messages in the chat_ctx that we need to add to OpenAI
+            additional_messages: list[AdditionalMessage] = []
             for msg in self._chat_ctx.messages:
                 if msg.role != "user":
                     continue
 
                 msg_id = str(uuid.uuid4())
-                if MESSAGE_ID_KEY not in msg._metadata:
+                if OPEN_AI_MESSAGE_ID_KEY not in msg._metadata:
+                    msg._metadata[OPEN_AI_MESSAGE_ID_KEY] = dict[str, str]()
+
+                if LIVEKIT_MESSAGE_ID_KEY not in msg._metadata:
+                    msg._metadata[LIVEKIT_MESSAGE_ID_KEY] = dict[str, str]()
+
+                oai_msg_id_dict = msg._metadata[OPEN_AI_MESSAGE_ID_KEY]
+                lk_msg_id_dict = msg._metadata[LIVEKIT_MESSAGE_ID_KEY]
+
+                if load_options.thread_id not in oai_msg_id_dict:
                     converted_msg = build_oai_message(msg, id(self._llm))
                     converted_msg["private_message_id"] = msg_id
-                    new_msg = await self._client.beta.threads.messages.create(
-                        thread_id=self._thread_id,
-                        role="user",
-                        content=converted_msg["content"],
+                    additional_messages.append(
+                        AdditionalMessage(
+                            role="user",
+                            content=converted_msg["content"],
+                            metadata={LIVEKIT_MESSAGE_ID_KEY: msg_id},
+                        )
                     )
-                    msg._metadata[MESSAGE_ID_KEY] = new_msg.id
-                    self._chat_ctx._metadata[MESSAGES_ADDED_KEY][self._thread_id].add(
-                        new_msg.id
-                    )
+                    lk_msg_id_dict[load_options.thread_id] = msg_id
 
             eh = AssistantLLMStream.EventHandler(
                 self._output_queue, chat_ctx=self._chat_ctx
             )
             async with self._client.beta.threads.runs.stream(
+                additional_messages=additional_messages,
                 thread_id=load_options.thread_id,
                 assistant_id=load_options.assistant_id,
                 event_handler=eh,
@@ -228,6 +269,35 @@ class AssistantLLMStream(llm.LLMStream):
                 await stream.until_done()
 
             await self._output_queue.put(None)
+
+            # Populate the openai_message_id for the messages we added to OpenAI. Note, we do this after
+            # sending None to close the iterator so that we it is done in parellel with any users of
+            # the stream. However, the next stream will not start until this is done.
+            lk_to_oai_lookup = dict[str, str]()
+            messages = await self._client.beta.threads.messages.list(
+                thread_id=load_options.thread_id,
+                limit=10,  # We could be smarter and make a more exact query, but this is probably fine
+            )
+            for oai_msg in messages.data:
+                if oai_msg.metadata.get(LIVEKIT_MESSAGE_ID_KEY):
+                    lk_to_oai_lookup[oai_msg.metadata[LIVEKIT_MESSAGE_ID_KEY]] = (
+                        oai_msg.id
+                    )
+
+            for msg in self._chat_ctx.messages:
+                oai_msg_id_dict = msg._metadata.get(OPEN_AI_MESSAGE_ID_KEY)
+                lk_msg_id_dict = msg._metadata.get(LIVEKIT_MESSAGE_ID_KEY)
+                if not oai_msg_id_dict or not lk_msg_id_dict:
+                    continue
+
+                lk_msg_id = lk_msg_id_dict.get(load_options.thread_id)
+                if lk_msg_id and lk_msg_id in lk_to_oai_lookup:
+                    oai_msg_id_dict[load_options.thread_id] = lk_to_oai_lookup[
+                        lk_msg_id
+                    ]
+                    openai_addded_messages_set.add(lk_to_oai_lookup[lk_msg_id])
+                    # We don't need the LiveKit message id anymore
+                    lk_msg_id_dict.pop(load_options.thread_id)
         except Exception as e:
             await self._output_queue.put(e)
         finally:
