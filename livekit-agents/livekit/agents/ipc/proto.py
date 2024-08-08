@@ -10,9 +10,10 @@ from livekit.protocol import agent
 from ..job import JobAcceptArguments, JobContext, JobProcess, RunningJobInfo
 from . import channel
 
-PING_INTERVAL = 5
+PING_INTERVAL = 2.5
 PING_TIMEOUT = 90
-HIGH_PING_THRESHOLD = 0.15  # 150ms
+HIGH_PING_THRESHOLD = 0.5
+NO_MESSAGE_TIMEOUT = 6.5
 
 
 @dataclass

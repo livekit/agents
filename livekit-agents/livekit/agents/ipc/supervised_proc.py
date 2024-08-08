@@ -158,7 +158,7 @@ class SupervisedProc:
             except RuntimeError:
                 pass
 
-        thread = threading.Thread(target=_sync_run)
+        thread = threading.Thread(target=_sync_run, name="proc_join_thread")
         thread.start()
         self._main_atask = asyncio.create_task(self._main_task())
 

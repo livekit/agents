@@ -120,7 +120,6 @@ def _start_job(
         job_entry_task.add_done_callback(log_exception)
 
         shutdown_info = await request_shutdown_fut
-        await cch.asend(proto.Exiting(reason=shutdown_info.reason))
         logger.debug(
             "shutting down job task",
             extra={
@@ -128,6 +127,7 @@ def _start_job(
                 "user_initiated": shutdown_info.user_initiated,
             },
         )
+        await cch.asend(proto.Exiting(reason=shutdown_info.reason))
         await room.disconnect()
 
         try:
@@ -154,47 +154,61 @@ async def _async_main(
 ) -> None:
     job_task: JobTask | None = None
     exit_proc_fut = asyncio.Event()
+    no_msg_timeout = utils.aio.sleep(proto.PING_INTERVAL * 5) # missing 5 pings
 
     @utils.log_exceptions(logger=logger)
     async def _read_ipc_task():
         nonlocal job_task
         while True:
-            try:
-                msg = await cch.arecv()
-                if isinstance(msg, proto.PingRequest):
-                    pong = proto.PongResponse(
-                        last_timestamp=msg.timestamp, timestamp=utils.time_ms()
+            msg = await cch.arecv()
+            no_msg_timeout.reset()
+
+            if isinstance(msg, proto.PingRequest):
+                pong = proto.PongResponse(
+                    last_timestamp=msg.timestamp, timestamp=utils.time_ms()
+                )
+                await cch.asend(pong)
+
+            if isinstance(msg, proto.StartJobRequest):
+                assert job_task is None, "job task already running"
+                job_task = _start_job(args, proc, msg, exit_proc_fut, cch)
+
+            if isinstance(msg, proto.ShutdownRequest):
+                if job_task is None:
+                    # there is no running job, we can exit immediately
+                    break
+
+                with contextlib.suppress(asyncio.InvalidStateError):
+                    job_task.shutdown_fut.set_result(
+                        _ShutdownInfo(reason=msg.reason, user_initiated=False)
                     )
-                    await cch.asend(pong)
 
-                if isinstance(msg, proto.StartJobRequest):
-                    assert job_task is None, "job task already running"
-                    job_task = _start_job(args, proc, msg, exit_proc_fut, cch)
+    async def _self_health_check():
+        await no_msg_timeout
+        print("worker process is not responding.. worker crashed?")
+        with contextlib.suppress(asyncio.CancelledError):
+            exit_proc_fut.set()
 
-                if isinstance(msg, proto.ShutdownRequest):
-                    if job_task is not None:
-                        with contextlib.suppress(asyncio.InvalidStateError):
-                            job_task.shutdown_fut.set_result(
-                                _ShutdownInfo(reason=msg.reason, user_initiated=False)
-                            )
-                    else:
-                        exit_proc_fut.set()  # there is no running job, we can exit immediately
+    read_task = asyncio.create_task(_read_ipc_task(), name="ipc_read")
+    health_check_task = asyncio.create_task(_self_health_check(), name="health_check")
 
-            except channel.ChannelClosed:
-                logger.exception("channel closed, exiting")
-                break
+    def _done_cb(task: asyncio.Task) -> None:
+        with contextlib.suppress(asyncio.InvalidStateError):
+            exit_proc_fut.set()
+    read_task.add_done_callback(_done_cb)
 
-    read_task = asyncio.create_task(_read_ipc_task())
     await exit_proc_fut.wait()
-    await utils.aio.gracefully_cancel(read_task)
+    await utils.aio.gracefully_cancel(read_task, health_check_task)
 
 
 def main(args: proto.ProcStartArgs) -> None:
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.NOTSET)
 
-    handler = LogQueueHandler(args.log_q)
-    root_logger.addHandler(handler)
+    log_q = args.log_q
+    log_q.cancel_join_thread()
+    log_handler = LogQueueHandler(log_q)
+    root_logger.addHandler(log_handler)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -227,5 +241,7 @@ def main(args: proto.ProcStartArgs) -> None:
                 # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
                 pass
     finally:
+        log_handler.close()
+        log_q.close()
+        cch.close()
         loop.run_until_complete(loop.shutdown_default_executor())
-        #loop.run_until_complete(cch.aclose())
