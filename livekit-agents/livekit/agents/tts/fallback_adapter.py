@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 from .. import utils
 from ..log import logger
@@ -10,6 +11,12 @@ from .tts import (
     SynthesizeStream,
     TTSCapabilities,
 )
+
+
+@dataclass
+class TTSProvider:
+    tts: TTS
+    active: bool = True
 
 
 class FallbackAdapter(TTS):
@@ -34,7 +41,7 @@ class FallbackAdapter(TTS):
             sample_rate=providers[0].sample_rate,
             num_channels=providers[0].num_channels,
         )
-        self._providers = providers
+        self._providers = [TTSProvider(tts=x) for x in providers]
         self._connect_timeout = connect_timeout
         self._keepalive_timeout = keepalive_timeout
 
@@ -62,7 +69,7 @@ class FallbackChunkedStream(ChunkedStream):
     def __init__(
         self,
         *,
-        providers: tuple[TTS, ...],
+        providers: list[TTSProvider],
         connect_timeout: float,
         keepalive_timeout: float,
         text: str,
@@ -72,32 +79,40 @@ class FallbackChunkedStream(ChunkedStream):
         self._connect_timeout = connect_timeout
         self._keepalive_timeout = keepalive_timeout
         self._providers = providers
+        self.timeout: float
+        self._init_tts()
+
+    def _init_tts(self) -> None:
+        self._index = next((i for i, x in enumerate(self._providers) if x.active), None)
+        if self._index is not None:
+            self._stream = self._providers[self._index].tts.synthesize(self._text)
+            self._timeout = self._connect_timeout
+        else:
+            raise Exception("all providers failed")
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        for provider in self._providers:
-            stream = provider.synthesize(self._text)
-            timeout = self._connect_timeout
-            while True:
-                try:
-                    item = await asyncio.wait_for(stream.__anext__(), timeout)
-                    timeout = self._keepalive_timeout
-                    self._event_ch.send_nowait(item)
-                except Exception as e:
-                    if isinstance(e, asyncio.TimeoutError):
-                        break
+        while True:
+            try:
+                item = await asyncio.wait_for(self._stream.__anext__(), self._timeout)
+                self._timeout = self._keepalive_timeout
+                self._event_ch.send_nowait(item)
+            except Exception as e:
+                if isinstance(e, asyncio.TimeoutError) or isinstance(e, TimeoutError):
+                    logger.warn(
+                        f"provider {self._stream.__class__.__module__} failed, attempting to switch"
+                    )
+                    self._providers[self._index].active = False
+                    self._init_tts()
+                else:
                     return
-            logger.warn(
-                f"provider {provider.__class__.__module__} failed, attempting to switch"
-            )
-        raise Exception("all providers failed")
 
 
 class FallbackSynthesizeStream(SynthesizeStream):
     def __init__(
         self,
         *,
-        providers: tuple[TTS, ...],
+        providers: list[TTSProvider],
         connect_timeout: float,
         keepalive_timeout: float,
     ) -> None:
@@ -106,12 +121,15 @@ class FallbackSynthesizeStream(SynthesizeStream):
         self._keepalive_timeout = keepalive_timeout
         self._providers = providers
         self._timeout: float
-        self._current_provider = 0
         self._init_tts()
 
     def _init_tts(self) -> None:
-        self._stream = self._providers[self._current_provider].stream()
-        self._timeout = self._connect_timeout
+        self._index = next((i for i, x in enumerate(self._providers) if x.active), None)
+        if self._index is not None:
+            self._stream = self._providers[self._index].tts.stream()
+            self._timeout = self._connect_timeout
+        else:
+            raise Exception("all providers failed")
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -137,11 +155,8 @@ class FallbackSynthesizeStream(SynthesizeStream):
                         logger.warn(
                             f"provider {self._stream.__class__.__module__} failed, attempting to switch"
                         )
-                        if self._current_provider + 1 < len(self._providers):
-                            self._current_provider += 1
-                            self._init_tts()
-                        else:
-                            raise Exception("all providers failed")
+                        self._providers[self._index].active = False
+                        self._init_tts()
 
         tasks = [
             asyncio.create_task(_pass_input()),
