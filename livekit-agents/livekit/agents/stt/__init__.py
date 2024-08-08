@@ -1,3 +1,4 @@
+from .fallback_adapter import FallbackAdapter, FallbackSpeechStream
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .stt import (
     STT,
@@ -17,4 +18,6 @@ __all__ = [
     "STTCapabilities",
     "StreamAdapter",
     "StreamAdapterWrapper",
+    "FallbackAdapter",
+    "FallbackSpeechStream",
 ]
