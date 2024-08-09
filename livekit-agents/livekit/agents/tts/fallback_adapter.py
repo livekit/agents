@@ -98,6 +98,7 @@ class FallbackChunkedStream(ChunkedStream):
         self.timeout: float
         self._init_tts()
 
+    @utils.log_exceptions(logger=logger)
     def _init_tts(self) -> None:
         index = next((i for i, x in enumerate(self._providers) if x.active), None)
         if index is not None:
@@ -114,15 +115,14 @@ class FallbackChunkedStream(ChunkedStream):
                 item = await asyncio.wait_for(self._stream.__anext__(), self._timeout)
                 self._timeout = self._keepalive_timeout
                 self._event_ch.send_nowait(item)
-            except Exception as e:
-                if isinstance(e, asyncio.TimeoutError) or isinstance(e, TimeoutError):
-                    logger.warn(
-                        f"provider {self._stream.__class__.__module__} failed, attempting to switch"
-                    )
-                    self._providers[self._index].deactivate()
-                    self._init_tts()
-                else:
-                    return
+            except (TimeoutError, asyncio.TimeoutError):
+                logger.warn(
+                    f"provider {self._stream.__class__.__module__} failed, attempting to switch"
+                )
+                self._providers[self._index].deactivate()
+                self._init_tts()
+            except StopAsyncIteration:
+                return
 
 
 class FallbackSynthesizeStream(SynthesizeStream):
@@ -140,6 +140,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
         self._timeout: float
         self._init_tts()
 
+    @utils.log_exceptions(logger=logger)
     def _init_tts(self) -> None:
         index = next((i for i, x in enumerate(self._providers) if x.active), None)
         if index is not None:
@@ -166,15 +167,14 @@ class FallbackSynthesizeStream(SynthesizeStream):
                     )
                     self._timeout = self._keepalive_timeout
                     self._event_ch.send_nowait(item)
-                except Exception as e:
-                    if isinstance(e, asyncio.TimeoutError) or isinstance(
-                        e, TimeoutError
-                    ):
-                        logger.warn(
-                            f"provider {self._stream.__class__.__module__} failed, attempting to switch"
-                        )
-                        self._providers[self._index].deactivate()
-                        self._init_tts()
+                except (TimeoutError, asyncio.TimeoutError):
+                    logger.warn(
+                        f"provider {self._stream.__class__.__module__} failed, attempting to switch"
+                    )
+                    self._providers[self._index].deactivate()
+                    self._init_tts()
+                except StopAsyncIteration:
+                    return
 
         tasks = [
             asyncio.create_task(_pass_input()),
