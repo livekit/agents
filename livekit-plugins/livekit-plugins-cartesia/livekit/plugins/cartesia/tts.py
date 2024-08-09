@@ -174,6 +174,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         request_id = utils.shortuuid()
+        pending_segments: list[str] = []
 
         async def sentence_stream_task():
             base_pkt = _to_cartesia_options(self._opts)
@@ -198,6 +199,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
                 self._sent_tokenizer_stream.push_text(data)
             self._sent_tokenizer_stream.end_input()
+            if len(pending_segments) == 0:
+                await ws.close()
 
         async def recv_task():
             audio_bstream = utils.audio.AudioByteStream(
@@ -240,7 +243,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                             )
                         )
 
-                    if self._input_ch.closed:
+                    pending_segments.remove(segment_id)
+                    if len(pending_segments) == 0 and self._input_ch.closed:
                         # we're not going to receive more frames, close the connection
                         await ws.close()
                         break
