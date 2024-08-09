@@ -270,7 +270,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
-        #await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
+        # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
         self._msg_chan.close()
         await self._close_future
 

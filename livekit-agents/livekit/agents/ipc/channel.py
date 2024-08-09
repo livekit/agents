@@ -146,6 +146,7 @@ class AsyncProcChannel(ProcChannel):
                 break
 
         with contextlib.suppress(RuntimeError):
+
             def _close():
                 if not self._exit_fut.done():
                     self._exit_fut.set_result(None)

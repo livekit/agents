@@ -154,7 +154,7 @@ async def _async_main(
 ) -> None:
     job_task: JobTask | None = None
     exit_proc_fut = asyncio.Event()
-    no_msg_timeout = utils.aio.sleep(proto.PING_INTERVAL * 5) # missing 5 pings
+    no_msg_timeout = utils.aio.sleep(proto.PING_INTERVAL * 5)  # missing 5 pings
 
     @utils.log_exceptions(logger=logger)
     async def _read_ipc_task():
@@ -195,6 +195,7 @@ async def _async_main(
     def _done_cb(task: asyncio.Task) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
             exit_proc_fut.set()
+
     read_task.add_done_callback(_done_cb)
 
     await exit_proc_fut.wait()
