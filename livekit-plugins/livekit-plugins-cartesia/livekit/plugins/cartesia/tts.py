@@ -217,6 +217,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             # self._sent_tokenizer_stream.end_input()
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
+                    logger.info(f"Printing full_text for theo: {full_text}")
                     stream = self._tts.synthesize(full_text)
                     async for ev in stream:
                         self._event_ch.send_nowait(ev)
