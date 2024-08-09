@@ -182,48 +182,33 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal last_segment_id
             base_pkt = _to_cartesia_options(self._opts)
             current_segment_id: str | None = None
-            text = ""
             async for ev in self._sent_tokenizer_stream:
-                print("NEIL sentence: ", ev.token)
-                # if current_segment_id != ev.segment_id:
-                #     end_pkt = base_pkt.copy()
-                #     end_pkt["context_id"] = current_segment_id
-                #     end_pkt["transcript"] = " "
-                #     end_pkt["continue"] = False
-                #     current_segment_id = ev.segment_id
-                # token_pkt = base_pkt.copy()
-                # token_pkt["context_id"] = current_segment_id
-                # token_pkt["transcript"] = ev.token + " "
-                # token_pkt["continue"] = True
-                # await ws.send_str(json.dumps(token_pkt))
-                text += ev.token + " "
+                if current_segment_id != ev.segment_id:
+                    end_pkt = base_pkt.copy()
+                    end_pkt["context_id"] = current_segment_id
+                    end_pkt["transcript"] = " "
+                    end_pkt["continue"] = False
+                    current_segment_id = ev.segment_id
+                token_pkt = base_pkt.copy()
+                token_pkt["context_id"] = current_segment_id
+                token_pkt["transcript"] = ev.token + " "
+                token_pkt["continue"] = True
+                await ws.send_str(json.dumps(token_pkt))
 
-            print("NEIL full: ", text)
             last_segment_id = current_segment_id
             end_pkt = base_pkt.copy()
             end_pkt["context_id"] = current_segment_id
-            # end_pkt["transcript"] = " "
-            end_pkt["transcript"] = text
+            end_pkt["transcript"] = " "
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
 
         async def input_task():
-            full_text = ""
-            # async for data in self._input_ch:
-            #     if isinstance(data, self._FlushSentinel):
-            #         self._sent_tokenizer_stream.flush()
-            #         continue
-            #     self._sent_tokenizer_stream.push_text(data)
-            # self._sent_tokenizer_stream.end_input()
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    logger.info(f"Printing full_text for theo: {full_text}")
-                    stream = self._tts.synthesize(full_text)
-                    async for ev in stream:
-                        self._event_ch.send_nowait(ev)
+                    self._sent_tokenizer_stream.flush()
                     continue
-                else:
-                    full_text += data
+                self._sent_tokenizer_stream.push_text(data)
+            self._sent_tokenizer_stream.end_input()
 
         async def recv_task():
             nonlocal last_segment_id
