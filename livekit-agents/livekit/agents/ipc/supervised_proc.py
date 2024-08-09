@@ -337,7 +337,14 @@ class SupervisedProc:
             logger.error("job is unresponsive, killing job", extra=self.logging_extra())
             self._send_kill_signal()
 
-        await asyncio.gather(_send_ping_co(), _pong_timeout_co())
+        tasks = [
+            asyncio.create_task(_send_ping_co()),
+            asyncio.create_task(_pong_timeout_co()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
 
     def logging_extra(self) -> dict:
         extra: dict = {

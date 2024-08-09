@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import threading
 import multiprocessing as mp
 import os
 from dataclasses import dataclass, field
@@ -36,9 +37,8 @@ from .job import JobAcceptArguments, JobContext, JobProcess, JobRequest, Running
 from .log import DEV_LEVEL, logger
 from .version import __version__
 
-MAX_RECONNECT_ATTEMPTS = 3
 ASSIGNMENT_TIMEOUT = 7.5
-UPDATE_LOAD_INTERVAL = 10.0
+UPDATE_LOAD_INTERVAL = 2.5
 
 
 def _default_initialize_process_fnc(proc: JobProcess) -> Any:
@@ -49,10 +49,24 @@ async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
 
 
-def _default_cpu_load_fnc() -> float:
-    percent = psutil.cpu_percent(1.0)
-    return percent / 100
+class _DefaultLoadCalc:
+    _instance = None
 
+    def __init__(self) -> None:
+        self._m_avg = utils.MovingAverage(5) # avg over 2.5
+        self._thread = threading.Thread(target=self._calc_load, daemon=True)
+        self._thread.start()
+
+    def _calc_load(self) -> None:
+        while True:
+            self._m_avg.add_sample(psutil.cpu_percent(0.5) / 100.0)  # 2 samples/s
+
+    @classmethod
+    def get_load(cls) -> float:
+        if cls._instance is None:
+            cls._instance = _DefaultLoadCalc()
+
+        return cls._instance._m_avg.get_avg()
 
 @dataclass
 class WorkerPermissions:
@@ -75,7 +89,7 @@ class WorkerOptions:
     When left empty, all jobs are accepted."""
     prewarm_fnc: Callable[[JobProcess], Any] = _default_initialize_process_fnc
     """A function to perform any necessary initialization before the job starts."""
-    load_fnc: Callable[[], float] = _default_cpu_load_fnc
+    load_fnc: Callable[[], float] = _DefaultLoadCalc.get_load
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
     load_threshold: float = 0.65
     """When the load exceeds this threshold, the worker will be marked as unavailable."""
@@ -89,7 +103,8 @@ class WorkerOptions:
     """Permissions that the agent should join the room with."""
     worker_type: agent.JobType = agent.JobType.JT_ROOM
     """Whether to spin up an agent for each room or publisher."""
-    max_retry: int = MAX_RECONNECT_ATTEMPTS
+    max_retry: int = 16
+    """Maximum number of times to retry connecting to LiveKit."""
     ws_url: str = "ws://localhost:7880"
     """URL to connect to the LiveKit server.
 
