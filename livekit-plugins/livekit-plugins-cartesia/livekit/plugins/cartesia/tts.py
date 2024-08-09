@@ -136,12 +136,10 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
         self,
-        tts: TTS,  # TODO remove
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
     ):
         super().__init__()
-        self._tts = tts
         self._opts, self._session = opts, session
         self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT
