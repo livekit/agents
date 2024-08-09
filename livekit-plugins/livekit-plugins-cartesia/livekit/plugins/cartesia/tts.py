@@ -179,6 +179,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def sentence_stream_task():
             base_pkt = _to_cartesia_options(self._opts)
             async for ev in self._sent_tokenizer_stream:
+                print("NEIL DEBUG: ev.segment_id: ", ev.segment_id)
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = ev.segment_id
                 token_pkt["transcript"] = ev.token + " "
