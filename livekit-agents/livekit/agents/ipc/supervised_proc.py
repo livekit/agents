@@ -6,8 +6,8 @@ import logging
 import multiprocessing as mp
 import sys
 import threading
-from multiprocessing.context import BaseContext
 from dataclasses import dataclass
+from multiprocessing.context import BaseContext
 from typing import Any, Callable, Coroutine
 
 from .. import utils
@@ -64,6 +64,7 @@ class _ProcOpts:
     mp_ctx: BaseContext
     initialize_timeout: float
     close_timeout: float
+
 
 class SupervisedProc:
     def __init__(
@@ -287,7 +288,6 @@ class SupervisedProc:
         self._exitcode = self._proc.exitcode
         self._proc.close()
         await utils.aio.gracefully_cancel(ping_task, monitor_task)
-
         await self._pch.aclose()
 
         if self._exitcode != 0 and not self._kill_sent:
