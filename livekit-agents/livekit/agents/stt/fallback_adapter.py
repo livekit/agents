@@ -44,34 +44,39 @@ class FallbackAdapter(STT):
     ) -> None:
         if len(providers) == 0:
             raise ValueError("FallbackAdapter requires at least one provider")
-        super().__init__(capabilities=STTCapabilities(
-            streaming=all(x.capabilities.streaming for x in providers),
-            interim_results=all(x.capabilities.interim_results for x in providers),
-        ))
+        super().__init__(
+            capabilities=STTCapabilities(
+                streaming=all(x.capabilities.streaming for x in providers),
+                interim_results=all(x.capabilities.interim_results for x in providers),
+            )
+        )
         self._providers = [STTProvider(stt=x, cooldown=cooldown) for x in providers]
         self._connect_timeout = connect_timeout
         self._keepalive_timeout = keepalive_timeout
 
-    async def recognize(self, buffer: utils.AudioBuffer, *, language: str | None = None) -> SpeechEvent:
+    async def recognize(
+        self, buffer: utils.AudioBuffer, *, language: str | None = None
+    ) -> SpeechEvent:
         def _init_stt():
             index = next((i for i, x in enumerate(self._providers) if x.active), None)
             if isinstance(index, int):
                 return index
             else:
                 raise Exception("all providers failed")
-            
+
         i = _init_stt()
         while True:
             try:
-                return await asyncio.wait_for(self._providers[i].stt.recognize(buffer, language=language), self._connect_timeout)
-            except Exception as e:
-                if isinstance(e, asyncio.TimeoutError) or isinstance(e, TimeoutError):
-                    logger.warn(
-                        f"provider {self._providers[i].__class__.__module__} failed, attempting to switch"
-                    )
-                    self._providers[i].deactivate()
-                    i = _init_stt()
-        
+                return await asyncio.wait_for(
+                    self._providers[i].stt.recognize(buffer, language=language),
+                    self._connect_timeout,
+                )
+            except (TimeoutError, asyncio.TimeoutError):
+                logger.warn(
+                    f"provider {self._providers[i].__class__.__module__} failed, attempting to switch"
+                )
+                self._providers[i].deactivate()
+                i = _init_stt()
 
     def stream(self, *, language: str | None = None) -> SpeechStream:
         if self.capabilities.streaming:
@@ -103,11 +108,14 @@ class FallbackSpeechStream(SpeechStream):
         self._timeout: float
         self._init_stt()
 
+    @utils.log_exceptions(logger=logger)
     def _init_stt(self) -> None:
         index = next((i for i, x in enumerate(self._providers) if x.active), None)
         if index is not None:
             self._index = index
-            self._stream = self._providers[self._index].stt.stream(language=self._language)
+            self._stream = self._providers[self._index].stt.stream(
+                language=self._language
+            )
             self._timeout = self._connect_timeout
         else:
             raise Exception("all providers failed")
@@ -126,15 +134,14 @@ class FallbackSpeechStream(SpeechStream):
                     )
                     self._timeout = self._keepalive_timeout
                     self._event_ch.send_nowait(item)
-                except Exception as e:
-                    if isinstance(e, asyncio.TimeoutError) or isinstance(
-                        e, TimeoutError
-                    ):
-                        logger.warn(
-                            f"provider {self._stream.__class__.__module__} failed, attempting to switch"
-                        )
-                        self._providers[self._index].deactivate()
-                        self._init_stt()
+                except (TimeoutError, asyncio.TimeoutError):
+                    logger.warn(
+                        f"provider {self._stream.__class__.__module__} failed, attempting to switch"
+                    )
+                    self._providers[self._index].deactivate()
+                    self._init_stt()
+                except StopAsyncIteration:
+                    return
 
         tasks = [
             asyncio.create_task(_pass_input()),
