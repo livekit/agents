@@ -1,13 +1,10 @@
 #!/bin/bash
 set -e
 
-[[ "$VIRTUAL_ENV" == "" ]]; INVENV=$?
-
-if [ $INVENV -eq 0 ]; then
+if [[ -z "$VIRTUAL_ENV" ]]; then
     echo "You are not in a virtual environment."
     exit 1
 fi
-
 
 pip install -e ./livekit-plugins-azure --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-cartesia --config-settings editable_mode=strict

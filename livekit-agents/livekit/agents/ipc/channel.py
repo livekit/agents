@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import multiprocessing
 import queue
 import struct
 import threading
@@ -135,26 +136,23 @@ class AsyncProcChannel(ProcChannel):
 
     async def aclose(self) -> None:
         self.close()
-        await self._exit_fut
+        await asyncio.shield(self._exit_fut)
 
     def _read_thread(self) -> None:
         while True:
             try:
-                if self._conn.poll(1.0):
+                if self._conn.poll(0.1):
                     msg = self.recv()
-                    try:
-                        self._loop.call_soon_threadsafe(self._read_q.put_nowait, msg)
-                    except RuntimeError:
-                        break
-            except (OSError, EOFError, ValueError):
-                break
-            except ChannelClosed:
+                    self._loop.call_soon_threadsafe(self._read_q.put_nowait, msg)
+            except (ChannelClosed, RuntimeError):
                 break
 
         with contextlib.suppress(RuntimeError):
 
             def _close():
-                self._exit_fut.set_result(None)
+                if not self._exit_fut.done():
+                    self._exit_fut.set_result(None)
+
                 self._read_q.put_nowait(self._sentinel)
                 self._write_q.put_nowait(self._sentinel)
                 self.close()

@@ -77,4 +77,11 @@ class StreamAdapterWrapper(SpeechStream):
                         )
                     )
 
-        await asyncio.gather(_forward_input(), _recognize())
+        tasks = [
+            asyncio.create_task(_forward_input(), name="forward_input"),
+            asyncio.create_task(_recognize(), name="recognize"),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
