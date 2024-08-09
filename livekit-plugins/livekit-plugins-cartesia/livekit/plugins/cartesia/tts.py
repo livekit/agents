@@ -189,14 +189,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 #     end_pkt["transcript"] = " "
                 #     end_pkt["continue"] = False
                 #     current_segment_id = ev.segment_id
-                token_pkt = base_pkt.copy()
-                token_pkt["context_id"] = current_segment_id
+                # token_pkt = base_pkt.copy()
+                # token_pkt["context_id"] = current_segment_id
                 # token_pkt["transcript"] = ev.token + " "
+                # token_pkt["continue"] = True
+                # await ws.send_str(json.dumps(token_pkt))
                 text += ev.token
-                token_pkt["continue"] = True
-                await ws.send_str(json.dumps(token_pkt))
 
-            print("NEIL full: ")
+            print("NEIL full: ", text)
             last_segment_id = current_segment_id
             end_pkt = base_pkt.copy()
             end_pkt["context_id"] = current_segment_id
