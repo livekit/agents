@@ -17,9 +17,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
-import threading
 import multiprocessing as mp
 import os
+import threading
 from dataclasses import dataclass, field
 from functools import reduce
 from typing import Any, Callable, Coroutine, Literal
@@ -53,7 +53,7 @@ class _DefaultLoadCalc:
     _instance = None
 
     def __init__(self) -> None:
-        self._m_avg = utils.MovingAverage(5) # avg over 2.5
+        self._m_avg = utils.MovingAverage(5)  # avg over 2.5
         self._thread = threading.Thread(target=self._calc_load, daemon=True)
         self._thread.start()
 
@@ -67,6 +67,7 @@ class _DefaultLoadCalc:
             cls._instance = _DefaultLoadCalc()
 
         return cls._instance._m_avg.get_avg()
+
 
 @dataclass
 class WorkerPermissions:
