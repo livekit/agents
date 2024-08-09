@@ -174,19 +174,19 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         request_id = utils.shortuuid()
-        current_segment_id = utils.shortuuid()
+        last_segment_id = utils.shortuuid()
 
         async def sentence_stream_task():
             base_pkt = _to_cartesia_options(self._opts)
             async for ev in self._sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
-                token_pkt["context_id"] = current_segment_id
-                token_pkt["transcript"] = ev.token
+                token_pkt["context_id"] = ev.segment_id
+                token_pkt["transcript"] = ev.token + " "
                 token_pkt["continue"] = True
                 await ws.send_str(json.dumps(token_pkt))
 
             end_pkt = base_pkt.copy()
-            end_pkt["context_id"] = current_segment_id
+            end_pkt["context_id"] = last_segment_id
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
@@ -240,7 +240,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             )
                         )
 
-                    if segment_id == current_segment_id:
+                    if segment_id == last_segment_id:
                         # we're not going to receive more frames, close the connection
                         await ws.close()
                         break
