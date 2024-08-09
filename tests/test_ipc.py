@@ -85,7 +85,6 @@ async def test_async_channel():
         string="hello", number=42, double=3.14, data=b"world"
     )
 
-    await pch.aclose()
     proc.terminate()
     proc.join()
 
