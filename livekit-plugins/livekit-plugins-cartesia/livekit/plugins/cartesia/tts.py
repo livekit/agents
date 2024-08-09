@@ -141,7 +141,9 @@ class SynthesizeStream(tts.SynthesizeStream):
     ):
         super().__init__()
         self._opts, self._session = opts, session
-        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer().stream()
+        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
+            min_sentence_len=BUFFERED_WORDS_COUNT
+        ).stream()
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -175,20 +177,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def sentence_stream_task():
             base_pkt = _to_cartesia_options(self._opts)
-            word_count = 0
-            first_hold_buffer = ""
             async for ev in self._sent_tokenizer_stream:
-                if word_count < BUFFERED_WORDS_COUNT:
-                    first_hold_buffer += ev.token
-                    word_count += ev.token.count(" ")
-
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = ev.segment_id
-                if len(first_hold_buffer) > 0:
-                    token_pkt["transcript"] = first_hold_buffer + ev.token
-                    first_hold_buffer = ""
-                else:
-                    token_pkt["transcript"] = ev.token
+                token_pkt["transcript"] = ev.token
                 token_pkt["continue"] = True
                 await ws.send_str(json.dumps(token_pkt))
 
