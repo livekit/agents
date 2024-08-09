@@ -60,6 +60,8 @@ def _ping_pong_main(mp_cch):
             except ipc.channel.ChannelClosed:
                 break
 
+        mp_cch.close()
+
     asyncio.run(_pong())
 
 
@@ -71,6 +73,7 @@ async def test_async_channel():
     pch = ipc.channel.AsyncProcChannel(conn=mp_pch, loop=loop, messages=IPC_MESSAGES)
     proc = mp_ctx.Process(target=_ping_pong_main, args=(mp_cch,))
     proc.start()
+    mp_cch.close()
 
     await pch.asend(EmptyMessage())
     assert await pch.arecv() == EmptyMessage()
