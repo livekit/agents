@@ -275,6 +275,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         assert self._close_future is not None
         assert self._http_session is not None
         assert self._api is not None
+        assert self._main_task is not None
 
         self._closed = True
         self._main_task.cancel()
