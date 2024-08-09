@@ -203,9 +203,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
                     self._sent_tokenizer_stream.flush()
-                    self._sent_tokenizer_stream.end_input()
-                elif data:
-                    self._sent_tokenizer_stream.push_text(data)
+                    continue
+                self._sent_tokenizer_stream.push_text(data)
+            self._sent_tokenizer_stream.end_input()
 
         async def recv_task():
             audio_bstream = utils.audio.AudioByteStream(
