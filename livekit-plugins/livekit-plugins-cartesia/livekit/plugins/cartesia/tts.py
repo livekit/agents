@@ -190,7 +190,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
-            await ws.close()
 
         async def input_task():
             async for data in self._input_ch:
