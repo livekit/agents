@@ -1,3 +1,4 @@
+from .fallback_adapter import FallbackAdapter, FallbackSynthesizeStream
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .tts import (
     TTS,
@@ -15,4 +16,6 @@ __all__ = [
     "StreamAdapterWrapper",
     "StreamAdapter",
     "ChunkedStream",
+    "FallbackAdapter",
+    "FallbackSynthesizeStream",
 ]
