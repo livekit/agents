@@ -183,7 +183,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["context_id"] = ev.segment_id
                 token_pkt["transcript"] = ev.token
                 token_pkt["continue"] = True
-                pending_segments.append(ev.segment_id)
                 await ws.send_str(json.dumps(token_pkt))
 
             end_pkt = base_pkt.copy()
