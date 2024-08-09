@@ -180,7 +180,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal last_segment_id
             base_pkt = _to_cartesia_options(self._opts)
             current_segment_id: str | None = None
+            text = ""
             async for ev in self._sent_tokenizer_stream:
+                print("NEIL sentence: ", ev.token)
                 # if current_segment_id != ev.segment_id:
                 #     end_pkt = base_pkt.copy()
                 #     end_pkt["context_id"] = current_segment_id
@@ -190,14 +192,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = current_segment_id
                 # token_pkt["transcript"] = ev.token + " "
-                token_pkt["transcript"] = ev.token
+                text += ev.token
                 token_pkt["continue"] = True
                 await ws.send_str(json.dumps(token_pkt))
 
+            print("NEIL full: ")
             last_segment_id = current_segment_id
             end_pkt = base_pkt.copy()
             end_pkt["context_id"] = current_segment_id
-            end_pkt["transcript"] = " "
+            # end_pkt["transcript"] = " "
+            end_pkt["transcript"] = text + " "
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
 
