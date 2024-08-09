@@ -7,6 +7,7 @@ import multiprocessing as mp
 import sys
 import threading
 from multiprocessing.context import BaseContext
+from dataclasses import dataclass
 from typing import Any, Callable, Coroutine
 
 from .. import utils
@@ -56,6 +57,14 @@ class LogQueueListener:
             self.handle(record)
 
 
+@dataclass
+class _ProcOpts:
+    initialize_process_fnc: Callable[[JobProcess], Any]
+    job_entrypoint_fnc: Callable[[JobContext], Coroutine]
+    mp_ctx: BaseContext
+    initialize_timeout: float
+    close_timeout: float
+
 class SupervisedProc:
     def __init__(
         self,
@@ -68,32 +77,18 @@ class SupervisedProc:
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._loop = loop
-
-        log_q = mp_ctx.Queue()
-        log_q.cancel_join_thread()
-        mp_pch, mp_cch = mp_ctx.Pipe(duplex=True)
-
-        self._pch = channel.AsyncProcChannel(
-            conn=mp_pch, loop=self._loop, messages=proto.IPC_MESSAGES
-        )
-
-        self._initialize_timeout = initialize_timeout
-        self._close_timeout = close_timeout
-        self._proc_args = proto.ProcStartArgs(
+        self._opts = _ProcOpts(
             initialize_process_fnc=initialize_process_fnc,
             job_entrypoint_fnc=job_entrypoint_fnc,
-            log_q=log_q,
-            mp_cch=mp_cch,
-            asyncio_debug=loop.get_debug(),
+            initialize_timeout=initialize_timeout,
+            close_timeout=close_timeout,
+            mp_ctx=mp_ctx,
         )
 
-        self._proc = mp_ctx.Process(  # type: ignore
-            target=proc_main.main, args=(self._proc_args,), name="job_proc"
-        )
+        self._user_args: Any | None = None
         self._running_job: RunningJobInfo | None = None
-
         self._exitcode: int | None = None
-        self._pid: int | None = self._proc.pid
+        self._pid: int | None = None
 
         self._main_atask: asyncio.Task[None] | None = None
         self._closing = False
@@ -118,11 +113,11 @@ class SupervisedProc:
 
     @property
     def start_arguments(self) -> Any | None:
-        return self._proc_args.user_arguments
+        return self._user_args
 
     @start_arguments.setter
     def start_arguments(self, value: Any | None) -> None:
-        self._proc_args.user_arguments = value
+        self._user_args = value
 
     @property
     def running_job(self) -> RunningJobInfo | None:
@@ -141,11 +136,32 @@ class SupervisedProc:
             for key, value in extra.items():
                 setattr(record, key, value)
 
-        log_q = self._proc_args.log_q
+        log_q = self._opts.mp_ctx.Queue()
+        log_q.cancel_join_thread()
+        mp_pch, mp_cch = self._opts.mp_ctx.Pipe(duplex=True)
+
+        self._pch = channel.AsyncProcChannel(
+            conn=mp_pch, loop=self._loop, messages=proto.IPC_MESSAGES
+        )
         log_listener = LogQueueListener(log_q, _add_proc_ctx_log)
         log_listener.start()
 
+        self._proc_args = proto.ProcStartArgs(
+            initialize_process_fnc=self._opts.initialize_process_fnc,
+            job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
+            log_q=log_q,
+            mp_cch=mp_cch,
+            asyncio_debug=self._loop.get_debug(),
+            user_arguments=self._user_args,
+        )
+
+        self._proc = self._opts.mp_ctx.Process(  # type: ignore
+            target=proc_main.main, args=(self._proc_args,), name="job_proc"
+        )
+
         self._proc.start()
+        mp_cch.close()
+
         self._pid = self._proc.pid
         self._join_fut = asyncio.Future[None]()
 
@@ -178,7 +194,7 @@ class SupervisedProc:
         # wait for the process to become ready
         try:
             init_res = await asyncio.wait_for(
-                self._pch.arecv(), timeout=self._initialize_timeout
+                self._pch.arecv(), timeout=self._opts.initialize_timeout
             )
             assert isinstance(
                 init_res, proto.InitializeResponse
@@ -207,7 +223,7 @@ class SupervisedProc:
         try:
             if self._main_atask:
                 await asyncio.wait_for(
-                    asyncio.shield(self._main_atask), timeout=self._close_timeout
+                    asyncio.shield(self._main_atask), timeout=self._opts.close_timeout
                 )
         except asyncio.TimeoutError:
             logger.error(
@@ -283,7 +299,10 @@ class SupervisedProc:
     @utils.log_exceptions(logger=logger)
     async def _monitor_task(self, pong_timeout: utils.aio.Sleep) -> None:
         while True:
-            msg = await self._pch.arecv()
+            try:
+                msg = await self._pch.arecv()
+            except channel.ChannelClosed:
+                break
 
             if isinstance(msg, proto.PongResponse):
                 delay = utils.time_ms() - msg.timestamp
