@@ -87,7 +87,7 @@ class TTS(tts.TTS):
         return ChunkedStream(text, self._opts, self._ensure_session())
 
     def stream(self) -> "SynthesizeStream":
-        return SynthesizeStream(self._opts, self._ensure_session())
+        return SynthesizeStream(self, self._opts, self._ensure_session())
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -136,10 +136,12 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
         self,
+        tts: TTS,  # TODO remove
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
     ):
         super().__init__()
+        self._tts = tts
         self._opts, self._session = opts, session
         self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT
@@ -206,12 +208,21 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps(end_pkt))
 
         async def input_task():
+            full_text = ""
+            # async for data in self._input_ch:
+            #     if isinstance(data, self._FlushSentinel):
+            #         self._sent_tokenizer_stream.flush()
+            #         continue
+            #     self._sent_tokenizer_stream.push_text(data)
+            # self._sent_tokenizer_stream.end_input()
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    self._sent_tokenizer_stream.flush()
+                    stream = self._tts.synthesize(full_text)
+                    async for ev in stream:
+                        self._event_ch.send_nowait(ev)
                     continue
-                self._sent_tokenizer_stream.push_text(data)
-            self._sent_tokenizer_stream.end_input()
+                else:
+                    full_text += data
 
         async def recv_task():
             nonlocal last_segment_id
