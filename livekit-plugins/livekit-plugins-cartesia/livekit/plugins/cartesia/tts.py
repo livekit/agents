@@ -174,7 +174,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         request_id = utils.shortuuid()
-        pending_segments: list[str] = []
+        end_segment_id = utils.shortuuid()
 
         async def sentence_stream_task():
             base_pkt = _to_cartesia_options(self._opts)
@@ -183,10 +183,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["context_id"] = ev.segment_id
                 token_pkt["transcript"] = ev.token
                 token_pkt["continue"] = True
+                pending_segments.append(ev.segment_id)
                 await ws.send_str(json.dumps(token_pkt))
 
             end_pkt = base_pkt.copy()
-            end_pkt["context_id"] = utils.shortuuid()
+            end_pkt["context_id"] = end_segment_id
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
@@ -198,8 +199,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
                 self._sent_tokenizer_stream.push_text(data)
             self._sent_tokenizer_stream.end_input()
-            if len(pending_segments) == 0:
-                await ws.close()
 
         async def recv_task():
             audio_bstream = utils.audio.AudioByteStream(
@@ -242,8 +241,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             )
                         )
 
-                    pending_segments.remove(segment_id)
-                    if len(pending_segments) == 0 and self._input_ch.closed:
+                    if segment_id == end_segment_id:
                         # we're not going to receive more frames, close the connection
                         await ws.close()
                         break
