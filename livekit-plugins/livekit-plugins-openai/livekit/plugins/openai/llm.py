@@ -293,6 +293,11 @@ def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):
             "type": "image_url",
             "image_url": {"url": image.image, "detail": "auto"},
         }
+    elif isinstance(image.base64_string, str):  # base64 string
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{image.base64_string}"},
+        }
     elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
         if cache_key not in image._cache:
             # inside our internal implementation, we allow to put extra metadata to

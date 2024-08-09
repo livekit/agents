@@ -25,7 +25,8 @@ ChatRole = Literal["system", "user", "assistant", "tool"]
 
 @dataclass
 class ChatImage:
-    image: str | rtc.VideoFrame
+    image: str | rtc.VideoFrame | None = None
+    base64_string: str | None = None
     inference_width: int | None = None
     inference_height: int | None = None
     _cache: dict[Any, Any] = field(default_factory=dict, repr=False, init=False)
