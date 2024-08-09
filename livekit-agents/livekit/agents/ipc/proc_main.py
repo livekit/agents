@@ -218,20 +218,22 @@ def main(args: proto.ProcStartArgs) -> None:
     cch = channel.AsyncProcChannel(
         conn=args.mp_cch, loop=loop, messages=proto.IPC_MESSAGES
     )
-    init_req = loop.run_until_complete(cch.arecv())
 
-    assert isinstance(
-        init_req, proto.InitializeRequest
-    ), "first message must be InitializeRequest"
-
-    job_proc = JobProcess(start_arguments=args.user_arguments)
-    logger.debug("initializing process", extra={"pid": job_proc.pid})
-    args.initialize_process_fnc(job_proc)
-    logger.debug("process initialized", extra={"pid": job_proc.pid})
-
-    # signal to the ProcPool that is worker is now ready to receive jobs
-    loop.run_until_complete(cch.asend(proto.InitializeResponse()))
     try:
+        init_req = loop.run_until_complete(cch.arecv())
+
+        assert isinstance(
+            init_req, proto.InitializeRequest
+        ), "first message must be InitializeRequest"
+
+        job_proc = JobProcess(start_arguments=args.user_arguments)
+        logger.debug("initializing process", extra={"pid": job_proc.pid})
+        args.initialize_process_fnc(job_proc)
+        logger.debug("process initialized", extra={"pid": job_proc.pid})
+
+        # signal to the ProcPool that is worker is now ready to receive jobs
+        loop.run_until_complete(cch.asend(proto.InitializeResponse()))
+
         main_task = loop.create_task(
             _async_main(args, job_proc, cch), name="job_proc_main"
         )

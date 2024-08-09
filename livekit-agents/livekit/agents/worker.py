@@ -94,7 +94,7 @@ class WorkerOptions:
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
     load_threshold: float = 0.65
     """When the load exceeds this threshold, the worker will be marked as unavailable."""
-    num_idle_processes: int = 3
+    num_idle_processes: int = 10
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 60.0
     """Maximum amount of time to wait for a job to shut down gracefully"""

@@ -209,6 +209,9 @@ class SupervisedProc:
             )
             self._send_kill_signal()
             raise
+        except Exception as e:  # should be channel.ChannelClosed most of the time
+            self._initialize_fut.set_exception(e)
+            raise
         else:
             self._initialize_fut.set_result(None)
 
@@ -276,8 +279,9 @@ class SupervisedProc:
         try:
             await self._initialize_fut
         except asyncio.TimeoutError:
-            # this happens when the initialization takes longer than self._initialize_timeout
-            pass
+            pass  # this happens when the initialization takes longer than self._initialize_timeout
+        except Exception:
+            pass  # initialization failed
 
         # the process is killed if it doesn't respond to ping requests
         pong_timeout = utils.aio.sleep(proto.PING_TIMEOUT)
