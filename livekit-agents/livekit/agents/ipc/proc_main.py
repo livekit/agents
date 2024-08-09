@@ -214,6 +214,8 @@ def main(args: proto.ProcStartArgs) -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.set_debug(args.asyncio_debug)
+    loop.slow_callback_duration = 0.1  # 100ms
+    utils.aio.debug.hook_slow_callbacks(2.0)
 
     cch = channel.AsyncProcChannel(
         conn=args.mp_cch, loop=loop, messages=proto.IPC_MESSAGES
@@ -243,6 +245,8 @@ def main(args: proto.ProcStartArgs) -> None:
             except KeyboardInterrupt:
                 # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
                 pass
+    except channel.ChannelClosed:
+        pass
     finally:
         log_handler.close()
         log_q.close()

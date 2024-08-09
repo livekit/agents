@@ -209,7 +209,7 @@ def run_worker(args: proto.CliArgs) -> None:
     worker = Worker(args.opts, loop=loop)
 
     loop.set_debug(args.asyncio_debug)
-    loop.slow_callback_duration = 0.05  # 50ms
+    loop.slow_callback_duration = 0.1  # 100ms
     utils.aio.debug.hook_slow_callbacks(2)
 
     if args.room:
