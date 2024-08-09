@@ -19,6 +19,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import aiohttp
 from livekit.agents import tokenize, tts, utils
@@ -42,7 +43,6 @@ class _TTSOptions:
     voice: str | list[float]
     api_key: str
     language: str
-    word_tokenizer: tokenize.WordTokenizer
 
 
 class TTS(tts.TTS):
@@ -56,9 +56,6 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
-            ignore_punctuation=False
-        ),
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -77,7 +74,6 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             voice=voice,
             api_key=api_key,
-            word_tokenizer=word_tokenizer,
         )
         self._session = http_session
 
@@ -145,7 +141,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     ):
         super().__init__()
         self._opts, self._session = opts, session
-        self._buf = ""
+        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer().stream()
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -176,51 +172,40 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         request_id = utils.shortuuid()
-        pending_segments = []
 
-        async def send_task():
+        async def sentence_stream_task():
             base_pkt = _to_cartesia_options(self._opts)
+            word_count = 0
+            first_hold_buffer = ""
+            async for ev in self._sent_tokenizer_stream:
+                if word_count < BUFFERED_WORDS_COUNT:
+                    first_hold_buffer += ev.token
+                    word_count += ev.token.count(" ")
 
-            def _new_segment():
-                segment_id = utils.shortuuid()
-                pending_segments.append(segment_id)
-                return segment_id
+                token_pkt = base_pkt.copy()
+                token_pkt["context_id"] = ev.segment_id
+                if len(first_hold_buffer) > 0:
+                    token_pkt["transcript"] = first_hold_buffer + ev.token
+                    first_hold_buffer = ""
+                else:
+                    token_pkt["transcript"] = ev.token
+                token_pkt["continue"] = True
+                await ws.send_str(json.dumps(token_pkt))
 
-            current_segment_id: str | None = _new_segment()
+            end_pkt = base_pkt.copy()
+            end_pkt["context_id"] = utils.shortuuid()
+            end_pkt["transcript"] = " "
+            end_pkt["continue"] = False
+            await ws.send_str(json.dumps(end_pkt))
+            await ws.close()
 
+        async def input_task():
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    if current_segment_id is None:
-                        continue
-
-                    end_pkt = base_pkt.copy()
-                    end_pkt["context_id"] = current_segment_id
-                    end_pkt["transcript"] = self._buf + " "
-                    end_pkt["continue"] = False
-                    await ws.send_str(json.dumps(end_pkt))
-
-                    current_segment_id = None
-                    self._buf = ""
+                    self._sent_tokenizer_stream.flush()
+                    self._sent_tokenizer_stream.end_input()
                 elif data:
-                    if current_segment_id is None:
-                        current_segment_id = _new_segment()
-
-                    self._buf += data
-                    words = self._opts.word_tokenizer.tokenize(text=self._buf)
-                    if len(words) < BUFFERED_WORDS_COUNT + 1:
-                        continue
-
-                    data = self._opts.word_tokenizer.format_words(words[:-1]) + " "
-                    self._buf = words[-1]
-
-                    token_pkt = base_pkt.copy()
-                    token_pkt["context_id"] = current_segment_id
-                    token_pkt["transcript"] = data
-                    token_pkt["continue"] = True
-                    await ws.send_str(json.dumps(token_pkt))
-
-            if len(pending_segments) == 0:
-                await ws.close()
+                    self._sent_tokenizer_stream.push_text(data)
 
         async def recv_task():
             audio_bstream = utils.audio.AudioByteStream(
@@ -263,8 +248,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             )
                         )
 
-                    pending_segments.remove(segment_id)
-                    if len(pending_segments) == 0 and self._input_ch.closed:
+                    if self._input_ch.closed:
                         # we're not going to receive more frames, close the connection
                         await ws.close()
                         break
@@ -272,7 +256,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.error("unexpected Cartesia message %s", data)
 
         tasks = [
-            asyncio.create_task(send_task()),
+            asyncio.create_task(input_task()),
+            asyncio.create_task(sentence_stream_task()),
             asyncio.create_task(recv_task()),
         ]
 
@@ -282,8 +267,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(*tasks)
 
 
-def _to_cartesia_options(opts: _TTSOptions) -> dict:
-    voice: dict = {}
+def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
+    voice: dict[str, Any] = {}
     if isinstance(opts.voice, str):
         voice["mode"] = "id"
         voice["id"] = opts.voice
