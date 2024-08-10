@@ -28,7 +28,13 @@ from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
-from .models import ChatModels, GroqChatModels, PerplexityChatModels
+from .models import (
+    ChatModels,
+    GroqChatModels,
+    OctoChatModels,
+    PerplexityChatModels,
+    TogetherChatModels,
+)
 from .utils import AsyncAzureADTokenProvider
 
 
@@ -83,6 +89,16 @@ class LLM(llm.LLM):
         return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
 
     @staticmethod
+    def with_octo(
+        *,
+        model: str | OctoChatModels = "llama-2-13b-chat",
+        api_key: str | None = None,
+        base_url: str | None = "https://text.octoai.run/v1",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+
+    @staticmethod
     def with_ollama(
         *,
         model: str = "llama3.1",
@@ -97,6 +113,16 @@ class LLM(llm.LLM):
         model: str | PerplexityChatModels = "llama-3.1-sonar-small-128k-chat",
         api_key: str | None = None,
         base_url: str | None = "https://api.perplexity.ai",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+
+    @staticmethod
+    def with_together(
+        *,
+        model: str | TogetherChatModels = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.together.xyz/v1",
         client: openai.AsyncClient | None = None,
     ) -> LLM:
         return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
