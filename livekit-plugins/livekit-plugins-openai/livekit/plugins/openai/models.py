@@ -30,3 +30,29 @@ ChatModels = Literal[
 EmbeddingModels = Literal[
     "text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large"
 ]
+
+# adapters for OpenAI-compatible LLMs
+
+PerplexityChatModels = Literal[
+    "llama-3.1-sonar-small-128k-online",
+    "llama-3.1-sonar-small-128k-chat",
+    "llama-3.1-sonar-large-128k-online",
+    "llama-3.1-sonar-large-128k-chat",
+    "llama-3.1-8b-instruct",
+    "llama-3.1-70b-instruct",
+]
+
+GroqChatModels = Literal[
+    "llama-3.1-405b-reasoning",
+    "llama-3.1-70b-versatile",
+    "llama-3.1-8b-instant",
+    "llama3-groq-70b-8192-tool-use-preview",
+    "llama3-groq-8b-8192-tool-use-preview",
+    "llama-guard-3-8b",
+    "llama3-70b-8192",
+    "llama3-8b-8192",
+    "mixtral-8x7b-32768",
+    "gemma-7b-it",
+    "gemma2-9b-it",
+    "whisper-large-v3",
+]

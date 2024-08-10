@@ -28,7 +28,7 @@ from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
-from .models import ChatModels
+from .models import ChatModels, GroqChatModels, PerplexityChatModels
 from .utils import AsyncAzureADTokenProvider
 
 
@@ -61,6 +61,45 @@ class LLM(llm.LLM):
             ),
         )
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
+
+    @staticmethod
+    def with_fireworks(
+        *,
+        model: str = "accounts/fireworks/models/llama-v3p1-70b-instruct",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.fireworks.ai/inference/v1",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+
+    @staticmethod
+    def with_groq(
+        *,
+        model: str | GroqChatModels = "llama3-8b-8192",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.groq.com/openai/v1",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+
+    @staticmethod
+    def with_ollama(
+        *,
+        model: str = "llama3.1",
+        base_url: str | None = "http://localhost:11434/v1",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key="ollama", base_url=base_url, client=client)
+
+    @staticmethod
+    def with_perplexity(
+        *,
+        model: str | PerplexityChatModels = "llama-3.1-sonar-small-128k-chat",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.perplexity.ai",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
 
     @staticmethod
     def create_azure_client(
