@@ -69,6 +69,44 @@ class LLM(llm.LLM):
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
     @staticmethod
+    def with_azure(
+        *,
+        model: str | ChatModels = "gpt-4o",
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+        organization: str | None = None,
+        project: str | None = None,
+        base_url: str | None = None,
+    ) -> LLM:
+        """
+        This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+        - `api_key` from `AZURE_OPENAI_API_KEY`
+        - `organization` from `OPENAI_ORG_ID`
+        - `project` from `OPENAI_PROJECT_ID`
+        - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
+        - `api_version` from `OPENAI_API_VERSION`
+        - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
+        """
+
+        azure_client = openai.AsyncAzureOpenAI(
+            azure_endpoint=azure_endpoint,
+            azure_deployment=azure_deployment,
+            api_version=api_version,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
+            organization=organization,
+            project=project,
+            base_url=base_url,
+        )  # type: ignore
+
+        return LLM(model=model, client=azure_client)
+
+    @staticmethod
     def with_fireworks(
         *,
         model: str = "accounts/fireworks/models/llama-v3p1-70b-instruct",
@@ -126,44 +164,6 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
     ) -> LLM:
         return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
-
-    @staticmethod
-    def create_azure_client(
-        *,
-        model: str | ChatModels = "gpt-4o",
-        azure_endpoint: str | None = None,
-        azure_deployment: str | None = None,
-        api_version: str | None = None,
-        api_key: str | None = None,
-        azure_ad_token: str | None = None,
-        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
-        organization: str | None = None,
-        project: str | None = None,
-        base_url: str | None = None,
-    ) -> LLM:
-        """
-        This automatically infers the following arguments from their corresponding environment variables if they are not provided:
-        - `api_key` from `AZURE_OPENAI_API_KEY`
-        - `organization` from `OPENAI_ORG_ID`
-        - `project` from `OPENAI_PROJECT_ID`
-        - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
-        - `api_version` from `OPENAI_API_VERSION`
-        - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
-        """
-
-        azure_client = openai.AsyncAzureOpenAI(
-            azure_endpoint=azure_endpoint,
-            azure_deployment=azure_deployment,
-            api_version=api_version,
-            api_key=api_key,
-            azure_ad_token=azure_ad_token,
-            azure_ad_token_provider=azure_ad_token_provider,
-            organization=organization,
-            project=project,
-            base_url=base_url,
-        )  # type: ignore
-
-        return LLM(model=model, client=azure_client)
 
     def chat(
         self,
