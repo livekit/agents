@@ -45,7 +45,9 @@ class LLM(llm.LLM):
         api_key: str | None = None,
         base_url: str | None = None,
         client: openai.AsyncClient | None = None,
+        token_usage_callback: Callable[[Dict[str, Any]], None] | None = None
     ) -> None:
+        self.token_usage_callback = token_usage_callback
         self._opts = LLMOptions(model=model)
         self._client = client or openai.AsyncClient(
             api_key=api_key,
@@ -127,10 +129,11 @@ class LLM(llm.LLM):
             n=n,
             temperature=temperature,
             stream=True,
+            stream_options={"include_usage": True if self.token_usage_callback else False},
             **opts,
         )
 
-        return LLMStream(oai_stream=cmp, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        return LLMStream(oai_stream=cmp, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, token_usage_callback=self.token_usage_callback)
 
 
 class LLMStream(llm.LLMStream):
@@ -140,8 +143,10 @@ class LLMStream(llm.LLMStream):
         oai_stream: Awaitable[openai.AsyncStream[ChatCompletionChunk]],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
+        token_usage_callback: Callable[[Dict[str, Any]], None] | None = None
     ) -> None:
         super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        self.token_usage_callback = token_usage_callback
         self._awaitable_oai_stream = oai_stream
         self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
 
@@ -161,6 +166,9 @@ class LLMStream(llm.LLMStream):
             self._oai_stream = await self._awaitable_oai_stream
 
         async for chunk in self._oai_stream:
+            if chunk.usage and self.token_usage_callback:
+                self.token_usage_callback(chunk.usage)
+                
             for choice in chunk.choices:
                 chat_chunk = self._parse_choice(choice)
                 if chat_chunk is not None:
