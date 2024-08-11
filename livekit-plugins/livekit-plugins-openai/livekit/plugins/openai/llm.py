@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import warnings
 from dataclasses import dataclass
 from typing import Any, Awaitable, MutableSet
 
@@ -164,6 +165,33 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
     ) -> LLM:
         return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+
+    @staticmethod
+    def create_azure_client(
+        *,
+        model: str | ChatModels = "gpt-4o",
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+        organization: str | None = None,
+        project: str | None = None,
+        base_url: str | None = None,
+    ) -> LLM:
+        warnings.warn("This alias is deprecated. Use LLM.with_azure() instead")
+        return LLM.with_azure(
+            model=model,
+            azure_endpoint=azure_endpoint,
+            api_version=api_version,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
+            organization=organization,
+            project=project,
+            base_url=base_url,
+        )
 
     def chat(
         self,
