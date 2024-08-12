@@ -57,12 +57,14 @@ setuptools.setup(
         "watchfiles~=0.22",
         "psutil~=5.9",
         "aiohttp~=3.10",
-        "aiodns~=3.2",
     ],
     extras_require={
         ':sys_platform=="win32"': [
             "colorama"
         ],  # fix logs color on windows (devmode only)
+        ':sys_platform!="win32"': [
+            "aiodns~=3.2"
+        ],  # use default aiohttp resolver on windows
         "codecs": ["av>=11.0.0"],
         "images": ["pillow~=10.3.0"],
     },
