@@ -187,6 +187,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     end_pkt["context_id"] = previous_segment_id
                     end_pkt["transcript"] = " "
                     end_pkt["continue"] = False
+                    previous_segment_id = current_segment_id
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = current_segment_id
                 token_pkt["transcript"] = ev.token + " "
