@@ -83,6 +83,7 @@ async def _eg_streamed_tts_stream(
         tts_forwarder.push_text(chunk)
 
     tts_stream.flush()
+    tts_stream.end_input()
     tts_forwarder.mark_text_segment_end()
 
     playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
