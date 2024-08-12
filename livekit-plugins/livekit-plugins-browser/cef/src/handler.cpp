@@ -37,7 +37,9 @@ void AgentHandler::OnPaint(CefRefPtr<CefBrowser> browser,
                            int height) {
 
   std::cout << "OnPaint" << std::endl;
-  dev_renderer_->OnPaint(browser, type, dirtyRects, buffer, width, height);
+
+  if (dev_renderer_)
+    dev_renderer_->OnPaint(browser, type, dirtyRects, buffer, width, height);
 }
 
 void AgentHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
@@ -65,9 +67,7 @@ void AgentHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
   int identifier = browser->GetIdentifier();
-
   CefRefPtr<BrowserHandle> handle = pending_handles_.front();
-  handle->AddRef();
   pending_handles_.pop_front();
 
   handle->browser_ = browser;
@@ -75,6 +75,9 @@ void AgentHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     handle->created_callback_();
 
   browser_handles_[identifier] = handle;
+
+  if (dev_renderer_)
+    dev_renderer_->OnAfterCreated(browser);
 }
 
 bool AgentHandler::DoClose(CefRefPtr<CefBrowser> browser) {
@@ -85,6 +88,10 @@ bool AgentHandler::DoClose(CefRefPtr<CefBrowser> browser) {
 
 void AgentHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
+
+
+  if (dev_renderer_)
+    dev_renderer_->OnBeforeClose(browser);
 }
 
 void AgentHandler::OnLoadError(CefRefPtr<CefBrowser> browser,

@@ -18,19 +18,31 @@ class DevRenderer: public CefBaseRefCounted {
   void Run();
   void Close();
 
+
+  void OnAfterCreated(CefRefPtr<CefBrowser> browser);
+
   void OnPaint(CefRefPtr<CefBrowser> browser,
                              CefRenderHandler::PaintElementType type,
-                             const CefRenderHandler::RectList& dirtyRects,
+                             const CefRenderHandler::RectList&ts,
                              const void* buffer,
                              int width,
                              int height);
+
+  void OnBeforeClose(CefRefPtr<CefBrowser> browser);
 
   void* getNativeWindowHandle() {
     return glfwGetCocoaWindow(window_);
   }
 
  private:
+  struct RenderData{
+    unsigned int texture_id;
+    int view_width;
+    int view_height;
+  };
+
   GLFWwindow* window_ = nullptr;
+  std::unordered_map<int, RenderData> render_data_;
 
   IMPLEMENT_REFCOUNTING(DevRenderer);
 };
