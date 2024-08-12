@@ -50,13 +50,12 @@ IPC_MESSAGES = {
 
 def _echo_main(mp_cch):
     async def _pong():
-        loop = asyncio.get_event_loop()
         cch = await utils.aio.duplex_unix._AsyncDuplex.open(mp_cch)
         while True:
             try:
                 msg = await ipc.channel.arecv_message(cch, IPC_MESSAGES)
                 await ipc.channel.asend_message(cch, msg)
-            except asyncio.IncompleteReadError:
+            except EOFError:
                 await cch.aclose()
                 break
 
@@ -84,6 +83,27 @@ async def test_async_channel():
     await asyncio.sleep(0.5)
     proc.terminate()
     proc.join()
+
+
+def test_sync_channel():
+    mp_pch, mp_cch = socket.socketpair()
+    pch = utils.aio.duplex_unix._Duplex.open(mp_pch)
+
+    proc = mp.get_context("spawn").Process(target=_echo_main, args=(mp_cch,))
+    proc.start()
+    mp_cch.close()
+
+    ipc.channel.send_message(pch, EmptyMessage())
+    assert ipc.channel.recv_message(pch, IPC_MESSAGES) == EmptyMessage()
+
+    ipc.channel.send_message(
+        pch, SomeDataMessage(string="hello", number=42, double=3.14, data=b"world")
+    )
+    assert ipc.channel.recv_message(pch, IPC_MESSAGES) == SomeDataMessage(
+        string="hello", number=42, double=3.14, data=b"world"
+    )
+
+    pch.close()
 
 
 def _generate_fake_job() -> job.RunningJobInfo:

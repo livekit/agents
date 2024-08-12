@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import struct
 import socket
+import struct
 
 
 class _AsyncDuplex:
@@ -49,7 +49,7 @@ def _read_exactly(sock: socket.socket, num_bytes: int) -> bytes:
     while len(data) < num_bytes:
         packet = sock.recv(num_bytes - len(data))
         if not packet:
-            raise EOFError("Socket closed before reading enough data")
+            raise EOFError()
         data.extend(packet)
     return bytes(data)
 
