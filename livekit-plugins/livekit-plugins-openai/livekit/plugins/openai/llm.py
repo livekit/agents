@@ -28,7 +28,13 @@ from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
-from .models import ChatModels
+from .models import (
+    ChatModels,
+    GroqChatModels,
+    OctoChatModels,
+    PerplexityChatModels,
+    TogetherChatModels,
+)
 from .utils import AsyncAzureADTokenProvider
 
 
@@ -63,7 +69,7 @@ class LLM(llm.LLM):
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
     @staticmethod
-    def create_azure_client(
+    def with_azure(
         *,
         model: str | ChatModels = "gpt-4o",
         azure_endpoint: str | None = None,
@@ -99,6 +105,92 @@ class LLM(llm.LLM):
         )  # type: ignore
 
         return LLM(model=model, client=azure_client)
+
+    @staticmethod
+    def with_fireworks(
+        *,
+        model: str = "accounts/fireworks/models/llama-v3p1-70b-instruct",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.fireworks.ai/inference/v1",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+
+    @staticmethod
+    def with_groq(
+        *,
+        model: str | GroqChatModels = "llama3-8b-8192",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.groq.com/openai/v1",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+
+    @staticmethod
+    def with_octo(
+        *,
+        model: str | OctoChatModels = "llama-2-13b-chat",
+        api_key: str | None = None,
+        base_url: str | None = "https://text.octoai.run/v1",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+
+    @staticmethod
+    def with_ollama(
+        *,
+        model: str = "llama3.1",
+        base_url: str | None = "http://localhost:11434/v1",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key="ollama", base_url=base_url, client=client)
+
+    @staticmethod
+    def with_perplexity(
+        *,
+        model: str | PerplexityChatModels = "llama-3.1-sonar-small-128k-chat",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.perplexity.ai",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+
+    @staticmethod
+    def with_together(
+        *,
+        model: str | TogetherChatModels = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.together.xyz/v1",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+
+    @staticmethod
+    def create_azure_client(
+        *,
+        model: str | ChatModels = "gpt-4o",
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+        organization: str | None = None,
+        project: str | None = None,
+        base_url: str | None = None,
+    ) -> LLM:
+        logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
+        return LLM.with_azure(
+            model=model,
+            azure_endpoint=azure_endpoint,
+            api_version=api_version,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
+            organization=organization,
+            project=project,
+            base_url=base_url,
+        )
 
     def chat(
         self,
