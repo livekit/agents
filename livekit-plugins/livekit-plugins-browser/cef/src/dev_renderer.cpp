@@ -56,6 +56,7 @@ void DevRenderer::OnPaint(CefRefPtr<CefBrowser> browser,
   CEF_REQUIRE_UI_THREAD();
 
   if (type != CefRenderHandler::PaintElementType::PET_VIEW){
+    std::cout << "Ignoring PET_POPUP" << std::endl;
     return; // Ignore PET_POPUP for now, bc I'm lazy
   }
 
@@ -69,6 +70,9 @@ void DevRenderer::OnPaint(CefRefPtr<CefBrowser> browser,
   render_data->view_height = height;
 
   glBindTexture(GL_TEXTURE_2D, render_data->texture_id);
+
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, width);
+  VERIFY_NO_ERROR;
 
   bool has_fullscreen_rect = dirtyRects.size() == 1 &&
                          dirtyRects[0] == CefRect(0, 0, width, height);
@@ -154,11 +158,16 @@ void DevRenderer::Run() {
     ImGui::NewFrame();
     ImGui::ShowDemoWindow();
 
-    {
-      ImGui::Begin("Hello, world!");
-      ImGui::Text("This is some useful text.");
+
+    for (auto& [identifier, render_data] : render_data_) {
+      ImGui::Begin("Browser");
+      ImGui::Text("Browser %d", identifier);
+      ImGui::Image((void*)(intptr_t)render_data.texture_id,
+                   ImVec2(render_data.view_width, render_data.view_height));
       ImGui::End();
     }
+
+
 
     // Rendering
     ImGui::Render();

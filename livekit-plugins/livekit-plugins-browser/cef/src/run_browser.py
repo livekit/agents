@@ -12,7 +12,7 @@ def _context_initialized():
     opts = lkcef.BrowserOptions()
     opts.framerate = 30
 
-    app.create_browser("http://www.google.com", opts)
+    app.create_browser("http://www.livekit.io", opts)
     print("LOL: Context initialized")
 
 opts = lkcef.AppOptions()
