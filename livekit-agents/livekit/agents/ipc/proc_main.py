@@ -5,6 +5,7 @@ import contextlib
 import copy
 import logging
 import multiprocessing as mp
+import socket
 from dataclasses import dataclass
 
 from livekit import rtc
@@ -150,8 +151,10 @@ def _start_job(
 
 
 async def _async_main(
-    args: proto.ProcStartArgs, proc: JobProcess, cch: channel.AsyncProcChannel
+    args: proto.ProcStartArgs, proc: JobProcess, cch: socket.socket
 ) -> None:
+    cch = await utils.aio.duplex_unix._AsyncDuplex.open(cch)
+
     job_task: JobTask | None = None
     exit_proc_fut = asyncio.Event()
     no_msg_timeout = utils.aio.sleep(proto.PING_INTERVAL * 5)  # missing 5 pings
@@ -200,6 +203,7 @@ async def _async_main(
 
     await exit_proc_fut.wait()
     await utils.aio.gracefully_cancel(read_task, health_check_task)
+    await cch.aclose()
 
 
 def main(args: proto.ProcStartArgs) -> None:
@@ -217,12 +221,9 @@ def main(args: proto.ProcStartArgs) -> None:
     loop.slow_callback_duration = 0.1  # 100ms
     utils.aio.debug.hook_slow_callbacks(2.0)
 
-    cch = channel.AsyncProcChannel(
-        conn=args.mp_cch, loop=loop, messages=proto.IPC_MESSAGES
-    )
-
+    cch = utils.aio.duplex_unix._Duplex.open(args.mp_cch)
     try:
-        init_req = loop.run_until_complete(cch.arecv())
+        init_req = channel.recv_message(cch, proto.IPC_MESSAGES)
 
         assert isinstance(
             init_req, proto.InitializeRequest
@@ -232,12 +233,12 @@ def main(args: proto.ProcStartArgs) -> None:
         logger.debug("initializing process", extra={"pid": job_proc.pid})
         args.initialize_process_fnc(job_proc)
         logger.debug("process initialized", extra={"pid": job_proc.pid})
-
-        # signal to the ProcPool that is worker is now ready to receive jobs
-        loop.run_until_complete(cch.asend(proto.InitializeResponse()))
+        channel.send_message(
+            cch, proto.InitializeResponse()
+        )  # we're ready to receive jobs
 
         main_task = loop.create_task(
-            _async_main(args, job_proc, cch), name="job_proc_main"
+            _async_main(args, job_proc, cch.detach()), name="job_proc_main"
         )
         while not main_task.done():
             try:
@@ -245,8 +246,6 @@ def main(args: proto.ProcStartArgs) -> None:
             except KeyboardInterrupt:
                 # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
                 pass
-    except channel.ChannelClosed:
-        pass
     finally:
         log_handler.close()
         log_q.close()

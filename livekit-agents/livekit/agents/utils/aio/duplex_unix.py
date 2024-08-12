@@ -78,4 +78,6 @@ class _Duplex:
         return sock
 
     def close(self) -> None:
-        self._sock.close()
+        if self._sock is not None:
+            self._sock.close()
+            self._sock = None
