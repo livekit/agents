@@ -57,10 +57,7 @@ def _echo_main(mp_cch):
                 msg = await ipc.channel.arecv_message(cch, IPC_MESSAGES)
                 await ipc.channel.asend_message(cch, msg)
             except utils.aio.duplex_unix.DuplexClosed:
-                break
-            finally:
-                with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
-                    await cch.aclose()
+                pass
 
     asyncio.run(_pong())
 
