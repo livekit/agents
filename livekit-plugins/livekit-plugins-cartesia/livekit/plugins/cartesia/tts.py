@@ -183,6 +183,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             previous_segment_id = current_segment_id
             async for ev in self._sent_tokenizer_stream:
                 if current_segment_id != previous_segment_id:
+                    print("NEIL ending segment", previous_segment_id)
                     end_pkt = base_pkt.copy()
                     end_pkt["context_id"] = previous_segment_id
                     end_pkt["transcript"] = " "
@@ -233,6 +234,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 segment_id = data.get("context_id")
                 # Once we receive audio for a segment, we can start a new segment
                 if segment_id == current_segment_id:
+                    print("NEIL starting new segment", segment_id, current_segment_id)
                     current_segment_id = utils.shortuuid()
                 if data.get("data"):
                     b64data = base64.b64decode(data["data"])
