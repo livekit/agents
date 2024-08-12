@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ctypes
 import io
 import multiprocessing as mp
@@ -58,7 +59,8 @@ def _echo_main(mp_cch):
             except utils.aio.duplex_unix.DuplexClosed:
                 break
             finally:
-                await cch.aclose()
+                with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
+                    await cch.aclose()
 
     asyncio.run(_pong())
 
