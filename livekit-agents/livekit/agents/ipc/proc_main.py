@@ -154,7 +154,7 @@ def _start_job(
 async def _async_main(
     args: proto.ProcStartArgs, proc: JobProcess, cch: socket.socket
 ) -> None:
-    cch = await utils.aio.duplex_unix._AsyncDuplex.open(cch)
+    cch = await duplex_unix._AsyncDuplex.open(cch)
 
     job_task: JobTask | None = None
     exit_proc_fut = asyncio.Event()
