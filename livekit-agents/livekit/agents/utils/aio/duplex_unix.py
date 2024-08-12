@@ -25,9 +25,12 @@ class _AsyncDuplex:
         return _AsyncDuplex(sock, reader, writer, loop)
 
     async def recv_bytes(self) -> bytes:
-        len_bytes = await self._reader.readexactly(4)
-        len = struct.unpack("!I", len_bytes)[0]
-        return await self._reader.readexactly(len)
+        try:
+            len_bytes = await self._reader.readexactly(4)
+            len = struct.unpack("!I", len_bytes)[0]
+            return await self._reader.readexactly(len)
+        except asyncio.IncompleteReadError:
+            raise EOFError()
 
     async def send_bytes(self, data: bytes) -> None:
         len_bytes = struct.pack("!I", len(data))
@@ -41,6 +44,16 @@ class _AsyncDuplex:
         self._sock.close()
 
 
+def _read_exactly(sock: socket.socket, num_bytes: int) -> bytes:
+    data = bytearray()
+    while len(data) < num_bytes:
+        packet = sock.recv(num_bytes - len(data))
+        if not packet:
+            raise EOFError("Socket closed before reading enough data")
+        data.extend(packet)
+    return bytes(data)
+
+
 class _Duplex:
     def __init__(self, sock: socket.socket) -> None:
         self._sock = sock
@@ -50,9 +63,9 @@ class _Duplex:
         return _Duplex(sock)
 
     def recv_bytes(self) -> bytes:
-        len_bytes = self._sock.recv(4)
+        len_bytes = _read_exactly(self._sock, 4)
         len = struct.unpack("!I", len_bytes)[0]
-        return self._sock.recv(len)
+        return _read_exactly(self._sock, len)
 
     def send_bytes(self, data: bytes) -> None:
         len_bytes = struct.pack("!I", len(data))

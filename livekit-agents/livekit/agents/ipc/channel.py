@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import io
-import asyncio
-import socket
 import struct
 from typing import ClassVar, Protocol, runtime_checkable
 
 from .. import utils
-import multiprocessing.connection as mpc
 
 
 class Message(Protocol):
