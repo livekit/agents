@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import warnings
 from dataclasses import dataclass
 from typing import Any, Awaitable, MutableSet
 
@@ -180,7 +179,7 @@ class LLM(llm.LLM):
         project: str | None = None,
         base_url: str | None = None,
     ) -> LLM:
-        warnings.warn("This alias is deprecated. Use LLM.with_azure() instead")
+        logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
         return LLM.with_azure(
             model=model,
             azure_endpoint=azure_endpoint,
