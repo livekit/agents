@@ -78,6 +78,9 @@ class STT(stt.STT):
         if api_key is None:
             raise ValueError("Deepgram API key is required")
 
+        if language != "en-US":
+            model = "nova-2-general"
+
         self._api_key = api_key
 
         self._opts = STTOptions(
