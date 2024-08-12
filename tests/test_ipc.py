@@ -55,7 +55,7 @@ def _echo_main(mp_cch):
             try:
                 msg = await ipc.channel.arecv_message(cch, IPC_MESSAGES)
                 await ipc.channel.asend_message(cch, msg)
-            except EOFError:
+            except utils.aio.duplex_unix.DuplexClosed:
                 await cch.aclose()
                 break
 
