@@ -349,7 +349,7 @@ class SupervisedProc:
                     await channel.asend_message(
                         self._pch, proto.PingRequest(timestamp=utils.time_ms())
                     )
-                except OSError:
+                except utils.aio.duplex_unix.DuplexClosed:
                     break
 
         async def _pong_timeout_co():
