@@ -58,10 +58,6 @@
 }
 
 - (void)tryToTerminateApplication:(NSApplication*)app {
-  AgentHandler* handler = AgentHandler::GetInstance();
-  if (handler && !handler->IsClosing()) {
-    handler->CloseAllBrowsers(false);
-  }
 }
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:
@@ -73,16 +69,12 @@
 // already running.
 - (BOOL)applicationShouldHandleReopen:(NSApplication*)theApplication
                     hasVisibleWindows:(BOOL)flag {
-  AgentHandler* handler = AgentHandler::GetInstance();
-  if (handler && !handler->IsClosing()) {
-    handler->ShowMainWindow();
-  }
   return NO;
 }
 @end
 
 // Entry point function for the browser process.
-int AgentApp::run() {
+int RunAgentApp(CefRefPtr<AgentApp> app) {
   CefMainArgs main_args(0, nullptr);
 
   @autoreleasepool {
@@ -119,7 +111,7 @@ int AgentApp::run() {
 
     settings.no_sandbox = true;  // No sandbox for MacOS, for livekit-agents,
                                  // we're only going to support Linux
-    CefRefPtr<AgentApp> app(new AgentApp);
+    settings.windowless_rendering_enabled = true;
 
     // Initialize the CEF browser process. May return false if initialization
     // fails or if early exit is desired (for example, due to process singleton
@@ -142,7 +134,6 @@ int AgentApp::run() {
     app->Run();
 
     CefShutdown();
-
     cef_unload_library();
 
 #if !__has_feature(objc_arc)

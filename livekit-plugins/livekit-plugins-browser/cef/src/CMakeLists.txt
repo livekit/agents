@@ -1,5 +1,7 @@
 include(FetchContent)
 
+set(FETCHCONTENT_QUIET off)
+
 # I don't want to write a different code per platform for the dev mode.
 # so use glfw and imgui like I do for my other side projects...
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
@@ -11,20 +13,18 @@ FetchContent_MakeAvailable(glfw)
 
 FetchContent_Declare(imgui GIT_REPOSITORY https://github.com/ocornut/imgui GIT_TAG origin/docking)
 FetchContent_GetProperties(imgui)
-if (NOT imgui_POPULATED)
-  FetchContent_Populate(imgui)
-  file(GLOB IMGUI_SOURCES ${imgui_SOURCE_DIR}/*.cpp)
-  file(GLOB IMGUI_HEADERS ${imgui_SOURCE_DIR}/*.h)
-  add_library(imgui STATIC ${IMGUI_SOURCES} ${IMGUI_SOURCES} ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
-  set_target_properties(imgui PROPERTIES CXX_STANDARD 17)
-  target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${GLFW_INCLUDE_DIR})
-  target_link_libraries(imgui PRIVATE glfw)
-endif()
+FetchContent_MakeAvailable(imgui)
+file(GLOB IMGUI_SOURCES ${imgui_SOURCE_DIR}/*.cpp)
+file(GLOB IMGUI_HEADERS ${imgui_SOURCE_DIR}/*.h)
+add_library(imgui STATIC ${IMGUI_SOURCES} ${IMGUI_SOURCES} ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
+set_target_properties(imgui PROPERTIES CXX_STANDARD 17)
+target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${GLFW_INCLUDE_DIR})
+target_link_libraries(imgui PRIVATE glfw)
 
 
 set(LKCEF_SRCS app.cpp app.hpp handler.hpp handler.cpp dev_renderer.hpp dev_renderer.cpp)
 set(LKCEF_SRCS_LINUX main_linux.cpp)
-set(LKCEF_SRCS_MAC handler_mac.mm app_mac.mm)
+set(LKCEF_SRCS_MAC app_mac.mm)
 set(LKCEF_SRCS_WINDOWS main_win.cpp )
 append_platform_sources(LKCEF_SRCS)
 source_group(lkcef FILES ${LKCEF_SRCS})
@@ -124,7 +124,7 @@ if(OS_MAC)
     # Create Helper-specific variants of the helper-Info.plist file.
     set(_helper_info_plist
         "${CMAKE_CURRENT_BINARY_DIR}/lkcef-Info${_target_suffix}.plist")
-    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/resources/lkcef-Info.plist"
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/resources/lkcefhelper-Info.plist"
          _plist_contents)
     string(REPLACE "\${EXECUTABLE_NAME}" "${_helper_output_name}"
                    _plist_contents ${_plist_contents})

@@ -3,7 +3,21 @@
 
 #include "include/cef_client.h"
 
+#include "dev_renderer.hpp"
 #include <list>
+
+class BrowserHandle: public CefBaseRefCounted{
+ public:
+  BrowserHandle(std::function<void()> created_callback) : created_callback_(created_callback) {}
+
+
+  CefRefPtr<CefBrowser> browser_ = nullptr;
+  std::function<void()> created_callback_ = nullptr;
+
+
+ IMPLEMENT_REFCOUNTING(BrowserHandle);
+};
+
 
 class AgentHandler : public CefClient,
                      public CefDisplayHandler,
@@ -13,12 +27,10 @@ class AgentHandler : public CefClient,
                      public CefLoadHandler {
 
 public:
-  AgentHandler();
-  ~AgentHandler() override;
-
-  static AgentHandler *GetInstance();
+  AgentHandler(CefRefPtr<DevRenderer> dev_renderer);
 
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
+  CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
   CefRefPtr<CefAudioHandler> GetAudioHandler() override { return this; }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
@@ -57,25 +69,25 @@ public:
                    ErrorCode errorCode, const CefString &errorText,
                    const CefString &failedUrl) override;
 
-  void ShowMainWindow();
-  void CloseAllBrowsers(bool force_close);
-  bool IsClosing() const { return is_closing_; }
+  //void CloseAllBrowsers(bool force_close);
 
   static bool IsChromeRuntimeEnabled();
 
+
+  void AddPendingHandle(CefRefPtr<BrowserHandle> handle) {
+    pending_handles_.push_back(handle);
+  }
+
+  void RemovePendingHandle(CefRefPtr<BrowserHandle> handle) {
+    pending_handles_.remove(handle);
+  }
+
 private:
-  // Platform-specific implementation.
-  void PlatformTitleChange(CefRefPtr<CefBrowser> browser,
-                           const CefString &title);
-  void PlatformShowWindow(CefRefPtr<CefBrowser> browser);
+  std::unordered_map<int, CefRefPtr<BrowserHandle>> browser_handles_;
+  std::list<CefRefPtr<BrowserHandle>> pending_handles_;
 
-  // List of existing browser windows. Only accessed on the CEF UI thread.
-  typedef std::list<CefRefPtr<CefBrowser>> BrowserList;
-  BrowserList browser_list_;
+  CefRefPtr<DevRenderer> dev_renderer_;
 
-  bool is_closing_ = false;
-
-  // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(AgentHandler);
 };
 
