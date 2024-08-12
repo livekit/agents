@@ -95,7 +95,7 @@ class SynthesizeStream(ABC):
     def __init__(self):
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
-        self._task = asyncio.create_task(self._main_task())
+        self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @abstractmethod

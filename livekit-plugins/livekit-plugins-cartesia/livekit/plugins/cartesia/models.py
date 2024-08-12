@@ -11,4 +11,4 @@ TTSEncoding = Literal[
 
 TTSModels = Literal["sonic-english", "sonic-multilingual"]
 TTSLanguages = Literal["en", "es", "fr", "de", "pt", "zh", "ja"]
-TTSDefaultVoiceId = "248be419-c632-4f23-adf1-5324ed7dbf1d"
+TTSDefaultVoiceId = "b7d50908-b17c-442d-ad8d-810c63997ed9"

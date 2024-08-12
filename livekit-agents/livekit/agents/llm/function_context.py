@@ -20,7 +20,7 @@ import functools
 import inspect
 import typing
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Tuple
 
 from ..log import logger
 
@@ -162,6 +162,12 @@ class FunctionContext:
             desc = type_info.description if type_info else ""
             choices = type_info.choices if type_info else None
 
+            is_optional, inner_type = _is_optional_type(th)
+            if is_optional:
+                # when the type is optional, only the inner type is relevant
+                # the argument info for default would be None
+                th = inner_type
+
             if issubclass(th, enum.Enum) and not choices:
                 # the enum must be a str or int (and at least one value)
                 # this is verified by is_type_supported
@@ -237,7 +243,11 @@ def is_type_supported(t: type) -> bool:
 
     if typing.get_origin(t) is list:
         in_type = typing.get_args(t)[0]
-        return in_type in (str, int, float, bool)
+        return is_type_supported(in_type)
+
+    is_optional, ty = _is_optional_type(t)
+    if is_optional:
+        return is_type_supported(ty)
 
     if issubclass(t, enum.Enum):
         initial_type = None
@@ -250,3 +260,22 @@ def is_type_supported(t: type) -> bool:
         return initial_type in (str, int)
 
     return False
+
+
+def _is_optional_type(typ) -> Tuple[bool, Any]:
+    """return is_optional, inner_type"""
+    origin = typing.get_origin(typ)
+
+    if origin in {typing.Union, getattr(__builtins__, "UnionType", typing.Union)}:
+        args = typing.get_args(typ)
+        is_optional = type(None) in args
+
+        inner_arg = None
+        for arg in args:
+            if arg is not type(None):
+                inner_arg = arg
+                break
+
+        return is_optional, inner_arg
+
+    return False, None

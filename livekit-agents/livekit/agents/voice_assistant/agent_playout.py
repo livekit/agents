@@ -16,7 +16,7 @@ class PlayoutHandle:
         self,
         speech_id: str,
         playout_source: AsyncIterable[rtc.AudioFrame],
-        transcription_fwd: transcription.TTSSegmentsForwarder | None = None,
+        transcription_fwd: transcription.TTSSegmentsForwarder,
     ) -> None:
         self._playout_source = playout_source
         self._tr_fwd = transcription_fwd
@@ -84,7 +84,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         self,
         speech_id: str,
         playout_source: AsyncIterable[rtc.AudioFrame],
-        transcription_fwd: transcription.TTSSegmentsForwarder | None = None,
+        transcription_fwd: transcription.TTSSegmentsForwarder,
     ) -> PlayoutHandle:
         if self._closed:
             raise ValueError("cancellable source is closed")
@@ -109,7 +109,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             return handle.interrupted and self._vol_filter.filtered() <= eps
 
         first_frame = True
-        cancelled = False
 
         try:
             if old_task is not None:
@@ -117,8 +116,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
 
             async for frame in handle._playout_source:
                 if first_frame:
-                    if handle._tr_fwd is not None:
-                        handle._tr_fwd.segment_playout_started()
+                    handle._tr_fwd.segment_playout_started()
 
                     logger.debug(
                         "started playing the first frame",
@@ -129,7 +127,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                     first_frame = False
 
                 if _should_break():
-                    cancelled = True
                     break
 
                 # divide the frame by chunks of 20ms
@@ -137,7 +134,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 i = 0
                 while i < len(frame.data):
                     if _should_break():
-                        cancelled = True
                         break
 
                     rem = min(ms20, len(frame.data) - i)
@@ -160,16 +156,18 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                     handle._time_played += rem / frame.sample_rate
         finally:
             if not first_frame:
-                if handle._tr_fwd is not None and not cancelled:
+                if not handle.interrupted:
                     handle._tr_fwd.segment_playout_finished()
 
-                self.emit("playout_stopped", cancelled)
+                self.emit("playout_stopped", handle.interrupted)
 
+            await handle._tr_fwd.aclose()
             handle._done_fut.set_result(None)
-            if handle._tr_fwd is not None:
-                await handle._tr_fwd.aclose()
 
             logger.debug(
                 "playout finished",
-                extra={"speech_id": handle.speech_id, "cancelled": cancelled},
+                extra={
+                    "speech_id": handle.speech_id,
+                    "interrupted": handle.interrupted,
+                },
             )

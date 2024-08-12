@@ -2,13 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Optional
+from typing import Awaitable, Callable, Optional, Union
 
 from livekit import rtc
 
 from .. import stt
 from ..log import logger
 from . import _utils
+
+WillForwardTranscription = Callable[
+    ["STTSegmentsForwarder", rtc.Transcription],
+    Union[rtc.Transcription, Awaitable[Optional[rtc.Transcription]]],
+]
+
+
+def _default_will_forward_transcription(
+    fwd: STTSegmentsForwarder, transcription: rtc.Transcription
+) -> rtc.Transcription:
+    return transcription
 
 
 class STTSegmentsForwarder:
@@ -22,6 +33,7 @@ class STTSegmentsForwarder:
         room: rtc.Room,
         participant: rtc.Participant | str,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
+        will_forward_transcription: WillForwardTranscription = _default_will_forward_transcription,
     ):
         identity = participant if isinstance(participant, str) else participant.identity
         if track is None:
@@ -29,9 +41,8 @@ class STTSegmentsForwarder:
         elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
             track = track.sid
 
-        self._room = room
-        self._participant_identity = identity
-        self._track_id = track
+        self._room, self._participant_identity, self._track_id = room, identity, track
+        self._will_forward_transcription = will_forward_transcription
         self._queue = asyncio.Queue[Optional[rtc.TranscriptionSegment]]()
         self._main_task = asyncio.create_task(self._run())
         self._current_id = _utils.segment_uuid()
@@ -43,12 +54,27 @@ class STTSegmentsForwarder:
                 if seg is None:
                     break
 
-                transcription = rtc.Transcription(
+                base_transcription = rtc.Transcription(
                     participant_identity=self._participant_identity,
                     track_sid=self._track_id,
                     segments=[seg],  # no history for now
                 )
-                await self._room.local_participant.publish_transcription(transcription)
+
+                transcription = self._will_forward_transcription(
+                    self, base_transcription
+                )
+                if asyncio.iscoroutine(transcription):
+                    transcription = await transcription
+
+                if not isinstance(transcription, rtc.Transcription):
+                    transcription = _default_will_forward_transcription(
+                        self, base_transcription
+                    )
+
+                if transcription.segments and self._room.isconnected():
+                    await self._room.local_participant.publish_transcription(
+                        transcription
+                    )
 
         except Exception:
             logger.exception("error in stt transcription")
