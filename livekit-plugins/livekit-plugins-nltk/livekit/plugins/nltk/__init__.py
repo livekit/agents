@@ -34,7 +34,7 @@ class NltkPlugin(Plugin):
         try:
             _ = nltk.data.find("tokenizers/punkt")
         except LookupError:
-            nltk.download("punkt")
+            nltk.download("punkt_tab")
 
 
 Plugin.register_plugin(NltkPlugin())
