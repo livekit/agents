@@ -1,11 +1,35 @@
-set(LKCEF_SRCS app.cpp app.hpp utils.cpp utils.hpp handler.hpp handler.cpp)
+include(FetchContent)
+
+set(FETCHCONTENT_QUIET off)
+
+# I don't want to write a different code per platform for the dev mode.
+# so use glfw and imgui like I do for my other side projects...
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(glfw GIT_REPOSITORY https://github.com/glfw/glfw.git GIT_TAG 3.4)
+FetchContent_MakeAvailable(glfw)
+
+FetchContent_Declare(imgui GIT_REPOSITORY https://github.com/ocornut/imgui GIT_TAG origin/docking)
+FetchContent_GetProperties(imgui)
+FetchContent_MakeAvailable(imgui)
+file(GLOB IMGUI_SOURCES ${imgui_SOURCE_DIR}/*.cpp)
+file(GLOB IMGUI_HEADERS ${imgui_SOURCE_DIR}/*.h)
+add_library(imgui STATIC ${IMGUI_SOURCES} ${IMGUI_SOURCES} ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
+set_target_properties(imgui PROPERTIES CXX_STANDARD 17)
+target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${GLFW_INCLUDE_DIR})
+target_link_libraries(imgui PRIVATE glfw)
+
+
+set(LKCEF_SRCS app.cpp app.hpp handler.hpp handler.cpp dev_renderer.hpp dev_renderer.cpp)
 set(LKCEF_SRCS_LINUX main_linux.cpp)
-set(LKCEF_SRCS_MAC main_mac.mm handler_mac.mm app_mac.mm)
+set(LKCEF_SRCS_MAC app_mac.mm)
 set(LKCEF_SRCS_WINDOWS main_win.cpp )
 append_platform_sources(LKCEF_SRCS)
 source_group(lkcef FILES ${LKCEF_SRCS})
 
-set(LKCEF_HELPER_SRCS utils.cpp utils.hpp)
+set(LKCEF_HELPER_SRCS )
 set(LKCEF_HELPER_SRCS_LINUX helper_main_linux.cpp)
 set(LKCEF_HELPER_SRCS_MAC helper_main_mac.mm)
 set(LKCEF_HELPER_SRCS_WINDOWS helper_main_win.cpp)
@@ -69,9 +93,8 @@ if(OS_MAC)
   add_library(lkcef STATIC ${LKCEF_SRCS})
   set_library_target_properties(lkcef)
   add_dependencies(lkcef libcef_dll_wrapper)
-  target_link_libraries(lkcef libcef_dll_wrapper ${CEF_STANDARD_LIBS})
-
-
+  target_include_directories(lkcef PRIVATE ${GLFW_INCLUDE_DIR})
+  target_link_libraries(lkcef libcef_dll_wrapper ${CEF_STANDARD_LIBS} glfw imgui)
 
   add_custom_command(
     TARGET lkcef
@@ -101,7 +124,7 @@ if(OS_MAC)
     # Create Helper-specific variants of the helper-Info.plist file.
     set(_helper_info_plist
         "${CMAKE_CURRENT_BINARY_DIR}/lkcef-Info${_target_suffix}.plist")
-    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/resources/lkcef-Info.plist"
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/resources/lkcefhelper-Info.plist"
          _plist_contents)
     string(REPLACE "\${EXECUTABLE_NAME}" "${_helper_output_name}"
                    _plist_contents ${_plist_contents})
@@ -173,6 +196,4 @@ set_target_properties(lkcef_python PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
 target_include_directories(lkcef_python PRIVATE ${CEF_INCLUDE_PATH})
 target_link_libraries(lkcef_python PUBLIC lkcef)
 target_link_libraries(lkcef_python PUBLIC libcef_dll_wrapper ${CEF_STANDARD_LIBS})
-
-
-
+add_dependencies(lkcef_python libcef_dll_wrapper)

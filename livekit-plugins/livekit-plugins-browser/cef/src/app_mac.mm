@@ -1,30 +1,29 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "include/cef_application_mac.h"
-#include "include/cef_command_line.h"
-#include "include/wrapper/cef_helpers.h"
-#include "include/wrapper/cef_library_loader.h"
-
+#include <iostream>
 
 #include "app.hpp"
 #include "handler.hpp"
+#include "include/cef_application_mac.h"
+#include "include/cef_command_line.h"
+#include "include/wrapper/cef_library_loader.h"
 
 // Receives notifications from the application.
-@interface SimpleAppDelegate : NSObject <NSApplicationDelegate>
+@interface AgentsAppDelegate : NSObject <NSApplicationDelegate>
 
 - (void)createApplication:(id)object;
 - (void)tryToTerminateApplication:(NSApplication*)app;
 @end
 
 // Provide the CefAppProtocol implementation required by CEF.
-@interface SimpleApplication : NSApplication <CefAppProtocol> {
+@interface AgentsApplication : NSApplication <CefAppProtocol> {
  @private
   BOOL handlingSendEvent_;
 }
 @end
 
-@implementation SimpleApplication
+@implementation AgentsApplication
 - (BOOL)isHandlingSendEvent {
   return handlingSendEvent_;
 }
@@ -38,52 +37,15 @@
   [super sendEvent:event];
 }
 
-// |-terminate:| is the entry point for orderly "quit" operations in Cocoa. This
-// includes the application menu's quit menu item and keyboard equivalent, the
-// application's dock icon menu's quit menu item, "quit" (not "force quit") in
-// the Activity Monitor, and quits triggered by user logout and system restart
-// and shutdown.
-//
-// The default |-terminate:| implementation ends the process by calling exit(),
-// and thus never leaves the main run loop. This is unsuitable for Chromium
-// since Chromium depends on leaving the main run loop to perform an orderly
-// shutdown. We support the normal |-terminate:| interface by overriding the
-// default implementation. Our implementation, which is very specific to the
-// needs of Chromium, works by asking the application delegate to terminate
-// using its |-tryToTerminateApplication:| method.
-//
-// |-tryToTerminateApplication:| differs from the standard
-// |-applicationShouldTerminate:| in that no special event loop is run in the
-// case that immediate termination is not possible (e.g., if dialog boxes
-// allowing the user to cancel have to be shown). Instead, this method tries to
-// close all browsers by calling CloseBrowser(false) via
-// ClientHandler::CloseAllBrowsers. Calling CloseBrowser will result in a call
-// to ClientHandler::DoClose and execution of |-performClose:| on the NSWindow.
-// DoClose sets a flag that is used to differentiate between new close events
-// (e.g., user clicked the window close button) and in-progress close events
-// (e.g., user approved the close window dialog). The NSWindowDelegate
-// |-windowShouldClose:| method checks this flag and either calls
-// CloseBrowser(false) in the case of a new close event or destructs the
-// NSWindow in the case of an in-progress close event.
-// ClientHandler::OnBeforeClose will be called after the CEF NSView hosted in
-// the NSWindow is dealloc'ed.
-//
-// After the final browser window has closed ClientHandler::OnBeforeClose will
-// begin actual tear-down of the application by calling CefQuitMessageLoop.
-// This ends the NSApplication event loop and execution then returns to the
-// main() function for cleanup before application termination.
-//
-// The standard |-applicationShouldTerminate:| is not supported, and code paths
-// leading to it must be redirected.
 - (void)terminate:(id)sender {
-  SimpleAppDelegate* delegate =
-      static_cast<SimpleAppDelegate*>([NSApp delegate]);
+  AgentsAppDelegate* delegate =
+      static_cast<AgentsAppDelegate*>([NSApp delegate]);
   [delegate tryToTerminateApplication:self];
   // Return, don't exit. The application is responsible for exiting on its own.
 }
 @end
 
-@implementation SimpleAppDelegate
+@implementation AgentsAppDelegate
 
 // Create the application on the UI thread.
 - (void)createApplication:(id)object {
@@ -96,10 +58,6 @@
 }
 
 - (void)tryToTerminateApplication:(NSApplication*)app {
-  AgentHandler* handler = AgentHandler::GetInstance();
-  if (handler && !handler->IsClosing()) {
-    handler->CloseAllBrowsers(false);
-  }
 }
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:
@@ -111,65 +69,61 @@
 // already running.
 - (BOOL)applicationShouldHandleReopen:(NSApplication*)theApplication
                     hasVisibleWindows:(BOOL)flag {
-  AgentHandler* handler = AgentHandler::GetInstance();
-  if (handler && !handler->IsClosing()) {
-    handler->ShowMainWindow();
-  }
   return NO;
 }
 @end
 
 // Entry point function for the browser process.
-int AgentApp::run() {
-
-
-  // Provide CEF with command-line arguments.
+int RunAgentApp(CefRefPtr<AgentApp> app) {
   CefMainArgs main_args(0, nullptr);
 
   @autoreleasepool {
-    // Initialize the SimpleApplication instance.
-    [SimpleApplication sharedApplication];
+    [AgentsApplication sharedApplication];
 
     // If there was an invocation to NSApp prior to this method, then the NSApp
-    // will not be a SimpleApplication, but will instead be an NSApplication.
+    // will not be a AgentsApplication, but will instead be an NSApplication.
     // This is undesirable and we must enforce that this doesn't happen.
-    CHECK([NSApp isKindOfClass:[SimpleApplication class]]);
+    CHECK([NSApp isKindOfClass:[AgentsApplication class]]);
 
-    // Specify CEF global settings here.
-    CefSettings settings;
-    settings.framework_dir_path = "/Users/theomonnom/livekit/agents/livekit-plugins/livekit-plugins-browser/cef/src/Release";
+    std::string framework_path =
+        "/Users/theomonnom/livekit/agents/livekit-plugins/"
+        "livekit-plugins-browser/cef/src/Debug/lkcef_app.app/Contents/"
+        "Frameworks/Chromium Embedded Framework.framework";
+    std::string main_bundle_path =
+        "/Users/theomonnom/livekit/agents/livekit-plugins/"
+        "livekit-plugins-browser/cef/src/Debug/lkcef_app.app";
+    std::string subprocess_path =
+        "/Users/theomonnom/livekit/agents/livekit-plugins/"
+        "livekit-plugins-browser/cef/src/Debug/lkcef_app.app/Contents/"
+        "Frameworks/lkcef Helper.app/Contents/MacOS/lkcef Helper";
 
-    // Use the CEF Chrome runtime if "--enable-chrome-runtime" is specified via
-    // the command-line. Otherwise, use the CEF Alloy runtime. For more
-    // information about CEF runtimes see
-    // https://bitbucket.org/chromiumembedded/cef/wiki/Architecture.md#markdown-header-cef3
-    //settings.chrome_runtime = true;
+    std::string framework_lib = framework_path + "/Chromium Embedded Framework";
+    if (!cef_load_library(framework_lib.c_str())) {
+      std::cerr << "lkcef: Failed to load CEF library" << std::endl;
+      return 1;
+    }
 
-    settings.no_sandbox = true;
+    CefSettings settings{};
+    // settings.remote_debugging_port = 8088;
+    CefString(&settings.framework_dir_path).FromString(framework_path);
+    CefString(&settings.main_bundle_path).FromString(main_bundle_path);
+    CefString(&settings.browser_subprocess_path).FromString(subprocess_path);
 
-    // SimpleApp implements application-level callbacks for the browser process.
-    // It will create the first browser instance in OnContextInitialized() after
-    // CEF has initialized.
-    CefRefPtr<AgentApp> app(new AgentApp);
-
-
-      // Load the CEF framework library at runtime instead of linking directly
-      // as required by the macOS sandbox implementation
-      CefScopedLibraryLoader library_loader;
-      if (!library_loader.LoadInMain()) {
-        return 1;
-      }
+    settings.no_sandbox = true;  // No sandbox for MacOS, for livekit-agents,
+                                 // we're only going to support Linux
+    settings.windowless_rendering_enabled = true;
 
     // Initialize the CEF browser process. May return false if initialization
     // fails or if early exit is desired (for example, due to process singleton
     // relaunch behavior).
     if (!CefInitialize(main_args, settings, app.get(), nullptr)) {
-      //return CefGetExitCode();
+      std::cerr << "lkcef: Failed to initialize CEF" << std::endl;
+      // TODO(theomonnom): Use CefGetExitCode();
       return 1;
     }
 
     // Create the application delegate.
-    SimpleAppDelegate* delegate = [[SimpleAppDelegate alloc] init];
+    AgentsAppDelegate* delegate = [[AgentsAppDelegate alloc] init];
     // Set as the delegate for application events.
     NSApp.delegate = delegate;
 
@@ -177,14 +131,11 @@ int AgentApp::run() {
                                withObject:nil
                             waitUntilDone:NO];
 
-    // Run the CEF message loop. This will block until CefQuitMessageLoop() is
-    // called.
-    CefRunMessageLoop();
+    app->Run();
 
-    // Shut down CEF.
     CefShutdown();
+    cef_unload_library();
 
-    // Release the delegate.
 #if !__has_feature(objc_arc)
     [delegate release];
 #endif  // !__has_feature(objc_arc)

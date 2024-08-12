@@ -12,110 +12,93 @@
 
 namespace {
 
-AgentHandler *g_instance = nullptr;
-
 // Returns a data: URI with the specified contents.
-std::string GetDataURI(const std::string &data, const std::string &mime_type) {
+std::string GetDataURI(const std::string& data, const std::string& mime_type) {
   return "data:" + mime_type + ";base64," +
          CefURIEncode(CefBase64Encode(data.data(), data.size()), false)
              .ToString();
 }
 
-} // namespace
+}  // namespace
 
-AgentHandler::AgentHandler() { g_instance = this; }
-
-AgentHandler::~AgentHandler() { g_instance = nullptr; }
-
-AgentHandler *AgentHandler::GetInstance() { return g_instance; }
+AgentHandler::AgentHandler(CefRefPtr<DevRenderer> dev_renderer)
+    : dev_renderer_(dev_renderer) {}
 
 void AgentHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
-                                 const CefString &title) {
+                                 const CefString& title) {
   CEF_REQUIRE_UI_THREAD();
-
-  if (auto browser_view = CefBrowserView::GetForBrowser(browser)) {
-    // Set the title of the window using the Views framework.
-    CefRefPtr<CefWindow> window = browser_view->GetWindow();
-    if (window) {
-      window->SetTitle(title);
-    }
-  } else if (!IsChromeRuntimeEnabled()) {
-    // Set the title of the window using platform APIs.
-    PlatformTitleChange(browser, title);
-  }
 }
 
-void AgentHandler::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
-                           const RectList &dirtyRects, const void *buffer,
-                           int width, int height) {
-    std::cout << "OnPaint" << std::endl;
+void AgentHandler::OnPaint(CefRefPtr<CefBrowser> browser,
+                           PaintElementType type,
+                           const RectList& dirtyRects,
+                           const void* buffer,
+                           int width,
+                           int height) {
+
+  std::cout << "OnPaint" << std::endl;
+
+  if (dev_renderer_)
+    dev_renderer_->OnPaint(browser, type, dirtyRects, buffer, width, height);
 }
 
-
-void AgentHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect &rect) {};
+void AgentHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
+        CEF_REQUIRE_UI_THREAD();
+        rect.Set(0, 0, 800, 600);
+};
 
 void AgentHandler::OnAudioStreamPacket(CefRefPtr<CefBrowser> browser,
-                                       const float **data, int frames,
+                                       const float** data,
+                                       int frames,
                                        int64_t pts) {
-    std::cout << "OnAudioStreamPacket" << std::endl;
+  std::cout << "OnAudioStreamPacket" << std::endl;
 }
 
 void AgentHandler::OnAudioStreamStarted(CefRefPtr<CefBrowser> browser,
-                        const CefAudioParameters &params,
-                        int channels) {}
+                                        const CefAudioParameters& params,
+                                        int channels) {}
 
 void AgentHandler::OnAudioStreamStopped(CefRefPtr<CefBrowser> browser) {}
 
 void AgentHandler::OnAudioStreamError(CefRefPtr<CefBrowser> browser,
-                      const CefString &message) {}
-
-
+                                      const CefString& message) {}
 
 void AgentHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
-  // Add to the list of existing browsers.
-  browser_list_.push_back(browser);
+  int identifier = browser->GetIdentifier();
+  CefRefPtr<BrowserHandle> handle = pending_handles_.front();
+  pending_handles_.pop_front();
+
+  handle->browser_ = browser;
+  if (handle->created_callback_)
+    handle->created_callback_();
+
+  browser_handles_[identifier] = handle;
+
+  if (dev_renderer_)
+    dev_renderer_->OnAfterCreated(browser);
 }
 
 bool AgentHandler::DoClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
-  // Closing the main window requires special handling. See the DoClose()
-  // documentation in the CEF header for a detailed destription of this
-  // process.
-  if (browser_list_.size() == 1) {
-    // Set a flag to indicate that the window close should be allowed.
-    is_closing_ = true;
-  }
-
-  // Allow the close. For windowed browsers this will result in the OS close
-  // event being sent.
   return false;
 }
 
 void AgentHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
-  // Remove from the list of existing browsers.
-  BrowserList::iterator bit = browser_list_.begin();
-  for (; bit != browser_list_.end(); ++bit) {
-    if ((*bit)->IsSame(browser)) {
-      browser_list_.erase(bit);
-      break;
-    }
-  }
 
-  if (browser_list_.empty()) {
-    // All browser windows have closed. Quit the application message loop.
-    CefQuitMessageLoop();
-  }
+  if (dev_renderer_)
+    dev_renderer_->OnBeforeClose(browser);
 }
 
 void AgentHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
-                               CefRefPtr<CefFrame> frame, ErrorCode errorCode,
-                               const CefString &errorText,
-                               const CefString &failedUrl) {
+                               CefRefPtr<CefFrame> frame,
+                               ErrorCode errorCode,
+                               const CefString& errorText,
+                               const CefString& failedUrl) {
   CEF_REQUIRE_UI_THREAD();
 
   // Allow Chrome to show the error page.
@@ -138,29 +121,7 @@ void AgentHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
   frame->LoadURL(GetDataURI(ss.str(), "text/html"));
 }
 
-void AgentHandler::ShowMainWindow() {
-  if (!CefCurrentlyOn(TID_UI)) {
-    // Execute on the UI thread.
-    CefPostTask(TID_UI, base::BindOnce(&AgentHandler::ShowMainWindow, this));
-    return;
-  }
-
-  if (browser_list_.empty()) {
-    return;
-  }
-
-  auto main_browser = browser_list_.front();
-
-  if (auto browser_view = CefBrowserView::GetForBrowser(main_browser)) {
-    // Show the window using the Views framework.
-    if (auto window = browser_view->GetWindow()) {
-      window->Show();
-    }
-  } else if (!IsChromeRuntimeEnabled()) {
-    PlatformShowWindow(main_browser);
-  }
-}
-
+/*
 void AgentHandler::CloseAllBrowsers(bool force_close) {
   if (!CefCurrentlyOn(TID_UI)) {
     // Execute on the UI thread.
@@ -178,6 +139,7 @@ void AgentHandler::CloseAllBrowsers(bool force_close) {
     (*it)->GetHost()->CloseBrowser(force_close);
   }
 }
+ */
 
 bool AgentHandler::IsChromeRuntimeEnabled() {
   static bool enabled = []() {
