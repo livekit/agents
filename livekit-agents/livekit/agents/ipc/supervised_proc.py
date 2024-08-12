@@ -319,7 +319,7 @@ class SupervisedProc:
         while True:
             try:
                 msg = await channel.arecv_message(self._pch, proto.IPC_MESSAGES)
-            except (utils.aio.duplex_unix.DuplexClosed):
+            except utils.aio.duplex_unix.DuplexClosed:
                 break
 
             if isinstance(msg, proto.PongResponse):

@@ -3,12 +3,15 @@ import multiprocessing as mp
 import os
 import socket
 
+
 async def async_send(loop, sock, message):
-    await loop.sock_sendall(sock, message.encode('utf-8'))
+    await loop.sock_sendall(sock, message.encode("utf-8"))
+
 
 async def async_recv(loop, sock, buffer_size=1024):
     data = await loop.sock_recv(sock, buffer_size)
-    return data.decode('utf-8')
+    return data.decode("utf-8")
+
 
 def worker_process(send_sock):
     # This will run in the worker process
@@ -25,10 +28,11 @@ def worker_process(send_sock):
     loop.run_until_complete(worker_task())
     send_sock.close()
 
+
 async def main():
     parent_sock, child_sock = socket.socketpair()
 
-    ctx = mp.get_context('spawn')
+    ctx = mp.get_context("spawn")
     process = ctx.Process(target=worker_process, args=(child_sock,))
     process.start()
 
@@ -50,5 +54,6 @@ async def main():
     process.join()
     parent_sock.close()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     asyncio.run(main())

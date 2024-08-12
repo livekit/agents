@@ -7,6 +7,7 @@ import struct
 
 class DuplexClosed(Exception):
     """Exception raised when the duplex connection is closed."""
+
     pass
 
 
@@ -34,7 +35,12 @@ class _AsyncDuplex:
             len_bytes = await self._reader.readexactly(4)
             len = struct.unpack("!I", len_bytes)[0]
             return await self._reader.readexactly(len)
-        except (BrokenPipeError, ConnectionResetError, EOFError, asyncio.IncompleteReadError):
+        except (
+            BrokenPipeError,
+            ConnectionResetError,
+            EOFError,
+            asyncio.IncompleteReadError,
+        ):
             raise DuplexClosed()
 
     async def send_bytes(self, data: bytes) -> None:
