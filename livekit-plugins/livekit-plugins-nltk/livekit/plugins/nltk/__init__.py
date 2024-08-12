@@ -32,7 +32,7 @@ class NltkPlugin(Plugin):
 
     def download_files(self):
         try:
-            _ = nltk.data.find("tokenizers/punkt")
+            _ = nltk.data.find("tokenizers/punkt_tab")
         except LookupError:
             nltk.download("punkt_tab")
 
