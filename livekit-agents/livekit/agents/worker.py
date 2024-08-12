@@ -54,7 +54,9 @@ class _DefaultLoadCalc:
 
     def __init__(self) -> None:
         self._m_avg = utils.MovingAverage(5)  # avg over 2.5
-        self._thread = threading.Thread(target=self._calc_load, daemon=True)
+        self._thread = threading.Thread(
+            target=self._calc_load, daemon=True, name="worker_cpu_load_monitor"
+        )
         self._thread.start()
 
     def _calc_load(self) -> None:

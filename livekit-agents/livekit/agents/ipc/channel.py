@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import asyncio
+import socket
 import struct
 from typing import ClassVar, Protocol, runtime_checkable
 
@@ -43,20 +44,24 @@ def _write_message(msg: Message) -> bytes:
     return bio.getvalue()
 
 
-async def arecv_message(conn: utils.aio.Connection, messages: MessagesDict) -> Message:
-    return _read_message(await conn.recv_bytes(), messages)
+async def arecv_message(
+    dplx: utils.aio.duplex_unix._AsyncDuplex, messages: MessagesDict
+) -> Message:
+    return _read_message(await dplx.recv_bytes(), messages)
 
 
-async def asend_message(conn: utils.aio.Connection, msg: Message) -> None:
-    await conn.send_bytes(_write_message(msg))
+async def asend_message(dplx: utils.aio.duplex_unix._AsyncDuplex, msg: Message) -> None:
+    await dplx.send_bytes(_write_message(msg))
 
 
-def recv_message(conn: mpc.Connection, messages: MessagesDict) -> Message:
-    return _read_message(conn.recv(), messages)
+def recv_message(
+    dplx: utils.aio.duplex_unix._Duplex, messages: MessagesDict
+) -> Message:
+    return _read_message(dplx.recv_bytes(), messages)
 
 
-def send_message(conn: mpc.Connection, msg: Message) -> None:
-    conn.send_bytes(_write_message(msg))
+def send_message(dplx: utils.aio.duplex_unix._Duplex, msg: Message) -> None:
+    dplx.send_bytes(_write_message(msg))
 
 
 def write_bytes(b: io.BytesIO, buf: bytes) -> None:

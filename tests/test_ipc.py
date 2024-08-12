@@ -4,6 +4,7 @@ import asyncio
 import ctypes
 import io
 import multiprocessing as mp
+import socket
 import time
 import uuid
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from multiprocessing.context import BaseContext
 from typing import ClassVar
 
 import psutil
-from livekit.agents import JobContext, JobProcess, ipc, job
+from livekit.agents import JobContext, JobProcess, ipc, job, utils
 from livekit.protocol import agent
 
 
@@ -47,46 +48,40 @@ IPC_MESSAGES = {
 }
 
 
-def _ping_pong_main(mp_cch):
+def _echo_main(mp_cch):
     async def _pong():
         loop = asyncio.get_event_loop()
-        cch = ipc.channel.AsyncProcChannel(
-            conn=mp_cch, loop=loop, messages=IPC_MESSAGES
-        )
+        cch = await utils.aio.duplex_unix._AsyncDuplex.open(mp_cch)
         while True:
             try:
-                msg = await cch.arecv()
-                await cch.asend(msg)
-            except ipc.channel.ChannelClosed:
+                msg = await ipc.channel.arecv_message(cch, IPC_MESSAGES)
+                await ipc.channel.asend_message(cch, msg)
+            except asyncio.IncompleteReadError:
+                await cch.aclose()
                 break
-
-        print("pong process exiting")
-        mp_cch.close()
 
     asyncio.run(_pong())
 
 
 async def test_async_channel():
-    mp_ctx = mp.get_context("spawn")
-
-    loop = asyncio.get_event_loop()
-    mp_pch, mp_cch = mp_ctx.Pipe(duplex=True)
-    pch = ipc.channel.AsyncProcChannel(conn=mp_pch, loop=loop, messages=IPC_MESSAGES)
-    proc = mp_ctx.Process(target=_ping_pong_main, args=(mp_cch,))
+    mp_pch, mp_cch = socket.socketpair()
+    pch = await utils.aio.duplex_unix._AsyncDuplex.open(mp_pch)
+    proc = mp.get_context("spawn").Process(target=_echo_main, args=(mp_cch,))
     proc.start()
     mp_cch.close()
 
-    await pch.asend(EmptyMessage())
-    assert await pch.arecv() == EmptyMessage()
+    await ipc.channel.asend_message(pch, EmptyMessage())
+    assert await ipc.channel.arecv_message(pch, IPC_MESSAGES) == EmptyMessage()
 
-    await pch.asend(
-        SomeDataMessage(string="hello", number=42, double=3.14, data=b"world")
+    await ipc.channel.asend_message(
+        pch, SomeDataMessage(string="hello", number=42, double=3.14, data=b"world")
     )
-    assert await pch.arecv() == SomeDataMessage(
+    assert await ipc.channel.arecv_message(pch, IPC_MESSAGES) == SomeDataMessage(
         string="hello", number=42, double=3.14, data=b"world"
     )
 
     await pch.aclose()
+    await asyncio.sleep(0.5)
     proc.terminate()
     proc.join()
 
