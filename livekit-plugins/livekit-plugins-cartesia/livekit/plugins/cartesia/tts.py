@@ -87,7 +87,7 @@ class TTS(tts.TTS):
         return ChunkedStream(text, self._opts, self._ensure_session())
 
     def stream(self) -> "SynthesizeStream":
-        return SynthesizeStream(self, self._opts, self._ensure_session())
+        return SynthesizeStream(self._opts, self._ensure_session())
 
 
 class ChunkedStream(tts.ChunkedStream):
