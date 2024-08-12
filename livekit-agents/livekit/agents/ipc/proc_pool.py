@@ -74,7 +74,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         )
         try:
             self.emit("process_created", proc)
-            proc.start()
+            await proc.start()
             self._processes.append(proc)
             self.emit("process_started", proc)
             try:

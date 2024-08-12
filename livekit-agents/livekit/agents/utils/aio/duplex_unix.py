@@ -5,6 +5,10 @@ import socket
 import struct
 
 
+class DuplexClosed(Exception):
+    pass
+
+
 class _AsyncDuplex:
     def __init__(
         self,
@@ -31,17 +35,25 @@ class _AsyncDuplex:
             return await self._reader.readexactly(len)
         except asyncio.IncompleteReadError:
             raise EOFError()
+        except BrokenPipeError:
+            raise DuplexClosed()
 
     async def send_bytes(self, data: bytes) -> None:
-        len_bytes = struct.pack("!I", len(data))
-        self._writer.write(len_bytes)
-        self._writer.write(data)
-        await self._writer.drain()
+        try:
+            len_bytes = struct.pack("!I", len(data))
+            self._writer.write(len_bytes)
+            self._writer.write(data)
+            await self._writer.drain()
+        except ConnectionResetError:
+            raise DuplexClosed()
 
     async def aclose(self) -> None:
-        self._writer.close()
-        await self._writer.wait_closed()
-        self._sock.close()
+        try:
+            self._writer.close()
+            await self._writer.wait_closed()
+            self._sock.close()
+        except BrokenPipeError:
+            raise DuplexClosed()
 
 
 def _read_exactly(sock: socket.socket, num_bytes: int) -> bytes:
@@ -63,14 +75,20 @@ class _Duplex:
         return _Duplex(sock)
 
     def recv_bytes(self) -> bytes:
-        len_bytes = _read_exactly(self._sock, 4)
-        len = struct.unpack("!I", len_bytes)[0]
-        return _read_exactly(self._sock, len)
+        try:
+            len_bytes = _read_exactly(self._sock, 4)
+            len = struct.unpack("!I", len_bytes)[0]
+            return _read_exactly(self._sock, len)
+        except BrokenPipeError:
+            raise DuplexClosed()
 
     def send_bytes(self, data: bytes) -> None:
-        len_bytes = struct.pack("!I", len(data))
-        self._sock.sendall(len_bytes)
-        self._sock.sendall(data)
+        try:
+            len_bytes = struct.pack("!I", len(data))
+            self._sock.sendall(len_bytes)
+            self._sock.sendall(data)
+        except BrokenPipeError:
+            raise DuplexClosed()
 
     def detach(self) -> socket.socket:
         sock = self._sock

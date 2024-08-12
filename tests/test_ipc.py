@@ -332,7 +332,7 @@ def _create_proc(
 async def test_shutdown_no_job():
     mp_ctx = mp.get_context("spawn")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
-    proc.start()
+    await proc.start()
     await proc.initialize()
     await asyncio.sleep(1.0)
     await proc.aclose()
@@ -349,7 +349,7 @@ async def test_job_slow_shutdown():
     proc, start_args = _create_proc(close_timeout=1.0, mp_ctx=mp_ctx)
     start_args.shutdown_simulate_work_time = 10.0
 
-    proc.start()
+    await proc.start()
     await proc.initialize()
     await asyncio.sleep(1.0)
 
@@ -367,7 +367,7 @@ async def test_job_graceful_shutdown():
     mp_ctx = mp.get_context("spawn")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
     start_args.shutdown_simulate_work_time = 1.0
-    proc.start()
+    await proc.start()
     await proc.initialize()
     await asyncio.sleep(1.0)
 

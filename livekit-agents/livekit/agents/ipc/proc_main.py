@@ -13,6 +13,7 @@ from livekit import rtc
 from .. import utils
 from ..job import JobContext, JobProcess
 from ..log import logger
+from ..utils.aio import duplex_unix
 from . import channel, proto
 
 
@@ -53,7 +54,7 @@ def _start_job(
     proc: JobProcess,
     start_req: proto.StartJobRequest,
     exit_proc_fut: asyncio.Event,
-    cch: channel.AsyncProcChannel,
+    cch: utils.aio.duplex_unix._AsyncDuplex,
 ) -> JobTask:
     # used to warn users if none of connect/shutdown is called inside the job_entry
     ctx_connect, ctx_shutdown = False, False
@@ -128,7 +129,7 @@ def _start_job(
                 "user_initiated": shutdown_info.user_initiated,
             },
         )
-        await cch.asend(proto.Exiting(reason=shutdown_info.reason))
+        await channel.asend_message(cch, proto.Exiting(reason=shutdown_info.reason))
         await room.disconnect()
 
         try:
@@ -163,14 +164,14 @@ async def _async_main(
     async def _read_ipc_task():
         nonlocal job_task
         while True:
-            msg = await cch.arecv()
+            msg = await channel.arecv_message(cch, proto.IPC_MESSAGES)
             no_msg_timeout.reset()
 
             if isinstance(msg, proto.PingRequest):
                 pong = proto.PongResponse(
                     last_timestamp=msg.timestamp, timestamp=utils.time_ms()
                 )
-                await cch.asend(pong)
+                await channel.asend_message(cch, pong)
 
             if isinstance(msg, proto.StartJobRequest):
                 assert job_task is None, "job task already running"
@@ -203,7 +204,9 @@ async def _async_main(
 
     await exit_proc_fut.wait()
     await utils.aio.gracefully_cancel(read_task, health_check_task)
-    await cch.aclose()
+
+    with contextlib.suppress(duplex_unix.DuplexClosed):
+        await cch.aclose()
 
 
 def main(args: proto.ProcStartArgs) -> None:
@@ -221,7 +224,7 @@ def main(args: proto.ProcStartArgs) -> None:
     loop.slow_callback_duration = 0.1  # 100ms
     utils.aio.debug.hook_slow_callbacks(2.0)
 
-    cch = utils.aio.duplex_unix._Duplex.open(args.mp_cch)
+    cch = duplex_unix._Duplex.open(args.mp_cch)
     try:
         init_req = channel.recv_message(cch, proto.IPC_MESSAGES)
 
@@ -233,9 +236,7 @@ def main(args: proto.ProcStartArgs) -> None:
         logger.debug("initializing process", extra={"pid": job_proc.pid})
         args.initialize_process_fnc(job_proc)
         logger.debug("process initialized", extra={"pid": job_proc.pid})
-        channel.send_message(
-            cch, proto.InitializeResponse()
-        )  # we're ready to receive jobs
+        channel.send_message(cch, proto.InitializeResponse())
 
         main_task = loop.create_task(
             _async_main(args, job_proc, cch.detach()), name="job_proc_main"
@@ -246,6 +247,8 @@ def main(args: proto.ProcStartArgs) -> None:
             except KeyboardInterrupt:
                 # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
                 pass
+    except duplex_unix.DuplexClosed:
+        pass
     finally:
         log_handler.close()
         log_q.close()
