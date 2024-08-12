@@ -159,15 +159,14 @@ class FallbackSynthesizeStream(SynthesizeStream):
         async def _pass_output():
             while True:
                 try:
-                    # TODO(nbsp): elevenlabs _stream._run_ws()#_recv_task() simply exits when it's
-                    #             done, and the iterator hangs indefinitely until it times out.
-                    #             probably needs a change to SynthesizeStream to make it work
                     item = await asyncio.wait_for(
                         self._stream.__anext__(), self._timeout
                     )
                     self._timeout = self._keepalive_timeout
                     self._event_ch.send_nowait(item)
                 except (TimeoutError, asyncio.TimeoutError):
+                    if self._stream.standby:
+                        continue
                     logger.warn(
                         f"provider {self._stream.__class__.__module__} failed, attempting to switch"
                     )
