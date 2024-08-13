@@ -58,10 +58,18 @@ class _DefaultLoadCalc:
             target=self._calc_load, daemon=True, name="worker_cpu_load_monitor"
         )
         self._thread.start()
+        self._lock = threading.Lock()
 
     def _calc_load(self) -> None:
         while True:
-            self._m_avg.add_sample(psutil.cpu_percent(0.5) / 100.0)  # 2 samples/s
+            cpu_p = psutil.cpu_percent(0.5) / 100.0  # 2 samples/s
+
+            with self._lock:
+                self._m_avg.add_sample(cpu_p)
+
+    def _get_avg(self) -> float:
+        with self._lock:
+            return self._m_avg.get_avg()
 
     @classmethod
     def get_load(cls) -> float:
