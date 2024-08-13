@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import multiprocessing as mp
+import socket
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Coroutine
 
@@ -21,7 +22,7 @@ class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Coroutine]
     log_q: mp.Queue
-    mp_cch: channel.ProcessConn
+    mp_cch: socket.socket
     asyncio_debug: bool
     user_arguments: Any | None = None
 

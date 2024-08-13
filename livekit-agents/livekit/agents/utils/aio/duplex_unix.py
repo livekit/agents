@@ -73,13 +73,14 @@ def _read_exactly(sock: socket.socket, num_bytes: int) -> bytes:
 
 class _Duplex:
     def __init__(self, sock: socket.socket) -> None:
-        self._sock = sock
+        self._sock: socket.socket | None = sock
 
     @staticmethod
     def open(sock: socket.socket) -> _Duplex:
         return _Duplex(sock)
 
     def recv_bytes(self) -> bytes:
+        assert self._sock is not None
         try:
             len_bytes = _read_exactly(self._sock, 4)
             len = struct.unpack("!I", len_bytes)[0]
@@ -88,6 +89,7 @@ class _Duplex:
             raise DuplexClosed()
 
     def send_bytes(self, data: bytes) -> None:
+        assert self._sock is not None
         try:
             len_bytes = struct.pack("!I", len(data))
             self._sock.sendall(len_bytes)
