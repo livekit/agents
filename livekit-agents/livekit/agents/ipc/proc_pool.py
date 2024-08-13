@@ -85,7 +85,6 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 self._warmed_proc_queue.put_nowait(proc)
             except Exception:
                 self._proc_needed_sem.release()  # notify to warm a new process after initialization failure
-                pass
             await proc.join()
             self.emit("process_closed", proc)
         finally:
