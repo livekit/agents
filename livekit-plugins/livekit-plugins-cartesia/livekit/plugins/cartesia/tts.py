@@ -174,30 +174,21 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         request_id = utils.shortuuid()
-        current_segment_id = utils.shortuuid()
         last_segment_id: str | None = None
 
         async def sentence_stream_task():
-            nonlocal last_segment_id, current_segment_id
+            nonlocal last_segment_id
             base_pkt = _to_cartesia_options(self._opts)
-            previous_segment_id = current_segment_id
             async for ev in self._sent_tokenizer_stream:
-                if current_segment_id != previous_segment_id:
-                    print("NEIL ending segment", previous_segment_id)
-                    end_pkt = base_pkt.copy()
-                    end_pkt["context_id"] = previous_segment_id
-                    end_pkt["transcript"] = " "
-                    end_pkt["continue"] = False
-                    previous_segment_id = current_segment_id
                 token_pkt = base_pkt.copy()
-                token_pkt["context_id"] = current_segment_id
+                token_pkt["context_id"] = utils.shortuuid()
                 token_pkt["transcript"] = ev.token + " "
                 token_pkt["continue"] = True
                 await ws.send_str(json.dumps(token_pkt))
 
-            last_segment_id = current_segment_id
+            last_segment_id = utils.shortuuid()
             end_pkt = base_pkt.copy()
-            end_pkt["context_id"] = current_segment_id
+            end_pkt["context_id"] = last_segment_id
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
@@ -211,7 +202,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._sent_tokenizer_stream.end_input()
 
         async def recv_task():
-            nonlocal last_segment_id, current_segment_id
+            nonlocal last_segment_id
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=NUM_CHANNELS,
@@ -233,9 +224,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 data = json.loads(msg.data)
                 segment_id = data.get("context_id")
                 # Once we receive audio for a segment, we can start a new segment
-                if segment_id == current_segment_id:
-                    print("NEIL starting new segment", segment_id, current_segment_id)
-                    current_segment_id = utils.shortuuid()
                 if data.get("data"):
                     b64data = base64.b64decode(data["data"])
                     for frame in audio_bstream.write(b64data):
