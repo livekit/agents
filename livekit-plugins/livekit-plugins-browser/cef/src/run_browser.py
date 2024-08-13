@@ -1,3 +1,5 @@
+# flake8: noqa
+
 import sys
 
 print("cwd: ", sys.path[0])

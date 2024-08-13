@@ -13,8 +13,23 @@ on:
 
 jobs:
   tests:
-    name: Run tests
-    runs-on: namespace-profile-4vcpu-cache
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14-large
+            platform: macos
+          - os: macos-14
+            platform: macos
+          - os: windows-2019
+            platform: windows
+          - os: ubuntu-20.04
+            platform: linux
+          - os: namespace-profile-default-arm64
+            platform: linux
+
+    runs-on: ${{ matrix.os }}
+    name: Run tests (${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,10 +41,29 @@ jobs:
           python-version: '3.9'
           cache: 'pip'
 
-      - name: install ffmpeg
+      - name: Install ffmpeg (Linux)
+        if: ${{ matrix.platform == 'linux' }}
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: install packages
+      # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
+      - name: Install libssl 1.1 (Linux 22.04)
+        if: ${{ matrix.os == 'namespace-profile-default-arm64' }}
+        run: |
+          wget https://old-releases.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
+          wget https://old-releases.ubuntu.com/ubuntu/pool/main/o/openssl/libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
+          sudo dpkg -i libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
+          sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
+
+      - name: Install ffmpeg (macOS)
+        if: ${{ matrix.platform == 'macos' }}
+        run: brew update && brew install ffmpeg
+
+      - name: Install ffmpeg (Windows)
+        if: ${{ matrix.platform == 'windows' }}
+        run: choco install ffmpeg
+
+      - name: Install packages
+        shell: bash
         run: |
           pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
           pip3 install -r ./tests/test-requirements.txt
@@ -44,6 +78,7 @@ jobs:
                       ./livekit-plugins/livekit-plugins-azure
 
       - name: Run tests
+        shell: bash
         env:
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}

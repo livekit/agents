@@ -5,6 +5,7 @@ import contextlib
 import copy
 import logging
 import multiprocessing as mp
+import socket
 from dataclasses import dataclass
 
 from livekit import rtc
@@ -12,6 +13,7 @@ from livekit import rtc
 from .. import utils
 from ..job import JobContext, JobProcess
 from ..log import logger
+from ..utils.aio import duplex_unix
 from . import channel, proto
 
 
@@ -52,7 +54,7 @@ def _start_job(
     proc: JobProcess,
     start_req: proto.StartJobRequest,
     exit_proc_fut: asyncio.Event,
-    cch: channel.AsyncProcChannel,
+    cch: utils.aio.duplex_unix._AsyncDuplex,
 ) -> JobTask:
     # used to warn users if none of connect/shutdown is called inside the job_entry
     ctx_connect, ctx_shutdown = False, False
@@ -120,7 +122,6 @@ def _start_job(
         job_entry_task.add_done_callback(log_exception)
 
         shutdown_info = await request_shutdown_fut
-        await cch.asend(proto.Exiting(reason=shutdown_info.reason))
         logger.debug(
             "shutting down job task",
             extra={
@@ -128,6 +129,7 @@ def _start_job(
                 "user_initiated": shutdown_info.user_initiated,
             },
         )
+        await channel.asend_message(cch, proto.Exiting(reason=shutdown_info.reason))
         await room.disconnect()
 
         try:
@@ -150,86 +152,105 @@ def _start_job(
 
 
 async def _async_main(
-    args: proto.ProcStartArgs, proc: JobProcess, cch: channel.AsyncProcChannel
+    args: proto.ProcStartArgs, proc: JobProcess, mp_cch: socket.socket
 ) -> None:
+    cch = await duplex_unix._AsyncDuplex.open(mp_cch)
+
     job_task: JobTask | None = None
     exit_proc_fut = asyncio.Event()
+    no_msg_timeout = utils.aio.sleep(proto.PING_INTERVAL * 5)  # missing 5 pings
 
     @utils.log_exceptions(logger=logger)
     async def _read_ipc_task():
         nonlocal job_task
         while True:
-            try:
-                msg = await cch.arecv()
-                if isinstance(msg, proto.PingRequest):
-                    pong = proto.PongResponse(
-                        last_timestamp=msg.timestamp, timestamp=utils.time_ms()
+            msg = await channel.arecv_message(cch, proto.IPC_MESSAGES)
+            no_msg_timeout.reset()
+
+            if isinstance(msg, proto.PingRequest):
+                pong = proto.PongResponse(
+                    last_timestamp=msg.timestamp, timestamp=utils.time_ms()
+                )
+                await channel.asend_message(cch, pong)
+
+            if isinstance(msg, proto.StartJobRequest):
+                assert job_task is None, "job task already running"
+                job_task = _start_job(args, proc, msg, exit_proc_fut, cch)
+
+            if isinstance(msg, proto.ShutdownRequest):
+                if job_task is None:
+                    # there is no running job, we can exit immediately
+                    break
+
+                with contextlib.suppress(asyncio.InvalidStateError):
+                    job_task.shutdown_fut.set_result(
+                        _ShutdownInfo(reason=msg.reason, user_initiated=False)
                     )
-                    await cch.asend(pong)
 
-                if isinstance(msg, proto.StartJobRequest):
-                    assert job_task is None, "job task already running"
-                    job_task = _start_job(args, proc, msg, exit_proc_fut, cch)
+    async def _self_health_check():
+        await no_msg_timeout
+        print("worker process is not responding.. worker crashed?")
+        with contextlib.suppress(asyncio.CancelledError):
+            exit_proc_fut.set()
 
-                if isinstance(msg, proto.ShutdownRequest):
-                    if job_task is not None:
-                        with contextlib.suppress(asyncio.InvalidStateError):
-                            job_task.shutdown_fut.set_result(
-                                _ShutdownInfo(reason=msg.reason, user_initiated=False)
-                            )
-                    else:
-                        exit_proc_fut.set()  # there is no running job, we can exit immediately
+    read_task = asyncio.create_task(_read_ipc_task(), name="ipc_read")
+    health_check_task = asyncio.create_task(_self_health_check(), name="health_check")
 
-            except channel.ChannelClosed:
-                logger.exception("channel closed, exiting")
-                break
+    def _done_cb(task: asyncio.Task) -> None:
+        with contextlib.suppress(asyncio.InvalidStateError):
+            exit_proc_fut.set()
 
-    read_task = asyncio.create_task(_read_ipc_task())
+    read_task.add_done_callback(_done_cb)
+
     await exit_proc_fut.wait()
-    await utils.aio.gracefully_cancel(read_task)
+    await utils.aio.gracefully_cancel(read_task, health_check_task)
+
+    with contextlib.suppress(duplex_unix.DuplexClosed):
+        await cch.aclose()
 
 
 def main(args: proto.ProcStartArgs) -> None:
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.NOTSET)
 
-    handler = LogQueueHandler(args.log_q)
-    root_logger.addHandler(handler)
+    log_q = args.log_q
+    log_q.cancel_join_thread()
+    log_handler = LogQueueHandler(log_q)
+    root_logger.addHandler(log_handler)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.set_debug(args.asyncio_debug)
+    loop.slow_callback_duration = 0.1  # 100ms
+    utils.aio.debug.hook_slow_callbacks(2.0)
 
-    cch = channel.AsyncProcChannel(
-        conn=args.mp_cch, loop=loop, messages=proto.IPC_MESSAGES
-    )
-    init_req = loop.run_until_complete(cch.arecv())
-
-    assert isinstance(
-        init_req, proto.InitializeRequest
-    ), "first message must be InitializeRequest"
-
-    job_proc = JobProcess(start_arguments=args.user_arguments)
-    logger.debug("initializing process", extra={"pid": job_proc.pid})
-    args.initialize_process_fnc(job_proc)
-    logger.debug("process initialized", extra={"pid": job_proc.pid})
-
-    # signal to the ProcPool that is worker is now ready to receive jobs
-    loop.run_until_complete(cch.asend(proto.InitializeResponse()))
+    cch = duplex_unix._Duplex.open(args.mp_cch)
     try:
+        init_req = channel.recv_message(cch, proto.IPC_MESSAGES)
+
+        assert isinstance(
+            init_req, proto.InitializeRequest
+        ), "first message must be InitializeRequest"
+
+        job_proc = JobProcess(start_arguments=args.user_arguments)
+        logger.debug("initializing process", extra={"pid": job_proc.pid})
+        args.initialize_process_fnc(job_proc)
+        logger.debug("process initialized", extra={"pid": job_proc.pid})
+        channel.send_message(cch, proto.InitializeResponse())
+
         main_task = loop.create_task(
-            _async_main(args, job_proc, cch), name="job_proc_main"
+            _async_main(args, job_proc, cch.detach()), name="job_proc_main"
         )
-        try:
-            loop.run_until_complete(main_task)
-        except KeyboardInterrupt:
-            # ignore the keyboard interrupt, we handle the process shutdown ourselves
-            # (this signal can be sent by watchfiles on dev mode)
-            loop.run_until_complete(main_task)
+        while not main_task.done():
+            try:
+                loop.run_until_complete(main_task)
+            except KeyboardInterrupt:
+                # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
+                pass
+    except duplex_unix.DuplexClosed:
+        pass
     finally:
-        # try:
+        log_handler.close()
+        log_q.close()
+        cch.close()
         loop.run_until_complete(loop.shutdown_default_executor())
-        loop.run_until_complete(cch.aclose())
-        # finally:
-        # loop.close()
-        # pass
