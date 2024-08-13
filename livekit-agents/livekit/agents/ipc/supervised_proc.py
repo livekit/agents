@@ -136,8 +136,7 @@ class SupervisedProc:
         if self._closing:
             raise RuntimeError("process is closed")
 
-        async with self._lock:
-            await asyncio.shield(self._start())
+        await asyncio.shield(self._start())
 
     async def _start(self) -> None:
         def _add_proc_ctx_log(record: logging.LogRecord) -> None:
@@ -145,46 +144,47 @@ class SupervisedProc:
             for key, value in extra.items():
                 setattr(record, key, value)
 
-        log_q = self._opts.mp_ctx.Queue()
-        log_q.cancel_join_thread()
+        async with self._lock:
+            log_q = self._opts.mp_ctx.Queue()
+            log_q.cancel_join_thread()
 
-        mp_pch, mp_cch = socket.socketpair()
+            mp_pch, mp_cch = socket.socketpair()
 
-        self._pch = await duplex_unix._AsyncDuplex.open(mp_pch)
-        log_listener = LogQueueListener(log_q, _add_proc_ctx_log)
-        log_listener.start()
+            self._pch = await duplex_unix._AsyncDuplex.open(mp_pch)
+            log_listener = LogQueueListener(log_q, _add_proc_ctx_log)
+            log_listener.start()
 
-        self._proc_args = proto.ProcStartArgs(
-            initialize_process_fnc=self._opts.initialize_process_fnc,
-            job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
-            log_q=log_q,
-            mp_cch=mp_cch,
-            asyncio_debug=self._loop.get_debug(),
-            user_arguments=self._user_args,
-        )
+            self._proc_args = proto.ProcStartArgs(
+                initialize_process_fnc=self._opts.initialize_process_fnc,
+                job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
+                log_q=log_q,
+                mp_cch=mp_cch,
+                asyncio_debug=self._loop.get_debug(),
+                user_arguments=self._user_args,
+            )
 
-        self._proc = self._opts.mp_ctx.Process(  # type: ignore
-            target=proc_main.main, args=(self._proc_args,), name="job_proc"
-        )
+            self._proc = self._opts.mp_ctx.Process(  # type: ignore
+                target=proc_main.main, args=(self._proc_args,), name="job_proc"
+            )
 
-        self._proc.start()
-        mp_cch.close()
+            self._proc.start()
+            mp_cch.close()
 
-        self._pid = self._proc.pid
-        self._join_fut = asyncio.Future[None]()
+            self._pid = self._proc.pid
+            self._join_fut = asyncio.Future[None]()
 
-        def _sync_run():
-            self._proc.join()
-            log_listener.stop()
-            log_q.close()
-            try:
-                self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
-            except RuntimeError:
-                pass
+            def _sync_run():
+                self._proc.join()
+                log_listener.stop()
+                log_q.close()
+                try:
+                    self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
+                except RuntimeError:
+                    pass
 
-        thread = threading.Thread(target=_sync_run, name="proc_join_thread")
-        thread.start()
-        self._main_atask = asyncio.create_task(self._main_task())
+            thread = threading.Thread(target=_sync_run, name="proc_join_thread")
+            thread.start()
+            self._main_atask = asyncio.create_task(self._main_task())
 
     async def join(self) -> None:
         """wait for the job process to finish"""
@@ -227,10 +227,10 @@ class SupervisedProc:
     async def aclose(self) -> None:
         """attempt to gracefully close the job process"""
         if not self.started:
-            raise RuntimeError("process not started")
+            return
 
         self._closing = True
-        with contextlib.suppress(OSError):
+        with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
             await channel.asend_message(self._pch, proto.ShutdownRequest())
 
         try:
