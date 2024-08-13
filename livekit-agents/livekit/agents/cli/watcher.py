@@ -139,6 +139,7 @@ class WatchClient:
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
         self._cch = await utils.aio.duplex_unix._AsyncDuplex.open(self._mp_cch)
+
         await channel.asend_message(self._cch, proto.ReloadJobsRequest())
         while True:
             try:

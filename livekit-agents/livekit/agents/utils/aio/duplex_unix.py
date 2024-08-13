@@ -98,6 +98,7 @@ class _Duplex:
             raise DuplexClosed()
 
     def detach(self) -> socket.socket:
+        assert self._sock is not None
         sock = self._sock
         self._sock = None
         return sock
