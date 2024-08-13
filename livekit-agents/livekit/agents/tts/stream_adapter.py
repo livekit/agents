@@ -64,10 +64,10 @@ class StreamAdapterWrapper(SynthesizeStream):
 
         async def _synthesize():
             async for ev in self._sent_stream:
-                self._standby = False
+                self._pending += 1
                 async for audio in self._tts.synthesize(ev.token):
                     self._event_ch.send_nowait(audio)
-                self._standby = True
+                self._pending -= 1
 
         tasks = [
             asyncio.create_task(_forward_input()),
