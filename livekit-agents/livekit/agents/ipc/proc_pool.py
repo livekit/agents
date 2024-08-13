@@ -14,6 +14,8 @@ EventTypes = Literal[
     "process_created", "process_started", "process_ready", "process_closed"
 ]
 
+MAX_CONCURRENT_INITIALIZATIONS = 3
+
 
 class ProcPool(utils.EventEmitter[EventTypes]):
     def __init__(
@@ -35,6 +37,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._initialize_timeout = initialize_timeout
         self._loop = loop
 
+        self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
         self._proc_needed_sem = asyncio.Semaphore(num_idle_processes)
         self._warmed_proc_queue = asyncio.Queue[SupervisedProc]()
         self._processes: list[SupervisedProc] = []
@@ -73,18 +76,20 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             loop=self._loop,
         )
         try:
-            self.emit("process_created", proc)
-            await proc.start()
-            self._processes.append(proc)
-            self.emit("process_started", proc)
-            try:
-                await proc.initialize()
-                # process where initialization times out will never fire "process_ready"
-                # neither be used to launch jobs
-                self.emit("process_ready", proc)
-                self._warmed_proc_queue.put_nowait(proc)
-            except Exception:
-                self._proc_needed_sem.release()  # notify to warm a new process after initialization failure
+            async with self._init_sem:
+                self.emit("process_created", proc)
+                await proc.start()
+                self._processes.append(proc)
+                self.emit("process_started", proc)
+                try:
+                    await proc.initialize()
+                    # process where initialization times out will never fire "process_ready"
+                    # neither be used to launch jobs
+                    self.emit("process_ready", proc)
+                    self._warmed_proc_queue.put_nowait(proc)
+                except Exception:
+                    self._proc_needed_sem.release()  # notify to warm a new process after initialization failure
+
             await proc.join()
             self.emit("process_closed", proc)
         finally:
