@@ -42,6 +42,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._warmed_proc_queue = asyncio.Queue[SupervisedProc]()
         self._processes: list[SupervisedProc] = []
         self._started = False
+        self._closed = False
 
     @property
     def processes(self) -> list[SupervisedProc]:
@@ -58,6 +59,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         if not self._started:
             return
 
+        self._closed = True
         await aio.gracefully_cancel(self._main_atask)
 
     async def launch_job(self, info: RunningJobInfo) -> None:
@@ -76,10 +78,14 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             loop=self._loop,
         )
         try:
+            self._processes.append(proc)
+
             async with self._init_sem:
+                if self._closed:
+                    return
+
                 self.emit("process_created", proc)
                 await proc.start()
-                self._processes.append(proc)
                 self.emit("process_started", proc)
                 try:
                     await proc.initialize()

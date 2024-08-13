@@ -227,10 +227,10 @@ class SupervisedProc:
     async def aclose(self) -> None:
         """attempt to gracefully close the job process"""
         if not self.started:
-            raise RuntimeError("process not started")
+            return
 
         self._closing = True
-        with contextlib.suppress(OSError):
+        with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
             await channel.asend_message(self._pch, proto.ShutdownRequest())
 
         try:
