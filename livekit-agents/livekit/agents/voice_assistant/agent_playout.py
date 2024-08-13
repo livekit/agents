@@ -55,7 +55,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         super().__init__()
         self._source = source
         self._target_volume = 1.0
-        self._vol_filter = utils.ExpFilter(alpha=alpha)
         self._playout_atask: asyncio.Task[None] | None = None
         self._closed = False
 
@@ -69,7 +68,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
 
     @property
     def smoothed_volume(self) -> float:
-        return self._vol_filter.filtered()
+        return self._target_volume
 
     async def aclose(self) -> None:
         if self._closed:
@@ -104,10 +103,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
     async def _playout_task(
         self, old_task: asyncio.Task[None] | None, handle: PlayoutHandle
     ) -> None:
-        def _should_break():
-            eps = 0.1
-            return handle.interrupted and self._vol_filter.filtered() <= eps
-
         first_frame = True
 
         try:
@@ -126,25 +121,19 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                     self.emit("playout_started")
                     first_frame = False
 
-                if _should_break():
+                if handle.interrupted:
                     break
 
                 # divide the frame by chunks of 20ms
                 ms20 = frame.sample_rate // 50
                 i = 0
                 while i < len(frame.data):
-                    if _should_break():
+                    if handle.interrupted:
                         break
 
                     rem = min(ms20, len(frame.data) - i)
                     data = frame.data[i : i + rem]
                     i += rem
-
-                    tv = self._target_volume if not handle.interrupted else 0.0
-                    dt = 1 / len(data)
-                    for si in range(0, len(data)):
-                        vol = self._vol_filter.apply(dt, tv)
-                        data[si] = int((data[si] / 32768) * vol * 32768)
 
                     chunk_frame = rtc.AudioFrame(
                         data=data.tobytes(),
