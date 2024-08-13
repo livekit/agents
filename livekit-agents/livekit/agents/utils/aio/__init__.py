@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 
-from . import debug
+from . import debug, duplex_unix
 from .channel import Chan, ChanClosed, ChanReceiver, ChanSender
 from .interval import Interval, interval
 from .sleep import Sleep, SleepFinished, sleep
@@ -30,4 +30,5 @@ __all__ = [
     "TaskSet",
     "debug",
     "gracefully_cancel",
+    "duplex_unix",
 ]
