@@ -22,6 +22,7 @@ __all__ = [
     "__version__",
     "Worker",
     "WorkerOptions",
+    "WorkerPermissions",
     "JobProcess",
     "JobContext",
     "JobRequest",
