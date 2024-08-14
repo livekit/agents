@@ -18,7 +18,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: ${{ inputs.package_name }}
+        working-directory: ${{ contains(inputs.package_name, 'plugins') && format('livekit-plugins/{0}', inputs.package_name) || 'livekit-agents' }}
 
     runs-on: ubuntu-latest
 
