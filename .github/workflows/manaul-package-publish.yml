@@ -42,7 +42,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: python-package-distributions
-        path: ${{ inputs.package_name}}/dist/
+        path: dist/
 
   publish:
 
