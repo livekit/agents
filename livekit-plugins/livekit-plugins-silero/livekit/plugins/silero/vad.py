@@ -28,6 +28,9 @@ from . import onnx_model
 from .log import logger
 
 
+SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
+
+
 @dataclass
 class _VADOptions:
     min_speech_duration: float
@@ -107,6 +110,8 @@ class VADStream(agents.vad.VADStream):
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._task.add_done_callback(lambda _: self._executor.shutdown(wait=False))
         self._exp_filter = utils.ExpFilter(alpha=0.35)
+
+        self._extra_inference_time = 0.0
 
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self):
@@ -202,9 +207,19 @@ class VADStream(agents.vad.VADStream):
                 window_duration = (
                     self._model.window_size_samples / self._opts.sample_rate
                 )
+
+                self._extra_inference_time = max(
+                    0, self._extra_inference_time + inference_duration - window_duration
+                )
+                if inference_duration > SLOW_INFERENCE_THRESHOLD:
+                    logger.warning(
+                        "inference is slower than realtime",
+                        extra={"delay": self._extra_inference_time},
+                    )
+
                 pub_current_sample += og_window_size_samples
 
-                def _copy_window():
+                def _copy_inference_window():
                     nonlocal speech_buffer_index
                     available_space = len(speech_buffer) - speech_buffer_index
                     to_copy = min(og_window_size_samples, available_space)
@@ -216,15 +231,34 @@ class VADStream(agents.vad.VADStream):
                     ] = og_window_data
                     speech_buffer_index += og_window_size_samples
 
-                def _reset_buffer():
+                def _reset_write_cursor():
                     nonlocal speech_buffer_index
 
-                    if speech_buffer_index > og_padding_size_samples:
-                        speech_buffer_index = og_padding_size_samples
+                    if speech_buffer_index <= og_padding_size_samples:
+                        return
+
+                    padding_data = speech_buffer[
+                        speech_buffer_index
+                        - og_padding_size_samples : speech_buffer_index
+                    ]
+
+                    speech_buffer[:og_padding_size_samples] = padding_data
+                    speech_buffer_index = og_padding_size_samples
+
+                def _copy_speech_buffer() -> rtc.AudioFrame:
+                    # copy the data from speech_buffer
+                    speech_data = speech_buffer[:speech_buffer_index].tobytes()
+
+                    return rtc.AudioFrame(
+                        sample_rate=og_sample_rate,
+                        num_channels=1,
+                        samples_per_channel=speech_buffer_index,
+                        data=speech_data,
+                    )
 
                 if pub_speaking:
                     pub_speech_duration += window_duration
-                    _copy_window()
+                    _copy_inference_window()
                 else:
                     pub_silence_duration += window_duration
 
@@ -245,7 +279,7 @@ class VADStream(agents.vad.VADStream):
                     silence_threshold_duration = 0.0
 
                     if not pub_speaking:
-                        _copy_window()
+                        _copy_inference_window()
 
                         if speech_threshold_duration >= self._opts.min_speech_duration:
                             pub_speaking = True
@@ -258,6 +292,7 @@ class VADStream(agents.vad.VADStream):
                                     samples_index=pub_current_sample,
                                     silence_duration=pub_silence_duration,
                                     speech_duration=pub_speech_duration,
+                                    frames=[_copy_speech_buffer()],
                                     speaking=True,
                                 )
                             )
@@ -266,19 +301,16 @@ class VADStream(agents.vad.VADStream):
                     speech_threshold_duration = 0.0
 
                     if not pub_speaking:
-                        _reset_buffer()
+                        _reset_write_cursor()
 
                     if (
                         pub_speaking
                         and silence_threshold_duration
-                        >= self._opts.min_silence_duration
+                        >= self._opts.min_silence_duration + self._opts.padding_duration
                     ):
                         pub_speaking = False
                         pub_speech_duration = 0.0
                         pub_silence_duration = silence_threshold_duration
-
-                        # copy the data from speech_buffer
-                        speech_data = speech_buffer[:speech_buffer_index].tobytes()
 
                         self._event_ch.send_nowait(
                             agents.vad.VADEvent(
@@ -286,16 +318,9 @@ class VADStream(agents.vad.VADStream):
                                 samples_index=pub_current_sample,
                                 silence_duration=pub_silence_duration,
                                 speech_duration=pub_speech_duration,
-                                frames=[
-                                    rtc.AudioFrame(
-                                        sample_rate=og_sample_rate,
-                                        num_channels=1,
-                                        samples_per_channel=speech_buffer_index,
-                                        data=speech_data,
-                                    )
-                                ],
+                                frames=[_copy_speech_buffer()],
                                 speaking=False,
                             )
                         )
 
-                        _reset_buffer()
+                        _reset_write_cursor()
