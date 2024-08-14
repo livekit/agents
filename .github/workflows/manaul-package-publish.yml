@@ -42,7 +42,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: python-package-distributions
-        path: dist/
+        path: ${{ contains(inputs.package_name, 'plugins') && format('livekit-plugins/{0}', inputs.package_name) || 'livekit-agents' }}/dist
 
   publish:
 
