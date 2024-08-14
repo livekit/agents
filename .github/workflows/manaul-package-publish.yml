@@ -1,0 +1,145 @@
+# This workflow will upload a Python Package using Twine when manually dispatched
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python#publishing-to-package-registries
+
+name: Manual package publish (for special cirumstances only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: 'The name of the package to publish'
+        required: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
+
+      - uses: pnpm/action-setup@v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install pnpm dependencies
+        run: pnpm install
+
+      - name: Ensure release mode
+        id: release_mode
+        run: |
+          set +e
+          pnpm changeset pre ${{ github.ref == 'refs/heads/main' && 'exit' || 'enter dev' }}
+          echo "exitcode=$?" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Add changes
+        if: ${{ steps.release_mode.outputs.exitcode == '0' }}
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: '[".changeset"]'
+          default_author: github_actions
+          message: ${{ github.ref == 'refs/heads/main' && 'Exit' || 'Enter dev' }} pre release mode
+
+      - name: Create Release Pull Request
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          version: pnpm ci:version
+          publish: pnpm ci:publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: bump
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: "${{ startsWith(github.event.inputs.package_name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ github.event.inputs.package_name }}"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Build package
+        run: python -m build
+
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v3
+        with:
+          name: python-package-distributions
+          path: "${{ startsWith(github.event.inputs.package_name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ github.event.inputs.package_name }}/dist/"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v3
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish package
+        uses: pypa/gh-action-pypi-publish@27b31702a0e7fc50959f5ad993c78deac1bdfc29
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+  docs:
+    needs:
+      - bump
+      - publish
+    runs-on: ubuntu-latest
+    env:
+      package: ${{ github.event.inputs.package_name }}
+      module: $(echo "${{ startsWith(github.event.inputs.package_name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ github.event.inputs.package_name }}" | tr '-' '/')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+
+      - name: Install pdoc
+        run: python -m pip install --upgrade pdoc
+
+      - name: Install package
+        run: python -m pip install ${{ env.package }}/
+
+      - name: Build Docs
+        run: python -m pdoc ${{ env.module }} --docformat=google --output-dir docs
+
+      - name: S3 Upload
+        run: aws s3 cp docs/ s3://livekit-docs/${{ env.package }} --recursive
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
+          AWS_DEFAULT_REGION: "us-east-1"
