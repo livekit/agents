@@ -18,7 +18,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: ${{ inputs.package_name }}
+        working-directory: ${{ contains(inputs.package_name, 'plugins') && format('livekit-plugins/{0}', inputs.package_name) || 'livekit-agents' }}
 
     runs-on: ubuntu-latest
 
@@ -42,7 +42,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: python-package-distributions
-        path: ${{ inputs.package_name}}/dist/
+        path: ${{ contains(inputs.package_name, 'plugins') && format('livekit-plugins/{0}', inputs.package_name) || 'livekit-agents' }}/dist
 
   publish:
 
@@ -64,28 +64,3 @@ jobs:
       with:
         user: __token__
         password: ${{ secrets.PYPI_API_TOKEN }}
-
-  docs:
-    needs:
-    - publish
-
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v3
-
-    - name: Install pdoc 
-      run: python -m pip install --upgrade pdoc
-
-    - name: Install package
-      run: python -m pip install ${{ inputs.package_name }}/
-
-    - name: Build Docs
-      run: python -m pdoc $(echo ${{ inputs.package_name }} | tr '-' '.') --docformat=google --output-dir docs
-
-    - name: S3 Upload
-      run: aws s3 cp docs/ s3://livekit-docs/${{ inputs.package_name }} --recursive
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
-        AWS_DEFAULT_REGION: "us-east-1"
