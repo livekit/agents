@@ -16,13 +16,13 @@ from . import ipc, llm, stt, tokenize, transcription, tts, utils, vad, voice_ass
 from .job import AutoSubscribe, JobContext, JobProcess, JobRequest
 from .plugin import Plugin
 from .version import __version__
-from .worker import Worker, WorkerOptions
+from .worker import WorkerType, Worker, WorkerOptions
 
 __all__ = [
     "__version__",
     "Worker",
     "WorkerOptions",
-    "WorkerPermissions",
+    "WorkerType",
     "JobProcess",
     "JobContext",
     "JobRequest",
