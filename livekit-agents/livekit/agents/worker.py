@@ -21,8 +21,9 @@ import multiprocessing as mp
 import os
 import threading
 from dataclasses import dataclass, field
+from enum import Enum
 from functools import reduce
-from typing import Any, Callable, Coroutine, Literal
+from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -47,6 +48,11 @@ def _default_initialize_process_fnc(proc: JobProcess) -> Any:
 
 async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
+
+
+class WorkerType(Enum):
+    ROOM = agent.JobType.JT_ROOM
+    PUBLISHER = agent.JobType.JT_PUBLISHER
 
 
 class _DefaultLoadCalc:
@@ -92,9 +98,9 @@ class WorkerPermissions:
 # NOTE: this object must be pickle-able
 @dataclass
 class WorkerOptions:
-    entrypoint_fnc: Callable[[JobContext], Coroutine]
+    entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
     """Entrypoint function that will be called when a job is assigned to this worker."""
-    request_fnc: Callable[[JobRequest], Coroutine] = _default_request_fnc
+    request_fnc: Callable[[JobRequest], Awaitable[None]] = _default_request_fnc
     """Inspect the request and decide if the current worker should handle it.
 
     When left empty, all jobs are accepted."""
@@ -112,7 +118,7 @@ class WorkerOptions:
     """Maximum amount of time to wait for a process to initialize/prewarm"""
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
-    worker_type: agent.JobType = agent.JobType.JT_ROOM
+    worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
     """Maximum number of times to retry connecting to LiveKit."""
@@ -191,7 +197,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             opts.host, opts.port, loop=self._loop
         )
 
-        self._main_task: asyncio.Task | None = None
+        self._main_task: asyncio.Task[None] | None = None
 
     async def run(self):
         if not self._closed:
@@ -344,7 +350,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
                 # register the worker
                 req = agent.WorkerMessage()
-                req.register.type = self._opts.worker_type
+                req.register.type = self._opts.worker_type.value
                 req.register.allowed_permissions.CopyFrom(
                     models.ParticipantPermission(
                         can_publish=self._opts.permissions.can_publish,
