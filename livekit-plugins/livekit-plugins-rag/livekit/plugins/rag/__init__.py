@@ -26,7 +26,9 @@ from .log import logger
 class RAGPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
+
     def download_files(self) -> None:
         pass
+
 
 Plugin.register_plugin(RAGPlugin())
