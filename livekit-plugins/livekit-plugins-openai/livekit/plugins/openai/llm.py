@@ -232,6 +232,8 @@ class LLM(llm.LLM):
             if fnc_ctx and parallel_tool_calls is not None:
                 opts["parallel_tool_calls"] = parallel_tool_calls
 
+        user = self._opts.user or openai.NOT_GIVEN
+
         messages = _build_oai_context(chat_ctx, id(self))
         cmp = self._client.chat.completions.create(
             messages=messages,
@@ -239,7 +241,7 @@ class LLM(llm.LLM):
             n=n,
             temperature=temperature,
             stream=True,
-            user=self._opts.user,
+            user=user,
             **opts,
         )
 
