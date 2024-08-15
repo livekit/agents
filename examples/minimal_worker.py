@@ -1,6 +1,6 @@
 import logging
 
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, WorkerType, cli
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -16,4 +16,6 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    # WorkerType.ROOM is the default worker type which will create an agent for every room.
+    # You can also use WorkerType.PUBLISHER to create a single agent for all participants that publish a track.
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, worker_type=WorkerType.ROOM))

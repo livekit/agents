@@ -9,7 +9,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
-from typing import Any, Callable, Coroutine
+from typing import Any, Awaitable, Callable
 
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
@@ -62,7 +62,7 @@ class LogQueueListener:
 @dataclass
 class _ProcOpts:
     initialize_process_fnc: Callable[[JobProcess], Any]
-    job_entrypoint_fnc: Callable[[JobContext], Coroutine]
+    job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
     mp_ctx: BaseContext
     initialize_timeout: float
     close_timeout: float
@@ -73,7 +73,7 @@ class SupervisedProc:
         self,
         *,
         initialize_process_fnc: Callable[[JobProcess], Any],
-        job_entrypoint_fnc: Callable[[JobContext], Coroutine],
+        job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         initialize_timeout: float,
         close_timeout: float,
         mp_ctx: BaseContext,
@@ -366,8 +366,8 @@ class SupervisedProc:
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
-    def logging_extra(self) -> dict:
-        extra: dict = {
+    def logging_extra(self):
+        extra: dict[str, Any] = {
             "pid": self.pid,
         }
         if self._running_job:

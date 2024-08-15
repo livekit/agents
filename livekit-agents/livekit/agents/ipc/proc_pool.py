@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from multiprocessing.context import BaseContext
-from typing import Any, Callable, Coroutine, Literal
+from typing import Any, Awaitable, Callable, Literal
 
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
@@ -22,7 +22,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self,
         *,
         initialize_process_fnc: Callable[[JobProcess], Any],
-        job_entrypoint_fnc: Callable[[JobContext], Coroutine],
+        job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
@@ -103,7 +103,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        watch_tasks = []
+        watch_tasks: list[asyncio.Task[None]] = []
         try:
             while True:
                 await self._proc_needed_sem.acquire()
