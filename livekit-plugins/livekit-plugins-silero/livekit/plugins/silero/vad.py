@@ -27,7 +27,6 @@ from livekit.agents import utils
 from . import onnx_model
 from .log import logger
 
-
 SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
 
 
@@ -149,6 +148,7 @@ class VADStream(agents.vad.VADStream):
             elif og_window_data is None:
                 # alloc the og buffers now that we know the pushed sample rate
                 og_sample_rate = frame.sample_rate
+
                 og_window_size_samples = int(
                     (self._model.window_size_samples / self._model.sample_rate)
                     * og_sample_rate
@@ -171,11 +171,15 @@ class VADStream(agents.vad.VADStream):
 
             frame_data = np.frombuffer(frame.data, dtype=np.int16)
             remaining_samples = len(frame_data)
+
             while remaining_samples > 0:
                 to_copy = min(remaining_samples, og_needed_samples)
 
-                index = len(og_window_data) - og_needed_samples
-                og_window_data[index : index + to_copy] = frame_data[:to_copy]
+                window_index = og_window_size_samples - og_needed_samples
+                frame_index = len(frame_data) - remaining_samples
+                og_window_data[window_index : window_index + to_copy] = frame_data[
+                    frame_index : frame_index + to_copy
+                ]
 
                 remaining_samples -= to_copy
                 og_needed_samples -= to_copy
@@ -198,18 +202,19 @@ class VADStream(agents.vad.VADStream):
                 raw_prob = await self._loop.run_in_executor(
                     self._executor, self._model, inference_window_data
                 )
+                inference_duration = time.perf_counter() - start_time
 
                 prob_change = abs(raw_prob - self._exp_filter.filtered())
                 exp = 0.5 if prob_change > 0.25 else 1
                 raw_prob = self._exp_filter.apply(exp=exp, sample=raw_prob)
 
-                inference_duration = time.perf_counter() - start_time
                 window_duration = (
                     self._model.window_size_samples / self._opts.sample_rate
                 )
 
                 self._extra_inference_time = max(
-                    0, self._extra_inference_time + inference_duration - window_duration
+                    0.0,
+                    self._extra_inference_time + inference_duration - window_duration,
                 )
                 if inference_duration > SLOW_INFERENCE_THRESHOLD:
                     logger.warning(
@@ -228,12 +233,11 @@ class VADStream(agents.vad.VADStream):
 
                     speech_buffer[
                         speech_buffer_index : speech_buffer_index + to_copy
-                    ] = og_window_data
-                    speech_buffer_index += og_window_size_samples
+                    ] = og_window_data[:to_copy]
+                    speech_buffer_index += to_copy
 
                 def _reset_write_cursor():
                     nonlocal speech_buffer_index
-
                     if speech_buffer_index <= og_padding_size_samples:
                         return
 
