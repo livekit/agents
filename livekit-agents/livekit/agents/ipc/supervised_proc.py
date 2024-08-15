@@ -22,7 +22,7 @@ class LogQueueListener:
     _sentinel = None
 
     def __init__(
-        self, queue: mp.Queue[Any], prepare_fnc: Callable[[logging.LogRecord], None]
+        self, queue: mp.Queue, prepare_fnc: Callable[[logging.LogRecord], None]
     ):
         self._thread: threading.Thread | None = None
         self._q = queue
