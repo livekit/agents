@@ -4,7 +4,7 @@ import io
 import multiprocessing as mp
 import socket
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Coroutine
+from typing import Any, Callable, ClassVar
 
 from livekit.protocol import agent
 
@@ -20,7 +20,7 @@ NO_MESSAGE_TIMEOUT = 15.0
 @dataclass
 class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
-    job_entrypoint_fnc: Callable[[JobContext], Coroutine]
+    job_entrypoint_fnc: Callable[[JobContext], Any]
     log_q: mp.Queue
     mp_cch: socket.socket
     asyncio_debug: bool
