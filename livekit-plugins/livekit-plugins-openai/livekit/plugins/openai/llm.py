@@ -41,6 +41,7 @@ from .utils import AsyncAzureADTokenProvider
 @dataclass
 class LLMOptions:
     model: str | ChatModels
+    user: str | None
 
 
 class LLM(llm.LLM):
@@ -50,9 +51,10 @@ class LLM(llm.LLM):
         model: str | ChatModels = "gpt-4o",
         api_key: str | None = None,
         base_url: str | None = None,
+        user: str | None = None,
         client: openai.AsyncClient | None = None,
     ) -> None:
-        self._opts = LLMOptions(model=model)
+        self._opts = LLMOptions(model=model, user=user)
         self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
@@ -81,6 +83,7 @@ class LLM(llm.LLM):
         organization: str | None = None,
         project: str | None = None,
         base_url: str | None = None,
+        user: str | None = None,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -104,7 +107,7 @@ class LLM(llm.LLM):
             base_url=base_url,
         )  # type: ignore
 
-        return LLM(model=model, client=azure_client)
+        return LLM(model=model, client=azure_client, user=user)
 
     @staticmethod
     def with_fireworks(
@@ -113,8 +116,11 @@ class LLM(llm.LLM):
         api_key: str | None = None,
         base_url: str | None = "https://api.fireworks.ai/inference/v1",
         client: openai.AsyncClient | None = None,
+        user: str | None = None,
     ) -> LLM:
-        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
 
     @staticmethod
     def with_groq(
@@ -123,8 +129,11 @@ class LLM(llm.LLM):
         api_key: str | None = None,
         base_url: str | None = "https://api.groq.com/openai/v1",
         client: openai.AsyncClient | None = None,
+        user: str | None = None,
     ) -> LLM:
-        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
 
     @staticmethod
     def with_octo(
@@ -133,8 +142,11 @@ class LLM(llm.LLM):
         api_key: str | None = None,
         base_url: str | None = "https://text.octoai.run/v1",
         client: openai.AsyncClient | None = None,
+        user: str | None = None,
     ) -> LLM:
-        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
 
     @staticmethod
     def with_ollama(
@@ -152,8 +164,11 @@ class LLM(llm.LLM):
         api_key: str | None = None,
         base_url: str | None = "https://api.perplexity.ai",
         client: openai.AsyncClient | None = None,
+        user: str | None = None,
     ) -> LLM:
-        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
 
     @staticmethod
     def with_together(
@@ -162,8 +177,11 @@ class LLM(llm.LLM):
         api_key: str | None = None,
         base_url: str | None = "https://api.together.xyz/v1",
         client: openai.AsyncClient | None = None,
+        user: str | None = None,
     ) -> LLM:
-        return LLM(model=model, api_key=api_key, base_url=base_url, client=client)
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
 
     @staticmethod
     def create_azure_client(
@@ -178,6 +196,7 @@ class LLM(llm.LLM):
         organization: str | None = None,
         project: str | None = None,
         base_url: str | None = None,
+        user: str | None = None,
     ) -> LLM:
         logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
         return LLM.with_azure(
@@ -190,6 +209,7 @@ class LLM(llm.LLM):
             organization=organization,
             project=project,
             base_url=base_url,
+            user=user,
         )
 
     def chat(
@@ -200,7 +220,6 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        user: str | None = None,
     ) -> "LLMStream":
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
@@ -220,7 +239,7 @@ class LLM(llm.LLM):
             n=n,
             temperature=temperature,
             stream=True,
-            user=user,
+            user=self._opts.user,
             **opts,
         )
 
