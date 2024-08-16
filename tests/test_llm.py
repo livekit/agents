@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Optional
 
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
@@ -15,18 +15,6 @@ class Unit(Enum):
 
 
 class FncCtx(FunctionContext):
-    def __init__(self) -> None:
-        super().__init__()
-        self._get_weather_calls = 0
-        self._play_music_calls = 0
-        self._toggle_light_calls = 0
-        self._select_currency_calls = 0
-        self._change_volume_calls = 0
-
-        self._toggle_light_cancelled = False
-        self._selected_currencies = None
-        self._selected_volume = None
-
     @ai_callable(
         description="Get the current weather in a given location", auto_retry=True
     )
@@ -38,8 +26,7 @@ class FncCtx(FunctionContext):
         unit: Annotated[
             Unit, TypeInfo(description="The temperature unit to use.")
         ] = Unit.CELSIUS,
-    ) -> None:
-        self._get_weather_calls += 1
+    ) -> None: ...
 
     @ai_callable(description="Play a music")
     def play_music(
@@ -47,8 +34,7 @@ class FncCtx(FunctionContext):
         name: Annotated[
             str, TypeInfo(description="The artist and the name of the song")
         ],
-    ) -> None:
-        self._play_music_calls += 1
+    ) -> None: ...
 
     # test for cancelled calls
     @ai_callable(description="Turn on/off the lights in a room")
@@ -57,14 +43,10 @@ class FncCtx(FunctionContext):
         room: Annotated[str, TypeInfo(description="The room to control")],
         on: bool = True,
     ) -> None:
-        self._toggle_light_calls += 1
-        try:
-            await asyncio.sleep(60)
-        except asyncio.CancelledError:
-            self._toggle_light_cancelled = True
+        await asyncio.sleep(60)
 
     # used to test arrays as arguments
-    @ai_callable(description="Currencies of a specific continent")
+    @ai_callable(description="Currencies of a specific area")
     def select_currencies(
         self,
         currencies: Annotated[
@@ -74,9 +56,7 @@ class FncCtx(FunctionContext):
                 choices=["usd", "eur", "gbp", "jpy", "sek"],
             ),
         ],
-    ) -> None:
-        self._select_currency_calls += 1
-        self._selected_currencies = currencies
+    ) -> None: ...
 
     # test choices on int
     @ai_callable(description="Change the volume")
@@ -85,9 +65,25 @@ class FncCtx(FunctionContext):
         volume: Annotated[
             int, TypeInfo(description="The volume level", choices=[0, 11, 30, 83, 99])
         ],
-    ) -> None:
-        self._change_volume_calls += 1
-        self._selected_volume = volume
+    ) -> None: ...
+
+    @ai_callable(description="Update userinfo")
+    def update_user_info(
+        self,
+        email: Annotated[
+            Optional[str], TypeInfo(description="The user address email")
+        ] = None,
+        name: Annotated[Optional[str], TypeInfo(description="The user name")] = None,
+        address: Optional[
+            Annotated[str, TypeInfo(description="The user address")]
+        ] = None,
+    ) -> None: ...
+
+
+def test_hashable_typeinfo():
+    typeinfo = TypeInfo(description="testing", choices=[1, 2, 3])
+    # TypeInfo must be hashable when used in combination of typing.Annotated
+    hash(typeinfo)
 
 
 async def test_chat():
@@ -107,21 +103,20 @@ async def test_chat():
     assert len(text) > 0
 
 
-async def test_fnc_calls():
+async def test_basic_fnc_calls():
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
         llm, "What's the weather in San Francisco and Paris?", fnc_ctx
     )
-    fns = stream.execute_functions()
-    await asyncio.gather(*[f.task for f in fns])
+    calls = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in calls])
     await stream.aclose()
+    assert len(calls) == 2, "get_weather should be called twice"
 
-    assert fnc_ctx._get_weather_calls == 2, "get_weather should be called twice"
 
-
-async def test_fnc_calls_runtime_addition():
+async def test_runtime_addition():
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
     called_msg = ""
@@ -150,16 +145,16 @@ async def test_cancelled_calls():
     stream = await _request_fnc_call(
         llm, "Turn off the lights in the Theo's bedroom", fnc_ctx
     )
-    stream.execute_functions()
+    calls = stream.execute_functions()
+    await asyncio.sleep(0)  # wait for the loop executor to start the task
 
-    # Need to wait for the task to start
-    await asyncio.sleep(0)
-
-    # don't wait for gather_function_results and directly close
+    # don't wait for gather_function_results and directly close (this should cancel the ongoing calls)
     await stream.aclose()
 
-    assert fnc_ctx._toggle_light_calls == 1
-    assert fnc_ctx._toggle_light_cancelled, "toggle_light should be cancelled"
+    assert len(calls) == 1
+    assert isinstance(
+        calls[0].exception, asyncio.CancelledError
+    ), "toggle_light should have been cancelled"
 
 
 async def test_calls_arrays():
@@ -170,19 +165,20 @@ async def test_calls_arrays():
         llm,
         "Can you select all currencies in Europe at once?",
         fnc_ctx,
-        temperature=0.5,
+        temperature=0.2,
     )
-    fns = stream.execute_functions()
-    await asyncio.gather(*[f.task for f in fns])
+    calls = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in calls])
     await stream.aclose()
 
-    assert fnc_ctx._select_currency_calls == 1
-    assert fnc_ctx._selected_currencies is not None
-    assert len(fnc_ctx._selected_currencies) == 3
+    assert len(calls) == 1, "select_currencies should have been called only once"
 
-    assert "eur" in fnc_ctx._selected_currencies
-    assert "gbp" in fnc_ctx._selected_currencies
-    assert "sek" in fnc_ctx._selected_currencies
+    call = calls[0]
+    currencies = call.call_info.arguments["currencies"]
+    assert len(currencies) == 3, "select_currencies should have 3 currencies"
+    assert (
+        "eur" in currencies and "gbp" in currencies and "sek" in currencies
+    ), "select_currencies should have eur, gbp, sek"
 
 
 async def test_calls_choices():
@@ -190,12 +186,39 @@ async def test_calls_choices():
     llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(llm, "Set the volume to 30", fnc_ctx)
-    fns = stream.execute_functions()
-    await asyncio.gather(*[f.task for f in fns])
+    calls = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in calls])
     await stream.aclose()
 
-    assert fnc_ctx._change_volume_calls == 1
-    assert fnc_ctx._selected_volume == 30
+    assert len(calls) == 1, "change_volume should have been called only once"
+
+    call = calls[0]
+    volume = call.call_info.arguments["volume"]
+    assert volume == 30, "change_volume should have been called with volume 30"
+
+
+async def test_optional_args():
+    fnc_ctx = FncCtx()
+    llm = openai.LLM(model="gpt-4o")
+
+    stream = await _request_fnc_call(
+        llm, "Can you update my information? My name is Theo", fnc_ctx
+    )
+
+    calls = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in calls])
+    await stream.aclose()
+
+    assert len(calls) == 1, "update_user_info should have been called only once"
+
+    call = calls[0]
+    name = call.call_info.arguments.get("name", None)
+    email = call.call_info.arguments.get("email", None)
+    address = call.call_info.arguments.get("address", None)
+
+    assert name == "Theo", "update_user_info should have been called with name 'Theo'"
+    assert email is None, "update_user_info should have been called with email None"
+    assert address is None, "update_user_info should have been called with address None"
 
 
 async def _request_fnc_call(
