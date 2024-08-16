@@ -166,6 +166,10 @@ async def test_calls_arrays():
 
     stream = await _request_fnc_call(
         llm, "Can you select all currencies in Europe at once?", fnc_ctx
+        llm,
+        "Can you select all currencies in Europe at once?",
+        fnc_ctx,
+        temperature=0.2,
     )
     fns = stream.execute_functions()
     await asyncio.gather(*[f.task for f in fns])
@@ -195,9 +199,15 @@ async def test_calls_choices():
 
 async def _request_fnc_call(
     model: llm.LLM, request: str, fnc_ctx: FncCtx
+    model: llm.LLM,
+    request: str,
+    fnc_ctx: FncCtx,
+    temperature: float | None = None,
 ) -> llm.LLMStream:
     stream = model.chat(
-        chat_ctx=ChatContext().append(text=request, role="user"), fnc_ctx=fnc_ctx
+        chat_ctx=ChatContext().append(text=request, role="user"),
+        fnc_ctx=fnc_ctx,
+        temperature=temperature,
     )
 
     async for _ in stream:
