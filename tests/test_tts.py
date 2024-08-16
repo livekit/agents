@@ -46,7 +46,7 @@ SYNTHESIZE_TTS = [
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts", SYNTHESIZE_TTS)
-async def test_synthetize(tts: agents.tts.TTS):
+async def test_synthesize(tts: agents.tts.TTS):
     frames = []
     async for audio in tts.synthesize(text=TEST_AUDIO_SYNTHESIZE):
         frames.append(audio.frame)

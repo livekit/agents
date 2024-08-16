@@ -1,26 +1,27 @@
 from __future__ import annotations
 
 import io
-import multiprocessing as mp
+import socket
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Coroutine
+from typing import Any, Callable, ClassVar
 
 from livekit.protocol import agent
 
 from ..job import JobAcceptArguments, JobContext, JobProcess, RunningJobInfo
 from . import channel
 
-PING_INTERVAL = 5
+PING_INTERVAL = 2.5
 PING_TIMEOUT = 90
-HIGH_PING_THRESHOLD = 0.15  # 150ms
+HIGH_PING_THRESHOLD = 0.5
+NO_MESSAGE_TIMEOUT = 15.0
 
 
 @dataclass
 class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
-    job_entrypoint_fnc: Callable[[JobContext], Coroutine]
-    log_q: mp.Queue
-    mp_cch: channel.ProcessConn
+    job_entrypoint_fnc: Callable[[JobContext], Any]
+    log_cch: socket.socket
+    mp_cch: socket.socket
     asyncio_debug: bool
     user_arguments: Any | None = None
 

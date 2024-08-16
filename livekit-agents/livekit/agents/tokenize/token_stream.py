@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from ..utils import aio
+from ..utils import aio, shortuuid
 from .tokenizer import SentenceStream, TokenData, WordStream
 
 
@@ -18,6 +18,7 @@ class BufferedTokenStream:
         self._tokenize_fnc = tokenize_fnc
         self._min_ctx_len = min_ctx_len
         self._min_token_len = min_token_len
+        self._current_segment_id = shortuuid()
 
         self._buf_tokens: list[str] = []  # <= min_token_len
         self._buf = ""
@@ -41,7 +42,9 @@ class BufferedTokenStream:
             buf += tok
             buf_toks.append(tok)
             if len(buf) >= self._min_token_len:
-                self._event_ch.send_nowait(TokenData(token=buf))
+                self._event_ch.send_nowait(
+                    TokenData(token=buf, segment_id=self._current_segment_id)
+                )
 
                 for i, tok in enumerate(buf_toks):
                     tok_i = self._buf.find(tok)
@@ -59,7 +62,10 @@ class BufferedTokenStream:
             else:
                 buf = self._buf
 
-            self._event_ch.send_nowait(TokenData(token=buf))
+            self._event_ch.send_nowait(
+                TokenData(token=buf, segment_id=self._current_segment_id)
+            )
+            self._current_segment_id = shortuuid()
 
         self._buf = ""
 

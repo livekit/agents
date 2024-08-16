@@ -1,5 +1,19 @@
 # livekit-plugins-cartesia
 
+## 0.3.0
+
+### Minor Changes
+
+- cartesia: correctly add spaces & fix tests - [#591](https://github.com/livekit/agents/pull/591) ([@theomonnom](https://github.com/theomonnom))
+
+### Patch Changes
+
+- fix log warnings & cartesia end of speech - [#603](https://github.com/livekit/agents/pull/603) ([@theomonnom](https://github.com/theomonnom))
+
+- stt/tts: fix unread inputs when the input channel is closed - [#594](https://github.com/livekit/agents/pull/594) ([@theomonnom](https://github.com/theomonnom))
+
+- Adds websockets streaming to Cartesia plugin - [#544](https://github.com/livekit/agents/pull/544) ([@sauhardjain](https://github.com/sauhardjain))
+
 ## 0.2.0
 
 ### Minor Changes

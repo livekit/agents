@@ -19,9 +19,11 @@ import contextlib
 import datetime
 import multiprocessing as mp
 import os
+import threading
 from dataclasses import dataclass, field
+from enum import Enum
 from functools import reduce
-from typing import Any, Callable, Coroutine, Literal
+from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -36,9 +38,8 @@ from .job import JobAcceptArguments, JobContext, JobProcess, JobRequest, Running
 from .log import DEV_LEVEL, logger
 from .version import __version__
 
-MAX_RECONNECT_ATTEMPTS = 3
 ASSIGNMENT_TIMEOUT = 7.5
-UPDATE_LOAD_INTERVAL = 10.0
+UPDATE_LOAD_INTERVAL = 2.5
 
 
 def _default_initialize_process_fnc(proc: JobProcess) -> Any:
@@ -49,9 +50,39 @@ async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
 
 
-def _default_cpu_load_fnc() -> float:
-    percent = psutil.cpu_percent(1.0)
-    return percent / 100
+class WorkerType(Enum):
+    ROOM = agent.JobType.JT_ROOM
+    PUBLISHER = agent.JobType.JT_PUBLISHER
+
+
+class _DefaultLoadCalc:
+    _instance = None
+
+    def __init__(self) -> None:
+        self._m_avg = utils.MovingAverage(5)  # avg over 2.5
+        self._thread = threading.Thread(
+            target=self._calc_load, daemon=True, name="worker_cpu_load_monitor"
+        )
+        self._thread.start()
+        self._lock = threading.Lock()
+
+    def _calc_load(self) -> None:
+        while True:
+            cpu_p = psutil.cpu_percent(0.5) / 100.0  # 2 samples/s
+
+            with self._lock:
+                self._m_avg.add_sample(cpu_p)
+
+    def _get_avg(self) -> float:
+        with self._lock:
+            return self._m_avg.get_avg()
+
+    @classmethod
+    def get_load(cls) -> float:
+        if cls._instance is None:
+            cls._instance = _DefaultLoadCalc()
+
+        return cls._instance._m_avg.get_avg()
 
 
 @dataclass
@@ -67,15 +98,15 @@ class WorkerPermissions:
 # NOTE: this object must be pickle-able
 @dataclass
 class WorkerOptions:
-    entrypoint_fnc: Callable[[JobContext], Coroutine]
+    entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
     """Entrypoint function that will be called when a job is assigned to this worker."""
-    request_fnc: Callable[[JobRequest], Coroutine] = _default_request_fnc
+    request_fnc: Callable[[JobRequest], Awaitable[None]] = _default_request_fnc
     """Inspect the request and decide if the current worker should handle it.
 
     When left empty, all jobs are accepted."""
     prewarm_fnc: Callable[[JobProcess], Any] = _default_initialize_process_fnc
     """A function to perform any necessary initialization before the job starts."""
-    load_fnc: Callable[[], float] = _default_cpu_load_fnc
+    load_fnc: Callable[[], float] = _DefaultLoadCalc.get_load
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
     load_threshold: float = 0.65
     """When the load exceeds this threshold, the worker will be marked as unavailable."""
@@ -87,9 +118,12 @@ class WorkerOptions:
     """Maximum amount of time to wait for a process to initialize/prewarm"""
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
-    worker_type: agent.JobType = agent.JobType.JT_ROOM
+    agent_name: str = ""
+    """Agent name can be used when multiple agents are required to join the same room. The LiveKit SFU will dispatch jobs to unique agent_name workers independently."""
+    worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
-    max_retry: int = MAX_RECONNECT_ATTEMPTS
+    max_retry: int = 16
+    """Maximum number of times to retry connecting to LiveKit."""
     ws_url: str = "ws://localhost:7880"
     """URL to connect to the LiveKit server.
 
@@ -165,6 +199,8 @@ class Worker(utils.EventEmitter[EventTypes]):
             opts.host, opts.port, loop=self._loop
         )
 
+        self._main_task: asyncio.Task[None] | None = None
+
     async def run(self):
         if not self._closed:
             raise Exception("worker is already running")
@@ -179,10 +215,17 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._http_session = aiohttp.ClientSession()
         self._close_future = asyncio.Future(loop=self._loop)
 
+        self._main_task = asyncio.create_task(self._worker_task(), name="worker_task")
+        tasks = [
+            self._main_task,
+            asyncio.create_task(self._http_server.run(), name="http_server"),
+        ]
         try:
-            await asyncio.gather(self._worker_task(), self._http_server.run())
+            await asyncio.gather(*tasks)
         finally:
-            self._close_future.set_result(None)
+            await utils.aio.gracefully_cancel(*tasks)
+            if not self._close_future.done():
+                self._close_future.set_result(None)
 
     @property
     def id(self) -> str:
@@ -250,16 +293,19 @@ class Worker(utils.EventEmitter[EventTypes]):
         assert self._close_future is not None
         assert self._http_session is not None
         assert self._api is not None
+        assert self._main_task is not None
 
         self._closed = True
+        self._main_task.cancel()
 
         await self._proc_pool.aclose()
         await self._http_session.close()
         await self._http_server.aclose()
         await self._api.aclose()
+
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
-        await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
+        # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
         self._msg_chan.close()
         await self._close_future
 
@@ -278,6 +324,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         assert self._http_session is not None
 
         retry_count = 0
+        ws: aiohttp.ClientWebSocketResponse | None = None
         while not self._closed:
             try:
                 self._connecting = True
@@ -305,7 +352,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
                 # register the worker
                 req = agent.WorkerMessage()
-                req.register.type = self._opts.worker_type
+                req.register.type = self._opts.worker_type.value
                 req.register.allowed_permissions.CopyFrom(
                     models.ParticipantPermission(
                         can_publish=self._opts.permissions.can_publish,
@@ -317,7 +364,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                         agent=True,
                     )
                 )
-                req.register.namespace = "default"
+                req.register.agent_name = self._opts.agent_name
                 req.register.version = __version__
                 await ws.send_bytes(req.SerializeToString())
 
@@ -349,6 +396,9 @@ class Worker(utils.EventEmitter[EventTypes]):
                     f"failed to connect to livekit, retrying in {retry_delay}s: {e}"
                 )
                 await asyncio.sleep(retry_delay)
+            finally:
+                if ws is not None:
+                    await ws.close()
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse):
         closing_ws = False
@@ -448,7 +498,11 @@ class Worker(utils.EventEmitter[EventTypes]):
 
     async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
         for aj in jobs:
-            logger.log(DEV_LEVEL, "reloading job", extra={"job_id": aj.job.id})
+            logger.log(
+                DEV_LEVEL,
+                "reloading job",
+                extra={"job_id": aj.job.id, "agent_name": aj.job.agent_name},
+            )
             url = self._opts.ws_url
 
             # take the original jwt token and extend it while keeping all the same data that was generated
@@ -517,7 +571,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             except asyncio.TimeoutError:
                 logger.warning(
                     f"assignment for job {job_req.id} timed out",
-                    extra={"job_request": job_req},
+                    extra={"job_request": job_req, "agent_name": self._opts.agent_name},
                 )
                 raise AssignmentTimeoutError()
 
@@ -535,7 +589,11 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         logger.info(
             "received job request",
-            extra={"job_request": msg.job, "resuming": msg.resuming},
+            extra={
+                "job_request": msg.job,
+                "resuming": msg.resuming,
+                "agent_name": self._opts.agent_name,
+            },
         )
 
         @utils.log_exceptions(logger=logger)
@@ -544,13 +602,14 @@ class Worker(utils.EventEmitter[EventTypes]):
                 await self._opts.request_fnc(job_req)
             except Exception:
                 logger.exception(
-                    "job_request_fnc failed", extra={"job_request": job_req}
+                    "job_request_fnc failed",
+                    extra={"job_request": job_req, "agent_name": self._opts.agent_name},
                 )
 
             if not answered:
                 logger.warning(
                     "no answer was given inside the job_request_fnc, automatically rejecting the job",
-                    extra={"job_request": job_req},
+                    extra={"job_request": job_req, "agent_name": self._opts.agent_name},
                 )
                 await _on_reject()
 
@@ -565,5 +624,6 @@ class Worker(utils.EventEmitter[EventTypes]):
                 fut.set_result(assignment)
         else:
             logger.warning(
-                "received assignment for an unknown job", extra={"job": assignment.job}
+                "received assignment for an unknown job",
+                extra={"job": assignment.job, "agent_name": self._opts.agent_name},
             )

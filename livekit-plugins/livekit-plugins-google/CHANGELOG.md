@@ -1,5 +1,11 @@
 # livekit-plugins-google
 
+## 0.6.2
+
+### Patch Changes
+
+- stt/tts: fix unread inputs when the input channel is closed - [#594](https://github.com/livekit/agents/pull/594) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.1
 
 ### Patch Changes
