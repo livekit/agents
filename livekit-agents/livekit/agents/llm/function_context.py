@@ -39,7 +39,7 @@ class TypeInfo:
     choices: tuple
 
     def __init__(
-        self, *, description: str, choices: tuple | list[Any] = tuple()
+        self, description: str, choices: tuple | list[Any] = tuple()
     ) -> None:
         object.__setattr__(self, "description", description)
 
