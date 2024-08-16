@@ -148,7 +148,6 @@ class SupervisedProc:
                 setattr(record, key, value)
 
         async with self._lock:
-            log_q = self._opts.mp_ctx.SimpleQueue()
             mp_pch, mp_cch = socket.socketpair()
             mp_log_pch, mp_log_cch = socket.socketpair()
 
