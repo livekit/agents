@@ -5,32 +5,25 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
-from livekit.plugins.openai.beta import (
-    AssistantCreateOptions,
-    AssistantLLM,
-    AssistantOptions,
-)
 
 load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    initial_ctx = llm.ChatContext()
+    initial_ctx = llm.ChatContext().append(
+        role="system",
+        text=(
+            "You are a voice assistant created by LiveKit. Your interface with users will be voice. "
+            "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
+        ),
+    )
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     assistant = VoiceAssistant(
         vad=silero.VAD.load(),
         stt=deepgram.STT(),
-        llm=AssistantLLM(
-            assistant_opts=AssistantOptions(
-                create_options=AssistantCreateOptions(
-                    model="gpt-4o",
-                    instructions="You are a voice assistant created by LiveKit. Your interface with users will be voice.",
-                    name="KITT",
-                )
-            )
-        ),
+        llm=openai.LLM(),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
     )
