@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, MutableSet
+from typing import Any, MutableSet, Union
 
 import httpx
 from livekit.agents import llm
@@ -194,7 +194,7 @@ class AssistantLLMStream(llm.LLMStream):
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
-        self._output_queue = asyncio.Queue[llm.ChatChunk | Exception | None]()
+        self._output_queue = asyncio.Queue[Union[llm.ChatChunk, Exception, None]]()
         self._create_stream_task = asyncio.create_task(self._create_stream())
         self._sync_openai_task = sync_openai_task
 
