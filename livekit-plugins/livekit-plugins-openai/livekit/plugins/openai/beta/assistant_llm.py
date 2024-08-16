@@ -74,6 +74,11 @@ class AssistantLLM(llm.LLM):
         api_key: str | None = None,
         base_url: str | None = None,
     ) -> None:
+        test_ctx = llm.ChatContext()
+        if not hasattr(test_ctx, "_metadata"):
+            raise Exception(
+                "This beta feature of 'livekit-plugins-openai' requires a newer version of 'livekit-agents'"
+            )
         self._client = client or AsyncClient(
             api_key=api_key,
             base_url=base_url,

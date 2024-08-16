@@ -5,6 +5,11 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
+from livekit.plugins.openai.beta import (
+    AssistantCreateOptions,
+    AssistantLLM,
+    AssistantOptions,
+)
 
 load_dotenv()
 
@@ -17,11 +22,13 @@ async def entrypoint(ctx: JobContext):
     assistant = VoiceAssistant(
         vad=silero.VAD.load(),
         stt=deepgram.STT(),
-        llm=openai.AssistantLLM(
-            assistant_opts=openai.AssistantCreateOptions(
-                model="gpt-4o",
-                instructions="You are a voice assistant created by LiveKit. Your interface with users will be voice.",
-                name="KITT",
+        llm=AssistantLLM(
+            assistant_opts=AssistantOptions(
+                create_options=AssistantCreateOptions(
+                    model="gpt-4o",
+                    instructions="You are a voice assistant created by LiveKit. Your interface with users will be voice.",
+                    name="KITT",
+                )
             )
         ),
         tts=openai.TTS(),
