@@ -20,7 +20,9 @@ from . import channel, proc_main, proto
 
 class LogQueueListener:
     def __init__(
-        self, duplex: utils.aio.duplex_unix._Duplex, prepare_fnc: Callable[[logging.LogRecord], None]
+        self,
+        duplex: utils.aio.duplex_unix._Duplex,
+        prepare_fnc: Callable[[logging.LogRecord], None],
     ):
         self._thread: threading.Thread | None = None
         self._duplex = duplex

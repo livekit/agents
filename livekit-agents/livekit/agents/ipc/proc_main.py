@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import pickle
 import contextlib
 import copy
 import logging
+import pickle
 import queue
 import socket
 import threading
