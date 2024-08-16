@@ -43,6 +43,8 @@ class LogQueueHandler(logging.Handler):
             except duplex_unix.DuplexClosed:
                 break
 
+        self._duplex.close()
+
     def emit(self, record: logging.LogRecord) -> None:
         try:
             msg = self.format(record)
@@ -59,7 +61,6 @@ class LogQueueHandler(logging.Handler):
     def close(self) -> None:
         super().close()
         self._send_q.put_nowait(self._sentinal)
-        self._duplex.close()
 
 
 @dataclass
