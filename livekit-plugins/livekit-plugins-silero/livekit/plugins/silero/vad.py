@@ -252,6 +252,7 @@ class VADStream(agents.vad.VADStream):
 
                 def _copy_speech_buffer() -> rtc.AudioFrame:
                     # copy the data from speech_buffer
+                    assert speech_buffer is not None
                     speech_data = speech_buffer[:speech_buffer_index].tobytes()
 
                     return rtc.AudioFrame(
