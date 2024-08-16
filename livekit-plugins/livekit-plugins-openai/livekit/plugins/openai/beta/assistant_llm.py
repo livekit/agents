@@ -228,7 +228,7 @@ class AssistantLLMStream(llm.LLMStream):
             # and which we may need to delete from OpenAI
             if OPENAI_MESSAGES_ADDED_KEY not in self._chat_ctx._metadata:
                 self._chat_ctx._metadata[OPENAI_MESSAGES_ADDED_KEY] = dict[
-                    str, set[str]()
+                    str, MutableSet[str]()
                 ]()
 
             if (
@@ -313,8 +313,8 @@ class AssistantLLMStream(llm.LLMStream):
                 limit=10,  # We could be smarter and make a more exact query, but this is probably fine
             )
             for oai_msg in messages.data:
-                if oai_msg.metadata.get(LIVEKIT_MESSAGE_ID_KEY):
-                    lk_to_oai_lookup[oai_msg.metadata[LIVEKIT_MESSAGE_ID_KEY]] = (
+                if oai_msg.metadata.get(LIVEKIT_MESSAGE_ID_KEY):  # type: ignore
+                    lk_to_oai_lookup[oai_msg.metadata[LIVEKIT_MESSAGE_ID_KEY]] = (  # type: ignore
                         oai_msg.id
                     )
 
