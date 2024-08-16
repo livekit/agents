@@ -118,6 +118,8 @@ class WorkerOptions:
     """Maximum amount of time to wait for a process to initialize/prewarm"""
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
+    agent_name: str = ""
+    """Agent name can be used when multiple agents are required to join the same room. The LiveKit SFU will dispatch jobs to unique agent_name workers independently."""
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -362,7 +364,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                         agent=True,
                     )
                 )
-                req.register.namespace = "default"
+                req.register.agent_name = self._opts.agent_name
                 req.register.version = __version__
                 await ws.send_bytes(req.SerializeToString())
 
@@ -496,7 +498,11 @@ class Worker(utils.EventEmitter[EventTypes]):
 
     async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
         for aj in jobs:
-            logger.log(DEV_LEVEL, "reloading job", extra={"job_id": aj.job.id})
+            logger.log(
+                DEV_LEVEL,
+                "reloading job",
+                extra={"job_id": aj.job.id, "agent_name": aj.job.agent_name},
+            )
             url = self._opts.ws_url
 
             # take the original jwt token and extend it while keeping all the same data that was generated
@@ -565,7 +571,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             except asyncio.TimeoutError:
                 logger.warning(
                     f"assignment for job {job_req.id} timed out",
-                    extra={"job_request": job_req},
+                    extra={"job_request": job_req, "agent_name": self._opts.agent_name},
                 )
                 raise AssignmentTimeoutError()
 
@@ -583,7 +589,11 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         logger.info(
             "received job request",
-            extra={"job_request": msg.job, "resuming": msg.resuming},
+            extra={
+                "job_request": msg.job,
+                "resuming": msg.resuming,
+                "agent_name": self._opts.agent_name,
+            },
         )
 
         @utils.log_exceptions(logger=logger)
@@ -592,13 +602,14 @@ class Worker(utils.EventEmitter[EventTypes]):
                 await self._opts.request_fnc(job_req)
             except Exception:
                 logger.exception(
-                    "job_request_fnc failed", extra={"job_request": job_req}
+                    "job_request_fnc failed",
+                    extra={"job_request": job_req, "agent_name": self._opts.agent_name},
                 )
 
             if not answered:
                 logger.warning(
                     "no answer was given inside the job_request_fnc, automatically rejecting the job",
-                    extra={"job_request": job_req},
+                    extra={"job_request": job_req, "agent_name": self._opts.agent_name},
                 )
                 await _on_reject()
 
@@ -613,5 +624,6 @@ class Worker(utils.EventEmitter[EventTypes]):
                 fut.set_result(assignment)
         else:
             logger.warning(
-                "received assignment for an unknown job", extra={"job": assignment.job}
+                "received assignment for an unknown job",
+                extra={"job": assignment.job, "agent_name": self._opts.agent_name},
             )

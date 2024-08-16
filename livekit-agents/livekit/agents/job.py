@@ -61,7 +61,7 @@ class JobContext:
         self._room = room
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
-        self._shutdown_callbacks: list[Callable[[], Coroutine]] = []
+        self._shutdown_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
 
     @property
     def proc(self) -> JobProcess:
@@ -79,7 +79,9 @@ class JobContext:
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
 
-    def add_shutdown_callback(self, callback: Callable[[], Coroutine]) -> None:
+    def add_shutdown_callback(
+        self, callback: Callable[[], Coroutine[None, None, None]]
+    ) -> None:
         self._shutdown_callbacks.append(callback)
 
     async def connect(
@@ -151,7 +153,7 @@ class JobRequest:
         self,
         *,
         job: agent.Job,
-        on_reject: Callable[[], Coroutine],
+        on_reject: Callable[[], Coroutine[None, None, None]],
         on_accept: Callable[[JobAcceptArguments], Coroutine[None, None, None]],
     ) -> None:
         self._job = job
@@ -174,6 +176,10 @@ class JobRequest:
     @property
     def publisher(self) -> models.ParticipantInfo | None:
         return self._job.participant
+
+    @property
+    def agent_name(self) -> str:
+        return self._job.agent_name
 
     async def reject(self) -> None:
         """Reject the job request. The job may be assigned to another worker"""
