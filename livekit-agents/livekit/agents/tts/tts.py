@@ -121,14 +121,9 @@ class SynthesizeStream(ABC):
         self._connect_timeout = connect_timeout
         self._keepalive_timeout = keepalive_timeout
         self._timeout = self._connect_timeout
-        self._pending = 0
 
     @abstractmethod
     async def _main_task(self) -> None: ...
-
-    @property
-    def pending(self) -> int:
-        return self._pending
 
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""

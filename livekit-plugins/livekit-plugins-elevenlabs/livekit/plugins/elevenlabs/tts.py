@@ -284,9 +284,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         @utils.log_exceptions(logger=logger)
         async def _run():
             async for word_stream in self._segments_ch:
-                self._pending += 1
                 await self._run_ws(word_stream)
-                self._pending -= 1
 
         tasks = [
             asyncio.create_task(_tokenize_input()),

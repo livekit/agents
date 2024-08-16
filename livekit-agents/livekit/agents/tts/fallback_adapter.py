@@ -158,22 +158,16 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
         async def _pass_output():
             while True:
-                # TODO(nbsp): this never runs. does python wait for the __anext__ call for the coro to start?
-                if self._stream.pending > 0:
-                    try:
-                        item = await asyncio.wait_for(
-                            self._stream.__anext__(), self._timeout
-                        )
+                try:
+                    async for item in self._stream:
                         self._timeout = self._keepalive_timeout
                         self._event_ch.send_nowait(item)
-                    except (TimeoutError, asyncio.TimeoutError):
-                        logger.warn(
-                            f"provider {self._stream.__class__.__module__} failed, attempting to switch"
-                        )
-                        self._providers[self._index].deactivate()
-                        self._init_tts()
-                    except StopAsyncIteration:
-                        return
+                except Exception:
+                    logger.warn(
+                        f"provider {self._stream.__class__.__module__} failed, attempting to switch"
+                    )
+                    self._providers[self._index].deactivate()
+                    self._init_tts()
 
         tasks = [
             asyncio.create_task(_pass_input()),
