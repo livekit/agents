@@ -64,13 +64,13 @@ class FncCtx(FunctionContext):
             self._toggle_light_cancelled = True
 
     # used to test arrays as arguments
-    @ai_callable(description="Currencies of a specific country")
+    @ai_callable(description="Currencies of a specific continent")
     def select_currencies(
         self,
         currencies: Annotated[
             list[str],
             TypeInfo(
-                description="The currency to select",
+                description="The currencies to select",
                 choices=["usd", "eur", "gbp", "jpy", "sek"],
             ),
         ],
@@ -170,7 +170,7 @@ async def test_calls_arrays():
         llm,
         "Can you select all currencies in Europe at once?",
         fnc_ctx,
-        temperature=0.2,
+        temperature=0.5,
     )
     fns = stream.execute_functions()
     await asyncio.gather(*[f.task for f in fns])
