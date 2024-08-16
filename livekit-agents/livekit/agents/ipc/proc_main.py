@@ -20,21 +20,26 @@ from . import channel, proto
 
 
 class LogQueueHandler(logging.Handler):
+    _sentinal = None
+
     def __init__(self, duplex: utils.aio.duplex_unix._Duplex) -> None:
         super().__init__()
         self._duplex = duplex
         self._send_q = queue.SimpleQueue[logging.LogRecord]()
         self._send_thread = threading.Thread(
-            target=self._forward_logs, daemon=True, name="ipc_log_forwarder"
+            target=self._forward_logs, name="ipc_log_forwarder"
         )
         self._send_thread.start()
 
     def _forward_logs(self):
         while True:
+            record = self._send_q.get()
+            if record is self._sentinal:
+                break
+
             try:
-                record = self._send_q.get()
                 self._duplex.send_bytes(pickle.dumps(record))
-            except Exception:
+            except duplex_unix.DuplexClosed:
                 break
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -49,6 +54,11 @@ class LogQueueHandler(logging.Handler):
             self._send_q.put_nowait(record)
         except Exception:
             self.handleError(record)
+
+    def close(self) -> None:
+        super().close()
+        self._send_q.put_nowait(self._sentinal)
+        self._duplex.close()
 
 
 @dataclass
@@ -264,7 +274,6 @@ def main(args: proto.ProcStartArgs) -> None:
     except duplex_unix.DuplexClosed:
         pass
     finally:
-        log_handler.close()
         cch.close()
-        log_cch.close()
+        log_handler.close()
         loop.run_until_complete(loop.shutdown_default_executor())
