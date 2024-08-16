@@ -38,9 +38,7 @@ class TypeInfo:
     description: str
     choices: tuple
 
-    def __init__(
-        self, description: str, choices: tuple | list[Any] = tuple()
-    ) -> None:
+    def __init__(self, description: str, choices: tuple | list[Any] = tuple()) -> None:
         object.__setattr__(self, "description", description)
 
         if isinstance(choices, list):
