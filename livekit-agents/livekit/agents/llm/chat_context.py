@@ -41,6 +41,7 @@ class ChatMessage:
     content: str | list[str | ChatImage] | None = None
     tool_calls: list[function_context.FunctionCallInfo] | None = None
     tool_call_id: str | None = None
+    _metadata: dict[str, Any] = field(default_factory=dict, repr=False, init=False)
 
     @staticmethod
     def create_tool_from_called_function(
@@ -104,6 +105,7 @@ class ChatMessage:
 @dataclass
 class ChatContext:
     messages: list[ChatMessage] = field(default_factory=list)
+    _metadata: dict[str, Any] = field(default_factory=dict, repr=False, init=False)
 
     def append(
         self, *, text: str = "", images: list[ChatImage] = [], role: ChatRole = "system"

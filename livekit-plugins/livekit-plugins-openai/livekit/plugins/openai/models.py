@@ -33,6 +33,8 @@ EmbeddingModels = Literal[
     "text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large"
 ]
 
+AssistantTools = Literal["code_interpreter"]
+
 # adapters for OpenAI-compatible LLMs
 
 PerplexityChatModels = Literal[

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
+from . import beta
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
 from .models import TTSModels, TTSVoices, WhisperModels
@@ -25,6 +27,7 @@ __all__ = [
     "LLM",
     "LLMStream",
     "WhisperModels",
+    "beta",
     "TTSModels",
     "TTSVoices",
     "create_embeddings",
