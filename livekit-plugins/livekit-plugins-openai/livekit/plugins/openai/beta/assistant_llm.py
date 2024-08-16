@@ -27,12 +27,12 @@ from openai.types.beta.threads import Text, TextDelta
 from openai.types.beta.threads.run_create_params import AdditionalMessage
 from openai.types.beta.threads.runs import ToolCall, ToolCallDelta
 
-from .log import logger
-from .models import AssistantTools, ChatModels
-from .utils import build_oai_message
+from ..log import logger
+from ..models import AssistantTools, ChatModels
+from ..utils import build_oai_message
 
 DEFAULT_MODEL = "gpt-4o"
-OPEN_AI_MESSAGE_ID_KEY = "__openai_message_id__"
+OPENAI_MESSAGE_ID_KEY = "__openai_message_id__"
 LIVEKIT_MESSAGE_ID_KEY = "__livekit_message_id__"
 OPENAI_MESSAGES_ADDED_KEY = "__openai_messages_added__"
 
@@ -120,7 +120,7 @@ class AssistantLLM(llm.LLM):
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
-        n: int | None = 1,
+        n: int | None = None,
         parallel_tool_calls: bool | None = None,
     ):
         if n is not None:
@@ -244,7 +244,7 @@ class AssistantLLMStream(llm.LLMStream):
             # it will create an extra round trip to OpenAI before being able to run inference.
             # TODO: parallelize it?
             for msg in self._chat_ctx.messages:
-                msg_id = msg._metadata.get(OPEN_AI_MESSAGE_ID_KEY, {}).get(
+                msg_id = msg._metadata.get(OPENAI_MESSAGE_ID_KEY, {}).get(
                     load_options.thread_id
                 )
                 if msg_id and msg_id not in openai_addded_messages_set:
@@ -264,13 +264,13 @@ class AssistantLLMStream(llm.LLMStream):
                     continue
 
                 msg_id = str(uuid.uuid4())
-                if OPEN_AI_MESSAGE_ID_KEY not in msg._metadata:
-                    msg._metadata[OPEN_AI_MESSAGE_ID_KEY] = dict[str, str]()
+                if OPENAI_MESSAGE_ID_KEY not in msg._metadata:
+                    msg._metadata[OPENAI_MESSAGE_ID_KEY] = dict[str, str]()
 
                 if LIVEKIT_MESSAGE_ID_KEY not in msg._metadata:
                     msg._metadata[LIVEKIT_MESSAGE_ID_KEY] = dict[str, str]()
 
-                oai_msg_id_dict = msg._metadata[OPEN_AI_MESSAGE_ID_KEY]
+                oai_msg_id_dict = msg._metadata[OPENAI_MESSAGE_ID_KEY]
                 lk_msg_id_dict = msg._metadata[LIVEKIT_MESSAGE_ID_KEY]
 
                 if load_options.thread_id not in oai_msg_id_dict:
@@ -314,7 +314,7 @@ class AssistantLLMStream(llm.LLMStream):
                     )
 
             for msg in self._chat_ctx.messages:
-                oai_msg_id_dict = msg._metadata.get(OPEN_AI_MESSAGE_ID_KEY)
+                oai_msg_id_dict = msg._metadata.get(OPENAI_MESSAGE_ID_KEY)
                 lk_msg_id_dict = msg._metadata.get(LIVEKIT_MESSAGE_ID_KEY)
                 if not oai_msg_id_dict or not lk_msg_id_dict:
                     continue
