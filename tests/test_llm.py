@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 from enum import Enum
 from typing import Annotated
@@ -62,13 +64,13 @@ class FncCtx(FunctionContext):
             self._toggle_light_cancelled = True
 
     # used to test arrays as arguments
-    @ai_callable(description="Currencies of a specific country")
+    @ai_callable(description="Currencies of a specific continent")
     def select_currencies(
         self,
         currencies: Annotated[
             list[str],
             TypeInfo(
-                description="The currency to select",
+                description="The currencies to select",
                 choices=["usd", "eur", "gbp", "jpy", "sek"],
             ),
         ],
@@ -165,7 +167,10 @@ async def test_calls_arrays():
     llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
-        llm, "Can you select all currencies in Europe at once?", fnc_ctx
+        llm,
+        "Can you select all currencies in Europe at once?",
+        fnc_ctx,
+        temperature=0.5,
     )
     fns = stream.execute_functions()
     await asyncio.gather(*[f.task for f in fns])
@@ -194,10 +199,15 @@ async def test_calls_choices():
 
 
 async def _request_fnc_call(
-    model: llm.LLM, request: str, fnc_ctx: FncCtx
+    model: llm.LLM,
+    request: str,
+    fnc_ctx: FncCtx,
+    temperature: float | None = None,
 ) -> llm.LLMStream:
     stream = model.chat(
-        chat_ctx=ChatContext().append(text=request, role="user"), fnc_ctx=fnc_ctx
+        chat_ctx=ChatContext().append(text=request, role="user"),
+        fnc_ctx=fnc_ctx,
+        temperature=temperature,
     )
 
     async for _ in stream:
