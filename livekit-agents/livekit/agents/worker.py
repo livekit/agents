@@ -118,6 +118,8 @@ class WorkerOptions:
     """Maximum amount of time to wait for a process to initialize/prewarm"""
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
+    agent_name: str = "default"
+    """Agent name can be used when multiple agents are required to join the same room. For every unique agent name, a new agent will be created."""
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -362,7 +364,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                         agent=True,
                     )
                 )
-                req.register.namespace = "default"
+                req.register.agent_name = self._opts.agent_name
                 req.register.version = __version__
                 await ws.send_bytes(req.SerializeToString())
 
