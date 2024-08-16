@@ -623,7 +623,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             (
                 x
                 for x in self._proc_pool.processes
-                if x.running_job.job.id == msg.job_id
+                if x.running_job and x.running_job.job.id == msg.job_id
             ),
             None,
         )
