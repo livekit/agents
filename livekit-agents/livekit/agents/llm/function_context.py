@@ -181,7 +181,7 @@ class FunctionContext:
             if issubclass(inner_th, enum.Enum) and not choices:
                 # the enum must be a str or int (and at least one value)
                 # this is verified by is_type_supported
-                choices = [item.value for item in inner_th]
+                choices = tuple([item.value for item in inner_th])
                 inner_th = type(choices[0])
 
             args[name] = FunctionArgInfo(
