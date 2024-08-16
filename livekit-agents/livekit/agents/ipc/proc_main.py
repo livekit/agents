@@ -9,9 +9,9 @@ import queue
 import socket
 import threading
 from dataclasses import dataclass
+from typing import Optional
 
 from livekit import rtc
-from typing import Optional
 
 from .. import utils
 from ..job import JobContext, JobProcess
