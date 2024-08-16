@@ -180,7 +180,6 @@ class SupervisedProc:
             def _sync_run():
                 self._proc.join()
                 log_listener.stop()
-                log_q.close()
                 try:
                     self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
                 except RuntimeError:
