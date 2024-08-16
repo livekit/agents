@@ -36,10 +36,10 @@ USE_DOCSTRING = _UseDocMarker()
 @dataclass(frozen=True, init=False)
 class TypeInfo:
     description: str
-    choices: tuple[Any]
+    choices: tuple
 
     def __init__(
-        self, *, description: str, choices: tuple[Any] | list[Any] = tuple()
+        self, *, description: str, choices: tuple | list[Any] = tuple()
     ) -> None:
         object.__setattr__(self, "description", description)
 
