@@ -30,7 +30,7 @@ class LogQueueListener:
 
     def start(self) -> None:
         self._thread = threading.Thread(
-            target=self._monitor, daemon=True, name="log_listener"
+            target=self._monitor, name="ipc_log_listener"
         )
         self._thread.start()
 
