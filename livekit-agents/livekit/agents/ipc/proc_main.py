@@ -23,7 +23,7 @@ class LogQueueHandler(logging.Handler):
     def __init__(self, duplex: utils.aio.duplex_unix._Duplex) -> None:
         super().__init__()
         self._duplex = duplex
-        self._send_q = queue.SimpleQueue()
+        self._send_q = queue.SimpleQueue[logging.LogRecord]()
         self._send_thread = threading.Thread(target=self._forward_logs, daemon=True)
 
     def _forward_logs(self):
