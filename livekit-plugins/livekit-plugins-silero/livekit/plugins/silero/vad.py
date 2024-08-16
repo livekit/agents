@@ -232,9 +232,9 @@ class VADStream(agents.vad.VADStream):
                     if to_copy <= 0:
                         return  # max_buffered_speech reached
 
-                    speech_buffer[speech_buffer_index: speech_buffer_index + to_copy] = (
-                        og_window_data[:to_copy]
-                    )
+                    speech_buffer[
+                        speech_buffer_index : speech_buffer_index + to_copy
+                    ] = og_window_data[:to_copy]
                     speech_buffer_index += to_copy
 
                 def _reset_write_cursor():
