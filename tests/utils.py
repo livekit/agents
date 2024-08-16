@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import io
 import os
 import pathlib
@@ -50,7 +51,9 @@ def read_mp3_file(path) -> rtc.AudioFrame:
     return utils.merge_frames(frames)  # merging just for ease of use
 
 
-def make_test_audio(chunk_duration_ms: int | None = None) -> (list[rtc.AudioFrame], str):
+def make_test_audio(
+    chunk_duration_ms: int | None = None,
+) -> (list[rtc.AudioFrame], str):
     mp3_audio = read_mp3_file(TEST_AUDIO_FILEPATH)
 
     if not chunk_duration_ms:

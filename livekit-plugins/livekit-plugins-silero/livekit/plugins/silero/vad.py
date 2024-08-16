@@ -202,6 +202,7 @@ class VADStream(agents.vad.VADStream):
                 raw_prob = await self._loop.run_in_executor(
                     self._executor, self._model, inference_window_data
                 )
+
                 inference_duration = time.perf_counter() - start_time
 
                 prob_change = abs(raw_prob - self._exp_filter.filtered())
@@ -231,9 +232,9 @@ class VADStream(agents.vad.VADStream):
                     if to_copy <= 0:
                         return  # max_buffered_speech reached
 
-                    speech_buffer[
-                        speech_buffer_index : speech_buffer_index + to_copy
-                    ] = og_window_data[:to_copy]
+                    speech_buffer[speech_buffer_index: speech_buffer_index + to_copy] = (
+                        og_window_data[:to_copy]
+                    )
                     speech_buffer_index += to_copy
 
                 def _reset_write_cursor():
@@ -260,9 +261,10 @@ class VADStream(agents.vad.VADStream):
                         data=speech_data,
                     )
 
+                _copy_inference_window()
+
                 if pub_speaking:
                     pub_speech_duration += window_duration
-                    _copy_inference_window()
                 else:
                     pub_silence_duration += window_duration
 
@@ -283,8 +285,6 @@ class VADStream(agents.vad.VADStream):
                     silence_threshold_duration = 0.0
 
                     if not pub_speaking:
-                        _copy_inference_window()
-
                         if speech_threshold_duration >= self._opts.min_speech_duration:
                             pub_speaking = True
                             pub_silence_duration = 0.0

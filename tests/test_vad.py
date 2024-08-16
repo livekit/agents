@@ -3,7 +3,9 @@ from livekit.plugins import silero
 
 from . import utils
 
-VAD = silero.VAD.load()
+VAD = silero.VAD.load(
+    min_speech_duration=0.5, min_silence_duration=0.5, padding_duration=1.0
+)
 
 
 async def test_chunks_vad() -> None:
