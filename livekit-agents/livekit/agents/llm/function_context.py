@@ -55,7 +55,7 @@ class FunctionArgInfo:
     description: str
     type: type
     default: Any
-    choices: list[Any] | None
+    choices: tuple | None
 
 
 @dataclass(frozen=True)
