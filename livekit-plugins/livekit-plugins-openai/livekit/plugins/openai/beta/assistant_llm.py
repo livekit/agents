@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, MutableSet, Union
+from typing import Any, Dict, MutableSet, Union
 
 import httpx
 from livekit.agents import llm
@@ -100,7 +100,7 @@ class AssistantLLM(llm.LLM):
 
     async def _sync_openai(self) -> AssistantLoadOptions:
         if self._assistant_opts.create_options:
-            kwargs: dict[str, Any] = {
+            kwargs: Dict[str, Any] = {
                 "model": self._assistant_opts.create_options.model,
                 "name": self._assistant_opts.create_options.name,
                 "instructions": self._assistant_opts.create_options.instructions,
@@ -227,9 +227,7 @@ class AssistantLLMStream(llm.LLMStream):
             # This is used to keep track of which messages have been added to the thread
             # and which we may need to delete from OpenAI
             if OPENAI_MESSAGES_ADDED_KEY not in self._chat_ctx._metadata:
-                self._chat_ctx._metadata[OPENAI_MESSAGES_ADDED_KEY] = dict[
-                    str, MutableSet[str]()
-                ]()
+                self._chat_ctx._metadata[OPENAI_MESSAGES_ADDED_KEY] = dict()
 
             if (
                 load_options.thread_id
