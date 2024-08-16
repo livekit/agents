@@ -165,7 +165,6 @@ async def test_calls_arrays():
     llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
-        llm, "Can you select all currencies in Europe at once?", fnc_ctx
         llm,
         "Can you select all currencies in Europe at once?",
         fnc_ctx,
@@ -198,7 +197,6 @@ async def test_calls_choices():
 
 
 async def _request_fnc_call(
-    model: llm.LLM, request: str, fnc_ctx: FncCtx
     model: llm.LLM,
     request: str,
     fnc_ctx: FncCtx,
