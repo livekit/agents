@@ -31,10 +31,10 @@ class LogQueueHandler(logging.Handler):
 
     def _forward_logs(self):
         while True:
-            record = self._send_q.get()
             try:
+                record = self._send_q.get()
                 self._duplex.send_bytes(pickle.dumps(record))
-            except duplex_unix.DuplexClosed:
+            except Exception:
                 break
 
     def emit(self, record: logging.LogRecord) -> None:
