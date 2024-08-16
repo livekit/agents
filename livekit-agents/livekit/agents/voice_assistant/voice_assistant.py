@@ -689,7 +689,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             # so make sure we directly interrupt every reply when pushing a new one
             for speech in self._speech_q:
                 if speech.allow_interruptions and speech.is_reply:
-                    speech.synthesis_handle.interrupt()
+                    speech.interrupt()
 
         assert self._pending_agent_reply is not None
 
@@ -721,7 +721,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             if len(interim_words) < self._opts.int_min_words:
                 return
 
-        self._playing_speech.synthesis_handle.interrupt()
+        self._playing_speech.interrupt()
 
     def _add_speech_for_playout(self, speech_handle: SpeechHandle) -> None:
         self._speech_q.append(speech_handle)
