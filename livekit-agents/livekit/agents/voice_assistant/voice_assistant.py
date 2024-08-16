@@ -691,6 +691,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 if speech.allow_interruptions and speech.is_reply:
                     speech.synthesis_handle.interrupt()
 
+        assert self._pending_agent_reply is not None
+
         logger.debug(
             "validated agent reply",
             extra={"speech_id": self._pending_agent_reply.id},

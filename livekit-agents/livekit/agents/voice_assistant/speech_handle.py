@@ -127,7 +127,7 @@ class SpeechHandle:
     @property
     def interrupted(self) -> bool:
         return self._init_fut.cancelled() or (
-            self._synthesis_handle and self._synthesis_handle.interrupted
+            self._synthesis_handle is not None and self._synthesis_handle.interrupted
         )
 
     def interrupt(self) -> None:
