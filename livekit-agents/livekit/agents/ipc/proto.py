@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import io
 import multiprocessing as mp
 import socket
@@ -21,7 +22,7 @@ NO_MESSAGE_TIMEOUT = 15.0
 class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
-    log_q: mp.Queue
+    log_cch: socket.socket
     mp_cch: socket.socket
     asyncio_debug: bool
     user_arguments: Any | None = None
