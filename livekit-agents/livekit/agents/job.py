@@ -18,7 +18,7 @@ import asyncio
 import multiprocessing as mp
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable, Coroutine
 
 from livekit import rtc
 from livekit.protocol import agent, models
@@ -61,7 +61,7 @@ class JobContext:
         self._room = room
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
-        self._shutdown_callbacks: list[Callable[[], Awaitable[None]]] = []
+        self._shutdown_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
 
     @property
     def proc(self) -> JobProcess:
@@ -79,7 +79,9 @@ class JobContext:
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
 
-    def add_shutdown_callback(self, callback: Callable[[], Awaitable[None]]) -> None:
+    def add_shutdown_callback(
+        self, callback: Callable[[], Coroutine[None, None, None]]
+    ) -> None:
         self._shutdown_callbacks.append(callback)
 
     async def connect(
@@ -151,8 +153,8 @@ class JobRequest:
         self,
         *,
         job: agent.Job,
-        on_reject: Callable[[], Awaitable[None]],
-        on_accept: Callable[[JobAcceptArguments], Awaitable[None]],
+        on_reject: Callable[[], Coroutine[None, None, None]],
+        on_accept: Callable[[JobAcceptArguments], Coroutine[None, None, None]],
     ) -> None:
         self._job = job
         self._lock = asyncio.Lock()
