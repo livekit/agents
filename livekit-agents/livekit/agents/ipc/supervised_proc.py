@@ -29,9 +29,7 @@ class LogQueueListener:
         self._prepare_fnc = prepare_fnc
 
     def start(self) -> None:
-        self._thread = threading.Thread(
-            target=self._monitor, name="ipc_log_listener"
-        )
+        self._thread = threading.Thread(target=self._monitor, name="ipc_log_listener")
         self._thread.start()
 
     def stop(self) -> None:
