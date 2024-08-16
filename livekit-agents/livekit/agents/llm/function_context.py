@@ -19,7 +19,7 @@ import enum
 import functools
 import inspect
 import typing
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Tuple
 
 from ..log import logger
@@ -33,10 +33,18 @@ METADATA_ATTR = "__livekit_ai_metadata__"
 USE_DOCSTRING = _UseDocMarker()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class TypeInfo:
-    description: str = ""
-    choices: list[Any] = field(default_factory=list)
+    description: str
+    choices: tuple
+
+    def __init__(self, description: str, choices: tuple | list[Any] = tuple()) -> None:
+        object.__setattr__(self, "description", description)
+
+        if isinstance(choices, list):
+            choices = tuple(choices)
+
+        object.__setattr__(self, "choices", choices)
 
 
 @dataclass(frozen=True)
@@ -45,7 +53,7 @@ class FunctionArgInfo:
     description: str
     type: type
     default: Any
-    choices: list[Any] | None
+    choices: tuple | None
 
 
 @dataclass(frozen=True)
@@ -137,8 +145,13 @@ class FunctionContext:
             raise ValueError(f"duplicate ai_callable name: {fnc_name}")
 
         sig = inspect.signature(fnc)
-        type_hints = typing.get_type_hints(fnc)  # Annotated[T, ...] -> T
-        args = dict()
+
+        # get_type_hints with include_extra=True is needed when using Annotated
+        # using typing.get_args with param.Annotated is returning an empty tuple for some reason
+        type_hints = typing.get_type_hints(
+            fnc, include_extras=True
+        )  # Annotated[T, ...] -> T
+        args = dict[str, FunctionArgInfo]()
 
         for name, param in sig.parameters.items():
             if param.kind not in (
@@ -147,37 +160,32 @@ class FunctionContext:
             ):
                 raise ValueError(f"{fnc_name}: unsupported parameter kind {param.kind}")
 
-            if param.annotation is inspect.Parameter.empty:
+            inner_th, type_info = _extract_types(type_hints[name])
+
+            if not is_type_supported(inner_th):
                 raise ValueError(
-                    f"{fnc_name}: missing type annotation for parameter {name}"
+                    f"{fnc_name}: unsupported type {inner_th} for parameter {name}"
                 )
 
-            th = type_hints[name]
-            if not is_type_supported(th):
-                raise ValueError(
-                    f"{fnc_name}: unsupported type {th} for parameter {name}"
-                )
-
-            type_info = _find_param_type_info(param.annotation)
             desc = type_info.description if type_info else ""
             choices = type_info.choices if type_info else None
 
-            is_optional, inner_type = _is_optional_type(th)
+            is_optional, optional_inner = _is_optional_type(inner_th)
             if is_optional:
                 # when the type is optional, only the inner type is relevant
                 # the argument info for default would be None
-                th = inner_type
+                inner_th = optional_inner
 
-            if issubclass(th, enum.Enum) and not choices:
+            if issubclass(inner_th, enum.Enum) and not choices:
                 # the enum must be a str or int (and at least one value)
                 # this is verified by is_type_supported
-                choices = [item.value for item in th]
-                th = type(choices[0])
+                choices = tuple([item.value for item in inner_th])
+                inner_th = type(choices[0])
 
             args[name] = FunctionArgInfo(
                 name=name,
                 description=desc,
-                type=th,
+                type=inner_th,
                 default=param.default,
                 choices=choices,
             )
@@ -202,15 +210,33 @@ class _AIFncMetadata:
     auto_retry: bool
 
 
-def _find_param_type_info(annotation: type) -> TypeInfo | None:
+def _extract_types(annotation: type) -> tuple[type, TypeInfo | None]:
+    """Return inner_type, TypeInfo"""
     if typing.get_origin(annotation) is not typing.Annotated:
-        return None
+        # email: Annotated[
+        #    Optional[str], TypeInfo(description="The user address email")
+        # ] = None,
+        #
+        # An argument like the above will return us:
+        # `typing.Optional[typing.Annotated[typing.Optional[str], TypeInfo(description='The user address email', choices=())]]`
+        # So we ignore the first typing.Optional
 
-    for a in typing.get_args(annotation):
+        is_optional, optional_inner = _is_optional_type(annotation)
+        if is_optional:
+            return _extract_types(optional_inner)
+
+        return annotation, None
+
+    # assume the first argument is always the inner type the LLM will use
+    args = typing.get_args(annotation)
+    if len(args) < 2:
+        return args[0], None
+
+    for a in args:
         if isinstance(a, TypeInfo):
-            return a
+            return args[0], a
 
-    return None
+    return args[0], None
 
 
 def _set_metadata(
