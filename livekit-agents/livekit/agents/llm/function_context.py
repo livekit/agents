@@ -212,7 +212,7 @@ class _AIFncMetadata:
     auto_retry: bool
 
 
-def _extract_types(annotation: type) -> tuple(type, TypeInfo | None):
+def _extract_types(annotation: type) -> tuple[type, TypeInfo | None]:
     """Return inner_type, TypeInfo"""
     if typing.get_origin(annotation) is not typing.Annotated:
         # email: Annotated[
