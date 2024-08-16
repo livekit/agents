@@ -37,7 +37,7 @@ class _AsyncDuplex:
             return await self._reader.readexactly(len)
         except (
             BrokenPipeError,
-            ConnectionResetError,
+            ConnectionError,
             EOFError,
             asyncio.IncompleteReadError,
         ):
@@ -49,7 +49,7 @@ class _AsyncDuplex:
             self._writer.write(len_bytes)
             self._writer.write(data)
             await self._writer.drain()
-        except (ConnectionResetError, BrokenPipeError):
+        except (ConnectionError, BrokenPipeError):
             raise DuplexClosed()
 
     async def aclose(self) -> None:
@@ -57,7 +57,7 @@ class _AsyncDuplex:
             self._writer.close()
             await self._writer.wait_closed()
             self._sock.close()
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionError):
             raise DuplexClosed()
 
 
@@ -85,7 +85,7 @@ class _Duplex:
             len_bytes = _read_exactly(self._sock, 4)
             len = struct.unpack("!I", len_bytes)[0]
             return _read_exactly(self._sock, len)
-        except (BrokenPipeError, ConnectionResetError, EOFError):
+        except (BrokenPipeError, ConnectionError, EOFError):
             raise DuplexClosed()
 
     def send_bytes(self, data: bytes) -> None:
@@ -94,7 +94,7 @@ class _Duplex:
             len_bytes = struct.pack("!I", len(data))
             self._sock.sendall(len_bytes)
             self._sock.sendall(data)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionError):
             raise DuplexClosed()
 
     def detach(self) -> socket.socket:
@@ -108,5 +108,5 @@ class _Duplex:
             if self._sock is not None:
                 self._sock.close()
                 self._sock = None
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionError):
             raise DuplexClosed()
