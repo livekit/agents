@@ -88,7 +88,7 @@ def _draw_plot(mp_cch):
 
     def _draw_cb(sp, pv):
         while True:
-            events = selector.select(timeout=0)
+            events = selector.select(timeout=0.01)
             if not events:
                 break
 
