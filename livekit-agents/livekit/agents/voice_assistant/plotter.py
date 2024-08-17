@@ -2,8 +2,8 @@ import asyncio
 import contextlib
 import io
 import multiprocessing as mp
-import socket
 import select
+import socket
 import time
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Tuple
@@ -185,7 +185,7 @@ class AssistantPlotter:
         async def _asend_message():
             try:
                 await channel.asend_message(self._duplex, msg)
-            except:
+            except Exception:
                 self._closed = True
 
         asyncio.ensure_future(_asend_message())
