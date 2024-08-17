@@ -141,7 +141,7 @@ def build_oai_function_description(
 
 
 def _sanitize_primitive(
-    *, value: Any, expected_type: type, choices: list | None
+    *, value: Any, expected_type: type, choices: tuple | None
 ) -> Any:
     if expected_type is str:
         if not isinstance(value, str):
