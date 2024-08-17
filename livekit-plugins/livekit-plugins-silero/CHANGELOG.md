@@ -1,5 +1,13 @@
 # livekit-plugins-silero
 
+## 0.6.4
+
+### Patch Changes
+
+- silero: adjust vad activation threshold - [#639](https://github.com/livekit/agents/pull/639) ([@theomonnom](https://github.com/theomonnom))
+
+- silero: fix vad padding & static audio - [#631](https://github.com/livekit/agents/pull/631) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.3
 
 ### Patch Changes
