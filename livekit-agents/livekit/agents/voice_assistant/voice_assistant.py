@@ -456,9 +456,24 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if old_task is not None:
             await utils.aio.gracefully_cancel(old_task)
 
-        user_msg = ChatMessage.create(text=handle.user_question, role="user")
         copied_ctx = self._chat_ctx.copy()
-        copied_ctx.messages.append(user_msg)
+
+        playing_speech = self._playing_speech
+        if playing_speech is not None and playing_speech.initialized:
+            if (
+                not playing_speech.user_question or playing_speech.user_commited
+            ) and not playing_speech.speech_commited:
+                # the speech is playing but not committed yet, add it to the chat context for this new reply synthesis
+                copied_ctx.messages.append(
+                    ChatMessage.create(
+                        text=playing_speech.synthesis_handle.tts_forwarder.played_text,
+                        role="assistant",
+                    )
+                )
+
+        copied_ctx.messages.append(
+            ChatMessage.create(text=handle.user_question, role="user")
+        )
 
         llm_stream = self._opts.will_synthesize_assistant_reply(self, copied_ctx)
         if asyncio.iscoroutine(llm_stream):
@@ -500,18 +515,15 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             return
 
         user_question = speech_handle.user_question
-        user_speech_committed = False
 
         play_handle = synthesis_handle.play()
         join_fut = play_handle.join()
 
         def _commit_user_question_if_needed() -> None:
-            nonlocal user_speech_committed
-
             if (
                 not user_question
                 or synthesis_handle.interrupted
-                or user_speech_committed
+                or speech_handle.user_commited
             ):
                 return
 
@@ -540,7 +552,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self.emit("user_speech_committed", user_msg)
 
             self._transcribed_text = self._transcribed_text[len(user_question) :]
-            user_speech_committed = True
+            speech_handle.mark_user_commited()
 
         # wait for the play_handle to finish and check every 1s if the user question should be committed
         _commit_user_question_if_needed()
@@ -567,7 +579,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if is_using_tools and not interrupted:
             assert isinstance(speech_handle.source, LLMStream)
             assert (
-                not user_question or user_speech_committed
+                not user_question or speech_handle.user_commited
             ), "user speech should have been committed before using tools"
 
             # execute functions
@@ -630,7 +642,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 interrupted = answer_synthesis.interrupted
 
         if speech_handle.add_to_chat_ctx and (
-            not user_question or user_speech_committed
+            not user_question or speech_handle.user_commited
         ):
             self._chat_ctx.messages.extend(extra_tools_messages)
 
@@ -639,6 +651,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             msg = ChatMessage.create(text=collected_text, role="assistant")
             self._chat_ctx.messages.append(msg)
+
+            speech_handle.mark_speech_commited()
 
             if interrupted:
                 self.emit("agent_speech_interrupted", msg)
@@ -684,14 +698,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 return
 
             self._synthesize_agent_reply()  # this will populate self._pending_agent_reply
-        else:
-            # in some timing, we could end up with two pushed agent replies inside the speech queue.
-            # so make sure we directly interrupt every reply when pushing a new one
-            for speech in self._speech_q:
-                if speech.allow_interruptions and speech.is_reply:
-                    speech.interrupt()
 
         assert self._pending_agent_reply is not None
+
+        # in some bad timing, we could end up with two pushed agent replies inside the speech queue.
+        # so make sure we directly interrupt every reply when validating a new one
+        for speech in self._speech_q:
+            if speech.allow_interruptions and speech.is_reply:
+                speech.interrupt()
 
         logger.debug(
             "validated agent reply",
