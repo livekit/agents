@@ -49,7 +49,7 @@ class VAD(agents.vad.VAD):
         min_silence_duration: float = 0.25,
         padding_duration: float = 0.1,
         max_buffered_speech: float = 60.0,
-        activation_threshold: float = 0.25,
+        activation_threshold: float = 0.5,
         sample_rate: int = 16000,
         force_cpu: bool = True,
     ) -> "VAD":

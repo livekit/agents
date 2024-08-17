@@ -391,7 +391,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         if self._opts.plotting:
-            self._plotter.start()
+            await self._plotter.start()
 
         audio_source = rtc.AudioSource(self._tts.sample_rate, self._tts.num_channels)
         track = rtc.LocalAudioTrack.create_audio_track("assistant_voice", audio_source)
