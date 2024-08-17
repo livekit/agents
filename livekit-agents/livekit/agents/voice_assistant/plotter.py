@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import io
 import multiprocessing as mp
-import select
+import selectors
 import socket
 import time
 from dataclasses import dataclass
@@ -83,12 +83,13 @@ def _draw_plot(mp_cch):
 
     duplex = utils.aio.duplex_unix._Duplex.open(mp_cch)
 
-    poller = select.poll()
-    poller.register(mp_cch, select.POLLIN)
+    selector = selectors.DefaultSelector()
+    selector.register(mp_cch, selectors.EVENT_READ)
 
     def _draw_cb(sp, pv):
         while True:
-            if not poller.poll(20):
+            events = selector.select(timeout=0)
+            if not events:
                 break
 
             msg = channel.recv_message(duplex, PLT_MESSAGES)
