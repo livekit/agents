@@ -88,7 +88,7 @@ def _draw_plot(mp_cch):
 
     def _draw_cb(sp, pv):
         while True:
-            events = selector.select(timeout=0.01)
+            events = selector.select(timeout=0)
             if not events:
                 break
 
@@ -140,7 +140,7 @@ def _draw_plot(mp_cch):
 
         fig.canvas.draw()
 
-    timer = fig.canvas.new_timer(interval=150)
+    timer = fig.canvas.new_timer(interval=33)
     timer.add_callback(_draw_cb, sp, pv)
     timer.start()
     plt.show()
