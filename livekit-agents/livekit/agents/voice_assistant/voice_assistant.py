@@ -93,7 +93,9 @@ class AssistantTranscriptionOptions:
     sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
     """The tokenizer used to split the speech into sentences.
     This is used to decide when to mark a transcript as final for the agent transcription."""
-    word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer()
+    word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
+        ignore_punctuation=False
+    )
     """The tokenizer used to split the speech into words.
     This is used to simulate the "interim results" of the agent transcription."""
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word

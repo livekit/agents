@@ -3,16 +3,17 @@ import re
 
 def split_words(text: str, ignore_punctuation: bool = True) -> list[str]:
     # fmt: off
-    punctuations = [".", ",", "!", "?", ";", ":", "'", '"', "(", ")", "[", "]", "{", "}", "<", ">",
-                    "—"]
+    punctuations = ['!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=', '>',
+                    '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~', '±', '—', '‘', '’', '“', '”', '…']
+
     # fmt: on
 
     if ignore_punctuation:
-        for p in punctuations:
-            # TODO(theomonnom): Ignore acronyms
-            text = text.replace(p, "")
+        # TODO(theomonnom): Ignore acronyms
+        translation_table = str.maketrans("", "", "".join(punctuations))
+        text = text.translate(translation_table)
 
-    words = re.split("[ \n]+", text)
+    words = re.split(r"\s+", text)
     new_words = []
     for word in words:
         if not word:
