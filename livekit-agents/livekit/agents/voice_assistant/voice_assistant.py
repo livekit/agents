@@ -702,7 +702,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         assert self._pending_agent_reply is not None
 
         # in some bad timing, we could end up with two pushed agent replies inside the speech queue.
-        # so make sure we directly interrupt every reply when pushing a new one
+        # so make sure we directly interrupt every reply when validating a new one
         for speech in self._speech_q:
             if speech.allow_interruptions and speech.is_reply:
                 speech.interrupt()
