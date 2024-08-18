@@ -27,7 +27,7 @@
 #define VERIFY_NO_ERROR
 #endif
 
-uint32_t glfw_mods_to_cef_mods(int glfw_mods) {
+static uint32_t glfw_mods_to_cef_mods(int glfw_mods) {
   uint32_t cef_flags = 0;
 
   if (glfw_mods & 0x0001) {  // GLFW_MOD_SHIFT
@@ -53,7 +53,7 @@ uint32_t glfw_mods_to_cef_mods(int glfw_mods) {
   return cef_flags;
 }
 
-std::optional<CefBrowserHost::MouseButtonType> glfw_button_to_cef_button(
+static std::optional<CefBrowserHost::MouseButtonType> glfw_button_to_cef_button(
     int button) {
   switch (button) {
     case GLFW_MOUSE_BUTTON_LEFT:
@@ -103,45 +103,10 @@ static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
   browser->GetHost()->SendKeyEvent(cef_event);
 }*/
 
-/*static void glfw_mouse_button_callback(GLFWwindow* window, int button, int
-action, int mods) { DevRenderer* dev_renderer =
-static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
 
-  if (button >= 0 && button <= 2) {  // GLFW only supports buttons 0-2 (left,
-right, middle) CefMouseEvent cef_event; double xpos, ypos;
-    glfwGetCursorPos(window, &xpos, &ypos);
-    cef_event.x = static_cast<int>(xpos);
-    cef_event.y = static_cast<int>(ypos);
 
-    auto browser = GetBrowserHandleFromWindow(window);
 
-    if (action == GLFW_PRESS) {
-      browser->GetHost()->SendMouseClickEvent(cef_event,
-static_cast<cef_mouse_button_type_t>(button), false, 1); } else if (action ==
-GLFW_RELEASE) { browser->GetHost()->SendMouseClickEvent(cef_event,
-static_cast<cef_mouse_button_type_t>(button), true, 1);
-    }
-  }
-}
-
-// Mouse move callback
-static void glfw_cursor_position_callback(GLFWwindow* window, double xpos,
-double ypos) { DevRenderer* dev_renderer =
-static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
-  DevRenderer::BrowserData* data = dev_renderer->getSelectedBrowserData();
-
-  if (!data) return;
-
-  CefMouseEvent cef_event;
-  cef_event.x = static_cast<int>(xpos);
-  cef_event.y = static_cast<int>(ypos);
-
-  // Translate the coordinate to the ImGUI window
-
-  data->browser->GetHost()->SendMouseMoveEvent(cef_event, false);
-}
-
-// Scroll callback
+/* Scroll callback
 static void glfw_scroll_callback(GLFWwindow* window, double xoffset, double
 yoffset) { DevRenderer* dev_renderer =
 static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
@@ -359,6 +324,7 @@ void DevRenderer::Run() {
       switch (event.type) {
         case GLEQ_CURSOR_MOVED:
         case GLEQ_BUTTON_PRESSED:
+        case GLEQ_SCROLLED:
         case GLEQ_BUTTON_RELEASED:
           if (focused_browser) {
             CefMouseEvent cef_event;
@@ -368,6 +334,18 @@ void DevRenderer::Run() {
               cef_event.y = event.pos.y - browser_view_y;
               focused_browser->browser->GetHost()->SendMouseMoveEvent(cef_event,
                                                                       false);
+            } else if (event.type == GLEQ_SCROLLED) {
+              double xpos, ypos;
+              glfwGetCursorPos(window_, &xpos, &ypos);
+              cef_event.x = static_cast<int>(xpos) - browser_view_x;
+              cef_event.y = static_cast<int>(ypos) - browser_view_y;
+
+              static const int scrollbarPixelsPerTick = 20;
+              int scroll_x = static_cast<int>(event.scroll.x * scrollbarPixelsPerTick);
+              int scroll_y = static_cast<int>(event.scroll.y * scrollbarPixelsPerTick);
+
+              focused_browser->browser->GetHost()->SendMouseWheelEvent(
+                  cef_event, scroll_x, scroll_y);
             } else {
               double xpos, ypos;
               glfwGetCursorPos(window_, &xpos, &ypos);

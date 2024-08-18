@@ -27,6 +27,7 @@ BOOL g_handling_send_event = false;
 
 // This selector is called very early during the application initialization.
 + (void)load {
+  NSLog(@"AgentsApplication::load");
   // Swap NSApplication::sendEvent with _swizzled_sendEvent.
   Method original = class_getInstanceMethod(self, @selector(sendEvent));
   Method swizzled =
@@ -48,7 +49,6 @@ BOOL g_handling_send_event = false;
 }
 
 - (void)_swizzled_sendEvent:(NSEvent*)event {
-  NSLog(@"_swizzled_sendEvent");
   CefScopedSendingEvent sendingEventScoper;
   // Calls NSApplication::sendEvent due to the swizzling.
   [self _swizzled_sendEvent:event];
