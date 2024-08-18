@@ -56,13 +56,17 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
+        connect_timeout: float = 0,
+        keepalive_timeout: float = 0,
     ):
         """
         if no credentials is provided, it will use the credentials on the environment
         GOOGLE_APPLICATION_CREDENTIALS (default behavior of Google SpeechAsyncClient)
         """
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
+            connect_timeout=connect_timeout,
+            keepalive_timeout=keepalive_timeout,
         )
 
         self._client: SpeechAsyncClient | None = None
@@ -153,18 +157,32 @@ class STT(stt.STT):
             language_codes=config.languages,
         )
 
-        raw = await self._ensure_client().recognize(
-            cloud_speech.RecognizeRequest(
-                recognizer=self._recognizer, config=config, content=frame.data.tobytes()
+        async def _request():
+            raw = await self._ensure_client().recognize(
+                cloud_speech.RecognizeRequest(
+                    recognizer=self._recognizer,
+                    config=config,
+                    content=frame.data.tobytes(),
+                )
             )
-        )
-        return _recognize_response_to_speech_event(raw)
+            return _recognize_response_to_speech_event(raw)
+
+        if self._connect_timeout > 0:
+            return await asyncio.wait_for(_request(), self._connect_timeout)
+        else:
+            return await _request()
 
     def stream(
         self, *, language: SpeechLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(self._ensure_client(), self._recognizer, config)
+        return SpeechStream(
+            self._ensure_client(),
+            self._recognizer,
+            config,
+            connect_timeout=self._connect_timeout,
+            keepalive_timeout=self._keepalive_timeout,
+        )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -176,8 +194,13 @@ class SpeechStream(stt.SpeechStream):
         sample_rate: int = 48000,
         num_channels: int = 1,
         max_retry: int = 32,
+        *,
+        connect_timeout: float,
+        keepalive_timeout: float,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
+        )
 
         self._client = client
         self._recognizer = recognizer

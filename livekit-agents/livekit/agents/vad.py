@@ -46,8 +46,16 @@ class VADCapabilities:
 
 
 class VAD(ABC):
-    def __init__(self, *, capabilities: VADCapabilities) -> None:
+    def __init__(
+        self,
+        *,
+        capabilities: VADCapabilities,
+        connect_timeout: float = 0,
+        keepalive_timeout: float = 0,
+    ) -> None:
         self._capabilities = capabilities
+        self._connect_timeout = connect_timeout
+        self._keepalive_timeout = keepalive_timeout
 
     @property
     def capabilities(self) -> VADCapabilities:
@@ -62,11 +70,14 @@ class VADStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self):
+    def __init__(self, *, connect_timeout: float = 0, keepalive_timeout: float = 0):
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, VADStream._FlushSentinel]]()
         self._event_ch = aio.Chan[VADEvent]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._connect_timeout = connect_timeout
+        self._keepalive_timeout = keepalive_timeout
+        self._timeout = self._connect_timeout
 
     @abstractmethod
     def _main_task(self) -> None: ...
@@ -95,7 +106,17 @@ class VADStream(ABC):
         self._event_ch.close()
 
     async def __anext__(self) -> VADEvent:
-        return await self._event_ch.__anext__()
+        if self._timeout > 0:
+            try:
+                event = await asyncio.wait_for(
+                    self._event_ch.__anext__(), self._timeout
+                )
+            except (TimeoutError, asyncio.TimeoutError) as e:
+                raise e.__class__("VAD event timed out")
+        else:
+            event = await self._event_ch.__anext__()
+        self._timeout = self._keepalive_timeout
+        return event
 
     def __aiter__(self) -> AsyncIterator[VADEvent]:
         return self

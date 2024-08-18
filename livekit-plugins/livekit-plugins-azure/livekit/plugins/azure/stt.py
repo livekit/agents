@@ -44,9 +44,13 @@ class STT(stt.STT):
         sample_rate: int = 48000,
         num_channels: int = 1,
         languages: list[str] = [],  # when empty, auto-detect the language
+        connect_timeout: float = 0,
+        keepalive_timeout: float = 0,
     ):
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
+            connect_timeout=connect_timeout,
+            keepalive_timeout=keepalive_timeout,
         )
 
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
@@ -71,12 +75,20 @@ class STT(stt.STT):
         raise NotImplementedError("Azure STT does not support single frame recognition")
 
     def stream(self, *, language: str | None = None) -> "SpeechStream":
-        return SpeechStream(self._config)
+        return SpeechStream(
+            self._config,
+            connect_timeout=self._connect_timeout,
+            keepalive_timeout=self._keepalive_timeout,
+        )
 
 
 class SpeechStream(stt.SpeechStream):
-    def __init__(self, opts: STTOptions) -> None:
-        super().__init__()
+    def __init__(
+        self, opts: STTOptions, *, connect_timeout: float, keepalive_timeout: float
+    ) -> None:
+        super().__init__(
+            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
+        )
         self._opts = opts
         self._speaking = False
 

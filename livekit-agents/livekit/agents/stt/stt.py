@@ -47,8 +47,16 @@ class STTCapabilities:
 
 
 class STT(ABC):
-    def __init__(self, *, capabilities: STTCapabilities) -> None:
+    def __init__(
+        self,
+        *,
+        capabilities: STTCapabilities,
+        connect_timeout: float = 0,
+        keepalive_timeout: float = 0,
+    ) -> None:
         self._capabilities = capabilities
+        self._connect_timeout = connect_timeout
+        self._keepalive_timeout = keepalive_timeout
 
     @property
     def capabilities(self) -> STTCapabilities:
@@ -76,11 +84,14 @@ class SpeechStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self):
+    def __init__(self, *, connect_timeout: float = 0, keepalive_timeout: float = 0):
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, SpeechStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SpeechEvent]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._connect_timeout = connect_timeout
+        self._keepalive_timeout = keepalive_timeout
+        self._timeout = self._connect_timeout
 
     @abstractmethod
     def _main_task(self) -> None: ...
@@ -109,7 +120,17 @@ class SpeechStream(ABC):
         self._event_ch.close()
 
     async def __anext__(self) -> SpeechEvent:
-        return await self._event_ch.__anext__()
+        if self._timeout > 0:
+            try:
+                event = await asyncio.wait_for(
+                    self._event_ch.__anext__(), self._timeout
+                )
+            except (TimeoutError, asyncio.TimeoutError) as e:
+                raise e.__class__("speech event timed out")
+        else:
+            event = await self._event_ch.__anext__()
+        self._timeout = self._keepalive_timeout
+        return event
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
         return self

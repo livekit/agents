@@ -67,11 +67,15 @@ class STT(stt.STT):
         keywords: list[Tuple[str, float]] = [],
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        connect_timeout: float = 0,
+        keepalive_timeout: float = 0,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True, interim_results=interim_results
-            )
+            ),
+            connect_timeout=connect_timeout,
+            keepalive_timeout=keepalive_timeout,
         )
 
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
@@ -143,24 +147,36 @@ class STT(stt.STT):
 
         data = io_buffer.getvalue()
 
-        async with self._ensure_session().post(
-            url=_to_deepgram_url(recognize_config),
-            data=data,
-            headers={
-                "Authorization": f"Token {self._api_key}",
-                "Accept": "application/json",
-                "Content-Type": "audio/wav",
-            },
-        ) as res:
-            return prerecorded_transcription_to_speech_event(
-                config.language, await res.json()
-            )
+        async def _request():
+            async with self._ensure_session().post(
+                url=_to_deepgram_url(recognize_config),
+                data=data,
+                headers={
+                    "Authorization": f"Token {self._api_key}",
+                    "Accept": "application/json",
+                    "Content-Type": "audio/wav",
+                },
+            ) as res:
+                return prerecorded_transcription_to_speech_event(
+                    config.language, await res.json()
+                )
+
+        if self._connect_timeout > 0:
+            return await asyncio.wait_for(_request(), self._connect_timeout)
+        else:
+            return await _request()
 
     def stream(
         self, *, language: DeepgramLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(config, self._api_key, self._ensure_session())
+        return SpeechStream(
+            config,
+            self._api_key,
+            self._ensure_session(),
+            connect_timeout=self._connect_timeout,
+            keepalive_timeout=self._keepalive_timeout,
+        )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
@@ -182,8 +198,13 @@ class SpeechStream(stt.SpeechStream):
         api_key: str,
         http_session: aiohttp.ClientSession,
         max_retry: int = 32,
+        *,
+        connect_timeout: float,
+        keepalive_timeout: float,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
+        )
 
         if opts.detect_language and opts.language is None:
             raise ValueError("language detection is not supported in streaming mode")

@@ -41,6 +41,8 @@ class TTS(tts.TTS):
         speech_key: str | None = None,
         speech_region: str | None = None,
         voice: str | None = None,
+        connect_timeout: float = 0,
+        keepalive_timeout: float = 0,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -48,6 +50,8 @@ class TTS(tts.TTS):
             ),
             sample_rate=AZURE_SAMPLE_RATE,
             num_channels=AZURE_NUM_CHANNELS,
+            connect_timeout=connect_timeout,
+            keepalive_timeout=keepalive_timeout,
         )
 
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
@@ -63,12 +67,26 @@ class TTS(tts.TTS):
         )
 
     def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts)
+        return ChunkedStream(
+            text,
+            self._opts,
+            connect_timeout=self._connect_timeout,
+            keepalive_timeout=self._keepalive_timeout,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, text: str, opts: _TTSOptions) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        text: str,
+        opts: _TTSOptions,
+        *,
+        connect_timeout: float,
+        keepalive_timeout: float,
+    ) -> None:
+        super().__init__(
+            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
+        )
         self._text, self._opts = text, opts
 
     @utils.log_exceptions()

@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import io
 import wave
@@ -46,9 +47,13 @@ class STT(stt.STT):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
+        connect_timeout: float = 0,
+        keepalive_timeout: float = 0,
     ):
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=False, interim_results=False)
+            capabilities=stt.STTCapabilities(streaming=False, interim_results=False),
+            connect_timeout=connect_timeout,
+            keepalive_timeout=keepalive_timeout,
         )
         if detect_language:
             language = ""
@@ -90,14 +95,20 @@ class STT(stt.STT):
             wav.setframerate(buffer.sample_rate)
             wav.writeframes(buffer.data)
 
-        resp = await self._client.audio.transcriptions.create(
-            file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
-            model=self._opts.model,
-            language=config.language,
-            response_format="json",
-        )
+        async def _request():
+            resp = await self._client.audio.transcriptions.create(
+                file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
+                model=self._opts.model,
+                language=config.language,
+                response_format="json",
+            )
 
-        return stt.SpeechEvent(
-            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(text=resp.text, language=language or "")],
-        )
+            return stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[stt.SpeechData(text=resp.text, language=language or "")],
+            )
+
+        if self._connect_timeout > 0:
+            return await asyncio.wait_for(_request(), self._connect_timeout)
+        else:
+            return await _request()

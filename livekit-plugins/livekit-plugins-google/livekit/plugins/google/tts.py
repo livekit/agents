@@ -49,6 +49,8 @@ class TTS(tts.TTS):
         speaking_rate: float = 1.0,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
+        connect_timeout: float = 0,
+        keepalive_timeout: float = 0,
     ) -> None:
         """
         if no credentials is provided, it will use the credentials on the environment
@@ -60,6 +62,8 @@ class TTS(tts.TTS):
             ),
             sample_rate=sample_rate,
             num_channels=1,
+            connect_timeout=connect_timeout,
+            keepalive_timeout=keepalive_timeout,
         )
 
         self._client: texttospeech.TextToSpeechAsyncClient | None = None
@@ -114,14 +118,28 @@ class TTS(tts.TTS):
         return self._client
 
     def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts, self._ensure_client())
+        return ChunkedStream(
+            text,
+            self._opts,
+            self._ensure_client(),
+            connect_timeout=self._connect_timeout,
+            keepalive_timeout=self._keepalive_timeout,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
-        self, text: str, opts: _TTSOptions, client: texttospeech.TextToSpeechAsyncClient
+        self,
+        text: str,
+        opts: _TTSOptions,
+        client: texttospeech.TextToSpeechAsyncClient,
+        *,
+        connect_timeout: float,
+        keepalive_timeout: float,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
+        )
         self._text, self._opts, self._client = text, opts, client
 
     @utils.log_exceptions(logger=logger)

@@ -29,11 +29,19 @@ class TTSCapabilities:
 
 class TTS(ABC):
     def __init__(
-        self, *, capabilities: TTSCapabilities, sample_rate: int, num_channels: int
+        self,
+        *,
+        capabilities: TTSCapabilities,
+        sample_rate: int,
+        num_channels: int,
+        connect_timeout: float = 0,
+        keepalive_timeout: float = 0,
     ) -> None:
         self._capabilities = capabilities
         self._sample_rate = sample_rate
         self._num_channels = num_channels
+        self._connect_timeout = connect_timeout
+        self._keepalive_timeout = keepalive_timeout
 
     @property
     def capabilities(self) -> TTSCapabilities:
@@ -61,10 +69,13 @@ class TTS(ABC):
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
-    def __init__(self):
+    def __init__(self, *, connect_timeout: float = 0, keepalive_timeout: float = 0):
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._connect_timeout = connect_timeout
+        self._keepalive_timeout = keepalive_timeout
+        self._timeout = self._connect_timeout
 
     async def collect(self) -> rtc.AudioFrame:
         """Utility method to collect every frame in a single call"""
@@ -82,7 +93,17 @@ class ChunkedStream(ABC):
         self._event_ch.close()
 
     async def __anext__(self) -> SynthesizedAudio:
-        return await self._event_ch.__anext__()
+        if self._timeout > 0:
+            try:
+                event = await asyncio.wait_for(
+                    self._event_ch.__anext__(), self._timeout
+                )
+            except (TimeoutError, asyncio.TimeoutError) as e:
+                raise e.__class__("synthesis timed out")
+        else:
+            event = await self._event_ch.__anext__()
+        self._timeout = self._keepalive_timeout
+        return event
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
@@ -92,11 +113,14 @@ class SynthesizeStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self):
+    def __init__(self, *, connect_timeout: float = 0, keepalive_timeout: float = 0):
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._connect_timeout = connect_timeout
+        self._keepalive_timeout = keepalive_timeout
+        self._timeout = self._connect_timeout
 
     @abstractmethod
     async def _main_task(self) -> None: ...
@@ -135,7 +159,17 @@ class SynthesizeStream(ABC):
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
     async def __anext__(self) -> SynthesizedAudio:
-        return await self._event_ch.__anext__()
+        if self._timeout > 0:
+            try:
+                event = await asyncio.wait_for(
+                    self._event_ch.__anext__(), self._timeout
+                )
+            except (TimeoutError, asyncio.TimeoutError) as e:
+                raise e.__class__("synthesis timed out")
+        else:
+            event = await self._event_ch.__anext__()
+        self._timeout = self._keepalive_timeout
+        return event
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
