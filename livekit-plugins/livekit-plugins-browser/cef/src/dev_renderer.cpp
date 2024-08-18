@@ -11,6 +11,7 @@
 #include "imgui_stdlib.h"
 #include "include/cef_app.h"
 #include "include/wrapper/cef_helpers.h"
+#include "keyboard_codes.h"
 
 #define GLEQ_IMPLEMENTATION
 #define GLEQ_STATIC
@@ -26,6 +27,172 @@
 #else
 #define VERIFY_NO_ERROR
 #endif
+
+int glfw_key_to_cef_key(int glfwKey) {
+  switch (glfwKey) {
+    case GLFW_KEY_SPACE:
+      return WebCore::VK_SPACE;
+    case GLFW_KEY_APOSTROPHE:
+      return WebCore::VK_OEM_7;
+    case GLFW_KEY_COMMA:
+      return WebCore::VK_OEM_COMMA;
+    case GLFW_KEY_MINUS:
+      return WebCore::VK_OEM_MINUS;
+    case GLFW_KEY_PERIOD:
+      return WebCore::VK_OEM_PERIOD;
+    case GLFW_KEY_SLASH:
+      return WebCore::VK_OEM_2;
+    case GLFW_KEY_0:
+      return WebCore::VK_0;
+    case GLFW_KEY_1:
+      return WebCore::VK_1;
+    case GLFW_KEY_2:
+      return WebCore::VK_2;
+    case GLFW_KEY_3:
+      return WebCore::VK_3;
+    case GLFW_KEY_4:
+      return WebCore::VK_4;
+    case GLFW_KEY_5:
+      return WebCore::VK_5;
+    case GLFW_KEY_6:
+      return WebCore::VK_6;
+    case GLFW_KEY_7:
+      return WebCore::VK_7;
+    case GLFW_KEY_8:
+      return WebCore::VK_8;
+    case GLFW_KEY_9:
+      return WebCore::VK_9;
+    case GLFW_KEY_SEMICOLON:
+      return WebCore::VK_OEM_1;
+    case GLFW_KEY_EQUAL:
+      return WebCore::VK_OEM_PLUS;
+    case GLFW_KEY_A:
+      return WebCore::VK_A;
+    case GLFW_KEY_B:
+      return WebCore::VK_B;
+    case GLFW_KEY_C:
+      return WebCore::VK_C;
+    case GLFW_KEY_D:
+      return WebCore::VK_D;
+    case GLFW_KEY_E:
+      return WebCore::VK_E;
+    case GLFW_KEY_F:
+      return WebCore::VK_F;
+    case GLFW_KEY_G:
+      return WebCore::VK_G;
+    case GLFW_KEY_H:
+      return WebCore::VK_H;
+    case GLFW_KEY_I:
+      return WebCore::VK_I;
+    case GLFW_KEY_J:
+      return WebCore::VK_J;
+    case GLFW_KEY_K:
+      return WebCore::VK_K;
+    case GLFW_KEY_L:
+      return WebCore::VK_L;
+    case GLFW_KEY_M:
+      return WebCore::VK_M;
+    case GLFW_KEY_N:
+      return WebCore::VK_N;
+    case GLFW_KEY_O:
+      return WebCore::VK_O;
+    case GLFW_KEY_P:
+      return WebCore::VK_P;
+    case GLFW_KEY_Q:
+      return WebCore::VK_Q;
+    case GLFW_KEY_R:
+      return WebCore::VK_R;
+    case GLFW_KEY_S:
+      return WebCore::VK_S;
+    case GLFW_KEY_T:
+      return WebCore::VK_T;
+    case GLFW_KEY_U:
+      return WebCore::VK_U;
+    case GLFW_KEY_V:
+      return WebCore::VK_V;
+    case GLFW_KEY_W:
+      return WebCore::VK_W;
+    case GLFW_KEY_X:
+      return WebCore::VK_X;
+    case GLFW_KEY_Y:
+      return WebCore::VK_Y;
+    case GLFW_KEY_Z:
+      return WebCore::VK_Z;
+    case GLFW_KEY_LEFT_BRACKET:
+      return WebCore::VK_OEM_4;
+    case GLFW_KEY_BACKSLASH:
+      return WebCore::VK_OEM_5;
+    case GLFW_KEY_RIGHT_BRACKET:
+      return WebCore::VK_OEM_6;
+    case GLFW_KEY_GRAVE_ACCENT:
+      return WebCore::VK_OEM_3;
+    case GLFW_KEY_ESCAPE:
+      return WebCore::VK_ESCAPE;
+    case GLFW_KEY_ENTER:
+      return WebCore::VK_RETURN;
+    case GLFW_KEY_TAB:
+      return WebCore::VK_TAB;
+    case GLFW_KEY_BACKSPACE:
+      return WebCore::VK_BACK;
+    case GLFW_KEY_INSERT:
+      return WebCore::VK_INSERT;
+    case GLFW_KEY_DELETE:
+      return WebCore::VK_DELETE;
+    case GLFW_KEY_RIGHT:
+      return WebCore::VK_RIGHT;
+    case GLFW_KEY_LEFT:
+      return WebCore::VK_LEFT;
+    case GLFW_KEY_DOWN:
+      return WebCore::VK_DOWN;
+    case GLFW_KEY_UP:
+      return WebCore::VK_UP;
+    case GLFW_KEY_PAGE_UP:
+      return WebCore::VK_PRIOR;
+    case GLFW_KEY_PAGE_DOWN:
+      return WebCore::VK_NEXT;
+    case GLFW_KEY_HOME:
+      return WebCore::VK_HOME;
+    case GLFW_KEY_END:
+      return WebCore::VK_END;
+    case GLFW_KEY_CAPS_LOCK:
+      return WebCore::VK_CAPITAL;
+    case GLFW_KEY_SCROLL_LOCK:
+      return WebCore::VK_SCROLL;
+    case GLFW_KEY_NUM_LOCK:
+      return WebCore::VK_NUMLOCK;
+    case GLFW_KEY_PRINT_SCREEN:
+      return WebCore::VK_SNAPSHOT;
+    case GLFW_KEY_PAUSE:
+      return WebCore::VK_PAUSE;
+    case GLFW_KEY_F1:
+      return WebCore::VK_F1;
+    case GLFW_KEY_F2:
+      return WebCore::VK_F2;
+    case GLFW_KEY_F3:
+      return WebCore::VK_F3;
+    case GLFW_KEY_F4:
+      return WebCore::VK_F4;
+    case GLFW_KEY_F5:
+      return WebCore::VK_F5;
+    case GLFW_KEY_F6:
+      return WebCore::VK_F6;
+    case GLFW_KEY_F7:
+      return WebCore::VK_F7;
+    case GLFW_KEY_F8:
+      return WebCore::VK_F8;
+    case GLFW_KEY_F9:
+      return WebCore::VK_F9;
+    case GLFW_KEY_F10:
+      return WebCore::VK_F10;
+    case GLFW_KEY_F11:
+      return WebCore::VK_F11;
+    case GLFW_KEY_F12:
+      return WebCore::VK_F12;
+    // Add more cases as needed
+    default:
+      return WebCore::VK_UNKNOWN;
+  }
+}
 
 static uint32_t glfw_mods_to_cef_mods(int glfw_mods) {
   uint32_t cef_flags = 0;
@@ -70,54 +237,6 @@ static std::optional<CefBrowserHost::MouseButtonType> glfw_button_to_cef_button(
 static void glfw_error_callback(int error, const char* description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
-
-/*static void glfw_key_callback(GLFWwindow* window, int key, int scancode, int
-action, int mods) { DevRenderer* dev_renderer =
-static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
-
-  if (action == GLFW_PRESS || action == GLFW_RELEASE) {
-    // Handle key event forwarding to CEF
-    CefKeyEvent cef_event;
-    cef_event.windows_key_code = key;
-    cef_event.native_key_code = scancode;
-    cef_event.is_system_key = false;
-    cef_event.type = (action == GLFW_PRESS) ? KEYEVENT_RAWKEYDOWN :
-KEYEVENT_KEYUP; cef_event.modifiers = mods;
-
-    auto browser = GetBrowserHandleFromWindow(window);
-    browser->GetHost()->SendKeyEvent(cef_event);
-  }
-}
-
-
-
-void glfw_char_callback(GLFWwindow* window, unsigned int codepoint) {
-  DevRenderer* dev_renderer =
-static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
-
-  CefKeyEvent cef_event;
-  cef_event.character = codepoint;
-  cef_event.type = KEYEVENT_CHAR;
-
-  auto browser = GetBrowserHandleFromWindow(window);
-  browser->GetHost()->SendKeyEvent(cef_event);
-}*/
-
-/* Scroll callback
-static void glfw_scroll_callback(GLFWwindow* window, double xoffset, double
-yoffset) { DevRenderer* dev_renderer =
-static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
-
-  CefMouseEvent cef_event;
-  double xpos, ypos;
-  glfwGetCursorPos(window, &xpos, &ypos);
-  cef_event.x = static_cast<int>(xpos);
-  cef_event.y = static_cast<int>(ypos);
-
-  auto browser = GetBrowserHandleFromWindow(window);
-  browser->GetHost()->SendMouseWheelEvent(cef_event, static_cast<int>(xoffset *
-100), static_cast<int>(yoffset * 100));
-}*/
 
 DevRenderer::DevRenderer() {}
 
@@ -306,6 +425,7 @@ void DevRenderer::Run() {
           focused_browser = &data;
           browser_view_x = static_cast<int>(cursor_pos.x);
           browser_view_y = static_cast<int>(cursor_pos.y);
+          data.browser->GetHost()->SetFocus(true);
         }
 
         // Render the browser tex
@@ -361,6 +481,38 @@ void DevRenderer::Run() {
                     event.type == GLEQ_BUTTON_RELEASED, 1);
               }
             }
+          }
+          break;
+        case GLEQ_KEY_PRESSED:
+        case GLEQ_KEY_RELEASED:
+          if (focused_browser) {
+            CefKeyEvent cef_event;
+            cef_event.windows_key_code =
+                glfw_key_to_cef_key(event.keyboard.key);
+            cef_event.native_key_code = event.keyboard.scancode;
+            cef_event.modifiers = glfw_mods_to_cef_mods(event.keyboard.mods);
+            cef_event.is_system_key = false;
+
+            if (event.type == GLEQ_KEY_PRESSED) {
+              cef_event.type = KEYEVENT_RAWKEYDOWN;
+              focused_browser->browser->GetHost()->SendKeyEvent(cef_event);
+            } else {
+              cef_event.type = KEYEVENT_KEYUP;
+              focused_browser->browser->GetHost()->SendKeyEvent(cef_event);
+            }
+          }
+          break;
+        case GLEQ_CODEPOINT_INPUT:
+          if (focused_browser) {
+            CefKeyEvent cef_event;
+            cef_event.type = KEYEVENT_CHAR;
+            cef_event.windows_key_code = 0;
+            cef_event.native_key_code = 0;
+            cef_event.modifiers = 0;
+            cef_event.is_system_key = false;
+            cef_event.unmodified_character = event.codepoint;
+            cef_event.character = event.codepoint;
+            focused_browser->browser->GetHost()->SendKeyEvent(cef_event);
           }
           break;
         default:
