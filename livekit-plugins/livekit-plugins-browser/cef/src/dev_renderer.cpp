@@ -103,9 +103,6 @@ static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
   browser->GetHost()->SendKeyEvent(cef_event);
 }*/
 
-
-
-
 /* Scroll callback
 static void glfw_scroll_callback(GLFWwindow* window, double xoffset, double
 yoffset) { DevRenderer* dev_renderer =
@@ -341,8 +338,10 @@ void DevRenderer::Run() {
               cef_event.y = static_cast<int>(ypos) - browser_view_y;
 
               static const int scrollbarPixelsPerTick = 20;
-              int scroll_x = static_cast<int>(event.scroll.x * scrollbarPixelsPerTick);
-              int scroll_y = static_cast<int>(event.scroll.y * scrollbarPixelsPerTick);
+              int scroll_x =
+                  static_cast<int>(event.scroll.x * scrollbarPixelsPerTick);
+              int scroll_y =
+                  static_cast<int>(event.scroll.y * scrollbarPixelsPerTick);
 
               focused_browser->browser->GetHost()->SendMouseWheelEvent(
                   cef_event, scroll_x, scroll_y);
