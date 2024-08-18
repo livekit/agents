@@ -16,7 +16,7 @@ std::shared_ptr<BrowserImpl> BrowserApp::CreateBrowser(
     const std::string& url,
     const BrowserOptions& options) {
 
-  app_->CreateBrowser(url, options.framerate, options.created_callback);
+  app_->CreateBrowser(url, options.framerate, options.width, options.height, options.created_callback);
   return nullptr;//std::make_shared<BrowserImpl>();
 }
 
@@ -40,6 +40,8 @@ PYBIND11_MODULE(lkcef_python, m) {
   py::class_<BrowserOptions>(m, "BrowserOptions")
       .def(py::init())
       .def_readwrite("framerate", &BrowserOptions::framerate)
+      .def_readwrite("width", &BrowserOptions::width)
+      .def_readwrite("height", &BrowserOptions::height)
       .def_readwrite("created_callback", &BrowserOptions::created_callback);
 
   py::class_<BrowserApp>(m, "BrowserApp")

@@ -2,13 +2,19 @@
 
 #include <iostream>
 
+#include "handler.hpp"
+
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
-
+#include "imgui_stdlib.h"
+#include "include/cef_app.h"
 #include "include/wrapper/cef_helpers.h"
 
-#include "include/cef_app.h"
+#define GLEQ_IMPLEMENTATION
+#define GLEQ_STATIC
+#include "gleq.h"
 
 // DCHECK on gl errors.
 #if DCHECK_IS_ON()
@@ -25,7 +31,111 @@ static void glfw_error_callback(int error, const char* description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
 
-DevRenderer::DevRenderer() {
+/*static void glfw_key_callback(GLFWwindow* window, int key, int scancode, int
+action, int mods) { DevRenderer* dev_renderer =
+static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
+
+  if (action == GLFW_PRESS || action == GLFW_RELEASE) {
+    // Handle key event forwarding to CEF
+    CefKeyEvent cef_event;
+    cef_event.windows_key_code = key;
+    cef_event.native_key_code = scancode;
+    cef_event.is_system_key = false;
+    cef_event.type = (action == GLFW_PRESS) ? KEYEVENT_RAWKEYDOWN :
+KEYEVENT_KEYUP; cef_event.modifiers = mods;
+
+    auto browser = GetBrowserHandleFromWindow(window);
+    browser->GetHost()->SendKeyEvent(cef_event);
+  }
+}
+
+
+
+void glfw_char_callback(GLFWwindow* window, unsigned int codepoint) {
+  DevRenderer* dev_renderer =
+static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
+
+  CefKeyEvent cef_event;
+  cef_event.character = codepoint;
+  cef_event.type = KEYEVENT_CHAR;
+
+  auto browser = GetBrowserHandleFromWindow(window);
+  browser->GetHost()->SendKeyEvent(cef_event);
+}*/
+
+/*static void glfw_mouse_button_callback(GLFWwindow* window, int button, int
+action, int mods) { DevRenderer* dev_renderer =
+static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
+
+  if (button >= 0 && button <= 2) {  // GLFW only supports buttons 0-2 (left,
+right, middle) CefMouseEvent cef_event; double xpos, ypos;
+    glfwGetCursorPos(window, &xpos, &ypos);
+    cef_event.x = static_cast<int>(xpos);
+    cef_event.y = static_cast<int>(ypos);
+
+    auto browser = GetBrowserHandleFromWindow(window);
+
+    if (action == GLFW_PRESS) {
+      browser->GetHost()->SendMouseClickEvent(cef_event,
+static_cast<cef_mouse_button_type_t>(button), false, 1); } else if (action ==
+GLFW_RELEASE) { browser->GetHost()->SendMouseClickEvent(cef_event,
+static_cast<cef_mouse_button_type_t>(button), true, 1);
+    }
+  }
+}
+
+// Mouse move callback
+static void glfw_cursor_position_callback(GLFWwindow* window, double xpos,
+double ypos) { DevRenderer* dev_renderer =
+static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
+  DevRenderer::BrowserData* data = dev_renderer->getSelectedBrowserData();
+
+  if (!data) return;
+
+  CefMouseEvent cef_event;
+  cef_event.x = static_cast<int>(xpos);
+  cef_event.y = static_cast<int>(ypos);
+
+  // Translate the coordinate to the ImGUI window
+
+  data->browser->GetHost()->SendMouseMoveEvent(cef_event, false);
+}
+
+// Scroll callback
+static void glfw_scroll_callback(GLFWwindow* window, double xoffset, double
+yoffset) { DevRenderer* dev_renderer =
+static_cast<DevRenderer*>(glfwGetWindowUserPointer(window));
+
+  CefMouseEvent cef_event;
+  double xpos, ypos;
+  glfwGetCursorPos(window, &xpos, &ypos);
+  cef_event.x = static_cast<int>(xpos);
+  cef_event.y = static_cast<int>(ypos);
+
+  auto browser = GetBrowserHandleFromWindow(window);
+  browser->GetHost()->SendMouseWheelEvent(cef_event, static_cast<int>(xoffset *
+100), static_cast<int>(yoffset * 100));
+}*/
+
+DevRenderer::DevRenderer() {}
+
+void DevRenderer::OnTitleChange(CefRefPtr<CefBrowser> browser,
+                                const CefString& title) {
+  CEF_REQUIRE_UI_THREAD();
+  int identifier = browser->GetIdentifier();
+  BrowserData* data = &browser_data_[identifier];
+  data->title = title;
+}
+
+void DevRenderer::OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
+                                       bool isLoading,
+                                       bool canGoBack,
+                                       bool canGoForward) {
+  if (!isLoading) {
+    int identifier = browser->GetIdentifier();
+    BrowserData* data = &browser_data_[identifier];
+    data->url = browser->GetMainFrame()->GetURL();
+  }
 }
 
 void DevRenderer::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
@@ -36,9 +146,10 @@ void DevRenderer::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   glGenTextures(1, &texture_id);
   VERIFY_NO_ERROR;
 
-  RenderData render_data{};
-  render_data.texture_id = texture_id;
-  render_data_.insert({identifier, render_data});
+  BrowserData data{};
+  data.browser = browser;
+  data.texture_id = texture_id;
+  browser_data_.insert({identifier, data});
 
   glBindTexture(GL_TEXTURE_2D, texture_id);
   VERIFY_NO_ERROR;
@@ -48,42 +159,42 @@ void DevRenderer::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
 }
 
 void DevRenderer::OnPaint(CefRefPtr<CefBrowser> browser,
-             CefRenderHandler::PaintElementType type,
-             const CefRenderHandler::RectList& dirtyRects,
-             const void* buffer,
-             int width,
-             int height) {
+                          CefRenderHandler::PaintElementType type,
+                          const CefRenderHandler::RectList& dirtyRects,
+                          const void* buffer,
+                          int width,
+                          int height) {
   CEF_REQUIRE_UI_THREAD();
 
-  if (type != CefRenderHandler::PaintElementType::PET_VIEW){
+  if (type != CefRenderHandler::PaintElementType::PET_VIEW) {
     std::cout << "Ignoring PET_POPUP" << std::endl;
-    return; // Ignore PET_POPUP for now, bc I'm lazy
+    return;  // Ignore PET_POPUP for now, bc I'm lazy
   }
 
   int identifier = browser->GetIdentifier();
-  RenderData* render_data = &render_data_[identifier];
+  BrowserData* data = &browser_data_[identifier];
 
-  int old_width = render_data->view_width;
-  int old_height = render_data->view_height;
+  int old_width = data->view_width;
+  int old_height = data->view_height;
 
-  render_data->view_width = width;
-  render_data->view_height = height;
+  data->view_width = width;
+  data->view_height = height;
 
-  glBindTexture(GL_TEXTURE_2D, render_data->texture_id);
+  glBindTexture(GL_TEXTURE_2D, data->texture_id);
 
   glPixelStorei(GL_UNPACK_ROW_LENGTH, width);
   VERIFY_NO_ERROR;
 
-  bool has_fullscreen_rect = dirtyRects.size() == 1 &&
-                         dirtyRects[0] == CefRect(0, 0, width, height);
+  bool has_fullscreen_rect =
+      dirtyRects.size() == 1 && dirtyRects[0] == CefRect(0, 0, width, height);
 
   if (old_width != width || old_height != height || has_fullscreen_rect) {
     glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
     VERIFY_NO_ERROR;
     glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
     VERIFY_NO_ERROR;
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
-                 GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, buffer);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_BGRA,
+                 GL_UNSIGNED_INT_8_8_8_8_REV, buffer);
     VERIFY_NO_ERROR;
   } else {
     CefRenderHandler::RectList::const_iterator i = dirtyRects.begin();
@@ -93,9 +204,8 @@ void DevRenderer::OnPaint(CefRefPtr<CefBrowser> browser,
       VERIFY_NO_ERROR;
       glPixelStorei(GL_UNPACK_SKIP_ROWS, rect.y);
       VERIFY_NO_ERROR;
-      glTexSubImage2D(GL_TEXTURE_2D, 0, rect.x, rect.y, rect.width,
-                      rect.height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,
-                      buffer);
+      glTexSubImage2D(GL_TEXTURE_2D, 0, rect.x, rect.y, rect.width, rect.height,
+                      GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, buffer);
       VERIFY_NO_ERROR;
     }
   }
@@ -104,9 +214,9 @@ void DevRenderer::OnPaint(CefRefPtr<CefBrowser> browser,
 void DevRenderer::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   int identifier = browser->GetIdentifier();
-  RenderData* render_data = &render_data_[identifier];
-  glDeleteTextures(1, &render_data->texture_id);
-  render_data_.erase(identifier);
+  BrowserData* data = &browser_data_[identifier];
+  glDeleteTextures(1, &data->texture_id);
+  browser_data_.erase(identifier);
 }
 
 void DevRenderer::Run() {
@@ -117,6 +227,8 @@ void DevRenderer::Run() {
     return;
   }
 
+  gleqInit();
+
   const char* glsl_version = "#version 150";
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
@@ -126,6 +238,8 @@ void DevRenderer::Run() {
   window_ =
       glfwCreateWindow(800, 600, "livekit-plugins-browser (Development Window)",
                        nullptr, nullptr);
+
+  gleqTrackWindow(window_);
 
   if (!window_) {
     std::cerr << "Failed to create GLFW window" << std::endl;
@@ -142,10 +256,8 @@ void DevRenderer::Run() {
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-  // Setup Platform/Renderer backends
   ImGui_ImplGlfw_InitForOpenGL(window_, true);
   ImGui_ImplOpenGL3_Init(glsl_version);
-
 
   ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
   while (!glfwWindowShouldClose(window_)) {
@@ -156,20 +268,73 @@ void DevRenderer::Run() {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    ImGui::ShowDemoWindow();
 
+    // Focused browser input states
+    BrowserData* focused_browser = nullptr;
+    int browser_view_x = 0;
+    int browser_view_y = 0;
 
-    for (auto& [identifier, render_data] : render_data_) {
-      ImGui::Begin("Browser");
-      ImGui::Text("Browser %d", identifier);
-      ImGui::Image((void*)(intptr_t)render_data.texture_id,
-                   ImVec2(render_data.view_width, render_data.view_height));
+    for (auto& [identifier, data] : browser_data_) {
+      std::string name =
+          (data.title.empty() ? "Browser #" + std::to_string(identifier)
+                              : data.title) +
+          "###Browser" + std::to_string(identifier);
+
+      if (ImGui::Begin(name.c_str())) {
+        ImVec2 size = ImGui::GetContentRegionAvail();
+
+        // Resize the browser view if needed
+        if (size.x > 0 && size.y > 0 &&
+            (data.view_width != static_cast<int>(size.x) ||
+             data.view_height != static_cast<int>(size.y))) {
+          AgentHandler::GetInstance()
+              ->GetBrowserHandle(identifier)
+              ->SetSize(static_cast<int>(size.x), static_cast<int>(size.y));
+        }
+
+        if (ImGui::InputText("URL", &data.url,
+                             ImGuiInputTextFlags_EnterReturnsTrue)) {
+          data.browser->GetMainFrame()->LoadURL(data.url);
+        }
+
+        ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
+
+        bool is_focused = ImGui::IsWindowFocused();
+        if (is_focused) {
+          focused_browser = &data;
+          browser_view_x = static_cast<int>(cursor_pos.x);
+          browser_view_y = static_cast<int>(cursor_pos.y);
+        }
+
+        // Render the browser tex
+        ImGui::Image((void*)(intptr_t)data.texture_id,
+                     ImVec2((float)data.view_width, (float)data.view_height));
+      }
       ImGui::End();
     }
 
+    GLEQevent event;
 
+    while (gleqNextEvent(&event)) {
+      switch (event.type) {
+        case GLEQ_CURSOR_MOVED:
 
-    // Rendering
+          if (focused_browser) {
+            CefMouseEvent cef_event;
+            cef_event.x = event.pos.x - browser_view_x;
+            cef_event.y = event.pos.y - browser_view_y;
+            focused_browser->browser->GetHost()->SendMouseMoveEvent(cef_event,
+                                                                    false);
+          }
+
+          break;
+        default:
+          break;
+      }
+
+      gleqFreeEvent(&event);
+    }
+
     ImGui::Render();
     int display_w, display_h;
     glfwGetFramebufferSize(window_, &display_w, &display_h);
@@ -191,5 +356,5 @@ void DevRenderer::Run() {
 }
 
 void DevRenderer::Close() {
-  //glfwSetWindowShouldClose(window_, GLFW_TRUE);
+  // glfwSetWindowShouldClose(window_, GLFW_TRUE);
 }

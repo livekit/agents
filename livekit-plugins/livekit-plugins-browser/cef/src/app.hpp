@@ -28,6 +28,8 @@ class AgentApp : public CefApp, public CefBrowserProcessHandler {
   CefRefPtr<BrowserHandle> CreateBrowser(
       const std::string& url,
       int framerate,
+      int width,
+      int height,
       std::function<void()> created_callback);
 
   int Run();

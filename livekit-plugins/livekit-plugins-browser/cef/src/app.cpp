@@ -38,6 +38,8 @@ CefRefPtr<CefClient> AgentApp::GetDefaultClient() {
 CefRefPtr<BrowserHandle> AgentApp::CreateBrowser(
     const std::string& url,
     int framerate,
+    int width,
+    int height,
     std::function<void()> created_callback) {
   CEF_REQUIRE_UI_THREAD();
   CefWindowInfo windowInfo;
@@ -51,7 +53,7 @@ CefRefPtr<BrowserHandle> AgentApp::CreateBrowser(
   settings.background_color = CefColorSetARGB(255, 255, 255, 255);
 
   CefRefPtr<BrowserHandle> browser_handle =
-        new BrowserHandle(created_callback);
+        new BrowserHandle(created_callback, width, height);
 
   client_->AddPendingHandle(browser_handle);
 
