@@ -38,8 +38,6 @@ class FallbackAdapter(STT):
     def __init__(
         self,
         *providers: STT,
-        connect_timeout: float = 5.0,
-        keepalive_timeout: float = 120.0,
         cooldown: float = 60.0,
     ) -> None:
         if len(providers) == 0:
@@ -51,8 +49,6 @@ class FallbackAdapter(STT):
             )
         )
         self._providers = [STTProvider(stt=x, cooldown=cooldown) for x in providers]
-        self._connect_timeout = connect_timeout
-        self._keepalive_timeout = keepalive_timeout
 
     async def recognize(
         self, buffer: utils.AudioBuffer, *, language: str | None = None
@@ -67,10 +63,7 @@ class FallbackAdapter(STT):
         i = _init_stt()
         while True:
             try:
-                return await asyncio.wait_for(
-                    self._providers[i].stt.recognize(buffer, language=language),
-                    self._connect_timeout,
-                )
+                return self._providers[i].stt.recognize(buffer, language=language),
             except (TimeoutError, asyncio.TimeoutError):
                 logger.warn(
                     f"provider {self._providers[i].__class__.__module__} failed, attempting to switch"
@@ -82,8 +75,6 @@ class FallbackAdapter(STT):
         if self.capabilities.streaming:
             return FallbackSpeechStream(
                 providers=self._providers,
-                connect_timeout=self._connect_timeout,
-                keepalive_timeout=self._keepalive_timeout,
                 language=language,
             )
         raise NotImplementedError(
@@ -96,16 +87,11 @@ class FallbackSpeechStream(SpeechStream):
         self,
         *,
         providers: list[STTProvider],
-        connect_timeout: float,
-        keepalive_timeout: float,
         language: str | None,
     ) -> None:
         super().__init__()
-        self._connect_timeout = connect_timeout
-        self._keepalive_timeout = keepalive_timeout
         self._providers = providers
         self._language = language
-        self._timeout: float
         self._init_stt()
 
     @utils.log_exceptions(logger=logger)
@@ -116,7 +102,6 @@ class FallbackSpeechStream(SpeechStream):
             self._stream = self._providers[self._index].stt.stream(
                 language=self._language
             )
-            self._timeout = self._connect_timeout
         else:
             raise Exception("all providers failed")
 
@@ -130,14 +115,16 @@ class FallbackSpeechStream(SpeechStream):
             while True:
                 try:
                     async for item in self._stream:
-                        self._timeout = self._keepalive_timeout
                         self._event_ch.send_nowait(item)
-                except Exception:
+                    return
+                except (TimeoutError, asyncio.TimeoutError):
                     logger.warn(
                         f"provider {self._stream.__class__.__module__} failed, attempting to switch"
                     )
                     self._providers[self._index].deactivate()
                     self._init_stt()
+                except StopAsyncIteration:
+                    return
 
         tasks = [
             asyncio.create_task(_pass_input()),

@@ -38,8 +38,6 @@ class FallbackAdapter(TTS):
     def __init__(
         self,
         *providers: TTS,
-        connect_timeout: float = 5.0,
-        keepalive_timeout: float = 120.0,
         cooldown: float = 60.0,
     ) -> None:
         if len(providers) == 0:
@@ -58,14 +56,10 @@ class FallbackAdapter(TTS):
             num_channels=providers[0].num_channels,
         )
         self._providers = [TTSProvider(tts=x, cooldown=cooldown) for x in providers]
-        self._connect_timeout = connect_timeout
-        self._keepalive_timeout = keepalive_timeout
 
     def synthesize(self, text: str) -> ChunkedStream:
         return FallbackChunkedStream(
             providers=self._providers,
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
             text=text,
         )
 
@@ -73,8 +67,6 @@ class FallbackAdapter(TTS):
         if self.capabilities.streaming:
             return FallbackSynthesizeStream(
                 providers=self._providers,
-                connect_timeout=self._connect_timeout,
-                keepalive_timeout=self._keepalive_timeout,
             )
         raise NotImplementedError(
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"
@@ -86,16 +78,11 @@ class FallbackChunkedStream(ChunkedStream):
         self,
         *,
         providers: list[TTSProvider],
-        connect_timeout: float,
-        keepalive_timeout: float,
         text: str,
     ) -> None:
         super().__init__()
         self._text = text
-        self._connect_timeout = connect_timeout
-        self._keepalive_timeout = keepalive_timeout
         self._providers = providers
-        self.timeout: float
         self._init_tts()
 
     @utils.log_exceptions(logger=logger)
@@ -104,7 +91,6 @@ class FallbackChunkedStream(ChunkedStream):
         if index is not None:
             self._index = index
             self._stream = self._providers[self._index].tts.synthesize(self._text)
-            self._timeout = self._connect_timeout
         else:
             raise Exception("all providers failed")
 
@@ -112,9 +98,9 @@ class FallbackChunkedStream(ChunkedStream):
     async def _main_task(self) -> None:
         while True:
             try:
-                item = await asyncio.wait_for(self._stream.__anext__(), self._timeout)
-                self._timeout = self._keepalive_timeout
-                self._event_ch.send_nowait(item)
+                async for item in self._stream:
+                    self._event_ch.send_nowait(item)
+                return
             except (TimeoutError, asyncio.TimeoutError):
                 logger.warn(
                     f"provider {self._stream.__class__.__module__} failed, attempting to switch"
@@ -124,18 +110,13 @@ class FallbackChunkedStream(ChunkedStream):
             except StopAsyncIteration:
                 return
 
-
 class FallbackSynthesizeStream(SynthesizeStream):
     def __init__(
         self,
         *,
         providers: list[TTSProvider],
-        connect_timeout: float,
-        keepalive_timeout: float,
     ) -> None:
         super().__init__()
-        self._connect_timeout = connect_timeout
-        self._keepalive_timeout = keepalive_timeout
         self._providers = providers
         self._timeout: float
         self._init_tts()
@@ -146,7 +127,6 @@ class FallbackSynthesizeStream(SynthesizeStream):
         if index is not None:
             self._index = index
             self._stream = self._providers[self._index].tts.stream()
-            self._timeout = self._connect_timeout
         else:
             raise Exception("all providers failed")
 
@@ -160,14 +140,16 @@ class FallbackSynthesizeStream(SynthesizeStream):
             while True:
                 try:
                     async for item in self._stream:
-                        self._timeout = self._keepalive_timeout
                         self._event_ch.send_nowait(item)
+                    return
                 except Exception:
                     logger.warn(
                         f"provider {self._stream.__class__.__module__} failed, attempting to switch"
                     )
                     self._providers[self._index].deactivate()
                     self._init_tts()
+                except StopAsyncIteration:
+                    return
 
         tasks = [
             asyncio.create_task(_pass_input()),
