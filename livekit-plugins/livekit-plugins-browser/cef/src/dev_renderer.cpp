@@ -27,6 +27,46 @@
 #define VERIFY_NO_ERROR
 #endif
 
+uint32_t glfw_mods_to_cef_mods(int glfw_mods) {
+  uint32_t cef_flags = 0;
+
+  if (glfw_mods & 0x0001) {  // GLFW_MOD_SHIFT
+    cef_flags |= (1 << 1);   // EVENTFLAG_SHIFT_DOWN
+  }
+  if (glfw_mods & 0x0002) {  // GLFW_MOD_CONTROL
+    cef_flags |= (1 << 2);   // EVENTFLAG_CONTROL_DOWN
+  }
+  if (glfw_mods & 0x0004) {  // GLFW_MOD_ALT
+    cef_flags |= (1 << 3);   // EVENTFLAG_ALT_DOWN
+  }
+  if (glfw_mods & 0x0008) {  // GLFW_MOD_SUPER
+    cef_flags |=
+        (1 << 7);  // EVENTFLAG_COMMAND_DOWN (Super key -> Command on Mac)
+  }
+  if (glfw_mods & 0x0010) {  // GLFW_MOD_CAPS_LOCK
+    cef_flags |= (1 << 0);   // EVENTFLAG_CAPS_LOCK_ON
+  }
+  if (glfw_mods & 0x0020) {  // GLFW_MOD_NUM_LOCK
+    cef_flags |= (1 << 8);   // EVENTFLAG_NUM_LOCK_ON
+  }
+
+  return cef_flags;
+}
+
+std::optional<CefBrowserHost::MouseButtonType> glfw_button_to_cef_button(
+    int button) {
+  switch (button) {
+    case GLFW_MOUSE_BUTTON_LEFT:
+      return CefBrowserHost::MouseButtonType::MBT_LEFT;
+    case GLFW_MOUSE_BUTTON_MIDDLE:
+      return CefBrowserHost::MouseButtonType::MBT_MIDDLE;
+    case GLFW_MOUSE_BUTTON_RIGHT:
+      return CefBrowserHost::MouseButtonType::MBT_RIGHT;
+    default:
+      return std::nullopt;
+  }
+}
+
 static void glfw_error_callback(int error, const char* description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
@@ -318,15 +358,56 @@ void DevRenderer::Run() {
     while (gleqNextEvent(&event)) {
       switch (event.type) {
         case GLEQ_CURSOR_MOVED:
-
+        case GLEQ_BUTTON_PRESSED:
+        case GLEQ_BUTTON_RELEASED:
           if (focused_browser) {
             CefMouseEvent cef_event;
-            cef_event.x = event.pos.x - browser_view_x;
-            cef_event.y = event.pos.y - browser_view_y;
-            focused_browser->browser->GetHost()->SendMouseMoveEvent(cef_event,
-                                                                    false);
-          }
 
+            if (event.type == GLEQ_CURSOR_MOVED) {
+              cef_event.x = event.pos.x - browser_view_x;
+              cef_event.y = event.pos.y - browser_view_y;
+              focused_browser->browser->GetHost()->SendMouseMoveEvent(cef_event,
+                                                                      false);
+            } else {
+              double xpos, ypos;
+              glfwGetCursorPos(window_, &xpos, &ypos);
+              cef_event.x = static_cast<int>(xpos) - browser_view_x;
+              cef_event.y = static_cast<int>(ypos) - browser_view_y;
+              cef_event.modifiers = glfw_mods_to_cef_mods(event.mouse.mods);
+
+              std::optional<CefBrowserHost::MouseButtonType> cef_button =
+                  glfw_button_to_cef_button(event.mouse.button);
+
+              if (cef_button.has_value()) {
+                focused_browser->browser->GetHost()->SendMouseClickEvent(
+                    cef_event, cef_button.value(),
+                    event.type == GLEQ_BUTTON_RELEASED, 1);
+              }
+            }
+          }
+          break;
+
+          /*
+           *
+           *
+if (button >= 0 && button <= 2) {  // GLFW only supports buttons 0-2 (left,
+right, middle) CefMouseEvent cef_event; double xpos, ypos;
+  glfwGetCursorPos(window, &xpos, &ypos);
+  cef_event.x = static_cast<int>(xpos);
+  cef_event.y = static_cast<int>(ypos);
+
+        auto browser = GetBrowserHandleFromWindow(window);
+
+        if (action == GLFW_PRESS) {
+          browser->GetHost()->SendMouseClickEvent(cef_event,
+                                                  static_cast<cef_mouse_button_type_t>(button),
+false, 1); } else if (action == GLFW_RELEASE) {
+browser->GetHost()->SendMouseClickEvent(cef_event,
+                                                  static_cast<cef_mouse_button_type_t>(button),
+true, 1);
+        }
+    }
+           */
           break;
         default:
           break;

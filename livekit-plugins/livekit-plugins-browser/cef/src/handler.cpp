@@ -77,6 +77,22 @@ void AgentHandler::OnAudioStreamStopped(CefRefPtr<CefBrowser> browser) {}
 void AgentHandler::OnAudioStreamError(CefRefPtr<CefBrowser> browser,
                                       const CefString& message) {}
 
+
+bool AgentHandler::OnBeforePopup(CefRefPtr<CefBrowser> browser,
+                   CefRefPtr<CefFrame> frame,
+                   const CefString& target_url,
+                   const CefString& target_frame_name,
+                   WindowOpenDisposition target_disposition,
+                   bool user_gesture,
+                   const CefPopupFeatures& popupFeatures,
+                   CefWindowInfo& windowInfo,
+                   CefRefPtr<CefClient>& client,
+                   CefBrowserSettings& settings,
+                   CefRefPtr<CefDictionaryValue>& extra_info,
+                   bool* no_javascript_access) {
+  return true;
+}
+
 void AgentHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
