@@ -34,6 +34,8 @@ class AgentApp : public CefApp, public CefBrowserProcessHandler {
 
   int Run();
 
+  bool IsDevMode() const { return dev_mode_; }
+
  private:
   IMPLEMENT_REFCOUNTING(AgentApp);
 

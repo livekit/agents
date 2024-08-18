@@ -14,7 +14,7 @@
 
 BOOL g_handling_send_event = false;
 
-@interface AgentsApplication : NSApplication <CefAppProtocol>
+@interface NSApplication (AgentsApplication)
 
 - (BOOL)isHandlingSendEvent;
 - (void)setHandlingSendEvent:(BOOL)handlingSendEvent;
@@ -23,7 +23,7 @@ BOOL g_handling_send_event = false;
 
 @end
 
-@implementation AgentsApplication
+@implementation NSApplication (AgentsApplication)
 
 // This selector is called very early during the application initialization.
 + (void)load {
@@ -48,6 +48,7 @@ BOOL g_handling_send_event = false;
 }
 
 - (void)_swizzled_sendEvent:(NSEvent*)event {
+  NSLog(@"_swizzled_sendEvent");
   CefScopedSendingEvent sendingEventScoper;
   // Calls NSApplication::sendEvent due to the swizzling.
   [self _swizzled_sendEvent:event];
@@ -64,12 +65,12 @@ int RunAgentApp(CefRefPtr<AgentApp> app) {
   CefMainArgs main_args(0, nullptr);
 
   @autoreleasepool {
-    [AgentsApplication sharedApplication];
+    //[NSApplication sharedApplication];
 
     // If there was an invocation to NSApp prior to this method, then the NSApp
     // will not be a AgentsApplication, but will instead be an NSApplication.
     // This is undesirable and we must enforce that this doesn't happen.
-    CHECK([NSApp isKindOfClass:[AgentsApplication class]]);
+    //CHECK([NSApp isKindOfClass:[NSApplication class]]);
 
     std::string framework_path =
         "/Users/theomonnom/livekit/agents/livekit-plugins/"
@@ -90,6 +91,8 @@ int RunAgentApp(CefRefPtr<AgentApp> app) {
     }
 
     CefSettings settings{};
+    settings.chrome_runtime = true;
+    settings.external_message_pump = app->IsDevMode();
     // settings.remote_debugging_port = 8088;
     CefString(&settings.framework_dir_path).FromString(framework_path);
     CefString(&settings.main_bundle_path).FromString(main_bundle_path);

@@ -386,29 +386,6 @@ void DevRenderer::Run() {
             }
           }
           break;
-
-          /*
-           *
-           *
-if (button >= 0 && button <= 2) {  // GLFW only supports buttons 0-2 (left,
-right, middle) CefMouseEvent cef_event; double xpos, ypos;
-  glfwGetCursorPos(window, &xpos, &ypos);
-  cef_event.x = static_cast<int>(xpos);
-  cef_event.y = static_cast<int>(ypos);
-
-        auto browser = GetBrowserHandleFromWindow(window);
-
-        if (action == GLFW_PRESS) {
-          browser->GetHost()->SendMouseClickEvent(cef_event,
-                                                  static_cast<cef_mouse_button_type_t>(button),
-false, 1); } else if (action == GLFW_RELEASE) {
-browser->GetHost()->SendMouseClickEvent(cef_event,
-                                                  static_cast<cef_mouse_button_type_t>(button),
-true, 1);
-        }
-    }
-           */
-          break;
         default:
           break;
       }

@@ -90,6 +90,7 @@ bool AgentHandler::OnBeforePopup(CefRefPtr<CefBrowser> browser,
                    CefBrowserSettings& settings,
                    CefRefPtr<CefDictionaryValue>& extra_info,
                    bool* no_javascript_access) {
+  browser->GetMainFrame()->LoadURL(target_url);
   return true;
 }
 
