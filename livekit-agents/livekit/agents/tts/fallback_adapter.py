@@ -110,6 +110,7 @@ class FallbackChunkedStream(ChunkedStream):
             except StopAsyncIteration:
                 return
 
+
 class FallbackSynthesizeStream(SynthesizeStream):
     def __init__(
         self,

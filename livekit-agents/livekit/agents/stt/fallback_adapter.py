@@ -63,7 +63,7 @@ class FallbackAdapter(STT):
         i = _init_stt()
         while True:
             try:
-                return self._providers[i].stt.recognize(buffer, language=language),
+                return self._providers[i].stt.recognize(buffer, language=language)
             except (TimeoutError, asyncio.TimeoutError):
                 logger.warn(
                     f"provider {self._providers[i].__class__.__module__} failed, attempting to switch"
