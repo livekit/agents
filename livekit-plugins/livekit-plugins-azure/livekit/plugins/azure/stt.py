@@ -177,7 +177,7 @@ class SpeechStream(stt.SpeechStream):
     def _on_session_stopped(self, evt: speechsdk.SpeechRecognitionEventArgs):
         self._loop.call_soon_threadsafe(self._done_event.set)
 
-    def _threadsafe_send(self, evt: stt.SpeechEvent | None):
+    def _threadsafe_send(self, evt: stt.SpeechEvent):
         self._loop.call_soon_threadsafe(self._event_ch.send_nowait, evt)
 
 
