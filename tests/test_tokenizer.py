@@ -118,33 +118,6 @@ async def test_streamed_word_tokenizer(tokenizer: tokenize.WordTokenizer):
         assert ev.token == WORDS_EXPECTED[i]
 
 
-WORDS_PUNCTUATED_TEXT = (
-    "This is a test. Blabla another test! multiple consecutive spaces:     done"
-)
-WORDS_PUNCTUATED_EXPECTED = [
-    "This",
-    "is",
-    "a",
-    "test.",
-    "Blabla",
-    "another",
-    "test",
-    "multiple",
-    "consecutive",
-    "spaces",
-    "done",
-]
-
-WORD_TOKENIZERS = [basic.WordTokenizer()]
-
-
-@pytest.mark.parametrize("tokenizer", WORD_TOKENIZERS)
-def test_word_tokenizer(tokenizer: tokenize.WordTokenizer):
-    tokens = tokenizer.tokenize(text=WORDS_TEXT)
-    for i, token in enumerate(WORDS_EXPECTED):
-        assert token == tokens[i]
-
-
 HYPHENATOR_TEXT = [
     "Segment",
     "expected",
