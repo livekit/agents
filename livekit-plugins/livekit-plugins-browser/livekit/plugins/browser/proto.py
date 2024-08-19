@@ -1,6 +1,6 @@
 from typing import ClassVar
 from livekit.agents.ipc import channel
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import io
 
@@ -75,7 +75,7 @@ class AcquirePaintData:
     page_id: int = -1
     width: int = 0
     height: int = 0
-    dirty_rects: list[tuple[int, int, int, int]] = []
+    dirty_rects: list[tuple[int, int, int, int]] = field(default_factory=list)
 
     def write(self, b: io.BytesIO) -> None:
         channel.write_int(b, self.page_id)

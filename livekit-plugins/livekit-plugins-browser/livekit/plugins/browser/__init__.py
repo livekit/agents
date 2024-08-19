@@ -17,6 +17,8 @@ from livekit.agents import Plugin
 from .log import logger
 from .version import __version__
 
+from .proc import BrowserContext, BrowserPage
+
 
 class BrowserPlugin(Plugin):
     def __init__(self):

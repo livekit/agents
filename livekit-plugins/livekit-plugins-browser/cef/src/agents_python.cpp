@@ -5,7 +5,9 @@
 #include <pybind11/stl.h>
 
 #include "app.hpp"
+#include "include/base/cef_callback.h"
 #include "include/internal/cef_mac.h"
+#include "include/wrapper/cef_closure_task.h"
 
 namespace py = pybind11;
 
@@ -13,10 +15,25 @@ BrowserApp::BrowserApp(const AppOptions& options) : options_(options) {
   app_ = new AgentApp(options_.dev_mode, options_.initialized_callback);
 }
 
-std::shared_ptr<BrowserImpl> BrowserApp::CreateBrowser(
-    const std::string& url,
-    const BrowserOptions& options) {
+bool BrowserApp::CreateBrowser(const std::string& url,
+                               const BrowserOptions& options) {
+  if (CefCurrentlyOn(TID_UI)) {
+    CreateBrowserOnUIThread(url, options);
+    return true;
+  }
+
+  // TODO(theomonnom): Document base::Unretained
+  CefPostTask(TID_UI, base::BindOnce(&BrowserApp::CreateBrowserOnUIThread,
+                                     base::Unretained(this), url, options));
+
+  return true;
+}
+
+void BrowserApp::CreateBrowserOnUIThread(const std::string& url,
+                                         const BrowserOptions& options) {
   std::shared_ptr<BrowserImpl> browser_impl = std::make_shared<BrowserImpl>();
+  browsers_.push_back(browser_impl);
+
   CefRefPtr<BrowserHandle> handle = app_->CreateBrowser(
       url, options.framerate, options.width, options.height,
       [options, browser_impl]() { options.created_callback(browser_impl); },
@@ -38,7 +55,6 @@ std::shared_ptr<BrowserImpl> BrowserApp::CreateBrowser(
       });
 
   browser_impl->handle = handle;
-  return browser_impl;
 }
 
 int BrowserApp::Run() {
@@ -79,9 +95,9 @@ PYBIND11_MODULE(lkcef_python, m) {
   py::class_<BrowserApp>(m, "BrowserApp")
       .def(py::init<const AppOptions&>())
       .def("create_browser", &BrowserApp::CreateBrowser)
-      .def("run", &BrowserApp::Run);
+      .def("run", &BrowserApp::Run, py::call_guard<py::gil_scoped_release>());
 
-  py::class_<BrowserImpl>(m, "BrowserImpl")
+  py::class_<BrowserImpl, std::shared_ptr<BrowserImpl>>(m, "BrowserImpl")
       .def("set_size", &BrowserImpl::SetSize)
       .def("identifier", &BrowserImpl::Identifier);
 

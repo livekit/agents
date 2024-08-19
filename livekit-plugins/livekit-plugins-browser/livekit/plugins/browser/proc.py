@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import asyncio
 import socket
 from livekit.agents import utils, ipc
@@ -14,23 +15,52 @@ MAX_WIDTH = 1920
 MAX_HEIGHT = 1080
 
 
+@dataclass
+class _PageOptions:
+    page_id: int
+    url: str
+    width: int
+    height: int
+    framerate: int
+
+
 # a page is in reality a browser in CEF
 class BrowserPage:
-    def __init__(self, mp_ctx: mpc.SpawnContext, page_id: int) -> None:
+    def __init__(
+        self,
+        mp_ctx: mpc.SpawnContext,
+        opts: _PageOptions,
+        ctx_duplex: utils.aio.duplex_unix._AsyncDuplex,
+    ) -> None:
         self._mp_ctx = mp_ctx
-        self._id = page_id
+        self._opts = opts
+        self._ctx_duplex = ctx_duplex
         self._created_fut = asyncio.Future()
 
     @property
     def id(self) -> int:
-        return self._id
+        return self._opts.page_id
 
     async def start(self) -> None:
         shm_name = f"lkcef_browser_{utils.shortuuid()}"
-        self._shm = mp_shm.SharedMemory(create=True, size=MAX_WIDTH * MAX_HEIGHT * 4, name=shm_name)
+        self._shm = mp_shm.SharedMemory(
+            create=True, size=MAX_WIDTH * MAX_HEIGHT * 4, name=shm_name
+        )
+
+        # send create browser request
+        req = proto.CreateBrowserRequest(
+            page_id=self._opts.page_id,
+            width=self._opts.width,
+            height=self._opts.height,
+            shm_name=shm_name,
+            url=self._opts.url,
+            framerate=self._opts.framerate,
+        )
+
+        await ipc.channel.asend_message(self._ctx_duplex, req)
 
         # TODO(theomonnom): create timeout (would prevent never resolving futures if the
-        # browser process crashed for some reasons)
+        #   browser process crashed for some reasons)
         await asyncio.shield(self._created_fut)
 
     async def aclose(self) -> None:
@@ -41,8 +71,6 @@ class BrowserPage:
 
     def _handle_paint(self, msg: proto.AcquirePaintData) -> None:
         print("painting", msg.page_id, msg.width, msg.height)
-        pass
-
 
 
 class BrowserContext:
@@ -55,24 +83,28 @@ class BrowserContext:
 
     async def initialize(self) -> None:
         mp_pch, mp_cch = socket.socketpair()
-        duplex = await utils.aio.duplex_unix._AsyncDuplex.open(mp_pch)
+        self._duplex = await utils.aio.duplex_unix._AsyncDuplex.open(mp_pch)
 
         self._proc = self._mp_ctx.Process(target=proc_main.main, args=(mp_cch,))
         self._proc.start()
         mp_cch.close()
 
-        await ipc.channel.asend_message(duplex, proto.InitializeContextRequest(dev_mode=self._dev_mode))
-        resp = await ipc.channel.arecv_message(duplex, proto.IPC_MESSAGES)
+        await ipc.channel.asend_message(
+            self._duplex, proto.InitializeContextRequest(dev_mode=self._dev_mode)
+        )
+        resp = await ipc.channel.arecv_message(self._duplex, proto.IPC_MESSAGES)
         assert isinstance(resp, proto.ContextInitializedResponse)
         self._initialized = True
         logger.debug("browser context initialized", extra={"pid": self._proc.pid})
+
+        self._main_atask = asyncio.create_task(self._main_task(self._duplex))
 
 
     async def _main_task(self, duplex: utils.aio.duplex_unix._AsyncDuplex) -> None:
         while True:
             try:
                 msg = await ipc.channel.arecv_message(duplex, proto.IPC_MESSAGES)
-            except utils.aio.duplex_unix.ChannelClosed:
+            except utils.aio.duplex_unix.DuplexClosed:
                 break
 
             if isinstance(msg, proto.CreateBrowserResponse):
@@ -82,14 +114,25 @@ class BrowserContext:
                 page = self._pages[msg.page_id]
                 page._handle_paint(msg)
 
-    async def new_page(self) -> BrowserPage:
+    async def new_page(
+        self, *, url: str, width: int = 800, height: int = 600, framerate: int = 30
+    ) -> BrowserPage:
         if not self._initialized:
             raise RuntimeError("BrowserContext not initialized")
 
         page_id = self._next_page_id
         self._next_page_id += 1
-
-        page = BrowserPage(self._mp_ctx, page_id)
+        page = BrowserPage(
+            self._mp_ctx,
+            _PageOptions(
+                page_id=page_id,
+                url=url,
+                width=width,
+                height=height,
+                framerate=framerate,
+            ),
+            self._duplex,
+        )
         self._pages[page_id] = page
         await page.start()
         return page

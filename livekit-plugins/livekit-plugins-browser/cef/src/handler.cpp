@@ -109,10 +109,10 @@ void AgentHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   pending_handles_.pop_front();
 
   handle->browser_ = browser;
+  browser_handles_[identifier] = handle;
+
   if (handle->created_callback_)
     handle->created_callback_();
-
-  browser_handles_[identifier] = handle;
 
   if (dev_renderer_)
     dev_renderer_->OnAfterCreated(browser);

@@ -25,13 +25,15 @@ struct BrowserOptions {
 struct BrowserApp {
   BrowserApp(const AppOptions& options);
 
-  std::shared_ptr<BrowserImpl> CreateBrowser(const std::string& url,
-                                             const BrowserOptions& options);
+  bool CreateBrowser(const std::string& url, const BrowserOptions& options);
+  void CreateBrowserOnUIThread(const std::string& url, const BrowserOptions& options);
+
   int Run();
 
  private:
   AppOptions options_;
   CefRefPtr<AgentApp> app_;
+  std::list<std::shared_ptr<BrowserImpl>> browsers_;
 };
 
 struct BrowserImpl {

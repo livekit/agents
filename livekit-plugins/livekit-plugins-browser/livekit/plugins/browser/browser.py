@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 # public API
 
+
 @dataclass
 class Rect:
     x: int

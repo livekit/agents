@@ -1,9 +1,13 @@
 import socket
 import sys
 import threading
+import time
 
 from livekit.agents import utils, ipc
 from . import proto, logger
+
+class BrowserClient:
+    pass
 
 
 def _manager_thread(duplex: utils.aio.duplex_unix._Duplex, browser_app):
@@ -12,7 +16,7 @@ def _manager_thread(duplex: utils.aio.duplex_unix._Duplex, browser_app):
     while True:
         try:
             msg = ipc.channel.recv_message(duplex, proto.IPC_MESSAGES)
-        except utils.aio.duplex_unix.ChannedClosed:
+        except utils.aio.duplex_unix.DuplexClosed:
             break
 
         if isinstance(msg, proto.CreateBrowserRequest):
@@ -36,17 +40,28 @@ def _manager_thread(duplex: utils.aio.duplex_unix._Duplex, browser_app):
 
             def _browser_created(impl):
                 browser_id = impl.identifier()
-                logger.debug("browser created", extra={"browser_id": browser_id, "page_id": page_id})
+                logger.debug(
+                    "browser created",
+                    extra={"browser_id": browser_id, "page_id": page_id},
+                )
 
                 try:
-                    ipc.channel.send_message(duplex,
-                                             proto.CreateBrowserResponse(page_id=page_id, browser_id=browser_id))
-                except utils.aio.duplex_unix.ChannedClosed:
+                    ipc.channel.send_message(
+                        duplex,
+                        proto.CreateBrowserResponse(
+                            page_id=page_id, browser_id=browser_id
+                        ),
+                    )
+                except utils.aio.duplex_unix.DuplexClosed:
                     logger.exception("failed to send CreateBrowserResponse")
 
-            # this also returns impl (seems like I don't need it finally?)
-            _ = browser_app.create_browser(msg.url,
-                                           opts)
+            opts.created_callback = _browser_created
+
+            def on_paint(frame_data):
+                pass
+
+            opts.paint_callback = on_paint
+            browser_app.create_browser(msg.url, opts)
 
 
 def main(mp_cch: socket.socket):
@@ -66,7 +81,7 @@ def main(mp_cch: socket.socket):
     def _context_initialized():
         try:
             ipc.channel.send_message(duplex, proto.ContextInitializedResponse())
-        except utils.aio.duplex_unix.ChannedClosed:
+        except utils.aio.duplex_unix.DuplexClosed:
             logger.exception("failed to send ContextInitializedResponse")
 
     opts = lkcef.AppOptions()
