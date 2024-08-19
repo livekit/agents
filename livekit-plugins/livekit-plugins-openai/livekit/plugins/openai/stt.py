@@ -47,13 +47,11 @@ class STT(stt.STT):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float = 0,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False),
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
         if detect_language:
             language = ""
@@ -108,7 +106,7 @@ class STT(stt.STT):
                 alternatives=[stt.SpeechData(text=resp.text, language=language or "")],
             )
 
-        if self._connect_timeout > 0:
-            return await asyncio.wait_for(_request(), self._connect_timeout)
+        if self._timeout > 0:
+            return await asyncio.wait_for(_request(), self._timeout)
         else:
             return await _request()

@@ -56,8 +56,7 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float = 0,
     ):
         """
         if no credentials is provided, it will use the credentials on the environment
@@ -65,8 +64,7 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
 
         self._client: SpeechAsyncClient | None = None
@@ -167,8 +165,8 @@ class STT(stt.STT):
             )
             return _recognize_response_to_speech_event(raw)
 
-        if self._connect_timeout > 0:
-            return await asyncio.wait_for(_request(), self._connect_timeout)
+        if self._timeout > 0:
+            return await asyncio.wait_for(_request(), self._timeout)
         else:
             return await _request()
 
@@ -180,8 +178,7 @@ class STT(stt.STT):
             self._ensure_client(),
             self._recognizer,
             config,
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
 
@@ -195,12 +192,9 @@ class SpeechStream(stt.SpeechStream):
         num_channels: int = 1,
         max_retry: int = 32,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
 
         self._client = client
         self._recognizer = recognizer

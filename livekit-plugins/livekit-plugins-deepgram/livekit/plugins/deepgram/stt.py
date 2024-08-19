@@ -67,15 +67,13 @@ class STT(stt.STT):
         keywords: list[Tuple[str, float]] = [],
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float = 0,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True, interim_results=interim_results
             ),
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
 
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
@@ -161,8 +159,8 @@ class STT(stt.STT):
                     config.language, await res.json()
                 )
 
-        if self._connect_timeout > 0:
-            return await asyncio.wait_for(_request(), self._connect_timeout)
+        if self._timeout > 0:
+            return await asyncio.wait_for(_request(), self._timeout)
         else:
             return await _request()
 
@@ -174,8 +172,7 @@ class STT(stt.STT):
             config,
             self._api_key,
             self._ensure_session(),
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
@@ -199,12 +196,9 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         max_retry: int = 32,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
 
         if opts.detect_language and opts.language is None:
             raise ValueError("language detection is not supported in streaming mode")

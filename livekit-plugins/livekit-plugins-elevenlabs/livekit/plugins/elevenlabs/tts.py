@@ -103,8 +103,7 @@ class TTS(tts.TTS):
         ),
         chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float = 0,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -112,8 +111,7 @@ class TTS(tts.TTS):
             ),
             sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
         if not api_key:
@@ -150,16 +148,14 @@ class TTS(tts.TTS):
             text,
             self._opts,
             self._ensure_session(),
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
     def stream(self) -> "SynthesizeStream":
         return SynthesizeStream(
             self._ensure_session(),
             self._opts,
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
 
@@ -172,12 +168,9 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
         self._text, self._opts, self._session = text, opts, session
         if _encoding_from_format(self._opts.encoding) == "mp3":
             self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
@@ -248,12 +241,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         session: aiohttp.ClientSession,
         opts: _TTSOptions,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
         self._opts, self._session = opts, session
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 

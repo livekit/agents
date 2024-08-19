@@ -46,16 +46,9 @@ class VADCapabilities:
 
 
 class VAD(ABC):
-    def __init__(
-        self,
-        *,
-        capabilities: VADCapabilities,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
-    ) -> None:
+    def __init__(self, *, capabilities: VADCapabilities, timeout: float = 0) -> None:
         self._capabilities = capabilities
-        self._connect_timeout = connect_timeout
-        self._keepalive_timeout = keepalive_timeout
+        self._timeout = timeout
 
     @property
     def capabilities(self) -> VADCapabilities:
@@ -70,14 +63,13 @@ class VADStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self, *, connect_timeout: float = 0, keepalive_timeout: float = 0):
+    def __init__(self, *, timeout: float = 0):
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, VADStream._FlushSentinel]]()
         self._event_ch = aio.Chan[VADEvent]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
-        self._connect_timeout = connect_timeout
-        self._keepalive_timeout = keepalive_timeout
-        self._timeout = self._connect_timeout
+        self._timeout = timeout
+        self._pending = 0
 
     @abstractmethod
     async def _main_task(self) -> None: ...
@@ -93,6 +85,7 @@ class VADStream(ABC):
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(self._FlushSentinel())
+        self._pending += 1
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
@@ -106,16 +99,17 @@ class VADStream(ABC):
         self._event_ch.close()
 
     async def __anext__(self) -> VADEvent:
-        if self._timeout > 0:
+        if self._timeout > 0 and self._pending > 0:
             try:
                 event = await asyncio.wait_for(
                     self._event_ch.__anext__(), self._timeout
                 )
             except (TimeoutError, asyncio.TimeoutError) as e:
+                self._pending -= 1
                 raise e.__class__("VAD event timed out")
         else:
             event = await self._event_ch.__anext__()
-        self._timeout = self._keepalive_timeout
+        self._pending -= 1
         return event
 
     def __aiter__(self) -> AsyncIterator[VADEvent]:

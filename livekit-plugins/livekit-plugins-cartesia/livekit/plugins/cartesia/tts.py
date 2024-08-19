@@ -56,15 +56,13 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float = 0,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
 
         api_key = api_key or os.environ.get("CARTESIA_API_KEY")
@@ -92,16 +90,14 @@ class TTS(tts.TTS):
             text,
             self._opts,
             self._ensure_session(),
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
     def stream(self) -> "SynthesizeStream":
         return SynthesizeStream(
             self._opts,
             self._ensure_session(),
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
 
@@ -114,12 +110,9 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
         self._text, self._opts, self._session = text, opts, session
 
     @utils.log_exceptions(logger=logger)
@@ -162,12 +155,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float,
     ):
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
         self._opts, self._session = opts, session
         self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT

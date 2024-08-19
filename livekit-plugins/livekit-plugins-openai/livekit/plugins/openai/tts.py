@@ -47,8 +47,7 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float = 0,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -56,15 +55,14 @@ class TTS(tts.TTS):
             ),
             sample_rate=OPENAI_TTS_SAMPLE_RATE,
             num_channels=OPENAI_TTS_CHANNELS,
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
 
         self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
-                timeout=5.0,
+                timeout=self._timeout,
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,
@@ -133,8 +131,7 @@ class TTS(tts.TTS):
             stream,
             text,
             self._opts,
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
 
@@ -145,12 +142,9 @@ class ChunkedStream(tts.ChunkedStream):
         text: str,
         opts: _TTSOptions,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
         self._opts, self._text = opts, text
         self._oai_stream = oai_stream
 
