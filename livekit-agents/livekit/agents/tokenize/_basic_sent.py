@@ -6,7 +6,7 @@ def split_sentences(
     text: str, min_sentence_len: int = 20
 ) -> list[tuple[str, int, int]]:
     """
-    the text can't contains substrings "<prd>" or "<stop>
+    the text may not contain substrings "<prd>" or "<stop>"
     """
     alphabets = r"([A-Za-z])"
     prefixes = r"(Mr|St|Mrs|Ms|Dr)[.]"
