@@ -92,7 +92,7 @@ class ChunkedStream(ABC):
         if self._timeout > 0:
             try:
                 return await asyncio.wait_for(self._event_ch.__anext__(), self._timeout)
-            except (TimeoutError, asyncio.TimeoutError) as e:
+            except asyncio.TimeoutError as e:
                 raise e.__class__("synthesis timed out")
         else:
             return await self._event_ch.__anext__()
@@ -156,7 +156,7 @@ class SynthesizeStream(ABC):
                 event = await asyncio.wait_for(
                     self._event_ch.__anext__(), self._timeout
                 )
-            except (TimeoutError, asyncio.TimeoutError) as e:
+            except asyncio.TimeoutError as e:
                 self._pending -= 1
                 raise e.__class__("synthesis timed out")
         else:
