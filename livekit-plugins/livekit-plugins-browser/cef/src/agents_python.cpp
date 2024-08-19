@@ -1,8 +1,8 @@
 #include "agents_python.hpp"
 
 #include <pybind11/functional.h>
-#include <pybind11/stl.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 #include "app.hpp"
 #include "include/internal/cef_mac.h"
@@ -16,26 +16,29 @@ BrowserApp::BrowserApp(const AppOptions& options) : options_(options) {
 std::shared_ptr<BrowserImpl> BrowserApp::CreateBrowser(
     const std::string& url,
     const BrowserOptions& options) {
-  app_->CreateBrowser(url, options.framerate, options.width, options.height,
-                      options.created_callback,
-                      [options](std::vector<CefRect> dirtyRects, const void* buffer,
-                         int width, int height) {
+  std::shared_ptr<BrowserImpl> browser_impl = std::make_shared<BrowserImpl>();
+  CefRefPtr<BrowserHandle> handle = app_->CreateBrowser(
+      url, options.framerate, options.width, options.height,
+      [options, browser_impl]() { options.created_callback(browser_impl); },
+      [options](std::vector<CefRect> dirtyRects, const void* buffer, int width,
+                int height) {
+        PaintData event{};
+        std::vector<PaintRect> rects;
+        rects.reserve(dirtyRects.size());
 
-                        PaintData event{};
-                        std::vector<PaintRect> rects;
-                        rects.reserve(dirtyRects.size());
+        for (const auto& rect : dirtyRects) {
+          rects.push_back({rect.x, rect.y, rect.width, rect.height});
+        }
 
-                        for (const auto& rect : dirtyRects) {
-                          rects.push_back({rect.x, rect.y, rect.width, rect.height});
-                        }
+        event.dirtyRect = rects;
+        event.buffer = buffer;
+        event.width = width;
+        event.height = height;
+        options.paint_callback(event);
+      });
 
-                        event.dirtyRect = rects;
-                        event.buffer = buffer;
-                        event.width = width;
-                        event.height = height;
-                        options.paint_callback(event);
-                      });
-  return nullptr;  // std::make_shared<BrowserImpl>();
+  browser_impl->handle = handle;
+  return browser_impl;
 }
 
 int BrowserApp::Run() {
@@ -46,11 +49,14 @@ BrowserImpl::BrowserImpl() {}
 
 void BrowserImpl::SetSize(int width, int height) {}
 
+int BrowserImpl::Identifier() const {
+  return handle->GetBrowser()->GetIdentifier();
+}
+
 py::memoryview paint_data_to_memoryview(const PaintData& event) {
   return py::memoryview::from_buffer(
       const_cast<uint32_t*>(static_cast<const uint32_t*>(event.buffer)),
-      {event.height * event.width},
-      {sizeof(uint32_t)}, true);
+      {event.height * event.width}, {sizeof(uint32_t)}, true);
 }
 
 PYBIND11_MODULE(lkcef_python, m) {
@@ -76,7 +82,8 @@ PYBIND11_MODULE(lkcef_python, m) {
       .def("run", &BrowserApp::Run);
 
   py::class_<BrowserImpl>(m, "BrowserImpl")
-      .def("set_size", &BrowserImpl::SetSize);
+      .def("set_size", &BrowserImpl::SetSize)
+      .def("identifier", &BrowserImpl::Identifier);
 
   py::class_<PaintRect>(m, "PaintRect")
       .def_readwrite("x", &PaintRect::x)

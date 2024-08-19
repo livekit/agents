@@ -13,7 +13,7 @@ print("BrowserImpl __dict__: ", lkcef.BrowserImpl.__dict__)
 
 def _context_initialized():
     opts = lkcef.BrowserOptions()
-    opts.framerate = 60
+    opts.framerate = 30
     opts.created_callback = lambda: print("run_browser.py - Browser created")
 
     def on_paint(frame_data):

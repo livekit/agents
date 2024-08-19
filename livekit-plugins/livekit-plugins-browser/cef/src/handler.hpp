@@ -40,6 +40,8 @@ class BrowserHandle : public CefBaseRefCounted {
   int GetWidth() const { return width_; }
   int GetHeight() const { return height_; }
 
+  CefRefPtr<CefBrowser> GetBrowser() const { return browser_; }
+
  private:
   int width_ = 0;
   int height_ = 0;

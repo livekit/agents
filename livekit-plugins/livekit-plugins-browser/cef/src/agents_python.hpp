@@ -18,7 +18,7 @@ struct BrowserOptions {
   int framerate = 30;
   int width = 800;
   int height = 600;
-  std::function<void()> created_callback = nullptr;
+  std::function<void(std::shared_ptr<BrowserImpl>)> created_callback = nullptr;
   std::function<void(const PaintData&)> paint_callback = nullptr;
 };
 
@@ -38,6 +38,9 @@ struct BrowserImpl {
   BrowserImpl();
 
   void SetSize(int width, int height);
+  int Identifier() const;
+
+  CefRefPtr<BrowserHandle> handle = nullptr;
 };
 
 struct PaintRect {
