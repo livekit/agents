@@ -94,7 +94,7 @@ class SpeechStream(ABC):
         self._timeout = self._connect_timeout
 
     @abstractmethod
-    def _main_task(self) -> None: ...
+    async def _main_task(self) -> None: ...
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized"""
