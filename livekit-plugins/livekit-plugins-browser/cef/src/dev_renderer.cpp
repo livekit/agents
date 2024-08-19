@@ -288,7 +288,6 @@ void DevRenderer::OnPaint(CefRefPtr<CefBrowser> browser,
   CEF_REQUIRE_UI_THREAD();
 
   if (type != CefRenderHandler::PaintElementType::PET_VIEW) {
-    std::cout << "Ignoring PET_POPUP" << std::endl;
     return;  // Ignore PET_POPUP for now, bc I'm lazy
   }
 
@@ -402,6 +401,11 @@ void DevRenderer::Run() {
           "###Browser" + std::to_string(identifier);
 
       if (ImGui::Begin(name.c_str())) {
+        if (ImGui::InputText("URL", &data.url,
+                             ImGuiInputTextFlags_EnterReturnsTrue)) {
+          data.browser->GetMainFrame()->LoadURL(data.url);
+        }
+
         ImVec2 size = ImGui::GetContentRegionAvail();
 
         // Resize the browser view if needed
@@ -411,11 +415,6 @@ void DevRenderer::Run() {
           AgentHandler::GetInstance()
               ->GetBrowserHandle(identifier)
               ->SetSize(static_cast<int>(size.x), static_cast<int>(size.y));
-        }
-
-        if (ImGui::InputText("URL", &data.url,
-                             ImGuiInputTextFlags_EnterReturnsTrue)) {
-          data.browser->GetMainFrame()->LoadURL(data.url);
         }
 
         ImVec2 cursor_pos = ImGui::GetCursorScreenPos();

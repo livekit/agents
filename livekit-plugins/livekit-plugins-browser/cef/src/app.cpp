@@ -40,7 +40,11 @@ CefRefPtr<BrowserHandle> AgentApp::CreateBrowser(
     int framerate,
     int width,
     int height,
-    std::function<void()> created_callback) {
+    std::function<void()> created_callback,
+    std::function<void(std::vector<CefRect> dirtyRects,
+                       const void* buffer,
+                       int width,
+                       int height)> paint_callback) {
   CEF_REQUIRE_UI_THREAD();
   CefWindowInfo windowInfo;
   // windowInfo.SetAsWindowless(dev_renderer_->getNativeWindowHandle());
@@ -50,10 +54,11 @@ CefRefPtr<BrowserHandle> AgentApp::CreateBrowser(
       CefCommandLine::GetGlobalCommandLine();
 
   CefBrowserSettings settings;
+  settings.windowless_frame_rate = framerate;
   settings.background_color = CefColorSetARGB(255, 255, 255, 255);
 
-  CefRefPtr<BrowserHandle> browser_handle =
-        new BrowserHandle(created_callback, width, height);
+  CefRefPtr<BrowserHandle> browser_handle = new BrowserHandle(
+      std::move(created_callback), std::move(paint_callback), width, height);
 
   client_->AddPendingHandle(browser_handle);
 

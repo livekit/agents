@@ -49,6 +49,13 @@ void AgentHandler::OnPaint(CefRefPtr<CefBrowser> browser,
                            const void* buffer,
                            int width,
                            int height) {
+  CEF_REQUIRE_UI_THREAD();
+
+  int identifier = browser->GetIdentifier();
+  CefRefPtr<BrowserHandle> handle = browser_handles_[identifier];
+  if (handle->paint_callback_)
+    handle->paint_callback_(dirtyRects, buffer, width, height);
+
   if (dev_renderer_)
     dev_renderer_->OnPaint(browser, type, dirtyRects, buffer, width, height);
 }

@@ -30,7 +30,11 @@ class AgentApp : public CefApp, public CefBrowserProcessHandler {
       int framerate,
       int width,
       int height,
-      std::function<void()> created_callback);
+      std::function<void()> created_callback,
+      std::function<void(std::vector<CefRect> dirtyRect,
+                         const void* buffer,
+                         int width,
+                         int height)> paint_callback);
 
   int Run();
 

@@ -13,10 +13,16 @@ print("BrowserImpl __dict__: ", lkcef.BrowserImpl.__dict__)
 
 def _context_initialized():
     opts = lkcef.BrowserOptions()
-    opts.framerate = 30
+    opts.framerate = 60
+    opts.created_callback = lambda: print("run_browser.py - Browser created")
+
+    def on_paint(frame_data):
+        pass
+
+    opts.paint_callback = on_paint
 
     app.create_browser("http://www.livekit.io", opts)
-    print("LOL: Context initialized")
+    print("run_browser.py - Context initialized")
 
 
 opts = lkcef.AppOptions()

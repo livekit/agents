@@ -7,6 +7,7 @@
 #include "app.hpp"
 
 class BrowserImpl;
+struct PaintData;
 
 struct AppOptions {
   bool dev_mode = false;
@@ -18,6 +19,7 @@ struct BrowserOptions {
   int width = 800;
   int height = 600;
   std::function<void()> created_callback = nullptr;
+  std::function<void(const PaintData&)> paint_callback = nullptr;
 };
 
 struct BrowserApp {
@@ -36,6 +38,20 @@ struct BrowserImpl {
   BrowserImpl();
 
   void SetSize(int width, int height);
+};
+
+struct PaintRect {
+  int x = 0;
+  int y = 0;
+  int width = 0;
+  int height = 0;
+};
+
+struct PaintData {
+  std::vector<PaintRect> dirtyRect;
+  const void* buffer;
+  int width;
+  int height;
 };
 
 #endif  // LKCEF_AGENTS_PYTHON_HPP

@@ -9,13 +9,25 @@
 
 class BrowserHandle : public CefBaseRefCounted {
  public:
-  BrowserHandle(std::function<void()> created_callback, int width, int height)
+  BrowserHandle(std::function<void()> created_callback,
+                std::function<void(std::vector<CefRect> dirtyRects,
+                                   const void* buffer,
+                                   int width,
+                                   int height)> paint_callback,
+                int width,
+                int height)
       : created_callback_(std::move(created_callback)),
+        paint_callback_(std::move(paint_callback)),
         width_(width),
         height_(height) {}
 
   CefRefPtr<CefBrowser> browser_ = nullptr;
   std::function<void()> created_callback_ = nullptr;
+  std::function<void(std::vector<CefRect> dirtyRect,
+                     const void* buffer,
+                     int width,
+                     int height)>
+      paint_callback_ = nullptr;
 
   void SetSize(int width, int height) {
     width_ = width;
@@ -45,7 +57,7 @@ class AgentHandler : public CefClient,
   AgentHandler(CefRefPtr<DevRenderer> dev_renderer);
   ~AgentHandler();
 
-  static AgentHandler *GetInstance();
+  static AgentHandler* GetInstance();
 
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
@@ -85,17 +97,17 @@ class AgentHandler : public CefClient,
   // CefLifeSpanHandler methods
 
   bool OnBeforePopup(CefRefPtr<CefBrowser> browser,
-                             CefRefPtr<CefFrame> frame,
-                             const CefString& target_url,
-                             const CefString& target_frame_name,
-                             WindowOpenDisposition target_disposition,
-                             bool user_gesture,
-                             const CefPopupFeatures& popupFeatures,
-                             CefWindowInfo& windowInfo,
-                             CefRefPtr<CefClient>& client,
-                             CefBrowserSettings& settings,
-                             CefRefPtr<CefDictionaryValue>& extra_info,
-                             bool* no_javascript_access) override;
+                     CefRefPtr<CefFrame> frame,
+                     const CefString& target_url,
+                     const CefString& target_frame_name,
+                     WindowOpenDisposition target_disposition,
+                     bool user_gesture,
+                     const CefPopupFeatures& popupFeatures,
+                     CefWindowInfo& windowInfo,
+                     CefRefPtr<CefClient>& client,
+                     CefBrowserSettings& settings,
+                     CefRefPtr<CefDictionaryValue>& extra_info,
+                     bool* no_javascript_access) override;
 
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
   bool DoClose(CefRefPtr<CefBrowser> browser) override;
@@ -129,8 +141,8 @@ class AgentHandler : public CefClient,
   }
 
   CefRefPtr<BrowserHandle> GetBrowserHandle(int identifier) {
-      CEF_REQUIRE_UI_THREAD();
-      return browser_handles_[identifier];
+    CEF_REQUIRE_UI_THREAD();
+    return browser_handles_[identifier];
   }
 
  private:
