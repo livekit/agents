@@ -45,9 +45,12 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
         )
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
-        return _basic_sent.split_sentences(
-            text, min_sentence_len=self._config.min_sentence_len
-        )
+        return [
+            tok[0]
+            for tok in _basic_sent.split_sentences(
+                text, min_sentence_len=self._config.min_sentence_len
+            )
+        ]
 
     def stream(self, *, language: str | None = None) -> tokenizer.SentenceStream:
         return token_stream.BufferedSentenceStream(
@@ -65,9 +68,12 @@ class WordTokenizer(tokenizer.WordTokenizer):
         self._ignore_punctuation = ignore_punctuation
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
-        return _basic_word.split_words(
-            text, ignore_punctuation=self._ignore_punctuation
-        )
+        return [
+            tok[0]
+            for tok in _basic_word.split_words(
+                text, ignore_punctuation=self._ignore_punctuation
+            )
+        ]
 
     def stream(self, *, language: str | None = None) -> tokenizer.WordStream:
         return token_stream.BufferedWordStream(
@@ -84,4 +90,4 @@ def hyphenate_word(word: str) -> list[str]:
 
 
 def tokenize_paragraphs(text: str) -> list[str]:
-    return _basic_paragraph.split_paragraphs(text)
+    return [tok[0] for tok in _basic_paragraph.split_paragraphs(text)]
