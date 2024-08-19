@@ -6,7 +6,6 @@
 "livekit-plugins-elevenlabs": patch
 "livekit-plugins-google": patch
 "livekit-plugins-openai": patch
-"livekit-plugins-silero": patch
 ---
 
-stt,tts,vad: add timeout functionality
+stt,tts: add timeout functionality
