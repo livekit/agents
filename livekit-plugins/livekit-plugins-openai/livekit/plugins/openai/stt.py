@@ -47,7 +47,7 @@ class STT(stt.STT):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        timeout: float = 0,
+        timeout: float = 10.0,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False),
@@ -66,7 +66,7 @@ class STT(stt.STT):
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
-                timeout=5.0,
+                timeout=self._timeout,
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,

@@ -47,7 +47,7 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        timeout: float = 0,
+        timeout: float = 10.0,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(

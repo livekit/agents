@@ -56,7 +56,7 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        timeout: float = 0,
+        timeout: float = 10.0,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),

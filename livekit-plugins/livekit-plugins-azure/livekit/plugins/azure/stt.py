@@ -44,7 +44,7 @@ class STT(stt.STT):
         sample_rate: int = 48000,
         num_channels: int = 1,
         languages: list[str] = [],  # when empty, auto-detect the language
-        timeout: float = 0,
+        timeout: float = 10.0,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),

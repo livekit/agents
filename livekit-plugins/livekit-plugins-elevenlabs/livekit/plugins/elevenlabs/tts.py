@@ -103,7 +103,7 @@ class TTS(tts.TTS):
         ),
         chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
-        timeout: float = 0,
+        timeout: float = 10.0,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(

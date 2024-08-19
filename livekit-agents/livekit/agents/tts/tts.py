@@ -34,7 +34,7 @@ class TTS(ABC):
         capabilities: TTSCapabilities,
         sample_rate: int,
         num_channels: int,
-        timeout: float = 0,
+        timeout: float = 10.0,
     ) -> None:
         self._capabilities = capabilities
         self._sample_rate = sample_rate
@@ -67,7 +67,7 @@ class TTS(ABC):
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
-    def __init__(self, *, timeout: float = 0):
+    def __init__(self, *, timeout: float = 10.0):
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -105,7 +105,7 @@ class SynthesizeStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self, *, timeout: float = 0):
+    def __init__(self, *, timeout: float = 10.0):
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")

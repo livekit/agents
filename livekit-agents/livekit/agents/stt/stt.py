@@ -51,7 +51,7 @@ class STT(ABC):
         self,
         *,
         capabilities: STTCapabilities,
-        timeout: float = 0,
+        timeout: float = 10.0,
     ) -> None:
         self._capabilities = capabilities
         self._timeout = timeout
@@ -82,7 +82,7 @@ class SpeechStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self, *, timeout: float = 0):
+    def __init__(self, *, timeout: float = 10.0):
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, SpeechStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SpeechEvent]()
         self._task = asyncio.create_task(self._main_task())

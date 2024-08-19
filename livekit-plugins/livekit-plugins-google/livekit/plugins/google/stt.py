@@ -56,7 +56,7 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        timeout: float = 0,
+        timeout: float = 10.0,
     ):
         """
         if no credentials is provided, it will use the credentials on the environment
