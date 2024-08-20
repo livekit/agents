@@ -47,6 +47,8 @@ class BufferedTokenStream:
             if isinstance(tok, tuple):
                 tok_text = tok[0]
 
+            assert isinstance(tok_text, str)
+
             buf += tok_text
             buf_toks.append(tok)
             if len(buf) >= self._min_token_len:
@@ -70,7 +72,7 @@ class BufferedTokenStream:
             tokens = self._tokenize_fnc(self._buf)
             if tokens:
                 if isinstance(tokens[0], tuple):
-                    buf = " ".join([tok[0] for tok in tokens])
+                    buf = " ".join([tok[0] for tok in tokens])  # type: ignore
                 else:
                     buf = " ".join(tokens)
             else:
@@ -106,7 +108,7 @@ class BufferedSentenceStream(BufferedTokenStream, SentenceStream):
     def __init__(
         self,
         *,
-        tokenizer: Callable[[str], list[str]],
+        tokenizer: TokenizeCallable,
         min_token_len: int,
         min_ctx_len: int,
     ) -> None:
@@ -121,7 +123,7 @@ class BufferedWordStream(BufferedTokenStream, WordStream):
     def __init__(
         self,
         *,
-        tokenizer: Callable[[str], list[str]],
+        tokenizer: TokenizeCallable,
         min_token_len: int,
         min_ctx_len: int,
     ) -> None:
