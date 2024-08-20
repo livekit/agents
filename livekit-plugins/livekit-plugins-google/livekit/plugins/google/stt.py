@@ -56,7 +56,7 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        timeout: float = 10.0,
+        timeout: float | None = 10.0,
     ):
         """
         if no credentials is provided, it will use the credentials on the environment
@@ -161,14 +161,12 @@ class STT(stt.STT):
                     recognizer=self._recognizer,
                     config=config,
                     content=frame.data.tobytes(),
-                )
+                ),
+                timeout=self._timeout,
             )
             return _recognize_response_to_speech_event(raw)
 
-        if self._timeout > 0:
-            return await asyncio.wait_for(_request(), self._timeout)
-        else:
-            return await _request()
+        return await asyncio.wait_for(_request(), self._timeout)
 
     def stream(
         self, *, language: SpeechLanguages | str | None = None
@@ -192,7 +190,7 @@ class SpeechStream(stt.SpeechStream):
         num_channels: int = 1,
         max_retry: int = 32,
         *,
-        timeout: float,
+        timeout: float | None,
     ) -> None:
         super().__init__(timeout=timeout)
 
@@ -257,7 +255,8 @@ class SpeechStream(stt.SpeechStream):
 
                 # try to connect
                 stream = await self._client.streaming_recognize(
-                    requests=input_generator()
+                    requests=input_generator(),
+                    timeout=self._timeout,
                 )
                 retry_count = 0  # connection successful, reset retry count
 

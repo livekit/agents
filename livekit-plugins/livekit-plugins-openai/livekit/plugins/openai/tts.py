@@ -47,7 +47,7 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        timeout: float = 10.0,
+        timeout: float | None = 10.0,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -142,7 +142,7 @@ class ChunkedStream(tts.ChunkedStream):
         text: str,
         opts: _TTSOptions,
         *,
-        timeout: float,
+        timeout: float | None,
     ) -> None:
         super().__init__(timeout=timeout)
         self._opts, self._text = opts, text

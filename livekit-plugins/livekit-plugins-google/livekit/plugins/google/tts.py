@@ -49,7 +49,7 @@ class TTS(tts.TTS):
         speaking_rate: float = 1.0,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        timeout: float = 10.0,
+        timeout: float | None = 10.0,
     ) -> None:
         """
         if no credentials is provided, it will use the credentials on the environment
@@ -131,7 +131,7 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _TTSOptions,
         client: texttospeech.TextToSpeechAsyncClient,
         *,
-        timeout: float,
+        timeout: float | None,
     ) -> None:
         super().__init__(timeout=timeout)
         self._text, self._opts, self._client = text, opts, client
@@ -144,6 +144,7 @@ class ChunkedStream(tts.ChunkedStream):
             input=texttospeech.SynthesisInput(text=self._text),
             voice=self._opts.voice,
             audio_config=self._opts.audio_config,
+            timeout=self._timeout,
         )
 
         data = response.audio_content

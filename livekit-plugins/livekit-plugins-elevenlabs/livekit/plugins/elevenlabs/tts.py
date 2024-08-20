@@ -103,7 +103,7 @@ class TTS(tts.TTS):
         ),
         chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
-        timeout: float = 10.0,
+        timeout: float | None = 10.0,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -168,7 +168,7 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
         *,
-        timeout: float,
+        timeout: float | None,
     ) -> None:
         super().__init__(timeout=timeout)
         self._text, self._opts, self._session = text, opts, session
@@ -241,7 +241,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         session: aiohttp.ClientSession,
         opts: _TTSOptions,
         *,
-        timeout: float,
+        timeout: float | None,
     ) -> None:
         super().__init__(timeout=timeout)
         self._opts, self._session = opts, session

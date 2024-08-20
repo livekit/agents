@@ -44,7 +44,7 @@ class STT(stt.STT):
         sample_rate: int = 48000,
         num_channels: int = 1,
         languages: list[str] = [],  # when empty, auto-detect the language
-        timeout: float = 10.0,
+        timeout: float | None = 10.0,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
@@ -84,7 +84,7 @@ class SpeechStream(stt.SpeechStream):
         self,
         opts: STTOptions,
         *,
-        timeout: float,
+        timeout: float | None,
     ) -> None:
         super().__init__(timeout=timeout)
         self._opts = opts

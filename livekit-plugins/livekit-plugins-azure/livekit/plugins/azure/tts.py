@@ -41,7 +41,7 @@ class TTS(tts.TTS):
         speech_key: str | None = None,
         speech_region: str | None = None,
         voice: str | None = None,
-        timeout: float = 10.0,
+        timeout: float | None = 10.0,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -78,7 +78,7 @@ class ChunkedStream(tts.ChunkedStream):
         text: str,
         opts: _TTSOptions,
         *,
-        timeout: float,
+        timeout: float | None,
     ) -> None:
         super().__init__(timeout=timeout)
         self._text, self._opts = text, opts

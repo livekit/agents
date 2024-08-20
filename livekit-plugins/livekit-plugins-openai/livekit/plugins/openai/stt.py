@@ -47,7 +47,7 @@ class STT(stt.STT):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        timeout: float = 10.0,
+        timeout: float | None = 10.0,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False),
@@ -106,7 +106,4 @@ class STT(stt.STT):
                 alternatives=[stt.SpeechData(text=resp.text, language=language or "")],
             )
 
-        if self._timeout > 0:
-            return await asyncio.wait_for(_request(), self._timeout)
-        else:
-            return await _request()
+        return await asyncio.wait_for(_request(), self._timeout)

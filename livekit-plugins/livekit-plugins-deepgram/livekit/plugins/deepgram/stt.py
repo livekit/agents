@@ -67,7 +67,7 @@ class STT(stt.STT):
         keywords: list[Tuple[str, float]] = [],
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        timeout: float = 10.0,
+        timeout: float | None = 10.0,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -159,10 +159,7 @@ class STT(stt.STT):
                     config.language, await res.json()
                 )
 
-        if self._timeout > 0:
-            return await asyncio.wait_for(_request(), self._timeout)
-        else:
-            return await _request()
+        return await asyncio.wait_for(_request(), self._timeout)
 
     def stream(
         self, *, language: DeepgramLanguages | str | None = None
@@ -196,7 +193,7 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         max_retry: int = 32,
         *,
-        timeout: float,
+        timeout: float | None,
     ) -> None:
         super().__init__(timeout=timeout)
 
