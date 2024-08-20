@@ -15,6 +15,8 @@ struct AppOptions {
 
 struct BrowserOptions {
   int framerate = 30;
+  int width = 800;
+  int height = 600;
   std::function<void()> created_callback = nullptr;
 };
 

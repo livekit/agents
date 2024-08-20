@@ -3,74 +3,61 @@
 
 #include <iostream>
 
+#import <Cocoa/Cocoa.h>
+#include <objc/runtime.h>
+
 #include "app.hpp"
 #include "handler.hpp"
 #include "include/cef_application_mac.h"
 #include "include/cef_command_line.h"
 #include "include/wrapper/cef_library_loader.h"
 
-// Receives notifications from the application.
-@interface AgentsAppDelegate : NSObject <NSApplicationDelegate>
+BOOL g_handling_send_event = false;
 
-- (void)createApplication:(id)object;
-- (void)tryToTerminateApplication:(NSApplication*)app;
+@interface NSApplication (AgentsApplication)
+
+- (BOOL)isHandlingSendEvent;
+- (void)setHandlingSendEvent:(BOOL)handlingSendEvent;
+- (void)_swizzled_sendEvent:(NSEvent*)event;
+- (void)_swizzled_terminate:(id)sender;
+
 @end
 
-// Provide the CefAppProtocol implementation required by CEF.
-@interface AgentsApplication : NSApplication <CefAppProtocol> {
- @private
-  BOOL handlingSendEvent_;
+@implementation NSApplication (AgentsApplication)
+
+// This selector is called very early during the application initialization.
++ (void)load {
+  NSLog(@"AgentsApplication::load");
+  // Swap NSApplication::sendEvent with _swizzled_sendEvent.
+  Method original = class_getInstanceMethod(self, @selector(sendEvent));
+  Method swizzled =
+      class_getInstanceMethod(self, @selector(_swizzled_sendEvent));
+  method_exchangeImplementations(original, swizzled);
+
+  Method originalTerm = class_getInstanceMethod(self, @selector(terminate:));
+  Method swizzledTerm =
+      class_getInstanceMethod(self, @selector(_swizzled_terminate:));
+  method_exchangeImplementations(originalTerm, swizzledTerm);
 }
-@end
 
-@implementation AgentsApplication
 - (BOOL)isHandlingSendEvent {
-  return handlingSendEvent_;
+  return g_handling_send_event;
 }
 
 - (void)setHandlingSendEvent:(BOOL)handlingSendEvent {
-  handlingSendEvent_ = handlingSendEvent;
+  g_handling_send_event = handlingSendEvent;
 }
 
-- (void)sendEvent:(NSEvent*)event {
+- (void)_swizzled_sendEvent:(NSEvent*)event {
   CefScopedSendingEvent sendingEventScoper;
-  [super sendEvent:event];
+  // Calls NSApplication::sendEvent due to the swizzling.
+  [self _swizzled_sendEvent:event];
 }
 
-- (void)terminate:(id)sender {
-  AgentsAppDelegate* delegate =
-      static_cast<AgentsAppDelegate*>([NSApp delegate]);
-  [delegate tryToTerminateApplication:self];
-  // Return, don't exit. The application is responsible for exiting on its own.
-}
-@end
-
-@implementation AgentsAppDelegate
-
-// Create the application on the UI thread.
-- (void)createApplication:(id)object {
-  [[NSBundle mainBundle] loadNibNamed:@"MainMenu"
-                                owner:NSApp
-                      topLevelObjects:nil];
-
-  // Set the delegate for application events.
-  [[NSApplication sharedApplication] setDelegate:self];
+- (void)_swizzled_terminate:(id)sender {
+  [self _swizzled_terminate:sender];
 }
 
-- (void)tryToTerminateApplication:(NSApplication*)app {
-}
-
-- (NSApplicationTerminateReply)applicationShouldTerminate:
-    (NSApplication*)sender {
-  return NSTerminateNow;
-}
-
-// Called when the user clicks the app dock icon while the application is
-// already running.
-- (BOOL)applicationShouldHandleReopen:(NSApplication*)theApplication
-                    hasVisibleWindows:(BOOL)flag {
-  return NO;
-}
 @end
 
 // Entry point function for the browser process.
@@ -78,12 +65,12 @@ int RunAgentApp(CefRefPtr<AgentApp> app) {
   CefMainArgs main_args(0, nullptr);
 
   @autoreleasepool {
-    [AgentsApplication sharedApplication];
+    //[NSApplication sharedApplication];
 
     // If there was an invocation to NSApp prior to this method, then the NSApp
     // will not be a AgentsApplication, but will instead be an NSApplication.
     // This is undesirable and we must enforce that this doesn't happen.
-    CHECK([NSApp isKindOfClass:[AgentsApplication class]]);
+    //CHECK([NSApp isKindOfClass:[NSApplication class]]);
 
     std::string framework_path =
         "/Users/theomonnom/livekit/agents/livekit-plugins/"
@@ -104,6 +91,8 @@ int RunAgentApp(CefRefPtr<AgentApp> app) {
     }
 
     CefSettings settings{};
+    settings.chrome_runtime = true;
+    settings.external_message_pump = app->IsDevMode();
     // settings.remote_debugging_port = 8088;
     CefString(&settings.framework_dir_path).FromString(framework_path);
     CefString(&settings.main_bundle_path).FromString(main_bundle_path);
@@ -122,24 +111,12 @@ int RunAgentApp(CefRefPtr<AgentApp> app) {
       return 1;
     }
 
-    // Create the application delegate.
-    AgentsAppDelegate* delegate = [[AgentsAppDelegate alloc] init];
-    // Set as the delegate for application events.
-    NSApp.delegate = delegate;
-
-    [delegate performSelectorOnMainThread:@selector(createApplication:)
-                               withObject:nil
-                            waitUntilDone:NO];
 
     app->Run();
 
     CefShutdown();
-    cef_unload_library();
 
-#if !__has_feature(objc_arc)
-    [delegate release];
-#endif  // !__has_feature(objc_arc)
-    delegate = nil;
+    cef_unload_library();
   }  // @autoreleasepool
 
   return 0;
