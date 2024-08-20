@@ -146,18 +146,21 @@ class STT(stt.STT):
         data = io_buffer.getvalue()
 
         async def _request():
-            async with self._ensure_session().post(
-                url=_to_deepgram_url(recognize_config),
-                data=data,
-                headers={
-                    "Authorization": f"Token {self._api_key}",
-                    "Accept": "application/json",
-                    "Content-Type": "audio/wav",
-                },
-            ) as res:
-                return prerecorded_transcription_to_speech_event(
-                    config.language, await res.json()
-                )
+            try:
+                async with self._ensure_session().post(
+                    url=_to_deepgram_url(recognize_config),
+                    data=data,
+                    headers={
+                        "Authorization": f"Token {self._api_key}",
+                        "Accept": "application/json",
+                        "Content-Type": "audio/wav",
+                    },
+                ) as res:
+                    return prerecorded_transcription_to_speech_event(
+                        config.language, await res.json()
+                    )
+            except aiohttp.ServerTimeoutError as e:
+                raise TimeoutError() from e
 
         return await asyncio.wait_for(_request(), self._timeout)
 

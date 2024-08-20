@@ -125,28 +125,33 @@ class ChunkedStream(tts.ChunkedStream):
         data = _to_cartesia_options(self._opts)
         data["transcript"] = self._text
 
-        async with self._session.post(
-            "https://api.cartesia.ai/tts/bytes",
-            headers={
-                API_AUTH_HEADER: self._opts.api_key,
-                API_VERSION_HEADER: API_VERSION,
-            },
-            json=data,
-        ) as resp:
-            async for data, _ in resp.content.iter_chunks():
-                for frame in bstream.write(data):
+        try:
+            async with self._session.post(
+                "https://api.cartesia.ai/tts/bytes",
+                headers={
+                    API_AUTH_HEADER: self._opts.api_key,
+                    API_VERSION_HEADER: API_VERSION,
+                },
+                json=data,
+            ) as resp:
+                async for data, _ in resp.content.iter_chunks():
+                    for frame in bstream.write(data):
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
+                            )
+                        )
+
+                for frame in bstream.flush():
                     self._event_ch.send_nowait(
                         tts.SynthesizedAudio(
                             request_id=request_id, segment_id=segment_id, frame=frame
                         )
                     )
-
-            for frame in bstream.flush():
-                self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(
-                        request_id=request_id, segment_id=segment_id, frame=frame
-                    )
-                )
+        except aiohttp.ServerTimeoutError as e:
+            raise TimeoutError() from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):

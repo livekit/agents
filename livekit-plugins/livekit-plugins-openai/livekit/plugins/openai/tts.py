@@ -119,20 +119,23 @@ class TTS(tts.TTS):
         return TTS(model=model, voice=voice, speed=speed, client=azure_client)
 
     def synthesize(self, text: str) -> "ChunkedStream":
-        stream = self._client.audio.speech.with_streaming_response.create(
-            input=text,
-            model=self._opts.model,
-            voice=self._opts.voice,
-            response_format="mp3",
-            speed=self._opts.speed,
-        )
+        try:
+            stream = self._client.audio.speech.with_streaming_response.create(
+                input=text,
+                model=self._opts.model,
+                voice=self._opts.voice,
+                response_format="mp3",
+                speed=self._opts.speed,
+            )
 
-        return ChunkedStream(
-            stream,
-            text,
-            self._opts,
-            timeout=self._timeout,
-        )
+            return ChunkedStream(
+                stream,
+                text,
+                self._opts,
+                timeout=self._timeout,
+            )
+        except openai.APITimeoutError as e:
+            raise TimeoutError from e
 
 
 class ChunkedStream(tts.ChunkedStream):

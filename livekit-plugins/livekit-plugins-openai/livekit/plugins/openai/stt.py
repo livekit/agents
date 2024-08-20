@@ -94,16 +94,21 @@ class STT(stt.STT):
             wav.writeframes(buffer.data)
 
         async def _request():
-            resp = await self._client.audio.transcriptions.create(
-                file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
-                model=self._opts.model,
-                language=config.language,
-                response_format="json",
-            )
+            try:
+                resp = await self._client.audio.transcriptions.create(
+                    file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
+                    model=self._opts.model,
+                    language=config.language,
+                    response_format="json",
+                )
 
-            return stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                alternatives=[stt.SpeechData(text=resp.text, language=language or "")],
-            )
+                return stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[
+                        stt.SpeechData(text=resp.text, language=language or "")
+                    ],
+                )
+            except openai.APITimeoutError as e:
+                raise TimeoutError from e
 
         return await asyncio.wait_for(_request(), self._timeout)

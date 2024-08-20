@@ -194,43 +194,48 @@ class ChunkedStream(tts.ChunkedStream):
             "voice_settings": voice_settings,
         }
 
-        async with self._session.post(
-            _synthesize_url(self._opts),
-            headers={AUTHORIZATION_HEADER: self._opts.api_key},
-            json=data,
-        ) as resp:
-            if not resp.content_type.startswith("audio/"):
-                content = await resp.text()
-                logger.error("11labs returned non-audio data: %s", content)
-                return
-            encoding = _encoding_from_format(self._opts.encoding)
-            if encoding == "mp3":
-                async for bytes_data, _ in resp.content.iter_chunks():
-                    for frame in self._mp3_decoder.decode_chunk(bytes_data):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                request_id=request_id,
-                                segment_id=segment_id,
-                                frame=frame,
+        try:
+            async with self._session.post(
+                _synthesize_url(self._opts),
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                json=data,
+            ) as resp:
+                if not resp.content_type.startswith("audio/"):
+                    content = await resp.text()
+                    logger.error("11labs returned non-audio data: %s", content)
+                    return
+                encoding = _encoding_from_format(self._opts.encoding)
+                if encoding == "mp3":
+                    async for bytes_data, _ in resp.content.iter_chunks():
+                        for frame in self._mp3_decoder.decode_chunk(bytes_data):
+                            self._event_ch.send_nowait(
+                                tts.SynthesizedAudio(
+                                    request_id=request_id,
+                                    segment_id=segment_id,
+                                    frame=frame,
+                                )
                             )
-                        )
-            else:
-                async for bytes_data, _ in resp.content.iter_chunks():
-                    for frame in bstream.write(bytes_data):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                request_id=request_id,
-                                segment_id=segment_id,
-                                frame=frame,
+                else:
+                    async for bytes_data, _ in resp.content.iter_chunks():
+                        for frame in bstream.write(bytes_data):
+                            self._event_ch.send_nowait(
+                                tts.SynthesizedAudio(
+                                    request_id=request_id,
+                                    segment_id=segment_id,
+                                    frame=frame,
+                                )
                             )
-                        )
 
-                for frame in bstream.flush():
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id, segment_id=segment_id, frame=frame
+                    for frame in bstream.flush():
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
+                            )
                         )
-                    )
+        except aiohttp.ServerTimeoutError as e:
+            raise TimeoutError() from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
