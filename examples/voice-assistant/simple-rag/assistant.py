@@ -52,8 +52,12 @@ async def entrypoint(ctx: JobContext):
 
     assistant.start(ctx.room)
 
-    await asyncio.sleep(1)
-    await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
+    async def speak():
+        await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
+
+    @ctx.room.on("local_track_subscribed")
+    def on_local_track_subscribed(_):
+        asyncio.create_task(speak())
 
 
 if __name__ == "__main__":

@@ -53,43 +53,47 @@ async def entrypoint(job: JobContext):
     await job.connect()
     await job.room.local_participant.publish_track(track, options)
 
-    await asyncio.sleep(1)
-    logger.info('Saying "Bonjour, comment allez-vous?"')
-    async for output in tts_11labs.synthesize("Bonjour, comment allez-vous?"):
-        await source.capture_frame(output.frame)
+    async def synthesize():
+        logger.info('Saying "Bonjour, comment allez-vous?"')
+        async for output in tts_11labs.synthesize("Bonjour, comment allez-vous?"):
+            await source.capture_frame(output.frame)
 
-    await asyncio.sleep(1)
-    logger.info('Saying "Au revoir."')
-    async for output in tts_11labs.synthesize("Au revoir."):
-        await source.capture_frame(output.frame)
+        await asyncio.sleep(1)
+        logger.info('Saying "Au revoir."')
+        async for output in tts_11labs.synthesize("Au revoir."):
+            await source.capture_frame(output.frame)
 
-    await asyncio.sleep(1)
-    streamed_text = (
-        "Bonjour, ceci est un autre example avec la méthode utilisant un websocket."
-    )
-    logger.info('Streaming text "%s"', streamed_text)
-    stream = tts_11labs.stream()
-    for chunk in _text_to_chunks(
-        streamed_text
-    ):  # split into chunk just for the demonstration
-        stream.push_text(chunk)
+        await asyncio.sleep(1)
+        streamed_text = (
+            "Bonjour, ceci est un autre example avec la méthode utilisant un websocket."
+        )
+        logger.info('Streaming text "%s"', streamed_text)
+        stream = tts_11labs.stream()
+        for chunk in _text_to_chunks(
+            streamed_text
+        ):  # split into chunk just for the demonstration
+            stream.push_text(chunk)
 
-    stream.flush()
-    stream.end_input()
+        stream.flush()
+        stream.end_input()
 
-    playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
+        playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
 
-    async def _synth_task():
-        async for ev in stream:
-            playout_q.put_nowait(ev.frame)
+        async def _synth_task():
+            async for ev in stream:
+                playout_q.put_nowait(ev.frame)
 
-        playout_q.put_nowait(None)
+            playout_q.put_nowait(None)
 
-    synth_task = asyncio.create_task(_synth_task())
-    playout_task = asyncio.create_task(_playout_task(playout_q, source))
+        synth_task = asyncio.create_task(_synth_task())
+        playout_task = asyncio.create_task(_playout_task(playout_q, source))
 
-    await asyncio.gather(synth_task, playout_task)
-    await stream.aclose()
+        await asyncio.gather(synth_task, playout_task)
+        await stream.aclose()
+
+    @job.room.on("local_track_subscribed")
+    def on_local_track_subscribed(_):
+        asyncio.create_task(synthesize())
 
 
 if __name__ == "__main__":

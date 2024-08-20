@@ -22,15 +22,20 @@ async def entrypoint(job: JobContext):
     await job.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
     await job.room.local_participant.publish_track(track, options)
 
-    await asyncio.sleep(1)
-    logger.info('Saying "Hello!"')
-    async for output in tts.synthesize("Hello!"):
-        await source.capture_frame(output.frame)
+    async def synthesize():
+        await asyncio.sleep(1)
+        logger.info('Saying "Hello!"')
+        async for output in tts.synthesize("Hello!"):
+            await source.capture_frame(output.frame)
 
-    await asyncio.sleep(1)
-    logger.info('Saying "Goodbye."')
-    async for output in tts.synthesize("Goodbye."):
-        await source.capture_frame(output.frame)
+        await asyncio.sleep(1)
+        logger.info('Saying "Goodbye."')
+        async for output in tts.synthesize("Goodbye."):
+            await source.capture_frame(output.frame)
+
+    @job.room.on("local_track_subscribed")
+    def on_local_track_subscribed(_):
+        asyncio.create_task(synthesize())
 
 
 if __name__ == "__main__":

@@ -34,11 +34,14 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room, participant=ctx.room.local_participant
     )
 
-    await asyncio.sleep(2)
-    await _eg_single_segment(tts_forwarder, tts_11labs, source)
+    async def synthesize():
+        await _eg_single_segment(tts_forwarder, tts_11labs, source)
+        await asyncio.sleep(2)
+        await _eg_streamed_tts_stream(tts_forwarder, tts_11labs, source)
 
-    await asyncio.sleep(2)
-    await _eg_streamed_tts_stream(tts_forwarder, tts_11labs, source)
+    @ctx.room.on("local_track_subscribed")
+    def on_local_track_subscribed(_):
+        asyncio.create_task(synthesize())
 
 
 async def _eg_single_segment(

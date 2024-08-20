@@ -107,8 +107,12 @@ async def entrypoint(ctx: JobContext):
     # it finds in the current room. If you need to specify a particular participant, use the participant parameter.
     assistant.start(ctx.room)
 
-    await asyncio.sleep(2)
-    await assistant.say("Hey, how can I help you today?")
+    async def speak():
+        await assistant.say("Hey, how can I help you today?")
+
+    @ctx.room.on("local_track_subscribed")
+    def on_local_track_subscribed(_):
+        asyncio.create_task(speak())
 
 
 if __name__ == "__main__":
