@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import typing
 from typing import Callable, Union
 
 from ..utils import aio, shortuuid
@@ -27,6 +28,7 @@ class BufferedTokenStream:
         self._buf_tokens: list[str] = []  # <= min_token_len
         self._buf = ""
 
+    @typing.no_type_check
     def push_text(self, text: str) -> None:
         self._check_not_closed()
         self._buf += text
@@ -47,8 +49,6 @@ class BufferedTokenStream:
             if isinstance(tok, tuple):
                 tok_text = tok[0]
 
-            assert isinstance(tok_text, str)
-
             buf += tok_text
             buf_toks.append(tok)
             if len(buf) >= self._min_token_len:
@@ -66,13 +66,14 @@ class BufferedTokenStream:
                 buf_toks = []
                 buf = ""
 
+    @typing.no_type_check
     def flush(self) -> None:
         self._check_not_closed()
         if self._buf:
             tokens = self._tokenize_fnc(self._buf)
             if tokens:
                 if isinstance(tokens[0], tuple):
-                    buf = " ".join([tok[0] for tok in tokens])  # type: ignore
+                    buf = " ".join([tok[0] for tok in tokens])
                 else:
                     buf = " ".join(tokens)
             else:
