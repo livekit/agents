@@ -1,9 +1,9 @@
-import numpy as np
-from typing import ClassVar
-from livekit.agents.ipc import channel
-from dataclasses import dataclass, field
-
 import io
+from dataclasses import dataclass, field
+from typing import ClassVar
+
+import numpy as np
+from livekit.agents.ipc import channel
 
 # there is no risk to increase these values. just using these defaults for now
 SHM_MAX_WIDTH = 1920

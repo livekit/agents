@@ -1,11 +1,11 @@
+import multiprocessing.shared_memory as mp_shm
 import socket
 import sys
 import threading
 
-import multiprocessing.shared_memory as mp_shm
+from livekit.agents import ipc, utils
 
-from livekit.agents import utils, ipc
-from . import proto, logger
+from . import logger, proto
 
 
 class BrowserServer:
@@ -110,8 +110,6 @@ class BrowserServer:
 
 
 def _manager_thread(duplex: utils.aio.duplex_unix._Duplex, browser_app):
-    import lkcef_python as lkcef
-
     browsers: dict[int, BrowserServer] = {}
 
     while True:

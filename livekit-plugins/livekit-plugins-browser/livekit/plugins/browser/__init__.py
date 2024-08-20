@@ -15,9 +15,10 @@
 from livekit.agents import Plugin
 
 from .log import logger
+from .proc import BrowserContext, BrowserPage
 from .version import __version__
 
-from .proc import BrowserContext, BrowserPage
+__all__ = ["BrowserContext", "BrowserPage"]
 
 
 class BrowserPlugin(Plugin):
