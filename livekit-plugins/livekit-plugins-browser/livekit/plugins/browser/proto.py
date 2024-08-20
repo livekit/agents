@@ -1,8 +1,13 @@
+import numpy as np
 from typing import ClassVar
 from livekit.agents.ipc import channel
 from dataclasses import dataclass, field
 
 import io
+
+# there is no risk to increase these values. just using these defaults for now
+SHM_MAX_WIDTH = 1920
+SHM_MAX_HEIGHT = 1080
 
 
 @dataclass
@@ -122,3 +127,38 @@ IPC_MESSAGES = {
     AcquirePaintData.MSG_ID: AcquirePaintData,
     ReleasePaintData.MSG_ID: ReleasePaintData,
 }
+
+
+def copy_paint_data(
+    acq: AcquirePaintData,
+    old_width: int,
+    old_height: int,
+    source: memoryview,
+    dest: memoryview,
+):
+    dirty_rects = acq.dirty_rects
+
+    # source_arr = np.frombuffer(source, dtype=np.uint32).reshape((acq.height, acq.width))
+    source_arr = np.ndarray(
+        (acq.height, acq.width),
+        dtype=np.uint32,
+        buffer=source,
+    )
+    dest_arr = np.ndarray(
+        (acq.height, acq.width),
+        dtype=np.uint32,
+        buffer=dest,
+    )
+
+    has_fullscreen_rect = len(dirty_rects) == 1 and dirty_rects[0] == (
+        0,
+        0,
+        acq.width,
+        acq.height,
+    )
+    if old_width != acq.width or old_height != acq.height or has_fullscreen_rect:
+        np.copyto(dest_arr, source_arr)
+    else:
+        for rect in dirty_rects:
+            x, y, w, h = rect
+            dest_arr[y : y + h, x : x + w] = source_arr[y : y + h, x : x + w]

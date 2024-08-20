@@ -1,18 +1,14 @@
 from dataclasses import dataclass
 import asyncio
 import socket
+from typing import Literal
 from livekit.agents import utils, ipc
+from livekit import rtc
 import multiprocessing as mp
 import multiprocessing.context as mpc
 import multiprocessing.shared_memory as mp_shm
 
 from . import proc_main, proto, logger
-
-
-# there is no risk to increase these values. just using these defaults for now
-# (they are used to calculate the size of the shared memory)
-MAX_WIDTH = 1920
-MAX_HEIGHT = 1080
 
 
 @dataclass
@@ -24,18 +20,24 @@ class _PageOptions:
     framerate: int
 
 
-# a page is in reality a browser in CEF
-class BrowserPage:
+EventTypes = Literal["paint"]
+
+
+class BrowserPage(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         mp_ctx: mpc.SpawnContext,
         opts: _PageOptions,
         ctx_duplex: utils.aio.duplex_unix._AsyncDuplex,
     ) -> None:
+        super().__init__()
         self._mp_ctx = mp_ctx
         self._opts = opts
         self._ctx_duplex = ctx_duplex
         self._created_fut = asyncio.Future()
+
+        self._view_width = 0
+        self._view_height = 0
 
     @property
     def id(self) -> int:
@@ -44,10 +46,18 @@ class BrowserPage:
     async def start(self) -> None:
         shm_name = f"lkcef_browser_{utils.shortuuid()}"
         self._shm = mp_shm.SharedMemory(
-            create=True, size=MAX_WIDTH * MAX_HEIGHT * 4, name=shm_name
+            create=True,
+            size=proto.SHM_MAX_WIDTH * proto.SHM_MAX_HEIGHT * 4,
+            name=shm_name,
         )
 
-        # send create browser request
+        self._framebuffer = rtc.VideoFrame(
+            proto.SHM_MAX_WIDTH,
+            proto.SHM_MAX_HEIGHT,
+            rtc.VideoBufferType.BGRA,
+            bytearray(proto.SHM_MAX_WIDTH * proto.SHM_MAX_HEIGHT * 4),
+        )
+
         req = proto.CreateBrowserRequest(
             page_id=self._opts.page_id,
             width=self._opts.width,
@@ -66,11 +76,27 @@ class BrowserPage:
     async def aclose(self) -> None:
         pass
 
-    def _handle_created(self, msg: proto.CreateBrowserResponse) -> None:
+    async def _handle_created(self, msg: proto.CreateBrowserResponse) -> None:
         self._created_fut.set_result(None)
 
-    def _handle_paint(self, msg: proto.AcquirePaintData) -> None:
-        print("painting", msg.page_id, msg.width, msg.height)
+    async def _handle_paint(self, acq: proto.AcquirePaintData) -> None:
+        old_width = self._view_width
+        old_height = self._view_height
+        self._view_width = acq.width
+        self._view_height = acq.height
+
+        # TODO(theomonnom): remove hacky alloc-free resizing
+        self._framebuffer._width = acq.width
+        self._framebuffer._height = acq.height
+
+        proto.copy_paint_data(
+            acq, old_width, old_height, self._shm.buf, self._framebuffer.data
+        )
+
+        self.emit("paint", self._framebuffer)
+
+        release_paint = proto.ReleasePaintData(page_id=acq.page_id)
+        await ipc.channel.asend_message(self._ctx_duplex, release_paint)
 
 
 class BrowserContext:
@@ -99,7 +125,7 @@ class BrowserContext:
 
         self._main_atask = asyncio.create_task(self._main_task(self._duplex))
 
-
+    @utils.log_exceptions(logger)
     async def _main_task(self, duplex: utils.aio.duplex_unix._AsyncDuplex) -> None:
         while True:
             try:
@@ -109,10 +135,10 @@ class BrowserContext:
 
             if isinstance(msg, proto.CreateBrowserResponse):
                 page = self._pages[msg.page_id]
-                page._handle_created(msg)
+                await page._handle_created(msg)
             elif isinstance(msg, proto.AcquirePaintData):
                 page = self._pages[msg.page_id]
-                page._handle_paint(msg)
+                await page._handle_paint(msg)
 
     async def new_page(
         self, *, url: str, width: int = 800, height: int = 600, framerate: int = 30
