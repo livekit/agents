@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import multiprocessing as mp
+import pickle
 import socket
 import sys
 import threading
@@ -19,25 +19,24 @@ from . import channel, proc_main, proto
 
 
 class LogQueueListener:
-    _sentinel = None
-
     def __init__(
-        self, queue: mp.Queue, prepare_fnc: Callable[[logging.LogRecord], None]
+        self,
+        duplex: utils.aio.duplex_unix._Duplex,
+        prepare_fnc: Callable[[logging.LogRecord], None],
     ):
         self._thread: threading.Thread | None = None
-        self._q = queue
+        self._duplex = duplex
         self._prepare_fnc = prepare_fnc
 
     def start(self) -> None:
-        self._thread = t = threading.Thread(
-            target=self._monitor, daemon=True, name="log_listener"
-        )
-        t.start()
+        self._thread = threading.Thread(target=self._monitor, name="ipc_log_listener")
+        self._thread.start()
 
     def stop(self) -> None:
         if self._thread is None:
             return
-        self._q.put_nowait(self._sentinel)
+
+        self._duplex.close()
         self._thread.join()
         self._thread = None
 
@@ -52,10 +51,12 @@ class LogQueueListener:
 
     def _monitor(self):
         while True:
-            record = self._q.get()
-            if record is self._sentinel:
+            try:
+                data = self._duplex.recv_bytes()
+            except utils.aio.duplex_unix.DuplexClosed:
                 break
 
+            record = pickle.loads(data)
             self.handle(record)
 
 
@@ -145,19 +146,19 @@ class SupervisedProc:
                 setattr(record, key, value)
 
         async with self._lock:
-            log_q = self._opts.mp_ctx.Queue()
-            log_q.cancel_join_thread()
-
             mp_pch, mp_cch = socket.socketpair()
+            mp_log_pch, mp_log_cch = socket.socketpair()
 
             self._pch = await duplex_unix._AsyncDuplex.open(mp_pch)
-            log_listener = LogQueueListener(log_q, _add_proc_ctx_log)
+
+            log_pch = duplex_unix._Duplex.open(mp_log_pch)
+            log_listener = LogQueueListener(log_pch, _add_proc_ctx_log)
             log_listener.start()
 
             self._proc_args = proto.ProcStartArgs(
                 initialize_process_fnc=self._opts.initialize_process_fnc,
                 job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
-                log_q=log_q,
+                log_cch=mp_log_cch,
                 mp_cch=mp_cch,
                 asyncio_debug=self._loop.get_debug(),
                 user_arguments=self._user_args,
@@ -168,6 +169,7 @@ class SupervisedProc:
             )
 
             self._proc.start()
+            mp_log_cch.close()
             mp_cch.close()
 
             self._pid = self._proc.pid
@@ -176,7 +178,6 @@ class SupervisedProc:
             def _sync_run():
                 self._proc.join()
                 log_listener.stop()
-                log_q.close()
                 try:
                     self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
                 except RuntimeError:

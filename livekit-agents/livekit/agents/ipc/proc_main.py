@@ -4,9 +4,12 @@ import asyncio
 import contextlib
 import copy
 import logging
-import multiprocessing as mp
+import pickle
+import queue
 import socket
+import threading
 from dataclasses import dataclass
+from typing import Optional
 
 from livekit import rtc
 
@@ -18,9 +21,29 @@ from . import channel, proto
 
 
 class LogQueueHandler(logging.Handler):
-    def __init__(self, queue: mp.Queue) -> None:
+    _sentinal = None
+
+    def __init__(self, duplex: utils.aio.duplex_unix._Duplex) -> None:
         super().__init__()
-        self._q = queue
+        self._duplex = duplex
+        self._send_q = queue.SimpleQueue[Optional[logging.LogRecord]]()
+        self._send_thread = threading.Thread(
+            target=self._forward_logs, name="ipc_log_forwarder"
+        )
+        self._send_thread.start()
+
+    def _forward_logs(self):
+        while True:
+            record = self._send_q.get()
+            if record is None:
+                break
+
+            try:
+                self._duplex.send_bytes(pickle.dumps(record))
+            except duplex_unix.DuplexClosed:
+                break
+
+        self._duplex.close()
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -31,9 +54,13 @@ class LogQueueHandler(logging.Handler):
             record.args = None
             record.exc_info = None
             record.exc_text = None
-            self._q.put_nowait(record)
+            self._send_q.put_nowait(record)
         except Exception:
             self.handleError(record)
+
+    def close(self) -> None:
+        super().close()
+        self._send_q.put_nowait(self._sentinal)
 
 
 @dataclass
@@ -213,9 +240,8 @@ def main(args: proto.ProcStartArgs) -> None:
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.NOTSET)
 
-    log_q = args.log_q
-    log_q.cancel_join_thread()
-    log_handler = LogQueueHandler(log_q)
+    log_cch = utils.aio.duplex_unix._Duplex.open(args.log_cch)
+    log_handler = LogQueueHandler(log_cch)
     root_logger.addHandler(log_handler)
 
     loop = asyncio.new_event_loop()
@@ -250,7 +276,6 @@ def main(args: proto.ProcStartArgs) -> None:
     except duplex_unix.DuplexClosed:
         pass
     finally:
-        log_handler.close()
-        log_q.close()
         cch.close()
+        log_handler.close()
         loop.run_until_complete(loop.shutdown_default_executor())

@@ -15,14 +15,17 @@ FetchContent_Declare(imgui GIT_REPOSITORY https://github.com/ocornut/imgui GIT_T
 FetchContent_GetProperties(imgui)
 FetchContent_MakeAvailable(imgui)
 file(GLOB IMGUI_SOURCES ${imgui_SOURCE_DIR}/*.cpp)
-file(GLOB IMGUI_HEADERS ${imgui_SOURCE_DIR}/*.h)
-add_library(imgui STATIC ${IMGUI_SOURCES} ${IMGUI_SOURCES} ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
+add_library(imgui STATIC ${IMGUI_SOURCES}
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+        ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
+)
 set_target_properties(imgui PROPERTIES CXX_STANDARD 17)
-target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${GLFW_INCLUDE_DIR})
+target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/misc/cpp ${imgui_SOURCE_DIR}/backends ${GLFW_INCLUDE_DIR})
 target_link_libraries(imgui PRIVATE glfw)
 
 
-set(LKCEF_SRCS app.cpp app.hpp handler.hpp handler.cpp dev_renderer.hpp dev_renderer.cpp)
+set(LKCEF_SRCS app.cpp app.hpp handler.hpp handler.cpp dev_renderer.hpp dev_renderer.cpp gleq.h)
 set(LKCEF_SRCS_LINUX main_linux.cpp)
 set(LKCEF_SRCS_MAC app_mac.mm)
 set(LKCEF_SRCS_WINDOWS main_win.cpp )
