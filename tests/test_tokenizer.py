@@ -29,7 +29,7 @@ EXPECTED_MIN_20 = [
 ]
 
 SENT_TOKENIZERS = [
-    #nltk.SentenceTokenizer(min_sentence_len=20),
+    nltk.SentenceTokenizer(min_sentence_len=20),
     basic.SentenceTokenizer(min_sentence_len=20),
 ]
 
