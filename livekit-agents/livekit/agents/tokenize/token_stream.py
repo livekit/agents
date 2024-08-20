@@ -36,9 +36,6 @@ class BufferedTokenStream:
 
         tokens = self._tokenize_fnc(self._buf)
 
-        if len(tokens) == 0:
-            return
-
         buf_toks = []
         buf = ""
         while len(tokens) > 1:
@@ -58,7 +55,7 @@ class BufferedTokenStream:
                 )
 
                 if isinstance(tok, tuple):
-                    self._buf = self._buf[tok[2] :].lstrip()
+                    self._buf = self._buf[tok[2] :]
                 else:
                     for i, tok in enumerate(buf_toks):
                         tok_i = max(self._buf.find(tok), 0)
