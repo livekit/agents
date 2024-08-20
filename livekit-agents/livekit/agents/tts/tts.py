@@ -34,7 +34,7 @@ class TTS(ABC):
         capabilities: TTSCapabilities,
         sample_rate: int,
         num_channels: int,
-        timeout: float = 10.0,
+        timeout: float | None = 10.0,
     ) -> None:
         self._capabilities = capabilities
         self._sample_rate = sample_rate
@@ -67,7 +67,7 @@ class TTS(ABC):
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
-    def __init__(self, *, timeout: float = 10.0):
+    def __init__(self, *, timeout: float | None = 10.0):
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -89,13 +89,10 @@ class ChunkedStream(ABC):
         self._event_ch.close()
 
     async def __anext__(self) -> SynthesizedAudio:
-        if self._timeout > 0:
-            try:
-                return await asyncio.wait_for(self._event_ch.__anext__(), self._timeout)
-            except asyncio.TimeoutError as e:
-                raise e.__class__("synthesis timed out")
-        else:
-            return await self._event_ch.__anext__()
+        try:
+            return await asyncio.wait_for(self._event_ch.__anext__(), self._timeout)
+        except asyncio.TimeoutError as e:
+            raise e.__class__("synthesis timed out")
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
@@ -105,7 +102,7 @@ class SynthesizeStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self, *, timeout: float = 10.0):
+    def __init__(self, *, timeout: float | None = 10.0):
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
@@ -151,14 +148,14 @@ class SynthesizeStream(ABC):
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
     async def __anext__(self) -> SynthesizedAudio:
-        if self._timeout > 0 and self._pending > 0:
+        if self._pending > 0:
             try:
                 event = await asyncio.wait_for(
                     self._event_ch.__anext__(), self._timeout
                 )
             except asyncio.TimeoutError as e:
                 self._pending -= 1
-                raise e.__class__("synthesis timed out")
+                raise e
         else:
             event = await self._event_ch.__anext__()
         self._pending -= 1
