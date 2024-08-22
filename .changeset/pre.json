@@ -15,5 +15,8 @@
     "livekit-plugins-rag": "0.2.2",
     "livekit-plugins-silero": "0.6.4"
   },
-  "changesets": []
+  "changesets": [
+    "fluffy-hornets-vanish",
+    "shaggy-onions-kick"
+  ]
 }
