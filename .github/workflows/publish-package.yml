@@ -10,11 +10,6 @@ name: Release and publish
 
 on:
   workflow_dispatch:
-    inputs:
-      packages:
-        description: 'Comma-separated list of packages to build manually'
-        required: false
-        default: ''
   push:
     branches:
       - main
@@ -98,14 +93,10 @@ jobs:
           lfs: true
         env:
           GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.9"
-
-      - name: Install cibuildwheel
-        run: python -m pip install cibuildwheel==2.20.0
 
       - name: Install dependencies
         run: |
