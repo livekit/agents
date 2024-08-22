@@ -80,30 +80,11 @@ jobs:
     strategy:
       matrix:
         package: ${{ fromJson(needs.bump.outputs.packages) }}
-    defaults:
-      run:
-        working-directory: "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}"
 
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          lfs: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.9"
-
-      - name: Build package
-        uses: ./.github/workflows/build-package.yml
-        with:
-          package: ${{ matrix.package.name }}
-          artifact_name: python-package-distributions
+    uses: livekit/agents/.github/workflows/build-package.yml@main
+    with:
+      package: ${{ matrix.package.name }}
+      artifact_name: python-package-distributions
 
   publish:
     needs:
