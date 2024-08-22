@@ -48,7 +48,7 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=["livekit-agents>=0.8.0"],
-    package_data={"livekit.plugins.minimal": ["py.typed"]},
+    package_data={"livekit.plugins.browser": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",
