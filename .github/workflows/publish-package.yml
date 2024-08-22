@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       packages:
-        description: 'package to build manually (as a json array)'
+        description: 'Comma-separated list of packages to build manually'
         required: false
         default: ''
   push:
@@ -81,10 +81,10 @@ jobs:
   build:
     needs:
       - bump
-    if: ${{ fromJson(needs.bump.outputs.packages)[0] != null || github.event.inputs.packages != '' }}
+    if: ${{ fromJson(needs.bump.outputs.packages)[0] != null }}
     strategy:
       matrix:
-        package: ${{ fromJson(github.event.inputs.packages != '' && github.event.inputs.packages || needs.bump.outputs.packages) }}
+        package: ${{ fromJson(needs.bump.outputs.packages) }}
     defaults:
       run:
         working-directory: "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}"
