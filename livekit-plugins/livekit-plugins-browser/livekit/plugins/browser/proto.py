@@ -14,12 +14,18 @@ SHM_MAX_HEIGHT = 1080
 class InitializeContextRequest:
     MSG_ID: ClassVar[int] = 0
     dev_mode: bool = False
+    remote_debugging_port: int = 0
+    root_cache_path: str = ""
 
     def write(self, b: io.BytesIO) -> None:
         channel.write_bool(b, self.dev_mode)
+        channel.write_int(b, self.remote_debugging_port)
+        channel.write_string(b, self.root_cache_path)
 
     def read(self, b: io.BytesIO) -> None:
         self.dev_mode = channel.read_bool(b)
+        self.remote_debugging_port = channel.read_int(b)
+        self.root_cache_path = channel.read_string(b)
 
 
 @dataclass
@@ -119,6 +125,30 @@ class ReleasePaintData:
         self.page_id = channel.read_int(b)
 
 
+@dataclass
+class CloseBrowserRequest:
+    MSG_ID: ClassVar[int] = 6
+    page_id: int = -1
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_int(b, self.page_id)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.page_id = channel.read_int(b)
+
+
+@dataclass
+class BrowserClosed:
+    MSG_ID: ClassVar[int] = 7
+    page_id: int = -1
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_int(b, self.page_id)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.page_id = channel.read_int(b)
+
+
 IPC_MESSAGES = {
     InitializeContextRequest.MSG_ID: InitializeContextRequest,
     ContextInitializedResponse.MSG_ID: ContextInitializedResponse,
@@ -126,6 +156,8 @@ IPC_MESSAGES = {
     CreateBrowserResponse.MSG_ID: CreateBrowserResponse,
     AcquirePaintData.MSG_ID: AcquirePaintData,
     ReleasePaintData.MSG_ID: ReleasePaintData,
+    CloseBrowserRequest.MSG_ID: CloseBrowserRequest,
+    BrowserClosed.MSG_ID: BrowserClosed,
 }
 
 

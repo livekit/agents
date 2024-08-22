@@ -12,7 +12,7 @@ set(USE_SANDBOX OFF) # TODO(theomonnom): I don't think we want to enable sandbox
 # Specify the CEF distribution version.
 if(NOT DEFINED CEF_VERSION)
   # set(CEF_VERSION "122.1.10+gc902316+chromium-122.0.6261.112")
-  set(CEF_VERSION "127.3.1+g6cbb30e+chromium-127.0.6533.100")
+  set(CEF_VERSION "127.3.5+g114ea2a+chromium-127.0.6533.120")
 endif()
 
 if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")

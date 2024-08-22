@@ -10,10 +10,10 @@ from . import logger, proto
 
 class BrowserServer:
     def __init__(
-        self,
-        duplex: utils.aio.duplex_unix._Duplex,
-        shm: mp_shm.SharedMemory,
-        page_id: int,
+            self,
+            duplex: utils.aio.duplex_unix._Duplex,
+            shm: mp_shm.SharedMemory,
+            page_id: int,
     ):
         self._duplex = duplex
         self._shm = shm
@@ -22,14 +22,15 @@ class BrowserServer:
         self._view_width = 0
         self._view_height = 0
 
+        self._closing = False
         self._release_paint_e = threading.Event()
 
     @staticmethod
     def create(
-        *,
-        duplex: utils.aio.duplex_unix._Duplex,
-        create_req: proto.CreateBrowserRequest,
-        browser_app,
+            *,
+            duplex: utils.aio.duplex_unix._Duplex,
+            create_req: proto.CreateBrowserRequest,
+            browser_app,
     ) -> "BrowserServer":
         logger.debug(
             "creating browser",
@@ -55,6 +56,7 @@ class BrowserServer:
 
         opts.created_callback = bserver._browser_created
         opts.paint_callback = bserver._paint
+        opts.close_callback = bserver._closed
         browser_app.create_browser(create_req.url, opts)
         return bserver
 
@@ -78,6 +80,9 @@ class BrowserServer:
             logger.exception("failed to send CreateBrowserResponse")
 
     def _paint(self, frame_data):
+        if self._closing:
+            return  # make sure to not use the shm
+
         acq = proto.AcquirePaintData()
         acq.page_id = self._page_id
         acq.width = frame_data.width
@@ -105,8 +110,17 @@ class BrowserServer:
         except utils.aio.duplex_unix.DuplexClosed:
             logger.exception("failed to send AcquirePaintData")
 
+    def _closed(self) -> None:
+        ipc.channel.send_message(
+            self._duplex, proto.BrowserClosed(page_id=self._page_id)
+        )
+
     def handle_release_paint(self, msg: proto.ReleasePaintData):
         self._release_paint_e.set()
+
+    def handle_close(self, msg: proto.CloseBrowserRequest):
+        self._closing = True
+        self._impl.close()
 
 
 def _manager_thread(duplex: utils.aio.duplex_unix._Duplex, browser_app):
@@ -126,6 +140,10 @@ def _manager_thread(duplex: utils.aio.duplex_unix._Duplex, browser_app):
         elif isinstance(msg, proto.ReleasePaintData):
             server = browsers[msg.page_id]
             server.handle_release_paint(msg)
+        elif isinstance(msg, proto.CloseBrowserRequest):
+            server = browsers[msg.page_id]
+            server.handle_close(msg)
+            del browsers[msg.page_id]
 
 
 def main(mp_cch: socket.socket):
@@ -150,7 +168,13 @@ def main(mp_cch: socket.socket):
 
     opts = lkcef.AppOptions()
     opts.dev_mode = init_req.dev_mode
+    opts.remote_debugging_port = init_req.remote_debugging_port
+    opts.root_cache_path = init_req.root_cache_path
     opts.initialized_callback = _context_initialized
+
+    opts.framework_path = "/Users/theomonnom/livekit/agents/livekit-plugins/livekit-plugins-browser/cef/src/Debug/lkcef_app.app/Contents/Frameworks/Chromium Embedded Framework.framework"
+    opts.main_bundle_path = "/Users/theomonnom/livekit/agents/livekit-plugins/livekit-plugins-browser/cef/src/Debug/lkcef_app.app"
+    opts.subprocess_path = "/Users/theomonnom/livekit/agents/livekit-plugins/livekit-plugins-browser/cef/src/Debug/lkcef_app.app/Contents/Frameworks/lkcef Helper.app/Contents/MacOS/lkcef Helper"
 
     app = lkcef.BrowserApp(opts)
     man_t = threading.Thread(target=_manager_thread, args=(duplex, app))

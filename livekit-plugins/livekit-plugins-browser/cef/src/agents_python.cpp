@@ -12,7 +12,10 @@
 namespace py = pybind11;
 
 BrowserApp::BrowserApp(const AppOptions& options) : options_(options) {
-  app_ = new AgentApp(options_.dev_mode, options_.initialized_callback);
+  app_ = new AgentApp(options_.dev_mode, options.remote_debugging_port,
+                      options.root_cache_path, options.framework_path,
+                      options.main_bundle_path, options.subprocess_path,
+                      options_.initialized_callback);
 }
 
 bool BrowserApp::CreateBrowser(const std::string& url,
@@ -52,7 +55,8 @@ void BrowserApp::CreateBrowserOnUIThread(const std::string& url,
         event.width = width;
         event.height = height;
         options.paint_callback(event);
-      });
+      },
+      options.close_callback);
 
   browser_impl->handle = handle;
 }
@@ -63,7 +67,15 @@ int BrowserApp::Run() {
 
 BrowserImpl::BrowserImpl() {}
 
-void BrowserImpl::SetSize(int width, int height) {}
+void BrowserImpl::SetSize(int width, int height) {
+  if (handle)
+    handle->SetSize(width, height);
+}
+
+void BrowserImpl::Close() {
+  if (handle)
+    handle->Close();
+}
 
 int BrowserImpl::Identifier() const {
   return handle->GetBrowser()->GetIdentifier();
@@ -82,6 +94,12 @@ PYBIND11_MODULE(lkcef_python, m) {
   py::class_<AppOptions>(m, "AppOptions")
       .def(py::init())
       .def_readwrite("dev_mode", &AppOptions::dev_mode)
+      .def_readwrite("remote_debugging_port",
+                     &AppOptions::remote_debugging_port)
+      .def_readwrite("root_cache_path", &AppOptions::root_cache_path)
+      .def_readwrite("framework_path", &AppOptions::framework_path)
+      .def_readwrite("main_bundle_path", &AppOptions::main_bundle_path)
+      .def_readwrite("subprocess_path", &AppOptions::subprocess_path)
       .def_readwrite("initialized_callback", &AppOptions::initialized_callback);
 
   py::class_<BrowserOptions>(m, "BrowserOptions")
@@ -90,7 +108,8 @@ PYBIND11_MODULE(lkcef_python, m) {
       .def_readwrite("width", &BrowserOptions::width)
       .def_readwrite("height", &BrowserOptions::height)
       .def_readwrite("created_callback", &BrowserOptions::created_callback)
-      .def_readwrite("paint_callback", &BrowserOptions::paint_callback);
+      .def_readwrite("paint_callback", &BrowserOptions::paint_callback)
+      .def_readwrite("close_callback", &BrowserOptions::close_callback);
 
   py::class_<BrowserApp>(m, "BrowserApp")
       .def(py::init<const AppOptions&>())
@@ -99,6 +118,7 @@ PYBIND11_MODULE(lkcef_python, m) {
 
   py::class_<BrowserImpl, std::shared_ptr<BrowserImpl>>(m, "BrowserImpl")
       .def("set_size", &BrowserImpl::SetSize)
+      .def("close", &BrowserImpl::Close)
       .def("identifier", &BrowserImpl::Identifier);
 
   py::class_<PaintRect>(m, "PaintRect")

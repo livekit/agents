@@ -1,10 +1,15 @@
+from __future__ import annotations
+
 import asyncio
+from contextlib import asynccontextmanager
 import multiprocessing as mp
 import multiprocessing.context as mpc
 import multiprocessing.shared_memory as mp_shm
 import socket
+import contextlib
+import tempfile
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Callable
 
 from livekit import rtc
 from livekit.agents import ipc, utils
@@ -24,6 +29,23 @@ class _PageOptions:
 EventTypes = Literal["paint"]
 
 
+@dataclass
+class PaintData:
+    dirty_rects: list[tuple[int, int, int, int]]
+    frame: rtc.VideoFrame
+    width: int
+    height: int
+
+
+@dataclass
+class BrowserOptions:
+    url: str
+    framerate: int
+    width: int
+    height: int
+    paint_callback: Callable[[PaintData], None]
+
+
 class BrowserPage(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
@@ -35,10 +57,12 @@ class BrowserPage(utils.EventEmitter[EventTypes]):
         self._mp_ctx = mp_ctx
         self._opts = opts
         self._ctx_duplex = ctx_duplex
-        self._created_fut = asyncio.Future()
 
         self._view_width = 0
         self._view_height = 0
+
+        self._created_fut = asyncio.Future()
+        self._close_fut = asyncio.Future()
 
     @property
     def id(self) -> int:
@@ -71,11 +95,17 @@ class BrowserPage(utils.EventEmitter[EventTypes]):
         await ipc.channel.asend_message(self._ctx_duplex, req)
 
         # TODO(theomonnom): create timeout (would prevent never resolving futures if the
-        #   browser process crashed for some reasons)
+        #  browser process crashed for some reasons)
         await asyncio.shield(self._created_fut)
 
     async def aclose(self) -> None:
-        pass
+        await ipc.channel.asend_message(
+            self._ctx_duplex, proto.CloseBrowserRequest(page_id=self.id)
+        )
+        await asyncio.shield(self._close_fut)
+
+        self._shm.unlink()
+        self._shm.close()
 
     async def _handle_created(self, msg: proto.CreateBrowserResponse) -> None:
         self._created_fut.set_result(None)
@@ -94,19 +124,30 @@ class BrowserPage(utils.EventEmitter[EventTypes]):
             acq, old_width, old_height, self._shm.buf, self._framebuffer.data
         )
 
-        self.emit("paint", self._framebuffer)
+        paint_data = PaintData(
+            dirty_rects=acq.dirty_rects,
+            frame=self._framebuffer,
+            width=acq.width,
+            height=acq.height,
+        )
+        self.emit("paint", paint_data)
 
         release_paint = proto.ReleasePaintData(page_id=acq.page_id)
         await ipc.channel.asend_message(self._ctx_duplex, release_paint)
 
+    async def _handle_close(self, msg: proto.BrowserClosed) -> None:
+        logger.debug("browser page closed", extra={"page_id": self.id})
+        self._close_fut.set_result(None)
+
 
 class BrowserContext:
-    def __init__(self, *, dev_mode: bool) -> None:
+    def __init__(self, *, dev_mode: bool, remote_debugging_port: int = 0) -> None:
         self._mp_ctx = mp.get_context("spawn")
         self._pages: dict[int, BrowserPage] = {}
         self._dev_mode = dev_mode
         self._initialized = False
         self._next_page_id = 1
+        self._remote_debugging_port = remote_debugging_port
 
     async def initialize(self) -> None:
         mp_pch, mp_cch = socket.socketpair()
@@ -116,8 +157,23 @@ class BrowserContext:
         self._proc.start()
         mp_cch.close()
 
+        if not self._remote_debugging_port:
+            with contextlib.closing(
+                socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            ) as s:
+                s.bind(("", 0))
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                self._remote_debugging_port = s.getsockname()[1]
+
+            logger.debug("using remote debugging port %d", self._remote_debugging_port)
+
         await ipc.channel.asend_message(
-            self._duplex, proto.InitializeContextRequest(dev_mode=self._dev_mode)
+            self._duplex,
+            proto.InitializeContextRequest(
+                dev_mode=self._dev_mode,
+                remote_debugging_port=self._remote_debugging_port,
+                root_cache_path=tempfile.mkdtemp(),  # TODO(theomonnom): cleanup
+            ),
         )
         resp = await ipc.channel.arecv_message(self._duplex, proto.IPC_MESSAGES)
         assert isinstance(resp, proto.ContextInitializedResponse)
@@ -125,6 +181,21 @@ class BrowserContext:
         logger.debug("browser context initialized", extra={"pid": self._proc.pid})
 
         self._main_atask = asyncio.create_task(self._main_task(self._duplex))
+
+    @asynccontextmanager
+    async def playwright(self, timeout: float | None = None):
+        if not self._initialized:
+            raise RuntimeError("BrowserContext not initialized")
+
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as p:
+            url = f"http://localhost:{self._remote_debugging_port}"
+            browser = await p.chromium.connect_over_cdp(url, timeout=timeout)
+            try:
+                yield browser
+            finally:
+                await browser.close()
 
     @utils.log_exceptions(logger)
     async def _main_task(self, duplex: utils.aio.duplex_unix._AsyncDuplex) -> None:
@@ -140,6 +211,9 @@ class BrowserContext:
             elif isinstance(msg, proto.AcquirePaintData):
                 page = self._pages[msg.page_id]
                 await page._handle_paint(msg)
+            elif isinstance(msg, proto.BrowserClosed):
+                page = self._pages[msg.page_id]
+                await page._handle_close(msg)
 
     async def new_page(
         self, *, url: str, width: int = 800, height: int = 600, framerate: int = 30

@@ -11,6 +11,11 @@ struct PaintData;
 
 struct AppOptions {
   bool dev_mode = false;
+  int remote_debugging_port = 0;
+  std::string root_cache_path;
+  std::string framework_path;
+  std::string main_bundle_path;
+  std::string subprocess_path;
   std::function<void()> initialized_callback = nullptr;
 };
 
@@ -20,6 +25,7 @@ struct BrowserOptions {
   int height = 600;
   std::function<void(std::shared_ptr<BrowserImpl>)> created_callback = nullptr;
   std::function<void(const PaintData&)> paint_callback = nullptr;
+  std::function<void()> close_callback = nullptr;
 };
 
 struct BrowserApp {
@@ -40,6 +46,7 @@ struct BrowserImpl {
   BrowserImpl();
 
   void SetSize(int width, int height);
+  void Close();
   int Identifier() const;
 
   CefRefPtr<BrowserHandle> handle = nullptr;
