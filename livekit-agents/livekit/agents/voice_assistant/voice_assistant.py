@@ -9,7 +9,7 @@ from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, U
 from livekit import rtc
 
 from .. import stt, tokenize, tts, utils, vad
-from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream, FunctionCallInfo
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .cancellable_source import CancellableAudioSource
 from .human_input import HumanInput
@@ -30,6 +30,11 @@ WillSynthesizeAssistantReply = Callable[
     ["VoiceAssistant", ChatContext],
     Union[Optional[LLMStream], Awaitable[Optional[LLMStream]]],
 ]
+
+WillLogCompletionEvent = Optional[Callable[
+    [ChatContext, str, list[FunctionCallInfo], bool],  # (chat_ctx, collected_text, tool_calls, interrupted)
+    None
+]]
 
 EventTypes = Literal[
     "user_started_speaking",
@@ -86,6 +91,7 @@ class _ImplOptions:
     int_min_words: int
     preemptive_synthesis: bool
     will_synthesize_assistant_reply: WillSynthesizeAssistantReply
+    will_log_completion_event: WillLogCompletionEvent
     plotting: bool
     transcription: AssistantTranscriptionOptions
 
@@ -126,6 +132,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         preemptive_synthesis: bool = True,
         transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply = _default_will_synthesize_assistant_reply,
+        will_log_completion_event: WillLogCompletionEvent = None,
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -139,6 +146,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             preemptive_synthesis=preemptive_synthesis,
             transcription=transcription,
             will_synthesize_assistant_reply=will_synthesize_assistant_reply,
+            will_log_completion_event=will_log_completion_event,
         )
         self._plotter = AssistantPlotter(self._loop)
 
@@ -617,6 +625,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self.emit("agent_speech_interrupted", msg)
             else:
                 self.emit("agent_speech_committed", msg)
+                
+            if self._opts.will_log_completion_event is not None:
+                if isinstance(speech_info.source, LLMStream):
+                    self._opts.will_log_completion_event(speech_info.source._chat_ctx, collected_text, speech_info.source.function_calls, interrupted)
+                else:
+                    self._opts.will_log_completion_event(self._chat_ctx, collected_text, [], interrupted)
 
         logger.debug("VoiceAssistant._play_speech ended")
 
