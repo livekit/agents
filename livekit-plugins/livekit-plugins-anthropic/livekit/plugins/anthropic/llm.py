@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass
-from typing import Any, Awaitable, List, MutableSet, Tuple
+from typing import Any, Awaitable, List, Literal, MutableSet
 
 import httpx
 from livekit import rtc
@@ -83,14 +83,16 @@ class LLM(llm.LLM):
             if fnc_ctx and parallel_tool_calls is not None:
                 opts["parallel_tool_calls"] = parallel_tool_calls
 
-        latest_system_message, collapsedmessages = _collapse_message(chat_ctx)
-        anthropic_ctx = _build_anthropic_context(collapsedmessages, id(self))
+        latest_system_message = _latest_system_message(chat_ctx)
+        anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
+        collaped_anthropic_ctx = _collapse_messages(anthropic_ctx)
         stream = self._client.messages.create(
+            max_tokens=opts.get("max_tokens", 1000),
             system=latest_system_message,
-            messages=anthropic_ctx,
+            messages=collaped_anthropic_ctx,
             model=self._opts.model,
-            temperature=temperature,
-            top_k=n,
+            temperature=temperature or anthropic.NOT_GIVEN,
+            top_k=n or anthropic.NOT_GIVEN,
             stream=True,
         )
 
@@ -128,11 +130,29 @@ class LLMStream(llm.LLMStream):
         if not self._anthropic_stream:
             self._anthropic_stream = await self._awaitable_anthropic_stream
 
-        async for chunk in self._anthropic_stream:
-            for choice in chunk.choices:
-                chat_chunk = self._parse_choice(choice)
-                if chat_chunk is not None:
-                    return chat_chunk
+        current_content_block = ""
+        current_content_block_type: Literal["text", "tool_use"] = "text"
+        content_blocks: List[] = []
+        async for event in self._anthropic_stream:
+            e: anthropic.types.RawMessageStreamEvent = event
+            if event.type == "message_start":
+                pass
+            elif event.type == "message_delta":
+                pass
+            elif event.type == "message_stop":
+                pass
+            elif event.type == "content_block_start":
+                current_content_block = ""
+                current_content_block_type = event.content_block.type
+            elif event.type == "content_block_delta":
+                delta = event.delta
+                if delta.type == "text_delta":
+                    current_content_block += delta["text"]
+                elif delta.type == "input_json_delta":
+                    current_content_block += delta["json"]
+                pass
+            elif event.type == "content_block_stop":
+                pass
 
         raise StopAsyncIteration
 
@@ -205,55 +225,12 @@ class LLMStream(llm.LLMStream):
         )
 
 
-def _collapse_message(chat_ctx: llm.ChatContext) -> Tuple[str, List[llm.ChatMessage]]:
-    """
-    Returns:
-        Tuple[llm.ChatMessage, List[[llm.ChatMessage]]]: returns the latest system message and a list of combined messages (because anthropic enforces alternating roles)
-    """
-    # Anthropic enforces alternating messages
-    combined_messages: list[llm.ChatMessage] = []
+def _latest_system_message(chat_ctx: llm.ChatContext) -> str:
     latest_system_message: llm.ChatMessage | None = None
     for m in chat_ctx.messages:
         if m.role == "system":
             latest_system_message = m
             continue
-
-        if len(combined_messages) == 0 or m.role != combined_messages[-1].role:
-            combined_messages.append(llm.ChatMessage(m.role, content=""))
-            continue
-
-        last_message = combined_messages[-1]
-        if isinstance(last_message.content, str):
-            if isinstance(m.content, str):
-                last_message.content += " " + m.content
-            elif isinstance(m.content, list):
-                new_text = " ".join([c for c in m.content if isinstance(c, str)])
-                content: List[str | llm.ChatImage] = [
-                    last_message.content + " " + new_text
-                ]
-                content.extend([c for c in m.content if not isinstance(c, str)])
-                last_message.content = content
-        elif isinstance(last_message.content, list):
-            if isinstance(m.content, str):
-                old_text = " ".join(
-                    [c for c in last_message.content if isinstance(c, str)]
-                )
-                content: List[str | llm.ChatImage] = [old_text + " " + m.content]
-                content.extend(
-                    [c for c in last_message.content if not isinstance(c, str)]
-                )
-                last_message.content = content
-            elif isinstance(m.content, list):
-                new_text = " ".join([c for c in m.content if isinstance(c, str)])
-                old_text = " ".join(
-                    [c for c in last_message.content if isinstance(c, str)]
-                )
-                content: List[str | llm.ChatImage] = [old_text + " " + new_text]
-                content.extend(
-                    [c for c in last_message.content if not isinstance(c, str)]
-                )
-                content.extend([c for c in m.content if not isinstance(c, str)])
-                last_message.content = content
 
     latest_system_str = ""
     if latest_system_message:
@@ -263,7 +240,28 @@ def _collapse_message(chat_ctx: llm.ChatContext) -> Tuple[str, List[llm.ChatMess
             latest_system_str = " ".join(
                 [c for c in latest_system_message.content if isinstance(c, str)]
             )
-    return latest_system_str, combined_messages
+    return latest_system_str
+
+
+def _collapse_messages(
+    messages: List[anthropic.types.MessageParam],
+) -> List[anthropic.types.MessageParam]:
+    # Anthropic enforces alternating messages
+    combined_messages: list[anthropic.types.MessageParam] = []
+    for m in messages:
+        if len(combined_messages) == 0 or m["role"] != combined_messages[-1]["role"]:
+            combined_messages.append(m)
+            continue
+        last_message = combined_messages[-1]
+        if not isinstance(last_message["content"], list) or not isinstance(
+            m["content"], list
+        ):
+            logger.error("message content is not a list")
+            continue
+
+        last_message["content"].extend(m["content"])
+
+    return combined_messages
 
 
 def _build_anthropic_context(
@@ -273,55 +271,66 @@ def _build_anthropic_context(
 
 
 def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
-    assert msg.role == "user" or msg.role == "assistant"
-    a_msg: anthropic.types.MessageParam = {
-        "role": msg.role,
-        "content": [],
-    }
-    assert isinstance(a_msg["content"], list)
-    a_content = a_msg["content"]
+    if msg.role == "user" or msg.role == "assistant":
+        a_msg: anthropic.types.MessageParam = {
+            "role": msg.role,
+            "content": [],
+        }
+        assert isinstance(a_msg["content"], list)
+        a_content = a_msg["content"]
 
-    # add content if provided
-    if isinstance(msg.content, str):
-        a_msg["content"].append(
-            anthropic.types.TextBlock(
-                text=msg.content,
-                type="text",
-            )
-        )
-    elif isinstance(msg.content, list):
-        for cnt in msg.content:
-            if isinstance(cnt, str):
-                content: anthropic.types.TextBlock = anthropic.types.TextBlock(
-                    text=cnt,
+        # add content if provided
+        if isinstance(msg.content, str):
+            a_msg["content"].append(
+                anthropic.types.TextBlock(
+                    text=msg.content,
                     type="text",
                 )
-                a_content.append(content)
-            elif isinstance(cnt, llm.ChatImage):
-                a_content.append(_build_anthropic_image_content(cnt, cache_key))
-
-    # make sure to provide when function has been called inside the context
-    # (+ raw_arguments)
-    if msg.tool_calls is not None:
-        tool_calls: List[anthropic.types.ToolUseBlockParam] = []
-        tool_results: List[anthropic.types.ToolResultBlockParam] = []
-        for fnc in msg.tool_calls:
-            tool_calls.append(
-                {
-                    "id": fnc.tool_call_id,
-                    "type": "tool_use",
-                    "input": fnc.arguments,
-                    "name": fnc.function_info.name,
-                }
             )
-            tool_results.append(
-                {
-                    "tool_use_id": fnc.tool_call_id,
-                    "type": "tool_result",
-                }
-            )
+        elif isinstance(msg.content, list):
+            for cnt in msg.content:
+                if isinstance(cnt, str):
+                    content: anthropic.types.TextBlock = anthropic.types.TextBlock(
+                        text=cnt,
+                        type="text",
+                    )
+                    a_content.append(content)
+                elif isinstance(cnt, llm.ChatImage):
+                    a_content.append(_build_anthropic_image_content(cnt, cache_key))
+        return a_msg
+    elif msg.role == "tool":
+        a_msg: anthropic.types.MessageParam = {
+            "role": "assistant",
+            "content": [],
+        }
+        assert isinstance(a_msg["content"], list)
+        # make sure to provide when function has been called inside the context
+        # (+ raw_arguments)
+        if msg.tool_calls is not None:
+            for fnc in msg.tool_calls:
+                a_msg["content"].append(
+                    {
+                        "id": fnc.tool_call_id,
+                        "type": "tool_use",
+                        "input": fnc.arguments,
+                        "name": fnc.function_info.name,
+                    }
+                )
+                if isinstance(msg.content, str):
+                    a_msg["content"].append(
+                        {
+                            "tool_use_id": fnc.tool_call_id,
+                            "type": "tool_result",
+                            "content": msg.content,
+                        }
+                    )
+                else:
+                    logger.warning(
+                        "tool result content is not a string, this is not supported by anthropic"
+                    )
+        return a_msg
 
-    return a_msg
+    raise ValueError(f"unknown role {msg.role}")
 
 
 def _build_anthropic_image_content(
