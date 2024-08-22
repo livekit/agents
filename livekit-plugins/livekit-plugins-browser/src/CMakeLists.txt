@@ -89,8 +89,12 @@ if(OS_MAC)
     cmake_policy(SET CMP0068 NEW)
   endif()
 
-  # output path for the main app bundle.
-  set(LKCEF_APP "${CEF_TARGET_OUT_DIR}/lkcef_app.app")
+  add_executable(lkcef_app MACOSX_BUNDLE dummy.cpp) # dummy app
+  set_target_properties(lkcef_app PROPERTIES
+          MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/resources/lkcefapp-Info.plist"
+          OUTPUT_NAME "lkcef_app"
+  )
+
 
   # library target.
   add_library(lkcef STATIC ${LKCEF_SRCS})
@@ -106,10 +110,7 @@ if(OS_MAC)
     COMMAND
       ${CMAKE_COMMAND} -E copy_directory
       "${CEF_BINARY_DIR}/Chromium Embedded Framework.framework"
-      "${LKCEF_APP}/Contents/Frameworks/Chromium Embedded Framework.framework"
-    # Copy the library into the main app bindle. COMMAND ${CMAKE_COMMAND} -E
-    # copy_if_different "${CEF_TARGET_OUT_DIR}/liblkcef.dylib"
-    # "${LKCEF_APP}/Contents/MacOS/liblkcef.dylib"
+      "$<TARGET_BUNDLE_DIR:lkcef_app>/Contents/Frameworks/Chromium Embedded Framework.framework"
     VERBATIM)
 
   # Create the multiple Helper app bundle targets.
@@ -143,6 +144,8 @@ if(OS_MAC)
     add_dependencies(${_helper_target} libcef_dll_wrapper)
     target_link_libraries(${_helper_target} libcef_dll_wrapper
                           ${CEF_STANDARD_LIBS})
+
+
     set_target_properties(
       ${_helper_target}
       PROPERTIES MACOSX_BUNDLE_INFO_PLIST ${_helper_info_plist}
@@ -158,7 +161,7 @@ if(OS_MAC)
       COMMAND
         ${CMAKE_COMMAND} -E copy_directory
         "${CEF_TARGET_OUT_DIR}/${_helper_output_name}.app"
-        "${LKCEF_APP}/Contents/Frameworks/${_helper_output_name}.app"
+        "$<TARGET_BUNDLE_DIR:lkcef_app>/Contents/Frameworks/${_helper_output_name}.app"
       VERBATIM)
   endforeach()
 endif()

@@ -1,6 +1,6 @@
+import importlib.resources
 import multiprocessing.shared_memory as mp_shm
 import socket
-import sys
 import threading
 
 from livekit.agents import ipc, utils
@@ -147,10 +147,6 @@ def _manager_thread(duplex: utils.aio.duplex_unix._Duplex, browser_app):
 
 
 def main(mp_cch: socket.socket):
-    sys.path.insert(
-        0,
-        "/Users/theomonnom/livekit/agents/livekit-plugins/livekit-plugins-browser/cef/src/Debug",
-    )
     import lkcef_python as lkcef
 
     duplex = utils.aio.duplex_unix._Duplex.open(mp_cch)
@@ -172,12 +168,26 @@ def main(mp_cch: socket.socket):
     opts.root_cache_path = init_req.root_cache_path
     opts.initialized_callback = _context_initialized
 
-    opts.framework_path = "/Users/theomonnom/livekit/agents/livekit-plugins/livekit-plugins-browser/cef/src/Debug/lkcef_app.app/Contents/Frameworks/Chromium Embedded Framework.framework"
-    opts.main_bundle_path = "/Users/theomonnom/livekit/agents/livekit-plugins/livekit-plugins-browser/cef/src/Debug/lkcef_app.app"
-    opts.subprocess_path = "/Users/theomonnom/livekit/agents/livekit-plugins/livekit-plugins-browser/cef/src/Debug/lkcef_app.app/Contents/Frameworks/lkcef Helper.app/Contents/MacOS/lkcef Helper"
+    res = (
+        importlib.resources.files("livekit.plugins.browser.resources") / "lkcef_app.app"
+    )
+    with importlib.resources.as_file(res) as path:
+        opts.framework_path = str(
+            path / "Contents" / "Frameworks" / "Chromium Embedded Framework.framework"
+        )
+        opts.main_bundle_path = str(path)
+        opts.subprocess_path = str(
+            path
+            / "Contents"
+            / "Frameworks"
+            / "lkcef Helper.app"
+            / "Contents"
+            / "MacOS"
+            / "lkcef Helper"
+        )
 
-    app = lkcef.BrowserApp(opts)
-    man_t = threading.Thread(target=_manager_thread, args=(duplex, app))
-    man_t.start()
+        app = lkcef.BrowserApp(opts)
+        man_t = threading.Thread(target=_manager_thread, args=(duplex, app))
+        man_t.start()
 
-    app.run()  # run indefinitely
+        app.run()  # run indefinitely

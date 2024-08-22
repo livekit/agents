@@ -52,6 +52,7 @@ jobs:
           echo "exitcode=$?" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Add changes
         if: ${{ steps.release_mode.outputs.exitcode == '0' }}
         uses: EndBug/add-and-commit@v9
@@ -98,19 +99,11 @@ jobs:
         with:
           python-version: "3.9"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install build
-
       - name: Build package
-        run: python -m build
-
-      - name: Store the distribution packages
-        uses: actions/upload-artifact@v3
+        uses: ./.github/workflows/build-package.yml
         with:
-          name: python-package-distributions
-          path: "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}/dist/"
+          package: ${{ matrix.package.name }}
+          artifact_name: python-package-distributions
 
   publish:
     needs:
