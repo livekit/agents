@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.8.7
+
+### Patch Changes
+
+- voiceassistant: fix llm not having the full chat context on bad interruption timing - [#640](https://github.com/livekit/agents/pull/640) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.8.6
 
 ### Patch Changes
