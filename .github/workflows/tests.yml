@@ -75,7 +75,8 @@ jobs:
                       ./livekit-plugins/livekit-plugins-silero \
                       ./livekit-plugins/livekit-plugins-elevenlabs \
                       ./livekit-plugins/livekit-plugins-cartesia \
-                      ./livekit-plugins/livekit-plugins-azure
+                      ./livekit-plugins/livekit-plugins-azure \
+                      ./livekit-plugins/livekit-plugins-anthropic
 
       - name: Run tests
         shell: bash
