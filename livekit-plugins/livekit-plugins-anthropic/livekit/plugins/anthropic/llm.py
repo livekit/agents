@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Awaitable, MutableSet
+from typing import Any, Awaitable, MutableSet, List, Dict, Tuple
 
 import httpx
 from livekit.agents import llm
@@ -72,7 +72,7 @@ class LLM(llm.LLM):
     ) -> "LLMStream":
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
-            fncs_desc = []
+            fncs_desc: list[dict[str, Any]] = []
             for fnc in fnc_ctx.ai_functions.values():
                 fncs_desc.append(llm._oai_api.build_oai_function_description(fnc))
 
@@ -82,7 +82,7 @@ class LLM(llm.LLM):
                 opts["parallel_tool_calls"] = parallel_tool_calls
 
         messages = _build_oai_context(chat_ctx, id(self))
-        cmp = self._client.messages.create(
+        stream = await self._client.messages.create(
             messages=messages,
             model=self._opts.model,
             n=n,
@@ -98,13 +98,13 @@ class LLMStream(llm.LLMStream):
     def __init__(
         self,
         *,
-        oai_stream: Awaitable[anthropic.AsyncStream[ChatCompletionChunk]],
+        anthropic_stream: Awaitable[anthropic.AsyncStream[anthropic.types.message.]],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
     ) -> None:
         super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
-        self._awaitable_oai_stream = oai_stream
-        self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
+        self._awaitable_anthropic_stream = anthropic_stream
+        self._anthropic_stream: anthropic.AsyncStream[ChatCompletionChunk] | None = None
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
@@ -198,7 +198,46 @@ class LLMStream(llm.LLMStream):
         )
 
 
-def _build_oai_context(
-    chat_ctx: llm.ChatContext, cache_key: Any
-) -> list[ChatCompletionMessageParam]:
-    return [build_oai_message(msg, cache_key) for msg in chat_ctx.messages]  # type: ignore
+def _collapse_message(chat_ctx: llm.ChatContext, cache_key: Any) -> Tuple[llm.ChatMessage, List[llm.ChatMessage]]:
+    """
+    Returns:
+        Tuple[llm.ChatMessage, List[[llm.ChatMessage]]]: returns the latest system message and a list of combined messages (because anthropic enforces alternating roles) 
+    """
+    # Anthropic enforces alternating messages
+    combined_messages: list[llm.ChatMessage] = []
+    latest_system_message: llm.ChatMessage = llm.ChatMessage("system", content="")
+    for m in chat_ctx.messages:
+        if m.role == "system":
+            latest_system_message = m
+            continue
+
+        if len(combined_messages) == 0 or  m.role != combined_messages[-1].role:
+            combined_messages.append(llm.ChatMessage(m.role, content=""))
+            continue
+
+        last_message = combined_messages[-1]
+        if isinstance(last_message.content, str):
+            if isinstance(m.content, str):
+                last_message.content += " " + m.content
+            elif isinstance(m.content, list):
+                new_text = " ".join([c for c in m.content if isinstance(c, str)])
+                content: List[str | llm.ChatImage] = [last_message.content + " " + new_text]
+                content.extend([c for c in m.content if not isinstance(c, str)])
+                last_message.content = content
+        elif isinstance(last_message.content, list):
+            if isinstance(m.content, str):
+                old_text = " ".join([c for c in last_message.content if isinstance(c, str)])
+                content: List[str | llm.ChatImage] = [old_text + " " + m.content]
+                content.extend([c for c in last_message.content if not isinstance(c, str)])
+                last_message.content = content
+            elif isinstance(m.content, list):
+                new_text = " ".join([c for c in m.content if isinstance(c, str)])
+                old_text = " ".join([c for c in last_message.content if isinstance(c, str)])
+                content: List[str | llm.ChatImage] = [old_text + " " + new_text]
+                content.extend([c for c in last_message.content if not isinstance(c, str)])
+                content.extend([c for c in m.content if not isinstance(c, str)])
+                last_message.content = content
+
+    return latest_system_message, combined_messages
+
+        
