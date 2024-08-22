@@ -14,7 +14,7 @@
 
 BOOL g_handling_send_event = false;
 
-@interface NSApplication (AgentsApplication)
+@interface NSApplication (AgentsApplication) <CefAppProtocol>
 
 - (BOOL)isHandlingSendEvent;
 - (void)setHandlingSendEvent:(BOOL)handlingSendEvent;
@@ -65,26 +65,14 @@ int RunAgentApp(CefRefPtr<AgentApp> app) {
   CefMainArgs main_args(0, nullptr);
 
   @autoreleasepool {
-    //[NSApplication sharedApplication];
+    [NSApplication sharedApplication];
 
     // If there was an invocation to NSApp prior to this method, then the NSApp
     // will not be a AgentsApplication, but will instead be an NSApplication.
     // This is undesirable and we must enforce that this doesn't happen.
-    //CHECK([NSApp isKindOfClass:[NSApplication class]]);
+    CHECK([NSApp isKindOfClass:[NSApplication class]]);
 
-    std::string framework_path =
-        "/Users/theomonnom/livekit/agents/livekit-plugins/"
-        "livekit-plugins-browser/cef/src/Debug/lkcef_app.app/Contents/"
-        "Frameworks/Chromium Embedded Framework.framework";
-    std::string main_bundle_path =
-        "/Users/theomonnom/livekit/agents/livekit-plugins/"
-        "livekit-plugins-browser/cef/src/Debug/lkcef_app.app";
-    std::string subprocess_path =
-        "/Users/theomonnom/livekit/agents/livekit-plugins/"
-        "livekit-plugins-browser/cef/src/Debug/lkcef_app.app/Contents/"
-        "Frameworks/lkcef Helper.app/Contents/MacOS/lkcef Helper";
-
-    std::string framework_lib = framework_path + "/Chromium Embedded Framework";
+    std::string framework_lib = app->GetFrameworkPath() + "/Chromium Embedded Framework";
     if (!cef_load_library(framework_lib.c_str())) {
       std::cerr << "lkcef: Failed to load CEF library" << std::endl;
       return 1;
@@ -93,10 +81,11 @@ int RunAgentApp(CefRefPtr<AgentApp> app) {
     CefSettings settings{};
     settings.chrome_runtime = true;
     settings.external_message_pump = app->IsDevMode();
-    // settings.remote_debugging_port = 8088;
-    CefString(&settings.framework_dir_path).FromString(framework_path);
-    CefString(&settings.main_bundle_path).FromString(main_bundle_path);
-    CefString(&settings.browser_subprocess_path).FromString(subprocess_path);
+    settings.remote_debugging_port = app->GetRemoteDebuggingPort();
+    CefString(&settings.root_cache_path).FromString(app->GetRootCachePath());
+    CefString(&settings.framework_dir_path).FromString(app->GetFrameworkPath());
+    CefString(&settings.main_bundle_path).FromString(app->GetMainBundlePath());
+    CefString(&settings.browser_subprocess_path).FromString(app->GetSubprocessPath());
 
     settings.no_sandbox = true;  // No sandbox for MacOS, for livekit-agents,
                                  // we're only going to support Linux
@@ -111,9 +100,7 @@ int RunAgentApp(CefRefPtr<AgentApp> app) {
       return 1;
     }
 
-
     app->Run();
-
     CefShutdown();
 
     cef_unload_library();

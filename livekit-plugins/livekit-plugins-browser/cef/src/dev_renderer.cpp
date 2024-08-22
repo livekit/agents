@@ -238,7 +238,8 @@ static void glfw_error_callback(int error, const char* description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
 
-DevRenderer::DevRenderer() {}
+DevRenderer::DevRenderer(CefRefPtr<BrowserStore> browser_store)
+    : browser_store_(browser_store) {}
 
 void DevRenderer::OnTitleChange(CefRefPtr<CefBrowser> browser,
                                 const CefString& title) {
@@ -288,7 +289,6 @@ void DevRenderer::OnPaint(CefRefPtr<CefBrowser> browser,
   CEF_REQUIRE_UI_THREAD();
 
   if (type != CefRenderHandler::PaintElementType::PET_VIEW) {
-    std::cout << "Ignoring PET_POPUP" << std::endl;
     return;  // Ignore PET_POPUP for now, bc I'm lazy
   }
 
@@ -380,7 +380,7 @@ void DevRenderer::Run() {
   ImGui_ImplGlfw_InitForOpenGL(window_, true);
   ImGui_ImplOpenGL3_Init(glsl_version);
 
-  ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+  ImVec4 clear_color = ImVec4(0.03f, 0.03f, 0.03f, 1.0f);
   while (!glfwWindowShouldClose(window_)) {
     glfwPollEvents();
 
@@ -389,6 +389,26 @@ void DevRenderer::Run() {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+
+    // Flags used for the "invisible" dockspace frame
+    ImGuiWindowFlags windowFlags =
+        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground;
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    ImGui::SetNextWindowViewport(viewport->ID);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("Editor", nullptr, windowFlags);
+    ImGui::PopStyleVar(3);
+    ImGui::DockSpace(ImGui::GetID("EditorDockSpace"), ImVec2(),
+                     ImGuiDockNodeFlags_PassthruCentralNode);
 
     // Focused browser input states
     BrowserData* focused_browser = nullptr;
@@ -401,21 +421,45 @@ void DevRenderer::Run() {
                               : data.title) +
           "###Browser" + std::to_string(identifier);
 
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
       if (ImGui::Begin(name.c_str())) {
+        ImGui::BeginDisabled(!data.browser->CanGoBack());
+        if (ImGui::ArrowButton("##BrowserBack", ImGuiDir_Left)) {
+          data.browser->GoBack();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+
+        ImGui::BeginDisabled(!data.browser->CanGoForward());
+        if (ImGui::ArrowButton("##BrowserForward", ImGuiDir_Right)) {
+          data.browser->GoForward();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+
+        if (ImGui::InputText("##BrowserURL", &data.url,
+                             ImGuiInputTextFlags_EnterReturnsTrue)) {
+          data.browser->GetMainFrame()->LoadURL(data.url);
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Show DevTools")) {
+          CefWindowInfo windowInfo{};
+          CefBrowserSettings settings{};
+
+          data.browser->GetHost()->ShowDevTools(
+              windowInfo, DevToolsHandler::GetInstance(), settings, CefPoint());
+        }
+
         ImVec2 size = ImGui::GetContentRegionAvail();
 
         // Resize the browser view if needed
         if (size.x > 0 && size.y > 0 &&
             (data.view_width != static_cast<int>(size.x) ||
              data.view_height != static_cast<int>(size.y))) {
-          AgentHandler::GetInstance()
-              ->GetBrowserHandle(identifier)
+          browser_store_->GetBrowserHandle(identifier)
               ->SetSize(static_cast<int>(size.x), static_cast<int>(size.y));
-        }
-
-        if (ImGui::InputText("URL", &data.url,
-                             ImGuiInputTextFlags_EnterReturnsTrue)) {
-          data.browser->GetMainFrame()->LoadURL(data.url);
         }
 
         ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
@@ -433,6 +477,7 @@ void DevRenderer::Run() {
                      ImVec2((float)data.view_width, (float)data.view_height));
       }
       ImGui::End();
+      ImGui::PopStyleVar();
     }
 
     GLEQevent event;
@@ -522,6 +567,7 @@ void DevRenderer::Run() {
       gleqFreeEvent(&event);
     }
 
+    ImGui::End();
     ImGui::Render();
     int display_w, display_h;
     glfwGetFramebufferSize(window_, &display_w, &display_h);

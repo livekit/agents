@@ -3,28 +3,31 @@
 #include <iostream>
 
 #include "include/base/cef_callback.h"
-#include "include/cef_app.h"
 #include "include/cef_parser.h"
 #include "include/views/cef_browser_view.h"
-#include "include/views/cef_window.h"
 #include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
 
-namespace {
+DevToolsHandler* g_dev_instance = nullptr;
 
-// Returns a data: URI with the specified contents.
-std::string GetDataURI(const std::string& data, const std::string& mime_type) {
-  return "data:" + mime_type + ";base64," +
-         CefURIEncode(CefBase64Encode(data.data(), data.size()), false)
-             .ToString();
+DevToolsHandler::DevToolsHandler() {
+  g_dev_instance = this;
 }
 
-}  // namespace
+DevToolsHandler::~DevToolsHandler() {
+  g_dev_instance = nullptr;
+}
+
+DevToolsHandler* DevToolsHandler::GetInstance() {
+  return g_dev_instance;
+}
 
 AgentHandler* g_instance = nullptr;
 
-AgentHandler::AgentHandler(CefRefPtr<DevRenderer> dev_renderer)
-    : dev_renderer_(std::move(dev_renderer)) {
+AgentHandler::AgentHandler(CefRefPtr<BrowserStore> browser_store,
+                           CefRefPtr<DevRenderer> dev_renderer)
+    : browser_store_(std::move(browser_store)),
+      dev_renderer_(std::move(dev_renderer)) {
   g_instance = this;
 }
 
@@ -49,6 +52,14 @@ void AgentHandler::OnPaint(CefRefPtr<CefBrowser> browser,
                            const void* buffer,
                            int width,
                            int height) {
+  CEF_REQUIRE_UI_THREAD();
+
+  int identifier = browser->GetIdentifier();
+  CefRefPtr<BrowserHandle> handle =
+      browser_store_->browser_handles_[identifier];
+  if (handle->paint_callback_)
+    handle->paint_callback_(dirtyRects, buffer, width, height);
+
   if (dev_renderer_)
     dev_renderer_->OnPaint(browser, type, dirtyRects, buffer, width, height);
 }
@@ -57,7 +68,8 @@ void AgentHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
   CEF_REQUIRE_UI_THREAD();
 
   int identifier = browser->GetIdentifier();
-  CefRefPtr<BrowserHandle>& handle = browser_handles_[identifier];
+  CefRefPtr<BrowserHandle>& handle =
+      browser_store_->browser_handles_[identifier];
   rect.Set(0, 0, handle->GetWidth(), handle->GetHeight());
 };
 
@@ -65,7 +77,7 @@ void AgentHandler::OnAudioStreamPacket(CefRefPtr<CefBrowser> browser,
                                        const float** data,
                                        int frames,
                                        int64_t pts) {
-  std::cout << "OnAudioStreamPacket" << std::endl;
+  // std::cout << "OnAudioStreamPacket" << std::endl;
 }
 
 void AgentHandler::OnAudioStreamStarted(CefRefPtr<CefBrowser> browser,
@@ -77,19 +89,18 @@ void AgentHandler::OnAudioStreamStopped(CefRefPtr<CefBrowser> browser) {}
 void AgentHandler::OnAudioStreamError(CefRefPtr<CefBrowser> browser,
                                       const CefString& message) {}
 
-
 bool AgentHandler::OnBeforePopup(CefRefPtr<CefBrowser> browser,
-                   CefRefPtr<CefFrame> frame,
-                   const CefString& target_url,
-                   const CefString& target_frame_name,
-                   WindowOpenDisposition target_disposition,
-                   bool user_gesture,
-                   const CefPopupFeatures& popupFeatures,
-                   CefWindowInfo& windowInfo,
-                   CefRefPtr<CefClient>& client,
-                   CefBrowserSettings& settings,
-                   CefRefPtr<CefDictionaryValue>& extra_info,
-                   bool* no_javascript_access) {
+                                 CefRefPtr<CefFrame> frame,
+                                 const CefString& target_url,
+                                 const CefString& target_frame_name,
+                                 WindowOpenDisposition target_disposition,
+                                 bool user_gesture,
+                                 const CefPopupFeatures& popupFeatures,
+                                 CefWindowInfo& windowInfo,
+                                 CefRefPtr<CefClient>& client,
+                                 CefBrowserSettings& settings,
+                                 CefRefPtr<CefDictionaryValue>& extra_info,
+                                 bool* no_javascript_access) {
   browser->GetMainFrame()->LoadURL(target_url);
   return true;
 }
@@ -97,15 +108,19 @@ bool AgentHandler::OnBeforePopup(CefRefPtr<CefBrowser> browser,
 void AgentHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
+  if (browser->IsPopup()) {
+    return;
+  }
+
   int identifier = browser->GetIdentifier();
-  CefRefPtr<BrowserHandle> handle = pending_handles_.front();
-  pending_handles_.pop_front();
+  CefRefPtr<BrowserHandle> handle = browser_store_->pending_handles_.front();
+  browser_store_->pending_handles_.pop_front();
 
   handle->browser_ = browser;
+  browser_store_->browser_handles_[identifier] = handle;
+
   if (handle->created_callback_)
     handle->created_callback_();
-
-  browser_handles_[identifier] = handle;
 
   if (dev_renderer_)
     dev_renderer_->OnAfterCreated(browser);
@@ -113,6 +128,13 @@ void AgentHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
 
 bool AgentHandler::DoClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
+  int identifier = browser->GetIdentifier();
+  CefRefPtr<BrowserHandle> handle =
+      browser_store_->browser_handles_[identifier];
+  browser_store_->browser_handles_.erase(identifier);
+
+  if (handle->close_callback_)
+    handle->close_callback_();
 
   return false;
 }
@@ -135,34 +157,6 @@ void AgentHandler::OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
                                         canGoForward);
 }
 
-void AgentHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
-                               CefRefPtr<CefFrame> frame,
-                               ErrorCode errorCode,
-                               const CefString& errorText,
-                               const CefString& failedUrl) {
-  CEF_REQUIRE_UI_THREAD();
-
-  // Allow Chrome to show the error page.
-  if (IsChromeRuntimeEnabled()) {
-    return;
-  }
-
-  // Don't display an error for downloaded files.
-  if (errorCode == ERR_ABORTED) {
-    return;
-  }
-
-  // Display a load error message using a data: URI.
-  std::stringstream ss;
-  ss << "<html><body bgcolor=\"white\">"
-        "<h2>Failed to load URL "
-     << std::string(failedUrl) << " with error " << std::string(errorText)
-     << " (" << errorCode << ").</h2></body></html>";
-
-  frame->LoadURL(GetDataURI(ss.str(), "text/html"));
-}
-
-/*
 void AgentHandler::CloseAllBrowsers(bool force_close) {
   if (!CefCurrentlyOn(TID_UI)) {
     // Execute on the UI thread.
@@ -171,23 +165,13 @@ void AgentHandler::CloseAllBrowsers(bool force_close) {
     return;
   }
 
-  if (browser_list_.empty()) {
+  if (browser_store_->browser_handles_.empty()) {
     return;
   }
 
-  BrowserList::const_iterator it = browser_list_.begin();
-  for (; it != browser_list_.end(); ++it) {
-    (*it)->GetHost()->CloseBrowser(force_close);
+  for (const auto& pair : browser_store_->browser_handles_) {
+    pair.second->browser_->GetHost()->CloseBrowser(force_close);
   }
-}
- */
-
-bool AgentHandler::IsChromeRuntimeEnabled() {
-  static bool enabled = []() {
-    return CefCommandLine::GetGlobalCommandLine()->HasSwitch(
-        "enable-chrome-runtime");
-  }();
-  return enabled;
 }
 
 #if !defined(OS_MAC)

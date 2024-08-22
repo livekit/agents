@@ -4,35 +4,19 @@
 #include <list>
 
 #include "dev_renderer.hpp"
+#include "browser_handle.hpp"
 #include "include/cef_client.h"
 #include "include/wrapper/cef_helpers.h"
 
-class BrowserHandle : public CefBaseRefCounted {
+class DevToolsHandler : public CefClient {
  public:
-  BrowserHandle(std::function<void()> created_callback, int width, int height)
-      : created_callback_(std::move(created_callback)),
-        width_(width),
-        height_(height) {}
+  DevToolsHandler();
+  ~DevToolsHandler();
 
-  CefRefPtr<CefBrowser> browser_ = nullptr;
-  std::function<void()> created_callback_ = nullptr;
-
-  void SetSize(int width, int height) {
-    width_ = width;
-    height_ = height;
-
-    if (browser_)
-      browser_->GetHost()->WasResized();
-  }
-
-  int GetWidth() const { return width_; }
-  int GetHeight() const { return height_; }
+  static DevToolsHandler* GetInstance();
 
  private:
-  int width_ = 0;
-  int height_ = 0;
-
-  IMPLEMENT_REFCOUNTING(BrowserHandle);
+  IMPLEMENT_REFCOUNTING(DevToolsHandler);
 };
 
 class AgentHandler : public CefClient,
@@ -42,10 +26,10 @@ class AgentHandler : public CefClient,
                      public CefLifeSpanHandler,
                      public CefLoadHandler {
  public:
-  AgentHandler(CefRefPtr<DevRenderer> dev_renderer);
+  AgentHandler(CefRefPtr<BrowserStore> browser_store, CefRefPtr<DevRenderer> dev_renderer);
   ~AgentHandler();
 
-  static AgentHandler *GetInstance();
+  static AgentHandler* GetInstance();
 
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
@@ -85,17 +69,17 @@ class AgentHandler : public CefClient,
   // CefLifeSpanHandler methods
 
   bool OnBeforePopup(CefRefPtr<CefBrowser> browser,
-                             CefRefPtr<CefFrame> frame,
-                             const CefString& target_url,
-                             const CefString& target_frame_name,
-                             WindowOpenDisposition target_disposition,
-                             bool user_gesture,
-                             const CefPopupFeatures& popupFeatures,
-                             CefWindowInfo& windowInfo,
-                             CefRefPtr<CefClient>& client,
-                             CefBrowserSettings& settings,
-                             CefRefPtr<CefDictionaryValue>& extra_info,
-                             bool* no_javascript_access) override;
+                     CefRefPtr<CefFrame> frame,
+                     const CefString& target_url,
+                     const CefString& target_frame_name,
+                     WindowOpenDisposition target_disposition,
+                     bool user_gesture,
+                     const CefPopupFeatures& popupFeatures,
+                     CefWindowInfo& windowInfo,
+                     CefRefPtr<CefClient>& client,
+                     CefBrowserSettings& settings,
+                     CefRefPtr<CefDictionaryValue>& extra_info,
+                     bool* no_javascript_access) override;
 
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
   bool DoClose(CefRefPtr<CefBrowser> browser) override;
@@ -108,35 +92,10 @@ class AgentHandler : public CefClient,
                             bool canGoBack,
                             bool canGoForward) override;
 
-  void OnLoadError(CefRefPtr<CefBrowser> browser,
-                   CefRefPtr<CefFrame> frame,
-                   ErrorCode errorCode,
-                   const CefString& errorText,
-                   const CefString& failedUrl) override;
-
-  // void CloseAllBrowsers(bool force_close);
-
-  static bool IsChromeRuntimeEnabled();
-
-  void AddPendingHandle(CefRefPtr<BrowserHandle> handle) {
-    CEF_REQUIRE_UI_THREAD();
-    pending_handles_.push_back(handle);
-  }
-
-  void RemovePendingHandle(CefRefPtr<BrowserHandle> handle) {
-    CEF_REQUIRE_UI_THREAD();
-    pending_handles_.remove(handle);
-  }
-
-  CefRefPtr<BrowserHandle> GetBrowserHandle(int identifier) {
-      CEF_REQUIRE_UI_THREAD();
-      return browser_handles_[identifier];
-  }
+  void CloseAllBrowsers(bool force_close);
 
  private:
-  std::unordered_map<int, CefRefPtr<BrowserHandle>> browser_handles_;
-  std::list<CefRefPtr<BrowserHandle>> pending_handles_;
-
+  CefRefPtr<BrowserStore> browser_store_;
   CefRefPtr<DevRenderer> dev_renderer_;
 
   IMPLEMENT_REFCOUNTING(AgentHandler);

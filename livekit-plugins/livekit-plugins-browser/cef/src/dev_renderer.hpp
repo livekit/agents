@@ -2,6 +2,7 @@
 #define LKCEF_DEV_RENDERER_HPP
 
 #include "include/cef_app.h"
+#include "browser_handle.hpp"
 
 #define GL_SILENCE_DEPRECATION
 #include <GLFW/glfw3.h>  // Will drag system OpenGL headers
@@ -13,7 +14,7 @@
 
 class DevRenderer: public CefBaseRefCounted {
  public:
-  DevRenderer();
+  DevRenderer(CefRefPtr<BrowserStore> browser_store);
 
   void Run();
   void Close();
@@ -53,6 +54,8 @@ class DevRenderer: public CefBaseRefCounted {
 
   GLFWwindow* window_ = nullptr;
   std::unordered_map<int, BrowserData> browser_data_;
+
+  CefRefPtr<BrowserStore> browser_store_;
 
   IMPLEMENT_REFCOUNTING(DevRenderer);
 };

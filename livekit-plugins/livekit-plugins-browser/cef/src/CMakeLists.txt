@@ -25,7 +25,7 @@ target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/
 target_link_libraries(imgui PRIVATE glfw)
 
 
-set(LKCEF_SRCS app.cpp app.hpp handler.hpp handler.cpp dev_renderer.hpp dev_renderer.cpp gleq.h)
+set(LKCEF_SRCS app.cpp app.hpp handler.hpp handler.cpp dev_renderer.hpp dev_renderer.cpp gleq.h browser_handle.hpp browser_handle.cpp)
 set(LKCEF_SRCS_LINUX main_linux.cpp)
 set(LKCEF_SRCS_MAC app_mac.mm)
 set(LKCEF_SRCS_WINDOWS main_win.cpp )
