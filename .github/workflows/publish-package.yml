@@ -10,6 +10,11 @@ name: Release and publish
 
 on:
   workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Comma-separated list of packages to build manually'
+        required: false
+        default: ''
   push:
     branches:
       - main
@@ -52,6 +57,7 @@ jobs:
           echo "exitcode=$?" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Add changes
         if: ${{ steps.release_mode.outputs.exitcode == '0' }}
         uses: EndBug/add-and-commit@v9
@@ -75,10 +81,10 @@ jobs:
   build:
     needs:
       - bump
-    if: ${{ fromJson(needs.bump.outputs.packages)[0] != null }}
+    if: ${{ fromJson(needs.bump.outputs.packages)[0] != null || github.event.inputs.packages != '' }}
     strategy:
       matrix:
-        package: ${{ fromJson(needs.bump.outputs.packages) }}
+        package: ${{ fromJson(needs.bump.outputs.packages || '[]') + fromJson(github.event.inputs.packages && format('[{0}]', join(github.event.inputs.packages, ',')) || '[]') }}
     defaults:
       run:
         working-directory: "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}"
@@ -97,6 +103,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.9"
+
+      - name: Install cibuildwheel
+        run: python -m pip install cibuildwheel==2.20.0
 
       - name: Install dependencies
         run: |
