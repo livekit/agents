@@ -635,7 +635,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             )
 
     async def _handle_termination(self, msg: agent.JobTermination):
-        proc = self._proc_pool.get(msg.job_id)
+        proc = self._proc_pool.get_by_job_id(msg.job_id)
         if not proc:
             # safe to ignore
             return
