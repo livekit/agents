@@ -486,7 +486,11 @@ class Worker(utils.EventEmitter[EventTypes]):
                 elif which == "assignment":
                     self._handle_assignment(msg.assignment)
                 elif which == "termination":
-                    await self._handle_termination(msg.termination)
+                    user_task = self._loop.create_task(
+                        self._handle_termination(msg.termination), name="termination"
+                    )
+                    self._tasks.add(user_task)
+                    user_task.add_done_callback(self._tasks.discard)
 
         tasks = [
             asyncio.create_task(_load_task()),
