@@ -82,7 +82,7 @@ jobs:
       - name: Install cibuildwheel
         run: |
           python -m pip install --upgrade pip
-          pip install cibuildwheel
+          pip install cibuildwheel pybind11[global]
 
       - name: Build wheels
         run: cibuildwheel --output-dir dist
