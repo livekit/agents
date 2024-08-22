@@ -84,7 +84,7 @@ jobs:
     if: ${{ fromJson(needs.bump.outputs.packages)[0] != null || github.event.inputs.packages != '' }}
     strategy:
       matrix:
-        package: ${{ fromJson(needs.bump.outputs.packages || '[]') + fromJson(github.event.inputs.packages && format('[{0}]', join(github.event.inputs.packages, ',')) || '[]') }}
+        package: ${{ fromJson(needs.bump.outputs.packages || '[]') + (github.event.inputs.packages && fromJson(format('[{0}]', join(github.event.inputs.packages, ','))) || []) }}
     defaults:
       run:
         working-directory: "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}"
