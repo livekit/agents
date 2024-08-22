@@ -86,6 +86,9 @@ jobs:
 
       - name: Build wheels
         run: cibuildwheel --output-dir dist
+        env:
+          CIBW_BUILD_VERBOSITY: 3
+
 
       - name: Upload distribution package
         uses: actions/upload-artifact@v3
