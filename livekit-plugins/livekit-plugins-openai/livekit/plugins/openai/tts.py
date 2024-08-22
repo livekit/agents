@@ -119,23 +119,20 @@ class TTS(tts.TTS):
         return TTS(model=model, voice=voice, speed=speed, client=azure_client)
 
     def synthesize(self, text: str) -> "ChunkedStream":
-        try:
-            stream = self._client.audio.speech.with_streaming_response.create(
-                input=text,
-                model=self._opts.model,
-                voice=self._opts.voice,
-                response_format="mp3",
-                speed=self._opts.speed,
-            )
+        stream = self._client.audio.speech.with_streaming_response.create(
+            input=text,
+            model=self._opts.model,
+            voice=self._opts.voice,
+            response_format="mp3",
+            speed=self._opts.speed,
+        )
 
-            return ChunkedStream(
-                stream,
-                text,
-                self._opts,
-                timeout=self._timeout,
-            )
-        except openai.APITimeoutError as e:
-            raise TimeoutError from e
+        return ChunkedStream(
+            stream,
+            text,
+            self._opts,
+            timeout=self._timeout,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -156,11 +153,16 @@ class ChunkedStream(tts.ChunkedStream):
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
         decoder = utils.codecs.Mp3StreamDecoder()
-        async with self._oai_stream as stream:
-            async for data in stream.iter_bytes(4096):
-                for frame in decoder.decode_chunk(data):
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id, segment_id=segment_id, frame=frame
+        try:
+            async with self._oai_stream as stream:
+                async for data in stream.iter_bytes(4096):
+                    for frame in decoder.decode_chunk(data):
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
+                            )
                         )
-                    )
+        except openai.APITimeoutError as e:
+            raise TimeoutError from e
