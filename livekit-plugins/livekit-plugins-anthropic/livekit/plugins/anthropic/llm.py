@@ -133,7 +133,6 @@ class LLMStream(llm.LLMStream):
             self._anthropic_stream = await self._awaitable_anthropic_stream
 
         async for event in self._anthropic_stream:
-            e: anthropic.types.RawMessageStreamEvent = event
             if event.type == "message_start":
                 pass
             elif event.type == "message_delta":

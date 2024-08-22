@@ -14,6 +14,7 @@
 
 
 from .llm import LLM, LLMStream
+from .log import logger
 from .models import ChatModels
 from .version import __version__
 
@@ -21,6 +22,7 @@ __all__ = [
     "LLM",
     "LLMStream",
     "ChatModels",
+    "logger",
     "__version__",
 ]
 
