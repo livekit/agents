@@ -43,7 +43,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "claude-3-5-sonnet-20240620",
+        model: str | ChatModels = "claude-3-opus-20240229",
         api_key: str | None = None,
         base_url: str | None = None,
         user: str | None = None,
@@ -78,7 +78,7 @@ class LLM(llm.LLM):
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc: list[dict[str, Any]] = []
             for fnc in fnc_ctx.ai_functions.values():
-                fncs_desc.append(llm._oai_api.build_oai_function_description(fnc))
+                fncs_desc.append(_build_function_description(fnc))
 
             opts["tools"] = fncs_desc
 
@@ -96,6 +96,7 @@ class LLM(llm.LLM):
             temperature=temperature or anthropic.NOT_GIVEN,
             top_k=n or anthropic.NOT_GIVEN,
             stream=True,
+            **opts,
         )
 
         return LLMStream(anthropic_stream=stream, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
@@ -140,11 +141,13 @@ class LLMStream(llm.LLMStream):
             elif event.type == "message_stop":
                 pass
             elif event.type == "content_block_start":
+                print("NEIL content block start", event)
                 if event.content_block.type == "tool_use":
                     self._tool_call_id = event.content_block.id
                     self._fnc_raw_arguments = ""
                     self._fnc_name = event.content_block.name
             elif event.type == "content_block_delta":
+                print("NEIL content block delta", event)
                 delta = event.delta
                 if delta.type == "text_delta":
                     return llm.ChatChunk(
@@ -163,6 +166,7 @@ class LLMStream(llm.LLMStream):
                 if self._tool_call_id is not None and self._fnc_ctx:
                     assert self._fnc_name is not None
                     assert self._fnc_raw_arguments is not None
+                    print("NEIL content block stop", self._fnc_raw_arguments)
                     fnc_info = _create_ai_function_info(
                         self._fnc_ctx,
                         self._tool_call_id,
@@ -229,7 +233,12 @@ def _collapse_messages(
 def _build_anthropic_context(
     chat_ctx: List[llm.ChatMessage], cache_key: Any
 ) -> List[anthropic.types.MessageParam]:
-    return [_build_anthropic_message(msg, cache_key) for msg in chat_ctx.messages]  # type: ignore
+    result: List[anthropic.types.MessageParam] = []
+    for msg in chat_ctx:
+        a_msg = _build_anthropic_message(msg, cache_key)
+        if a_msg:
+            result.append(a_msg)
+    return result
 
 
 def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
@@ -292,7 +301,7 @@ def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
                     )
         return a_msg
 
-    raise ValueError(f"unknown role {msg.role}")
+    return None
 
 
 def _build_anthropic_image_content(
@@ -386,6 +395,56 @@ def _create_ai_function_info(
         function_info=fnc_info,
         arguments=sanitized_arguments,
     )
+
+
+def _build_function_description(
+    fnc_info: llm.function_context.FunctionInfo,
+) -> anthropic.types.ToolParam:
+    def build_schema_field(arg_info: llm.function_context.FunctionArgInfo):
+        def type2str(t: type) -> str:
+            if t is str:
+                return "string"
+            elif t in (int, float):
+                return "number"
+            elif t is bool:
+                return "boolean"
+
+            raise ValueError(f"unsupported type {t} for ai_property")
+
+        p: dict[str, Any] = {}
+
+        if arg_info.description:
+            p["description"] = arg_info.description
+
+        if get_origin(arg_info.type) is list:
+            inner_type = get_args(arg_info.type)[0]
+            p["type"] = "array"
+            p["items"] = {}
+            p["items"]["type"] = type2str(inner_type)
+
+            if arg_info.choices:
+                p["items"]["enum"] = arg_info.choices
+        else:
+            p["type"] = type2str(arg_info.type)
+            if arg_info.choices:
+                p["enum"] = arg_info.choices
+
+        return p
+
+    input_schema: dict[str, object] = {"type": "object"}
+    required_properties: list[str] = []
+
+    for arg_info in fnc_info.arguments.values():
+        if arg_info.default is inspect.Parameter.empty:
+            required_properties.append(arg_info.name)
+
+        input_schema[arg_info.name] = build_schema_field(arg_info)
+
+    return {
+        "name": fnc_info.name,
+        "description": fnc_info.description,
+        "input_schema": input_schema,
+    }
 
 
 def _sanitize_primitive(

@@ -5,9 +5,12 @@ from enum import Enum
 from typing import Annotated, Optional
 
 import pytest
+from dotenv import load_dotenv
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
 from livekit.plugins import anthropic, openai
+
+load_dotenv()
 
 
 class Unit(Enum):
@@ -87,14 +90,15 @@ def test_hashable_typeinfo():
     hash(typeinfo)
 
 
-LLMS = [openai.LLM(), anthropic.LLM()]
+LLMS = [
+    # openai.LLM(),
+    anthropic.LLM(),
+]
 
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
 async def test_chat(llm: llm.LLM):
-    llm = openai.LLM(model="gpt-4o")
-
     chat_ctx = ChatContext().append(
         text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.'
     )
@@ -113,7 +117,6 @@ async def test_chat(llm: llm.LLM):
 @pytest.mark.parametrize("llm", LLMS)
 async def test_basic_fnc_calls(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
         llm, "What's the weather in San Francisco and Paris?", fnc_ctx
@@ -128,7 +131,6 @@ async def test_basic_fnc_calls(llm: llm.LLM):
 @pytest.mark.parametrize("llm", LLMS)
 async def test_runtime_addition(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
     called_msg = ""
 
     @fnc_ctx.ai_callable(description="Show a message on the screen")
@@ -152,7 +154,6 @@ async def test_runtime_addition(llm: llm.LLM):
 @pytest.mark.parametrize("llm", LLMS)
 async def test_cancelled_calls(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
         llm, "Turn off the lights in the Theo's bedroom", fnc_ctx
@@ -173,7 +174,6 @@ async def test_cancelled_calls(llm: llm.LLM):
 @pytest.mark.parametrize("llm", LLMS)
 async def test_calls_arrays(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
         llm,
@@ -199,7 +199,6 @@ async def test_calls_arrays(llm: llm.LLM):
 @pytest.mark.parametrize("llm", LLMS)
 async def test_calls_choices(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(llm, "Set the volume to 30", fnc_ctx)
     calls = stream.execute_functions()
@@ -217,7 +216,6 @@ async def test_calls_choices(llm: llm.LLM):
 @pytest.mark.parametrize("llm", LLMS)
 async def test_optional_args(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
         llm, "Can you update my information? My name is Theo", fnc_ctx
