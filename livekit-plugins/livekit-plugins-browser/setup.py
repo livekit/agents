@@ -13,14 +13,14 @@
 # limitations under the License.
 
 import os
+import pathlib
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-import pathlib
 import setuptools
-from setuptools import Extension, setup
+from setuptools import Extension
 from setuptools.command.build_ext import build_ext
 
 here = pathlib.Path(__file__).parent.resolve()

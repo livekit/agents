@@ -1,7 +1,6 @@
-import multiprocessing.shared_memory as mp_shm
 import importlib.resources
+import multiprocessing.shared_memory as mp_shm
 import socket
-import sys
 import threading
 
 from livekit.agents import ipc, utils
