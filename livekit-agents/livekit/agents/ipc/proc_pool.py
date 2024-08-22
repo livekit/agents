@@ -48,7 +48,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     def processes(self) -> list[SupervisedProc]:
         return self._processes
 
-    def get(self, job_id: str) -> SupervisedProc | None:
+    def get_by_job_id(self, job_id: str) -> SupervisedProc | None:
         return next(
             (
                 x
