@@ -34,12 +34,7 @@ EventTypes = Literal[
     "function_calls_finished",
 ]
 
-VoiceAssistantState = Literal[
-    "initializing",
-    "listening",
-    "thinking",
-    "speaking"
-]
+VoiceAssistantState = Literal["initializing", "listening", "thinking", "speaking"]
 
 
 _CallContextVar = contextvars.ContextVar["AssistantCallContext"](
@@ -310,7 +305,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     async def set_state(self, state: VoiceAssistantState):
         """Set the current state of the voice assistant"""
-        await self._room.local_participant.set_attributes({'agent.state': state })
+        await self._room.local_participant.set_attributes({"agent.state": state})
 
     async def aclose(self) -> None:
         """Close the voice assistant"""
@@ -344,7 +339,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("user_started_speaking")
             self.emit("user_started_speaking")
             self._deferred_validation.on_human_start_of_speech(ev)
-            await self.set_state('listening')
+            await self.set_state("listening")
 
         def _on_vad_updated(ev: vad.VADEvent) -> None:
             if not self._track_published_fut.done():
@@ -372,7 +367,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._deferred_validation.on_human_end_of_speech(ev)
             self._last_end_of_speech_time = time.time()
             await self.set_state("thinking")
-
 
         def _on_interim_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_interim_text = ev.alternatives[0].text
@@ -407,7 +401,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if self._opts.plotting:
             await self._plotter.start()
 
-        await self.set_state('initializing')
+        await self.set_state("initializing")
         audio_source = rtc.AudioSource(self._tts.sample_rate, self._tts.num_channels)
         track = rtc.LocalAudioTrack.create_audio_track("assistant_voice", audio_source)
         self._agent_publication = await self._room.local_participant.publish_track(
@@ -425,13 +419,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         async def _on_playout_started() -> None:
             self._plotter.plot_event("agent_started_speaking")
             self.emit("agent_started_speaking")
-            await self.set_state('speaking')
+            await self.set_state("speaking")
 
         async def _on_playout_stopped(interrupted: bool) -> None:
             self._plotter.plot_event("agent_stopped_speaking")
             self.emit("agent_stopped_speaking")
-            await self.set_state('listening')
-
+            await self.set_state("listening")
 
         agent_playout.on("playout_started", _on_playout_started)
         agent_playout.on("playout_stopped", _on_playout_stopped)
