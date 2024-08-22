@@ -47,15 +47,13 @@ jobs:
         with:
           python-version: "3.9"
 
-      - name: Install wheel
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install wheel
+          pip install build
 
-      - name: Build wheels
-        run: pip wheel -w dist .
-        env:
-          CIBW_BUILD_VERBOSITY: 3
+      - name: Build package
+        run: python -m build
 
       - name: Upload distribution package
         uses: actions/upload-artifact@v3
@@ -89,7 +87,7 @@ jobs:
       - name: Build wheels
         run: cibuildwheel --output-dir dist
         env:
-          CIBW_PYTHON_VERSIONS: "3.9 3.10 3.11 3.12"
+          CIBW_SKIP: pp* cp313-*
           CIBW_BUILD_VERBOSITY: 3
 
       - name: Upload distribution package

@@ -29,7 +29,6 @@ with open(os.path.join(here, "livekit", "plugins", "browser", "version.py"), "r"
     exec(f.read(), about)
 
 
-
 class CMakeExtension(Extension):
     def __init__(self, name: str, sourcedir: str = "") -> None:
         super().__init__(name, sources=[])
@@ -46,6 +45,7 @@ class CMakeBuild(build_ext):
         cfg = "Debug" if debug else "Release"
 
         cmake_args = [
+            f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             f"-DPYTHON_EXECUTABLE={sys.executable}",
             f"-DCMAKE_BUILD_TYPE={cfg}",
         ]
@@ -65,16 +65,9 @@ class CMakeBuild(build_ext):
         subprocess.run(
             ["cmake", ext.sourcedir, *cmake_args], cwd=self.build_temp, check=True
         )
-        subprocess.run(
-            ["cmake", "--build", "."], cwd=self.build_temp, check=True
-        )
+        subprocess.run(["cmake", "--build", "."], cwd=self.build_temp, check=True)
 
-        ext_fullpath = Path.cwd() / self.get_ext_fullpath(ext.name)
-        extdir = ext_fullpath.parent.resolve()
-
-        build_output = self.build_temp /  "src" / cfg
-        print("extdir:", extdir)
-        print("build_output:", build_output)
+        build_output = self.build_temp / "src" / cfg
 
         for f in build_output.iterdir():
             if f.suffix == ".so":
@@ -83,9 +76,18 @@ class CMakeBuild(build_ext):
         if sys.platform.startswith("darwin"):
             # on macos, copy the dummy app
             app = build_output / "lkcef_app.app"
-            self.copy_tree(app, str(extdir / "lkcef_app.app"))
+            self.copy_tree(
+                app,
+                str(
+                    extdir
+                    / "livekit"
+                    / "plugins"
+                    / "browser"
+                    / "resources"
+                    / "lkcef_app.app"
+                ),
+            )
 
-        # TODO(theomonnom): check other platforms
 
 setuptools.setup(
     name="livekit-plugins-browser",
@@ -112,7 +114,10 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=["livekit-agents>=0.8.0"],
-    package_data={"livekit.plugins.browser": ["py.typed"]},
+    package_data={
+        "livekit.plugins.browser": ["py.typed"],
+        "livekit.plugins.browser.resources": ["**", "lkcef_app.app"],
+    },
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

@@ -93,24 +93,17 @@ jobs:
           lfs: true
         env:
           GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.9"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install build
-
       - name: Build package
-        run: python -m build
-
-      - name: Store the distribution packages
-        uses: actions/upload-artifact@v3
+        uses: ./.github/workflows/build-package.yml
         with:
-          name: python-package-distributions
-          path: "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}/dist/"
+          package: ${{ matrix.package.name }}
+          artifact_name: python-package-distributions
 
   publish:
     needs:
