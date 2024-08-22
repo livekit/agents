@@ -14,17 +14,17 @@
 
 
 from .llm import LLM, LLMStream
+from .models import ChatModels
 from .version import __version__
 
 __all__ = [
     "LLM",
     "LLMStream",
+    "ChatModels",
     "__version__",
 ]
 
 from livekit.agents import Plugin
-
-from .log import logger
 
 
 class AnthropicPlugin(Plugin):

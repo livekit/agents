@@ -4,9 +4,10 @@ import asyncio
 from enum import Enum
 from typing import Annotated, Optional
 
+import pytest
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
-from livekit.plugins import openai
+from livekit.plugins import anthropic, openai
 
 
 class Unit(Enum):
@@ -86,6 +87,11 @@ def test_hashable_typeinfo():
     hash(typeinfo)
 
 
+LLMS = [openai.LLM(), anthropic.LLM()]
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("llm", LLMS)
 async def test_chat():
     llm = openai.LLM(model="gpt-4o")
 
@@ -116,6 +122,8 @@ async def test_basic_fnc_calls():
     assert len(calls) == 2, "get_weather should be called twice"
 
 
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("llm", LLMS)
 async def test_runtime_addition():
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
@@ -138,6 +146,8 @@ async def test_runtime_addition():
     assert called_msg == "Hello LiveKit!", "send_message should be called"
 
 
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("llm", LLMS)
 async def test_cancelled_calls():
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
@@ -157,6 +167,8 @@ async def test_cancelled_calls():
     ), "toggle_light should have been cancelled"
 
 
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("llm", LLMS)
 async def test_calls_arrays():
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
@@ -181,6 +193,8 @@ async def test_calls_arrays():
     ), "select_currencies should have eur, gbp, sek"
 
 
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("llm", LLMS)
 async def test_calls_choices():
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
@@ -197,6 +211,8 @@ async def test_calls_choices():
     assert volume == 30, "change_volume should have been called with volume 30"
 
 
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("llm", LLMS)
 async def test_optional_args():
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")

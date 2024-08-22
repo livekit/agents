@@ -43,7 +43,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "gpt-4o",
+        model: str | ChatModels = "claude-3-5-sonnet-20240620",
         api_key: str | None = None,
         base_url: str | None = None,
         user: str | None = None,
