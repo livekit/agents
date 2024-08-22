@@ -35,6 +35,10 @@ jobs:
       inputs.package == 'livekit-plugins-openai' ||
       inputs.package == 'livekit-plugins-rag' ||
       inputs.package == 'livekit-plugins-silero'
+
+    defaults:
+      run:
+        working-directory: "${{ startsWith(inputs.package, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ inputs.package }}"
     steps:
       - uses: actions/checkout@v4
 
@@ -63,6 +67,10 @@ jobs:
     strategy:
       matrix:
         os: [macos-14] # TODO(theomonnom): other platforms
+
+    defaults:
+      run:
+        working-directory: livekit-plugins/livekit-plugins-browser
     steps:
       - uses: actions/checkout@v4
 
