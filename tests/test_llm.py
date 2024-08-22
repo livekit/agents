@@ -92,7 +92,7 @@ LLMS = [openai.LLM(), anthropic.LLM()]
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
-async def test_chat():
+async def test_chat(llm: llm.LLM):
     llm = openai.LLM(model="gpt-4o")
 
     chat_ctx = ChatContext().append(
@@ -109,7 +109,9 @@ async def test_chat():
     assert len(text) > 0
 
 
-async def test_basic_fnc_calls():
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("llm", LLMS)
+async def test_basic_fnc_calls(llm: llm.LLM):
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
 
@@ -124,7 +126,7 @@ async def test_basic_fnc_calls():
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
-async def test_runtime_addition():
+async def test_runtime_addition(llm: llm.LLM):
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
     called_msg = ""
@@ -148,7 +150,7 @@ async def test_runtime_addition():
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
-async def test_cancelled_calls():
+async def test_cancelled_calls(llm: llm.LLM):
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
 
@@ -169,7 +171,7 @@ async def test_cancelled_calls():
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
-async def test_calls_arrays():
+async def test_calls_arrays(llm: llm.LLM):
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
 
@@ -195,7 +197,7 @@ async def test_calls_arrays():
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
-async def test_calls_choices():
+async def test_calls_choices(llm: llm.LLM):
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
 
@@ -213,7 +215,7 @@ async def test_calls_choices():
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
-async def test_optional_args():
+async def test_optional_args(llm: llm.LLM):
     fnc_ctx = FncCtx()
     llm = openai.LLM(model="gpt-4o")
 
