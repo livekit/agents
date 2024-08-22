@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       packages:
-        description: 'Comma-separated list of packages to build manually'
+        description: 'package to build manually (as a json array)'
         required: false
         default: ''
   push:
