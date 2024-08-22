@@ -45,11 +45,10 @@ async def entrypoint(job: JobContext):
                 defaultPage = defaultContext.pages[0]
                 try:
                     await defaultPage.goto(urls[i % len(urls)])
-                except Exception as e:
+                except Exception:
                     logging.exception(f"failed to navigate to {urls[i % len(urls)]}")
 
     await _test_cycle()
-
 
 
 if __name__ == "__main__":

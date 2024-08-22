@@ -10,10 +10,10 @@ from . import logger, proto
 
 class BrowserServer:
     def __init__(
-            self,
-            duplex: utils.aio.duplex_unix._Duplex,
-            shm: mp_shm.SharedMemory,
-            page_id: int,
+        self,
+        duplex: utils.aio.duplex_unix._Duplex,
+        shm: mp_shm.SharedMemory,
+        page_id: int,
     ):
         self._duplex = duplex
         self._shm = shm
@@ -27,10 +27,10 @@ class BrowserServer:
 
     @staticmethod
     def create(
-            *,
-            duplex: utils.aio.duplex_unix._Duplex,
-            create_req: proto.CreateBrowserRequest,
-            browser_app,
+        *,
+        duplex: utils.aio.duplex_unix._Duplex,
+        create_req: proto.CreateBrowserRequest,
+        browser_app,
     ) -> "BrowserServer":
         logger.debug(
             "creating browser",
