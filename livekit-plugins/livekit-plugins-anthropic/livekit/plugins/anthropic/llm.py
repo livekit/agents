@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import inspect
+import json
 from dataclasses import dataclass
-from typing import Any, Awaitable, List, Literal, MutableSet
+from typing import Any, Awaitable, List, MutableSet, Tuple, get_args, get_origin
 
 import httpx
 from livekit import rtc
@@ -130,9 +132,6 @@ class LLMStream(llm.LLMStream):
         if not self._anthropic_stream:
             self._anthropic_stream = await self._awaitable_anthropic_stream
 
-        current_content_block = ""
-        current_content_block_type: Literal["text", "tool_use"] = "text"
-        content_blocks: List[] = []
         async for event in self._anthropic_stream:
             e: anthropic.types.RawMessageStreamEvent = event
             if event.type == "message_start":
@@ -142,87 +141,51 @@ class LLMStream(llm.LLMStream):
             elif event.type == "message_stop":
                 pass
             elif event.type == "content_block_start":
-                current_content_block = ""
-                current_content_block_type = event.content_block.type
+                if event.content_block.type == "tool_use":
+                    self._tool_call_id = event.content_block.id
+                    self._fnc_raw_arguments = ""
+                    self._fnc_name = event.content_block.name
             elif event.type == "content_block_delta":
                 delta = event.delta
                 if delta.type == "text_delta":
-                    current_content_block += delta["text"]
+                    return llm.ChatChunk(
+                        choices=[
+                            llm.Choice(
+                                delta=llm.ChoiceDelta(
+                                    content=delta.text, role="assistant"
+                                )
+                            )
+                        ]
+                    )
                 elif delta.type == "input_json_delta":
-                    current_content_block += delta["json"]
-                pass
+                    assert self._fnc_raw_arguments is not None
+                    self._fnc_raw_arguments += delta.partial_json
             elif event.type == "content_block_stop":
-                pass
+                if self._tool_call_id is not None and self._fnc_ctx:
+                    assert self._fnc_name is not None
+                    assert self._fnc_raw_arguments is not None
+                    fnc_info = _create_ai_function_info(
+                        self._fnc_ctx,
+                        self._tool_call_id,
+                        self._fnc_name,
+                        self._fnc_raw_arguments,
+                    )
+                    chunk = llm.ChatChunk(
+                        choices=[
+                            llm.Choice(
+                                delta=llm.ChoiceDelta(
+                                    role="assistant", tool_calls=[fnc_info]
+                                ),
+                                index=0,
+                            )
+                        ]
+                    )
+                    self._tool_call_id = None
+                    self._fnc_raw_arguments = None
+                    self._fnc_name = None
+                    return chunk
 
         raise StopAsyncIteration
-
-    def _parse_choice(self, choice: Choice) -> llm.ChatChunk | None:
-        delta = choice.delta
-
-        if delta.tool_calls:
-            # check if we have functions to calls
-            for tool in delta.tool_calls:
-                if not tool.function:
-                    continue  # oai may add other tools in the future
-
-                call_chunk = None
-                if self._tool_call_id and tool.id and tool.id != self._tool_call_id:
-                    call_chunk = self._try_run_function(choice)
-
-                if tool.function.name:
-                    self._tool_call_id = tool.id
-                    self._fnc_name = tool.function.name
-                    self._fnc_raw_arguments = tool.function.arguments or ""
-                elif tool.function.arguments:
-                    self._fnc_raw_arguments += tool.function.arguments  # type: ignore
-
-                if call_chunk is not None:
-                    return call_chunk
-
-        if choice.finish_reason == "tool_calls":
-            # we're done with the tool calls, run the last one
-            return self._try_run_function(choice)
-
-        return llm.ChatChunk(
-            choices=[
-                llm.Choice(
-                    delta=llm.ChoiceDelta(content=delta.content, role="assistant"),
-                    index=choice.index,
-                )
-            ]
-        )
-
-    def _try_run_function(self, choice: Choice) -> llm.ChatChunk | None:
-        if not self._fnc_ctx:
-            logger.warning("oai stream tried to run function without function context")
-            return None
-
-        if self._tool_call_id is None:
-            logger.warning(
-                "oai stream tried to run function but tool_call_id is not set"
-            )
-            return None
-
-        if self._fnc_name is None or self._fnc_raw_arguments is None:
-            logger.warning(
-                "oai stream tried to call a function but raw_arguments and fnc_name are not set"
-            )
-            return None
-
-        fnc_info = llm._oai_api.create_ai_function_info(
-            self._fnc_ctx, self._tool_call_id, self._fnc_name, self._fnc_raw_arguments
-        )
-        self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
-        self._function_calls_info.append(fnc_info)
-
-        return llm.ChatChunk(
-            choices=[
-                llm.Choice(
-                    delta=llm.ChoiceDelta(role="assistant", tool_calls=[fnc_info]),
-                    index=choice.index,
-                )
-            ]
-        )
 
 
 def _latest_system_message(chat_ctx: llm.ChatContext) -> str:
@@ -365,3 +328,90 @@ def _build_anthropic_image_content(
         }
 
     raise ValueError(f"unknown image type {type(image.image)}")
+
+
+def _create_ai_function_info(
+    fnc_ctx: llm.function_context.FunctionContext,
+    tool_call_id: str,
+    fnc_name: str,
+    raw_arguments: str,  # JSON string
+) -> llm.function_context.FunctionCallInfo:
+    if fnc_name not in fnc_ctx.ai_functions:
+        raise ValueError(f"AI function {fnc_name} not found")
+
+    parsed_arguments: dict[str, Any] = {}
+    try:
+        if raw_arguments:  # ignore empty string
+            parsed_arguments = json.loads(raw_arguments)
+    except json.JSONDecodeError:
+        raise ValueError(
+            f"AI function {fnc_name} received invalid JSON arguments - {raw_arguments}"
+        )
+
+    fnc_info = fnc_ctx.ai_functions[fnc_name]
+
+    # Ensure all necessary arguments are present and of the correct type.
+    sanitized_arguments: dict[str, Any] = {}
+    for arg_info in fnc_info.arguments.values():
+        if arg_info.name not in parsed_arguments:
+            if arg_info.default is inspect.Parameter.empty:
+                raise ValueError(
+                    f"AI function {fnc_name} missing required argument {arg_info.name}"
+                )
+            continue
+
+        arg_value = parsed_arguments[arg_info.name]
+        if get_origin(arg_info.type) is not None:
+            if not isinstance(arg_value, list):
+                raise ValueError(
+                    f"AI function {fnc_name} argument {arg_info.name} should be a list"
+                )
+
+            inner_type = get_args(arg_info.type)[0]
+            sanitized_value = [
+                _sanitize_primitive(
+                    value=v, expected_type=inner_type, choices=arg_info.choices
+                )
+                for v in arg_value
+            ]
+        else:
+            sanitized_value = _sanitize_primitive(
+                value=arg_value, expected_type=arg_info.type, choices=arg_info.choices
+            )
+
+        sanitized_arguments[arg_info.name] = sanitized_value
+
+    return llm.function_context.FunctionCallInfo(
+        tool_call_id=tool_call_id,
+        raw_arguments=raw_arguments,
+        function_info=fnc_info,
+        arguments=sanitized_arguments,
+    )
+
+
+def _sanitize_primitive(
+    *, value: Any, expected_type: type, choices: Tuple[Any] | None
+) -> Any:
+    if expected_type is str:
+        if not isinstance(value, str):
+            raise ValueError(f"expected str, got {type(value)}")
+    elif expected_type in (int, float):
+        if not isinstance(value, (int, float)):
+            raise ValueError(f"expected number, got {type(value)}")
+
+        if expected_type is int:
+            if value % 1 != 0:
+                raise ValueError("expected int, got float")
+
+            value = int(value)
+        elif expected_type is float:
+            value = float(value)
+
+    elif expected_type is bool:
+        if not isinstance(value, bool):
+            raise ValueError(f"expected bool, got {type(value)}")
+
+    if choices and value not in choices:
+        raise ValueError(f"invalid value {value}, not in {choices}")
+
+    return value
