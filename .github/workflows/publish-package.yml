@@ -80,8 +80,8 @@ jobs:
     strategy:
       matrix:
         package: ${{ fromJson(needs.bump.outputs.packages) }}
-        
-    uses: ./.github/workflows/build-package.yml
+
+    uses: livekit/agents/.github/workflows/build-package.yml@main
     with:
       package: ${{ matrix.package.name }}
       artifact_name: python-package-distributions
