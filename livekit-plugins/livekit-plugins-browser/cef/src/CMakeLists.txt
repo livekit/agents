@@ -111,9 +111,6 @@ if(OS_MAC)
       ${CMAKE_COMMAND} -E copy_directory
       "${CEF_BINARY_DIR}/Chromium Embedded Framework.framework"
       "$<TARGET_BUNDLE_DIR:lkcef_app>/Contents/Frameworks/Chromium Embedded Framework.framework"
-    # Copy the library into the main app bindle. COMMAND ${CMAKE_COMMAND} -E
-    # copy_if_different "${CEF_TARGET_OUT_DIR}/liblkcef.dylib"
-    # "${LKCEF_APP}/Contents/MacOS/liblkcef.dylib"
     VERBATIM)
 
   # Create the multiple Helper app bundle targets.
