@@ -61,7 +61,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: ${{ inputs.artifact_name }}
-          path: dist/*
+          path: "${{ startsWith(inputs.package, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ inputs.package }}/dist/"
 
   build_browser:
     if: inputs.package == 'livekit-plugins-browser'
@@ -89,10 +89,11 @@ jobs:
       - name: Build wheels
         run: cibuildwheel --output-dir dist
         env:
+          CIBW_PYTHON_VERSIONS: "3.9 3.10 3.11 3.12"
           CIBW_BUILD_VERBOSITY: 3
 
       - name: Upload distribution package
         uses: actions/upload-artifact@v3
         with:
           name: ${{ inputs.artifact_name }}
-          path: dist/*
+          path: livekit-plugins-browser/dist/
