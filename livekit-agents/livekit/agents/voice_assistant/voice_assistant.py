@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import time
-from enum import Enum
 from dataclasses import dataclass
 from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, Union
 
@@ -408,7 +407,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if self._opts.plotting:
             await self._plotter.start()
 
-        await self.set_state('initializing');
+        await self.set_state('initializing')
         audio_source = rtc.AudioSource(self._tts.sample_rate, self._tts.num_channels)
         track = rtc.LocalAudioTrack.create_audio_track("assistant_voice", audio_source)
         self._agent_publication = await self._room.local_participant.publish_track(
