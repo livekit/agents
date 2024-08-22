@@ -96,4 +96,4 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: ${{ inputs.artifact_name }}
-          path: livekit-plugins-browser/dist/
+          path: livekit-plugins/livekit-plugins-browser/dist/
