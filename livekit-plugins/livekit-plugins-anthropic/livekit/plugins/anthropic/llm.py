@@ -228,7 +228,7 @@ def _merge_messages(
     if len(combined_messages) == 0 or combined_messages[0]["role"] != "user":
         print("NEIL inserting empty user message")
         combined_messages.insert(
-            0, {"role": "user", "content": [{"type": "text", "text": ""}]}
+            0, {"role": "user", "content": [{"type": "text", "text": " "}]}
         )
 
     print("NEIL", combined_messages)
