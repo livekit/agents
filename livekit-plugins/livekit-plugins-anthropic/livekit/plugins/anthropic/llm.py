@@ -224,6 +224,7 @@ def _merge_messages(
 
         last_message["content"].extend(m["content"])
 
+    print("NEIL gh")
     if len(combined_messages) == 0 or combined_messages[0]["role"] != "user":
         print("NEIL inserting empty user message")
         combined_messages.insert(
