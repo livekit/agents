@@ -205,7 +205,7 @@ def _latest_system_message(chat_ctx: llm.ChatContext) -> str:
     return latest_system_str
 
 
-def _collapse_messages(
+def _merge_messages(
     messages: List[anthropic.types.MessageParam],
 ) -> List[anthropic.types.MessageParam]:
     # Anthropic enforces alternating messages
@@ -222,6 +222,9 @@ def _collapse_messages(
             continue
 
         last_message["content"].extend(m["content"])
+
+    if len(combined_messages) == 0 or combined_messages[0]["role"] != "user":
+        messages.insert(0, {"role": "user", "content": [{"type": "text", "text": " "}]})
 
     return combined_messages
 
