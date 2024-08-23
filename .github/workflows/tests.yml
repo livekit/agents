@@ -75,7 +75,8 @@ jobs:
                       ./livekit-plugins/livekit-plugins-silero \
                       ./livekit-plugins/livekit-plugins-elevenlabs \
                       ./livekit-plugins/livekit-plugins-cartesia \
-                      ./livekit-plugins/livekit-plugins-azure
+                      ./livekit-plugins/livekit-plugins-azure \
+                      ./livekit-plugins/livekit-plugins-anthropic
 
       - name: Run tests
         shell: bash
@@ -90,6 +91,7 @@ jobs:
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }} # nit: doesn't have to be secret
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
         run: |
           echo $GOOGLE_CREDENTIALS_JSON > google.json
