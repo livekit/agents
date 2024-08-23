@@ -63,7 +63,6 @@ class LLM(llm.LLM):
                 ),
             ),
         )
-        self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
     def chat(
         self,

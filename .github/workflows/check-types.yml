@@ -67,4 +67,5 @@ jobs:
                -p livekit.plugins.elevenlabs \
                -p livekit.plugins.cartesia \
                -p livekit.plugins.rag \
-               -p livekit.plugins.azure
+               -p livekit.plugins.azure \
+               -p livekit.plugins.anthropic

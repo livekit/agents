@@ -8,6 +8,9 @@ import pytest
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
 from livekit.plugins import anthropic, openai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class Unit(Enum):
@@ -93,7 +96,6 @@ LLMS = [
 ]
 
 
-@pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
 async def test_chat(llm: llm.LLM):
     chat_ctx = ChatContext().append(
@@ -117,7 +119,6 @@ async def test_chat(llm: llm.LLM):
     assert len(text) > 0
 
 
-@pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
 async def test_basic_fnc_calls(llm: llm.LLM):
     fnc_ctx = FncCtx()
@@ -133,7 +134,6 @@ async def test_basic_fnc_calls(llm: llm.LLM):
     assert len(calls) == 2, "get_weather should be called twice"
 
 
-@pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
 async def test_runtime_addition(llm: llm.LLM):
     fnc_ctx = FncCtx()
@@ -156,7 +156,6 @@ async def test_runtime_addition(llm: llm.LLM):
     assert called_msg == "Hello LiveKit!", "send_message should be called"
 
 
-@pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
 async def test_cancelled_calls(llm: llm.LLM):
     fnc_ctx = FncCtx()
@@ -176,7 +175,6 @@ async def test_cancelled_calls(llm: llm.LLM):
     ), "toggle_light should have been cancelled"
 
 
-@pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
 async def test_calls_arrays(llm: llm.LLM):
     fnc_ctx = FncCtx()
@@ -201,7 +199,6 @@ async def test_calls_arrays(llm: llm.LLM):
     ), "select_currencies should have eur, gbp, sek"
 
 
-@pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
 async def test_calls_choices(llm: llm.LLM):
     fnc_ctx = FncCtx()
@@ -218,7 +215,6 @@ async def test_calls_choices(llm: llm.LLM):
     assert volume == 30, "change_volume should have been called with volume 30"
 
 
-@pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("llm", LLMS)
 async def test_optional_args(llm: llm.LLM):
     fnc_ctx = FncCtx()
