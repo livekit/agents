@@ -86,7 +86,6 @@ class LLM(llm.LLM):
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
-        print("NEIL", collaped_anthropic_ctx)
         stream = self._client.messages.create(
             max_tokens=opts.get("max_tokens", 1000),
             system=latest_system_message,
@@ -224,14 +223,11 @@ def _merge_messages(
 
         last_message["content"].extend(m["content"])
 
-    print("NEIL gh")
     if len(combined_messages) == 0 or combined_messages[0]["role"] != "user":
-        print("NEIL inserting empty user message")
         combined_messages.insert(
             0, {"role": "user", "content": [{"type": "text", "text": "(empty)"}]}
         )
 
-    print("NEIL", combined_messages)
     return combined_messages
 
 
