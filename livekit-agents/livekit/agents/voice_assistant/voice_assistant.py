@@ -567,7 +567,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         _commit_user_question_if_needed()
 
         collected_text = speech_handle.synthesis_handle.tts_forwarder.played_text
-        interrupted = speech_handle.synthesis_handle.interrupted
+        interrupted = speech_handle.interrupted
         is_using_tools = isinstance(speech_handle.source, LLMStream) and len(
             speech_handle.source.function_calls
         )
@@ -722,7 +722,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if (
             self._playing_speech is None
             or not self._playing_speech.allow_interruptions
-            or self._playing_speech.synthesis_handle.interrupted
+            or self._playing_speech.interrupted
         ):
             return
 
