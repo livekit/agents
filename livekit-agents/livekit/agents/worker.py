@@ -485,6 +485,13 @@ class Worker(utils.EventEmitter[EventTypes]):
                     self._handle_availability(msg.availability)
                 elif which == "assignment":
                     self._handle_assignment(msg.assignment)
+                elif which == "termination":
+                    user_task = self._loop.create_task(
+                        self._handle_termination(msg.termination),
+                        name="agent_job_termination",
+                    )
+                    self._tasks.add(user_task)
+                    user_task.add_done_callback(self._tasks.discard)
 
         tasks = [
             asyncio.create_task(_load_task()),
@@ -627,3 +634,10 @@ class Worker(utils.EventEmitter[EventTypes]):
                 "received assignment for an unknown job",
                 extra={"job": assignment.job, "agent_name": self._opts.agent_name},
             )
+
+    async def _handle_termination(self, msg: agent.JobTermination):
+        proc = self._proc_pool.get_by_job_id(msg.job_id)
+        if not proc:
+            # safe to ignore
+            return
+        await proc.aclose()
