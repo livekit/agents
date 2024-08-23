@@ -122,6 +122,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply = _default_will_synthesize_assistant_reply,
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
+        include_transcription_words: bool = False,
     ) -> None:
         """
         Create a new VoiceAssistant.
@@ -191,6 +192,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._playing_speech: SpeechHandle | None = None
         self._transcribed_text, self._transcribed_interim_text = "", ""
+        self._transcribed_words, self._transcribed_interim_words = [], []
 
         self._deferred_validation = _DeferredReplyValidation(
             self._validate_reply_if_possible, loop=self._loop
@@ -200,6 +202,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._speech_q_changed = asyncio.Event()
 
         self._last_end_of_speech_time: float | None = None
+
+        self._include_transcription_words = include_transcription_words
 
     @property
     def fnc_ctx(self) -> FunctionContext | None:
@@ -362,13 +366,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         def _on_interim_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_interim_text = ev.alternatives[0].text
+            self._transcribed_interim_words = ev.alternatives[0].words
 
         def _on_final_transcript(ev: stt.SpeechEvent) -> None:
             new_transcript = ev.alternatives[0].text
+            new_transcript_words = ev.alternatives[0].words
             self._transcribed_text += (
                 " " if self._transcribed_text else ""
             ) + new_transcript
 
+            if new_transcript_words:
+                self._transcribed_words.extend(new_transcript_words)
             if self._opts.preemptive_synthesis:
                 self._synthesize_agent_reply()
 
@@ -443,6 +451,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             allow_interruptions=self._opts.allow_interruptions,
             add_to_chat_ctx=True,
             user_question=self._transcribed_text,
+            user_question_words=self._transcribed_words,
         )
 
         self._agent_reply_task = asyncio.create_task(
@@ -471,8 +480,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     )
                 )
 
+        words = handle.user_question_words if self._include_transcription_words else []
         copied_ctx.messages.append(
-            ChatMessage.create(text=handle.user_question, role="user")
+            ChatMessage.create(text=handle.user_question, role="user", words=words)
         )
 
         llm_stream = self._opts.will_synthesize_assistant_reply(self, copied_ctx)
@@ -520,6 +530,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         join_fut = play_handle.join()
 
         def _commit_user_question_if_needed() -> None:
+
             if (
                 not user_question
                 or synthesis_handle.interrupted
@@ -715,6 +726,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._add_speech_for_playout(self._pending_agent_reply)
         self._pending_agent_reply = None
         self._transcribed_interim_text = ""
+        self._transcribed_interim_words = []
         # self._transcribed_text is reset after MIN_TIME_PLAYED_FOR_COMMIT, see self._play_speech
 
     def _interrupt_if_possible(self) -> None:

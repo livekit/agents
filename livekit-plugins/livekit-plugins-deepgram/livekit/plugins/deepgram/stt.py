@@ -23,6 +23,8 @@ import wave
 from dataclasses import dataclass
 from typing import List, Tuple
 from urllib.parse import urlencode
+import math
+
 
 import aiohttp
 from livekit.agents import stt, utils
@@ -361,7 +363,6 @@ class SpeechStream(stt.SpeechStream):
                         type=stt.SpeechEventType.START_OF_SPEECH
                     )
                     self._event_ch.send_nowait(start_event)
-
                 if is_final_transcript:
                     final_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=alts
@@ -396,10 +397,11 @@ def live_transcription_to_speech_data(
     return [
         stt.SpeechData(
             language=language,
-            start_time=alt["words"][0]["start"] if alt["words"] else 0,
-            end_time=alt["words"][-1]["end"] if alt["words"] else 0,
+            start_time=int(math.ceil(alt["words"][0]["start"])) if alt["words"] else 0,
+            end_time=int(math.ceil(alt["words"][-1]["end"])) if alt["words"] else 0,
             confidence=alt["confidence"],
             text=alt["transcript"],
+            words=alt.get("words", []),
         )
         for alt in dg_alts
     ]
@@ -422,10 +424,11 @@ def prerecorded_transcription_to_speech_event(
         alternatives=[
             stt.SpeechData(
                 language=language or detected_language,
-                start_time=alt["words"][0]["start"] if alt["words"] else 0,
-                end_time=alt["words"][-1]["end"] if alt["words"] else 0,
+                start_time=int(round(alt["words"][0]["start"])) if alt["words"] else 0,
+                end_time=int(round(alt["words"][-1]["end"])) if alt["words"] else 0,
                 confidence=alt["confidence"],
                 text=alt["transcript"],
+                words=alt.get("words", []),
             )
             for alt in dg_alts
         ],

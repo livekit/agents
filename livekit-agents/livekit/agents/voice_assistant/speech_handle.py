@@ -17,6 +17,7 @@ class SpeechHandle:
         add_to_chat_ctx: bool,
         is_reply: bool,
         user_question: str,
+        user_question_words=list,
     ) -> None:
         self._id = id
         self._allow_interruptions = allow_interruptions
@@ -26,6 +27,7 @@ class SpeechHandle:
         self._is_reply = is_reply
         self._user_question = user_question
         self._user_commited = False
+        self._user_question_words = user_question_words
 
         self._init_fut: asyncio.Future[None] = asyncio.Future()
         self._initialized = False
@@ -41,6 +43,7 @@ class SpeechHandle:
         allow_interruptions: bool,
         add_to_chat_ctx: bool,
         user_question: str,
+        user_question_words: list,
     ) -> SpeechHandle:
         return SpeechHandle(
             id=utils.shortuuid(),
@@ -48,6 +51,7 @@ class SpeechHandle:
             add_to_chat_ctx=add_to_chat_ctx,
             is_reply=True,
             user_question=user_question,
+            user_question_words=user_question_words,
         )
 
     @staticmethod
@@ -139,6 +143,10 @@ class SpeechHandle:
     @property
     def user_question(self) -> str:
         return self._user_question
+
+    @property
+    def user_question_words(self) -> str:
+        return self._user_question_words
 
     @property
     def interrupted(self) -> bool:
