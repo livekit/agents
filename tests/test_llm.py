@@ -5,12 +5,9 @@ from enum import Enum
 from typing import Annotated, Optional
 
 import pytest
-from dotenv import load_dotenv
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
 from livekit.plugins import anthropic, openai
-
-load_dotenv()
 
 
 class Unit(Enum):
