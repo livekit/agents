@@ -85,7 +85,7 @@ class LLM(llm.LLM):
 
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
-        collaped_anthropic_ctx = _collapse_messages(anthropic_ctx)
+        collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
         stream = self._client.messages.create(
             max_tokens=opts.get("max_tokens", 1000),
             system=latest_system_message,
@@ -205,7 +205,7 @@ def _latest_system_message(chat_ctx: llm.ChatContext) -> str:
     return latest_system_str
 
 
-def _collapse_messages(
+def _merge_messages(
     messages: List[anthropic.types.MessageParam],
 ) -> List[anthropic.types.MessageParam]:
     # Anthropic enforces alternating messages
@@ -222,6 +222,11 @@ def _collapse_messages(
             continue
 
         last_message["content"].extend(m["content"])
+
+    if len(combined_messages) == 0 or combined_messages[0]["role"] != "user":
+        combined_messages.insert(
+            0, {"role": "user", "content": [{"type": "text", "text": "(empty)"}]}
+        )
 
     return combined_messages
 
