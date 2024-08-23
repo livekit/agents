@@ -225,8 +225,8 @@ def _merge_messages(
         last_message["content"].extend(m["content"])
 
     if len(combined_messages) == 0 or combined_messages[0]["role"] != "user":
-        messages.insert(
-            0, {"role": "user", "content": [{"type": "text", "text": "hello"}]}
+        combined_messages.insert(
+            0, {"role": "user", "content": [{"type": "text", "text": ""}]}
         )
 
     return combined_messages
