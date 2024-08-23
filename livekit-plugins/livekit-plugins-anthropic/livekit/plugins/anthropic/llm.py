@@ -85,7 +85,7 @@ class LLM(llm.LLM):
 
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
-        collaped_anthropic_ctx = _collapse_messages(anthropic_ctx)
+        collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
         stream = self._client.messages.create(
             max_tokens=opts.get("max_tokens", 1000),
             system=latest_system_message,
