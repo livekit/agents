@@ -487,7 +487,8 @@ class Worker(utils.EventEmitter[EventTypes]):
                     self._handle_assignment(msg.assignment)
                 elif which == "termination":
                     user_task = self._loop.create_task(
-                        self._handle_termination(msg.termination), name="agent_job_termination"
+                        self._handle_termination(msg.termination),
+                        name="agent_job_termination",
                     )
                     self._tasks.add(user_task)
                     user_task.add_done_callback(self._tasks.discard)
