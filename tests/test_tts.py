@@ -46,7 +46,7 @@ SYNTHESIZE_TTS = [
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts", SYNTHESIZE_TTS)
-async def test_synthetize(tts: agents.tts.TTS):
+async def test_synthesize(tts: agents.tts.TTS):
     frames = []
     async for audio in tts.synthesize(text=TEST_AUDIO_SYNTHESIZE):
         frames.append(audio.frame)
@@ -60,6 +60,7 @@ STREAM_SENT_TOKENIZER = nltk.SentenceTokenizer(min_sentence_len=20)
 STREAM_TTS = [
     elevenlabs.TTS(),
     elevenlabs.TTS(encoding="pcm_44100"),
+    cartesia.TTS(),
     agents.tts.StreamAdapter(
         tts=openai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
@@ -67,9 +68,6 @@ STREAM_TTS = [
         tts=google.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
     agents.tts.StreamAdapter(tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER),
-    agents.tts.StreamAdapter(
-        tts=cartesia.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
-    ),
 ]
 
 

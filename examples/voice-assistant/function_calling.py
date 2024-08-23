@@ -3,9 +3,12 @@ import enum
 import logging
 from typing import Annotated
 
-from livekit.agents import JobContext, WorkerOptions, cli, llm
+from dotenv import load_dotenv
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
+
+load_dotenv()
 
 logger = logging.getLogger("function-calling-demo")
 logger.setLevel(logging.INFO)
@@ -98,7 +101,7 @@ async def entrypoint(ctx: JobContext):
         will_synthesize_assistant_reply=_will_synthesize_assistant_reply,
     )
 
-    await ctx.connect()
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     # Start the assistant. This will automatically publish a microphone track and listen to the first participant
     # it finds in the current room. If you need to specify a particular participant, use the participant parameter.

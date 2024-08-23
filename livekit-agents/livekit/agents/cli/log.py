@@ -9,7 +9,7 @@ from datetime import date, datetime, time, timezone
 from inspect import istraceback
 from typing import Any, Dict, Tuple
 
-from ..log import logger
+from ..plugin import Plugin
 
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
@@ -91,6 +91,7 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Formats a log record and serializes to json"""
         message_dict: Dict[str, Any] = {}
+        message_dict["level"] = record.levelname
 
         if isinstance(record.msg, dict):
             message_dict = record.msg
@@ -105,7 +106,6 @@ class JsonFormatter(logging.Formatter):
             message_dict["exc_info"] = self.formatException(record.exc_info)
         if not message_dict.get("exc_info") and record.exc_text:
             message_dict["exc_info"] = record.exc_text
-
         if record.stack_info and not message_dict.get("stack_info"):
             message_dict["stack_info"] = self.formatStack(record.stack_info)
 
@@ -196,6 +196,25 @@ def setup_logging(log_level: str, production: bool = True) -> None:
 
     root = logging.getLogger()
     root.addHandler(handler)
-    root.setLevel(logging.WARN)
 
-    logger.setLevel(log_level)
+    if root.level == logging.NOTSET:
+        root.setLevel(logging.WARN)
+
+    from ..log import logger
+
+    if logger.level == logging.NOTSET:
+        logger.setLevel(log_level)
+
+    from ..voice_assistant.log import logger
+
+    if logger.level == logging.NOTSET:
+        logger.setLevel(log_level)
+
+    def _configure_plugin_logger(plugin: Plugin) -> None:
+        if plugin.logger is not None and plugin.logger.level == logging.NOTSET:
+            plugin.logger.setLevel(log_level)
+
+    for plugin in Plugin.registered_plugins:
+        _configure_plugin_logger(plugin)
+
+    Plugin.emitter.on("plugin_registered", _configure_plugin_logger)

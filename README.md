@@ -12,15 +12,15 @@
 
 <!--BEGIN_DESCRIPTION-->
 
-The Agent Framework is designed for building real-time, programmable participants
-that run on servers. Easily tap into LiveKit WebRTC sessions and process or generate
-audio, video, and data streams.
+The Agent Framework is designed for building realtime, programmable participants
+that run on servers. Use it to create conversational, multi-modal voice
+agents that can see, hear, and understand.
 
 <!--END_DESCRIPTION-->
 
 The framework includes plugins for common workflows, such as voice activity detection and speech-to-text.
 
-Agents integrates seamlessly with [LiveKit server](https://github.com/livekit/livekit), offloading job queuing and scheduling responsibilities to it. This eliminates the need for additional queuing infrastructure. Agent code developed on your local machine can scale to support thousands of concurrent sessions when deployed to a server in production.
+Agents integrates seamlessly with Cloud or self-hosted [LiveKit](https://livekit.io/) server, offloading job queuing and scheduling responsibilities to it. This eliminates the need for additional queuing infrastructure. Agent code developed on your local machine can scale to support thousands of concurrent sessions when deployed to a server in production.
 
 > This SDK is currently in Developer Preview. During this period, you may encounter bugs and the APIs may change.
 >
@@ -32,6 +32,9 @@ Agents integrates seamlessly with [LiveKit server](https://github.com/livekit/li
 - [Quickstart](https://docs.livekit.io/agents/quickstart)
 - [Working with plugins](https://docs.livekit.io/agents/plugins)
 - [Deploying agents](https://docs.livekit.io/agents/deployment)
+
+> [!NOTE]
+> There are breaking API changes between versions 0.7.x and 0.8.x. Please refer to the [0.8 migration guide](0.8-migration-guide.md) for a detailed overview of the changes.
 
 ## Examples
 
@@ -81,12 +84,18 @@ The framework exposes a CLI interface to run your agent. To get started, you'll 
 - LIVEKIT_API_KEY
 - LIVEKIT_API_SECRET
 
-### Running the worker
+### Starting the worker
 
 This will start the worker and wait for users to connect to your LiveKit server:
 
 ```bash
 python my_agent.py start
+```
+
+To run the worker in dev-mode (with hot code reloading), you can use the dev command:
+
+```bash
+python my_agent.py dev
 ```
 
 ### Using playground for your agent UI
@@ -144,16 +153,14 @@ class MyPlugin(Plugin):
 ```
 
 <!--BEGIN_REPO_NAV-->
-
 <br/><table>
-
 <thead><tr><th colspan="2">LiveKit Ecosystem</th></tr></thead>
 <tbody>
-<tr><td>Real-time SDKs</td><td><a href="https://github.com/livekit/components-js">React Components</a> · <a href="https://github.com/livekit/client-sdk-js">Browser</a> · <a href="https://github.com/livekit/client-sdk-swift">iOS/macOS</a> · <a href="https://github.com/livekit/client-sdk-android">Android</a> · <a href="https://github.com/livekit/client-sdk-flutter">Flutter</a> · <a href="https://github.com/livekit/client-sdk-react-native">React Native</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/client-sdk-unity-web">Unity (web)</a> · <a href="https://github.com/livekit/client-sdk-unity">Unity (beta)</a></td></tr><tr></tr>
+<tr><td>Realtime SDKs</td><td><a href="https://github.com/livekit/components-js">React Components</a> · <a href="https://github.com/livekit/client-sdk-js">Browser</a> · <a href="https://github.com/livekit/components-swift">Swift Components</a> · <a href="https://github.com/livekit/client-sdk-swift">iOS/macOS/visionOS</a> · <a href="https://github.com/livekit/client-sdk-android">Android</a> · <a href="https://github.com/livekit/client-sdk-flutter">Flutter</a> · <a href="https://github.com/livekit/client-sdk-react-native">React Native</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/client-sdk-unity-web">Unity (web)</a> · <a href="https://github.com/livekit/client-sdk-unity">Unity (beta)</a></td></tr><tr></tr>
 <tr><td>Server APIs</td><td><a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/server-sdk-go">Golang</a> · <a href="https://github.com/livekit/server-sdk-ruby">Ruby</a> · <a href="https://github.com/livekit/server-sdk-kotlin">Java/Kotlin</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/agence104/livekit-server-sdk-php">PHP (community)</a></td></tr><tr></tr>
 <tr><td>Agents Frameworks</td><td><b>Python</b> · <a href="https://github.com/livekit/agent-playground">Playground</a></td></tr><tr></tr>
-<tr><td>Services</td><td><a href="https://github.com/livekit/livekit">Livekit server</a> · <a href="https://github.com/livekit/egress">Egress</a> · <a href="https://github.com/livekit/ingress">Ingress</a> · <a href="https://github.com/livekit/sip">SIP</a></td></tr><tr></tr>
-<tr><td>Resources</td><td><a href="https://docs.livekit.io">Docs</a> · <a href="https://github.com/livekit-examples">Example apps</a> · <a href="https://livekit.io/cloud">Cloud</a> · <a href="https://docs.livekit.io/oss/deployment">Self-hosting</a> · <a href="https://github.com/livekit/livekit-cli">CLI</a></td></tr>
+<tr><td>Services</td><td><a href="https://github.com/livekit/livekit">LiveKit server</a> · <a href="https://github.com/livekit/egress">Egress</a> · <a href="https://github.com/livekit/ingress">Ingress</a> · <a href="https://github.com/livekit/sip">SIP</a></td></tr><tr></tr>
+<tr><td>Resources</td><td><a href="https://docs.livekit.io">Docs</a> · <a href="https://github.com/livekit-examples">Example apps</a> · <a href="https://livekit.io/cloud">Cloud</a> · <a href="https://docs.livekit.io/home/self-hosting/deployment">Self-hosting</a> · <a href="https://github.com/livekit/livekit-cli">CLI</a></td></tr>
 </tbody>
 </table>
 <!--END_REPO_NAV-->

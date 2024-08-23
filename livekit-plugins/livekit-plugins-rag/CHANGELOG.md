@@ -1,5 +1,17 @@
 # livekit-plugins-rag
 
+## 0.2.2
+
+### Patch Changes
+
+- rag: fix backward compatibility - [#629](https://github.com/livekit/agents/pull/629) ([@afigar](https://github.com/afigar))
+
+## 0.2.1
+
+### Patch Changes
+
+- rag: add missing logger file - [#571](https://github.com/livekit/agents/pull/571) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.2.0
 
 ### Minor Changes

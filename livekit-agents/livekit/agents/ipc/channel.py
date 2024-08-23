@@ -1,27 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import io
-import queue
 import struct
-import threading
-from typing import ClassVar, Optional, Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
-
-class ProcessConn(Protocol):
-    def recv_bytes(self) -> bytes: ...
-
-    def send_bytes(
-        self,
-        buf: bytes | bytearray | memoryview,
-        offset: int = 0,
-        size: int | None = None,
-    ): ...
-
-    def poll(self, timeout: float) -> bool: ...
-
-    def close(self) -> None: ...
+from .. import utils
 
 
 class Message(Protocol):
@@ -35,142 +18,47 @@ class DataMessage(Message, Protocol):
     def read(self, b: io.BytesIO) -> None: ...
 
 
-class ChannelClosed(Exception):
-    pass
+MessagesDict = dict[int, type[Message]]
 
 
-class ProcChannel:
-    _sentinel = None
+def _read_message(data: bytes, messages: MessagesDict) -> Message:
+    bio = io.BytesIO(data)
+    msg_id = read_int(bio)
+    msg = messages[msg_id]()
+    if isinstance(msg, DataMessage):
+        msg.read(bio)
 
-    def __init__(
-        self,
-        *,
-        conn: ProcessConn,
-        messages: dict[int, type[Message]],
-    ) -> None:
-        self._conn = conn
-        self._messages = messages
-        self._closed = False
-
-    def recv(self) -> Message:
-        if self._closed:
-            raise ChannelClosed()
-
-        try:
-            b = io.BytesIO(self._conn.recv_bytes())
-        except (OSError, EOFError, ValueError):
-            raise ChannelClosed()
-
-        msg_id = read_int(b)
-        msg = self._messages[msg_id]()
-
-        if isinstance(msg, DataMessage):
-            msg.read(b)
-
-        return msg
-
-    def send(self, msg: Message) -> None:
-        if self._closed:
-            raise ChannelClosed()
-
-        b = io.BytesIO()
-        write_int(b, msg.MSG_ID)
-
-        if isinstance(msg, DataMessage):
-            msg.write(b)
-
-        try:
-            self._conn.send_bytes(b.getvalue())
-        except (OSError, ValueError):
-            raise ChannelClosed()
-
-    def close(self) -> None:
-        if self._closed:
-            return
-
-        self._closed = True
-        self._conn.close()
+    return msg
 
 
-class AsyncProcChannel(ProcChannel):
-    def __init__(
-        self,
-        *,
-        conn: ProcessConn,
-        messages: dict[int, type[Message]],
-        loop: asyncio.AbstractEventLoop,
-    ):
-        super().__init__(conn=conn, messages=messages)
-        self._loop = loop
+def _write_message(msg: Message) -> bytes:
+    bio = io.BytesIO()
+    write_int(bio, msg.MSG_ID)
 
-        self._read_q = asyncio.Queue[Optional[Message]]()
-        self._write_q = queue.Queue[Optional[Message]]()
-        self._exit_fut = asyncio.Future[None]()
+    if isinstance(msg, DataMessage):
+        msg.write(bio)
 
-        self._read_t = threading.Thread(
-            target=self._read_thread, daemon=True, name="proc_channel_read"
-        )
-        self._write_t = threading.Thread(
-            target=self._write_thread, daemon=True, name="proc_channel_write"
-        )
-        self._read_t.start()
-        self._write_t.start()
-        self._closed = False
+    return bio.getvalue()
 
-    async def arecv(self) -> Message:
-        if self._closed:
-            raise ChannelClosed()
 
-        msg = await self._read_q.get()
-        if msg is self._sentinel:
-            raise ChannelClosed()
+async def arecv_message(
+    dplx: utils.aio.duplex_unix._AsyncDuplex, messages: MessagesDict
+) -> Message:
+    return _read_message(await dplx.recv_bytes(), messages)
 
-        return msg
 
-    async def asend(self, msg: Message) -> None:
-        if self._closed:
-            raise ChannelClosed()
+async def asend_message(dplx: utils.aio.duplex_unix._AsyncDuplex, msg: Message) -> None:
+    await dplx.send_bytes(_write_message(msg))
 
-        self._write_q.put_nowait(msg)
 
-    async def aclose(self) -> None:
-        self.close()
-        await self._exit_fut
+def recv_message(
+    dplx: utils.aio.duplex_unix._Duplex, messages: MessagesDict
+) -> Message:
+    return _read_message(dplx.recv_bytes(), messages)
 
-    def _read_thread(self) -> None:
-        while True:
-            try:
-                if self._conn.poll(1.0):
-                    msg = self.recv()
-                    try:
-                        self._loop.call_soon_threadsafe(self._read_q.put_nowait, msg)
-                    except RuntimeError:
-                        break
-            except (OSError, EOFError, ValueError):
-                break
-            except ChannelClosed:
-                break
 
-        with contextlib.suppress(RuntimeError):
-
-            def _close():
-                self._exit_fut.set_result(None)
-                self._read_q.put_nowait(self._sentinel)
-                self._write_q.put_nowait(self._sentinel)
-                self.close()
-
-            self._loop.call_soon_threadsafe(_close)
-
-    def _write_thread(self) -> None:
-        while True:
-            msg = self._write_q.get()
-            if msg is self._sentinel:
-                break
-
-            try:
-                self.send(msg)
-            except ChannelClosed:
-                break
+def send_message(dplx: utils.aio.duplex_unix._Duplex, msg: Message) -> None:
+    dplx.send_bytes(_write_message(msg))
 
 
 def write_bytes(b: io.BytesIO, buf: bytes) -> None:

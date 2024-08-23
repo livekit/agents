@@ -23,16 +23,18 @@ from livekit.agents import Plugin
 
 import nltk  # type: ignore
 
+from .log import logger
+
 
 class NltkPlugin(Plugin):
     def __init__(self):
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
     def download_files(self):
         try:
-            _ = nltk.data.find("tokenizers/punkt")
+            _ = nltk.data.find("tokenizers/punkt_tab")
         except LookupError:
-            nltk.download("punkt")
+            nltk.download("punkt_tab")
 
 
 Plugin.register_plugin(NltkPlugin())

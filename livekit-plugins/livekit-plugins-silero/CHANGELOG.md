@@ -1,5 +1,35 @@
 # livekit-plugins-silero
 
+## 0.6.4
+
+### Patch Changes
+
+- silero: adjust vad activation threshold - [#639](https://github.com/livekit/agents/pull/639) ([@theomonnom](https://github.com/theomonnom))
+
+- silero: fix vad padding & static audio - [#631](https://github.com/livekit/agents/pull/631) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.6.3
+
+### Patch Changes
+
+- silero: fix high cpu usage - [#569](https://github.com/livekit/agents/pull/569) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.6.2
+
+### Patch Changes
+
+- silero: tiny tweaks - [#565](https://github.com/livekit/agents/pull/565) ([@theomonnom](https://github.com/theomonnom))
+
+- silero: optimize numpy input buffers - [#550](https://github.com/livekit/agents/pull/550) ([@theomonnom](https://github.com/theomonnom))
+
+- silero: bring back expfilter - [#562](https://github.com/livekit/agents/pull/562) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.6.1
+
+### Patch Changes
+
+- fix end_input not flushing & unhandled flush messages - [#528](https://github.com/livekit/agents/pull/528) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.0
 
 ### Minor Changes

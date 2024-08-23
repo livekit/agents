@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from multiprocessing.context import BaseContext
-from typing import Any, Callable, Coroutine, Literal
+from typing import Any, Awaitable, Callable, Literal
 
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
@@ -14,13 +14,15 @@ EventTypes = Literal[
     "process_created", "process_started", "process_ready", "process_closed"
 ]
 
+MAX_CONCURRENT_INITIALIZATIONS = 3
+
 
 class ProcPool(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
         initialize_process_fnc: Callable[[JobProcess], Any],
-        job_entrypoint_fnc: Callable[[JobContext], Coroutine],
+        job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
@@ -35,14 +37,26 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._initialize_timeout = initialize_timeout
         self._loop = loop
 
+        self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
         self._proc_needed_sem = asyncio.Semaphore(num_idle_processes)
         self._warmed_proc_queue = asyncio.Queue[SupervisedProc]()
         self._processes: list[SupervisedProc] = []
         self._started = False
+        self._closed = False
 
     @property
     def processes(self) -> list[SupervisedProc]:
         return self._processes
+
+    def get_by_job_id(self, job_id: str) -> SupervisedProc | None:
+        return next(
+            (
+                x
+                for x in self._processes
+                if x.running_job and x.running_job.job.id == job_id
+            ),
+            None,
+        )
 
     def start(self) -> None:
         if self._started:
@@ -55,6 +69,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         if not self._started:
             return
 
+        self._closed = True
         await aio.gracefully_cancel(self._main_atask)
 
     async def launch_job(self, info: RunningJobInfo) -> None:
@@ -73,18 +88,24 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             loop=self._loop,
         )
         try:
-            self.emit("process_created", proc)
-            proc.start()
             self._processes.append(proc)
-            self.emit("process_started", proc)
-            try:
-                await proc.initialize()
-                # process where initialization times out will never fire "process_ready"
-                # neither be used to launch jobs
-                self.emit("process_ready", proc)
-                self._warmed_proc_queue.put_nowait(proc)
-            except asyncio.TimeoutError:
-                self._proc_needed_sem.release()  # notify to warm a new process after initialization failure
+
+            async with self._init_sem:
+                if self._closed:
+                    return
+
+                self.emit("process_created", proc)
+                await proc.start()
+                self.emit("process_started", proc)
+                try:
+                    await proc.initialize()
+                    # process where initialization times out will never fire "process_ready"
+                    # neither be used to launch jobs
+                    self.emit("process_ready", proc)
+                    self._warmed_proc_queue.put_nowait(proc)
+                except Exception:
+                    self._proc_needed_sem.release()  # notify to warm a new process after initialization failure
+
             await proc.join()
             self.emit("process_closed", proc)
         finally:
@@ -92,7 +113,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        watch_tasks = []
+        watch_tasks: list[asyncio.Task[None]] = []
         try:
             while True:
                 await self._proc_needed_sem.acquire()

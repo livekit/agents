@@ -26,9 +26,9 @@ class SentenceChunker:
     def chunk(self, *, text: str) -> list[str]:
         chunks = []
 
-        buf_words = []
+        buf_words: list[str] = []
         for paragraph in self._paragraph_tokenizer(text):
-            last_buf_words = []
+            last_buf_words: list[str] = []
 
             for sentence in self._sentence_tokenizer.tokenize(text=paragraph):
                 for word in self._word_tokenizer.tokenize(text=sentence):

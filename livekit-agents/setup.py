@@ -48,19 +48,23 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "click~=8.1",
-        "livekit~=0.12.0.dev1",
-        "livekit-api~=0.6.0",
-        "livekit-protocol~=0.6.0",
+        "livekit~=0.12",
+        "livekit-api~=0.6",
+        "livekit-protocol~=0.6",
         "protobuf>=3",
         "pyjwt>=2.0.0",
         "types-protobuf>=4,<5",
         "watchfiles~=0.22",
         "psutil~=5.9",
+        "aiohttp~=3.10",
     ],
     extras_require={
         ':sys_platform=="win32"': [
             "colorama"
         ],  # fix logs color on windows (devmode only)
+        ':sys_platform!="win32"': [
+            "aiodns~=3.2"
+        ],  # use default aiohttp resolver on windows
         "codecs": ["av>=11.0.0"],
         "images": ["pillow~=10.3.0"],
     },

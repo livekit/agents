@@ -15,41 +15,47 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 from dataclasses import dataclass
 from typing import Any, Awaitable, MutableSet
 
 import httpx
-from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import llm
 
 import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
-from .models import ChatModels
-from .utils import AsyncAzureADTokenProvider, get_base_url
-
-DEFAULT_MODEL = "gpt-4o"
+from .models import (
+    ChatModels,
+    GroqChatModels,
+    OctoChatModels,
+    PerplexityChatModels,
+    TogetherChatModels,
+)
+from .utils import AsyncAzureADTokenProvider, build_oai_message
 
 
 @dataclass
 class LLMOptions:
     model: str | ChatModels
+    user: str | None
 
 
 class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = DEFAULT_MODEL,
+        model: str | ChatModels = "gpt-4o",
+        api_key: str | None = None,
         base_url: str | None = None,
+        user: str | None = None,
         client: openai.AsyncClient | None = None,
     ) -> None:
-        self._opts = LLMOptions(model=model)
+        self._opts = LLMOptions(model=model, user=user)
         self._client = client or openai.AsyncClient(
-            base_url=get_base_url(base_url),
+            api_key=api_key,
+            base_url=base_url,
             http_client=httpx.AsyncClient(
                 timeout=5.0,
                 follow_redirects=True,
@@ -63,9 +69,9 @@ class LLM(llm.LLM):
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
     @staticmethod
-    def create_azure_client(
+    def with_azure(
         *,
-        model: str | ChatModels = DEFAULT_MODEL,
+        model: str | ChatModels = "gpt-4o",
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
@@ -75,6 +81,7 @@ class LLM(llm.LLM):
         organization: str | None = None,
         project: str | None = None,
         base_url: str | None = None,
+        user: str | None = None,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -98,7 +105,110 @@ class LLM(llm.LLM):
             base_url=base_url,
         )  # type: ignore
 
-        return LLM(model=model, client=azure_client)
+        return LLM(model=model, client=azure_client, user=user)
+
+    @staticmethod
+    def with_fireworks(
+        *,
+        model: str = "accounts/fireworks/models/llama-v3p1-70b-instruct",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.fireworks.ai/inference/v1",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+    ) -> LLM:
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
+
+    @staticmethod
+    def with_groq(
+        *,
+        model: str | GroqChatModels = "llama3-8b-8192",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.groq.com/openai/v1",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+    ) -> LLM:
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
+
+    @staticmethod
+    def with_octo(
+        *,
+        model: str | OctoChatModels = "llama-2-13b-chat",
+        api_key: str | None = None,
+        base_url: str | None = "https://text.octoai.run/v1",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+    ) -> LLM:
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
+
+    @staticmethod
+    def with_ollama(
+        *,
+        model: str = "llama3.1",
+        base_url: str | None = "http://localhost:11434/v1",
+        client: openai.AsyncClient | None = None,
+    ) -> LLM:
+        return LLM(model=model, api_key="ollama", base_url=base_url, client=client)
+
+    @staticmethod
+    def with_perplexity(
+        *,
+        model: str | PerplexityChatModels = "llama-3.1-sonar-small-128k-chat",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.perplexity.ai",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+    ) -> LLM:
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
+
+    @staticmethod
+    def with_together(
+        *,
+        model: str | TogetherChatModels = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.together.xyz/v1",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+    ) -> LLM:
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
+
+    @staticmethod
+    def create_azure_client(
+        *,
+        model: str | ChatModels = "gpt-4o",
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+        organization: str | None = None,
+        project: str | None = None,
+        base_url: str | None = None,
+        user: str | None = None,
+    ) -> LLM:
+        logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
+        return LLM.with_azure(
+            model=model,
+            azure_endpoint=azure_endpoint,
+            api_version=api_version,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
+            organization=organization,
+            project=project,
+            base_url=base_url,
+            user=user,
+        )
 
     def chat(
         self,
@@ -120,6 +230,8 @@ class LLM(llm.LLM):
             if fnc_ctx and parallel_tool_calls is not None:
                 opts["parallel_tool_calls"] = parallel_tool_calls
 
+        user = self._opts.user or openai.NOT_GIVEN
+
         messages = _build_oai_context(chat_ctx, id(self))
         cmp = self._client.chat.completions.create(
             messages=messages,
@@ -127,6 +239,7 @@ class LLM(llm.LLM):
             n=n,
             temperature=temperature,
             stream=True,
+            user=user,
             **opts,
         )
 
@@ -240,77 +353,4 @@ class LLMStream(llm.LLMStream):
 def _build_oai_context(
     chat_ctx: llm.ChatContext, cache_key: Any
 ) -> list[ChatCompletionMessageParam]:
-    return [_build_oai_message(msg, cache_key) for msg in chat_ctx.messages]  # type: ignore
-
-
-def _build_oai_message(msg: llm.ChatMessage, cache_key: Any):
-    oai_msg: dict = {"role": msg.role}
-
-    if msg.name:
-        oai_msg["name"] = msg.name
-
-    # add content if provided
-    if isinstance(msg.content, str):
-        oai_msg["content"] = msg.content
-    elif isinstance(msg.content, list):
-        oai_content = []
-        for cnt in msg.content:
-            if isinstance(cnt, str):
-                oai_content.append({"type": "text", "text": cnt})
-            elif isinstance(cnt, llm.ChatImage):
-                oai_content.append(_build_oai_image_content(cnt, cache_key))
-
-        oai_msg["content"] = oai_content
-
-    # make sure to provide when function has been called inside the context
-    # (+ raw_arguments)
-    if msg.tool_calls is not None:
-        tool_calls: list[dict[str, Any]] = []
-        oai_msg["tool_calls"] = tool_calls
-        for fnc in msg.tool_calls:
-            tool_calls.append(
-                {
-                    "id": fnc.tool_call_id,
-                    "type": "function",
-                    "function": {
-                        "name": fnc.function_info.name,
-                        "arguments": fnc.raw_arguments,
-                    },
-                }
-            )
-
-    # tool_call_id is set when the message is a response/result to a function call
-    # (content is a string in this case)
-    if msg.tool_call_id:
-        oai_msg["tool_call_id"] = msg.tool_call_id
-
-    return oai_msg
-
-
-def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):
-    if isinstance(image.image, str):  # image url
-        return {
-            "type": "image_url",
-            "image_url": {"url": image.image, "detail": "auto"},
-        }
-    elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
-        if cache_key not in image._cache:
-            # inside our internal implementation, we allow to put extra metadata to
-            # each ChatImage (avoid to reencode each time we do a chatcompletion request)
-            opts = utils.images.EncodeOptions()
-            if image.inference_width and image.inference_height:
-                opts.resize_options = utils.images.ResizeOptions(
-                    width=image.inference_width,
-                    height=image.inference_height,
-                    strategy="center_aspect_fit",
-                )
-
-            encoded_data = utils.images.encode(image.image, opts)
-            image._cache[cache_key] = base64.b64encode(encoded_data).decode("utf-8")
-
-        return {
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{image._cache[cache_key]}"},
-        }
-
-    raise ValueError(f"unknown image type {type(image.image)}")
+    return [build_oai_message(msg, cache_key) for msg in chat_ctx.messages]  # type: ignore
