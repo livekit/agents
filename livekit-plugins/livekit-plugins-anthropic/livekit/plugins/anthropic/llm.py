@@ -141,13 +141,11 @@ class LLMStream(llm.LLMStream):
             elif event.type == "message_stop":
                 pass
             elif event.type == "content_block_start":
-                print("NEIL content block start", event)
                 if event.content_block.type == "tool_use":
                     self._tool_call_id = event.content_block.id
                     self._fnc_raw_arguments = ""
                     self._fnc_name = event.content_block.name
             elif event.type == "content_block_delta":
-                print("NEIL content block delta", event)
                 delta = event.delta
                 if delta.type == "text_delta":
                     return llm.ChatChunk(
@@ -166,13 +164,13 @@ class LLMStream(llm.LLMStream):
                 if self._tool_call_id is not None and self._fnc_ctx:
                     assert self._fnc_name is not None
                     assert self._fnc_raw_arguments is not None
-                    print("NEIL content block stop", self._fnc_raw_arguments)
                     fnc_info = _create_ai_function_info(
                         self._fnc_ctx,
                         self._tool_call_id,
                         self._fnc_name,
                         self._fnc_raw_arguments,
                     )
+                    self._function_calls_info.append(fnc_info)
                     chunk = llm.ChatChunk(
                         choices=[
                             llm.Choice(
@@ -412,6 +410,10 @@ def _build_function_description(
             raise ValueError(f"unsupported type {t} for ai_property")
 
         p: dict[str, Any] = {}
+        if arg_info.default is inspect.Parameter.empty:
+            p["required"] = True
+        else:
+            p["required"] = False
 
         if arg_info.description:
             p["description"] = arg_info.description
@@ -432,12 +434,8 @@ def _build_function_description(
         return p
 
     input_schema: dict[str, object] = {"type": "object"}
-    required_properties: list[str] = []
 
     for arg_info in fnc_info.arguments.values():
-        if arg_info.default is inspect.Parameter.empty:
-            required_properties.append(arg_info.name)
-
         input_schema[arg_info.name] = build_schema_field(arg_info)
 
     return {

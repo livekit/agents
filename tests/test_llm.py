@@ -71,7 +71,7 @@ class FncCtx(FunctionContext):
         ],
     ) -> None: ...
 
-    @ai_callable(description="Update userinfo")
+    @ai_callable(description="Update user info")
     def update_user_info(
         self,
         email: Annotated[
@@ -91,7 +91,7 @@ def test_hashable_typeinfo():
 
 
 LLMS = [
-    # openai.LLM(),
+    openai.LLM(),
     anthropic.LLM(),
 ]
 
@@ -102,6 +102,13 @@ async def test_chat(llm: llm.LLM):
     chat_ctx = ChatContext().append(
         text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.'
     )
+
+    # Anthropics LLM requires at least one message (system messages don't count)
+    if isinstance(llm, anthropic.LLM):
+        chat_ctx.append(
+            text="Hello",
+            role="user",
+        )
 
     stream = llm.chat(chat_ctx=chat_ctx)
     text = ""
@@ -119,7 +126,9 @@ async def test_basic_fnc_calls(llm: llm.LLM):
     fnc_ctx = FncCtx()
 
     stream = await _request_fnc_call(
-        llm, "What's the weather in San Francisco and Paris?", fnc_ctx
+        llm,
+        "What's the weather in San Francisco and what's the weather Paris?",
+        fnc_ctx,
     )
     calls = stream.execute_functions()
     await asyncio.gather(*[f.task for f in calls])
