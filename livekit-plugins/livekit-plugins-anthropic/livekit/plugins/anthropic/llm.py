@@ -74,7 +74,7 @@ class LLM(llm.LLM):
     ) -> "LLMStream":
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
-            fncs_desc: list[dict[str, Any]] = []
+            fncs_desc: list[anthropic.types.ToolParam] = []
             for fnc in fnc_ctx.ai_functions.values():
                 fncs_desc.append(_build_function_description(fnc))
 
@@ -266,16 +266,16 @@ def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
                     a_content.append(_build_anthropic_image_content(cnt, cache_key))
         return a_msg
     elif msg.role == "tool":
-        a_msg: anthropic.types.MessageParam = {
+        ant_msg: anthropic.types.MessageParam = {
             "role": "assistant",
             "content": [],
         }
-        assert isinstance(a_msg["content"], list)
+        assert isinstance(ant_msg["content"], list)
         # make sure to provide when function has been called inside the context
         # (+ raw_arguments)
         if msg.tool_calls is not None:
             for fnc in msg.tool_calls:
-                a_msg["content"].append(
+                ant_msg["content"].append(
                     {
                         "id": fnc.tool_call_id,
                         "type": "tool_use",
@@ -284,7 +284,7 @@ def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
                     }
                 )
                 if isinstance(msg.content, str):
-                    a_msg["content"].append(
+                    ant_msg["content"].append(
                         {
                             "tool_use_id": fnc.tool_call_id,
                             "type": "tool_result",
@@ -295,7 +295,7 @@ def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
                     logger.warning(
                         "tool result content is not a string, this is not supported by anthropic"
                     )
-        return a_msg
+        return ant_msg
 
     return None
 
