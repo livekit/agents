@@ -146,9 +146,7 @@ class SynthesizeStream(ABC):
 
     async def __anext__(self) -> SynthesizedAudio:
         await self._req_ch.__anext__()
-        return await asyncio.wait_for(
-            self._event_ch.__anext__(), self._timeout
-        )
+        return await asyncio.wait_for(self._event_ch.__anext__(), self._timeout)
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
