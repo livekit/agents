@@ -70,6 +70,7 @@ The following plugins are available today:
 | [livekit-plugins-nltk](https://pypi.org/project/livekit-plugins-nltk/)             | Utilities for working with text |
 | [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-openai/)         | LLM, STT, TTS                   |
 | [livekit-plugins-silero](https://pypi.org/project/livekit-plugins-silero/)         | VAD                             |
+| [livekit-plugins-anthropic](https://pypi.org/project/livekit-plugins-anthropic/)   | LLM                             |
 
 ## Using LLM models
 
