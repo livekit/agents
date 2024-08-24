@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import socket
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -24,7 +25,7 @@ class CliArgs:
 
     # pipe used for the communication between the watch server and the watch client
     # when reload/dev mode is enabled
-    mp_cch: channel.ProcessConn | None = None
+    mp_cch: socket.socket | None = None
 
 
 @dataclass

@@ -1,5 +1,12 @@
 # livekit-plugins-cartesia
 
+## 0.4.1
+
+### Patch Changes
+
+- Switch Cartesia to a sentence tokenizer and keep the same context id throughout. - [#608](https://github.com/livekit/agents/pull/608) ([@keepingitneil](https://github.com/keepingitneil))
+  Propagate segment_id through the basic sentence tokenizer
+
 ## 0.3.0
 
 ### Minor Changes

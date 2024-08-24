@@ -52,6 +52,7 @@ jobs:
           echo "exitcode=$?" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Add changes
         if: ${{ steps.release_mode.outputs.exitcode == '0' }}
         uses: EndBug/add-and-commit@v9
@@ -79,38 +80,11 @@ jobs:
     strategy:
       matrix:
         package: ${{ fromJson(needs.bump.outputs.packages) }}
-    defaults:
-      run:
-        working-directory: "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}"
 
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          lfs: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.9"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install build
-
-      - name: Build package
-        run: python -m build
-
-      - name: Store the distribution packages
-        uses: actions/upload-artifact@v3
-        with:
-          name: python-package-distributions
-          path: "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}/dist/"
+    uses: livekit/agents/.github/workflows/build-package.yml@main
+    with:
+      package: ${{ matrix.package.name }}
+      artifact_name: python-package-distributions
 
   publish:
     needs:

@@ -1,5 +1,11 @@
 # livekit-plugins-deepgram
 
+## 0.6.5
+
+### Patch Changes
+
+- deepgram: fallback to nova-2-general when the language isn't supported - [#623](https://github.com/livekit/agents/pull/623) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.4
 
 ### Patch Changes

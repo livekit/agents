@@ -4,7 +4,11 @@ import re
 
 
 def update_py_version(project_root: pathlib.Path, py_version_path: pathlib.Path) -> str:
-    with open(project_root / "package.json") as f:
+    pkg_file = project_root / "package.json"
+    if not pkg_file.exists():
+        return
+
+    with open(pkg_file) as f:
         package = json.load(f)
         version = package["version"]
 

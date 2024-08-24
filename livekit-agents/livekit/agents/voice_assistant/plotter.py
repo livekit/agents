@@ -1,10 +1,14 @@
 import asyncio
+import contextlib
 import io
 import multiprocessing as mp
+import selectors
+import socket
 import time
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Tuple
 
+from .. import utils
 from ..ipc import channel
 
 PlotType = Literal["vad_probability", "raw_vol", "smoothed_vol"]
@@ -57,7 +61,7 @@ PLT_MESSAGES: dict = {
 }
 
 
-def _draw_plot(reader):
+def _draw_plot(mp_cch):
     try:
         import matplotlib as mpl  # type: ignore
         import matplotlib.pyplot as plt  # type: ignore
@@ -77,11 +81,18 @@ def _draw_plot(reader):
 
     max_points = 250
 
-    plot_rx = channel.ProcChannel(conn=reader, messages=PLT_MESSAGES)
+    duplex = utils.aio.duplex_unix._Duplex.open(mp_cch)
+
+    selector = selectors.DefaultSelector()
+    selector.register(mp_cch, selectors.EVENT_READ)
 
     def _draw_cb(sp, pv):
-        while reader.poll():
-            msg = plot_rx.recv()
+        while True:
+            events = selector.select(timeout=0.01)
+            if not events:
+                break
+
+            msg = channel.recv_message(duplex, PLT_MESSAGES)
             if isinstance(msg, PlotMessage):
                 data = plot_data.setdefault(msg.which, ([], []))
                 data[0].append(msg.x)
@@ -129,7 +140,7 @@ def _draw_plot(reader):
 
         fig.canvas.draw()
 
-    timer = fig.canvas.new_timer(interval=150)
+    timer = fig.canvas.new_timer(interval=33)
     timer.add_callback(_draw_cb, sp, pv)
     timer.start()
     plt.show()
@@ -140,18 +151,18 @@ class AssistantPlotter:
         self._loop = loop
         self._started = False
 
-    def start(self):
+    async def start(self):
         if self._started:
             return
 
-        mp_pch, mp_cch = mp.Pipe(duplex=True)
-        self._plot_tx = channel.AsyncProcChannel(
-            conn=mp_pch, loop=self._loop, messages=PLT_MESSAGES
-        )
+        mp_pch, mp_cch = socket.socketpair()
+        self._duplex = await utils.aio.duplex_unix._AsyncDuplex.open(mp_pch)
         self._plot_proc = mp.Process(target=_draw_plot, args=(mp_cch,), daemon=True)
         self._plot_proc.start()
+        mp_cch.close()
 
         self._started = True
+        self._closed = False
         self._start_time = time.time()
 
     def plot_value(self, which: PlotType, y: float):
@@ -159,17 +170,32 @@ class AssistantPlotter:
             return
 
         ts = time.time() - self._start_time
-        asyncio.ensure_future(self._plot_tx.asend(PlotMessage(which=which, x=ts, y=y)))
+        self._send_message(PlotMessage(which=which, x=ts, y=y))
 
     def plot_event(self, which: EventType):
         if not self._started:
             return
 
         ts = time.time() - self._start_time
-        asyncio.ensure_future(self._plot_tx.asend(PlotEventMessage(which=which, x=ts)))
+        self._send_message(PlotEventMessage(which=which, x=ts))
 
-    def terminate(self):
+    def _send_message(self, msg: channel.Message) -> None:
+        if self._closed:
+            return
+
+        async def _asend_message():
+            try:
+                await channel.asend_message(self._duplex, msg)
+            except Exception:
+                self._closed = True
+
+        asyncio.ensure_future(_asend_message())
+
+    async def terminate(self):
         if not self._started:
             return
 
         self._plot_proc.terminate()
+
+        with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
+            await self._duplex.aclose()
