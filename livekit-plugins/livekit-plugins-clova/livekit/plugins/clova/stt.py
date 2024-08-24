@@ -39,6 +39,13 @@ class STT(stt.STT):
         http_session: Optional[aiohttp.ClientSession] = None,
         threshold: float = 0.5,
     ):
+        """
+        Create a new instance of Clova STT.
+
+        ``secret`` and ``invoke_url`` must be set, either using arguments or by setting the
+        ``CLOVA_STT_SECRET_KEY`` and ``CLOVA_STT_INVOKE_URL`` environmental variables, respectively.
+        """
+
         super().__init__(
             capabilities=STTCapabilities(streaming=False, interim_results=True)
         )

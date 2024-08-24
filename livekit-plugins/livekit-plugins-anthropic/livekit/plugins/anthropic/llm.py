@@ -48,6 +48,18 @@ class LLM(llm.LLM):
         user: str | None = None,
         client: anthropic.AsyncClient | None = None,
     ) -> None:
+        """
+        Create a new instance of Anthropic LLM.
+
+        ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
+        the ``ANTHROPIC_API_KEY`` environmental variable.
+        """
+
+        # throw an error on our end
+        api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if api_key is None:
+            raise ValueError("Anthropic API key is required")
+
         self._opts = LLMOptions(model=model, user=user)
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,

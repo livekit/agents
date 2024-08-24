@@ -104,6 +104,13 @@ class TTS(tts.TTS):
         chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
+        """
+        Create a new instance of ElevenLabs TTS.
+
+        ``api_key`` must be set to your ElevenLabs API key, either using the argument or by setting
+        the ``ELEVEN_API_KEY`` environmental variable.
+        """
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,

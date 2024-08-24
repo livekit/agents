@@ -51,9 +51,13 @@ class TTS(tts.TTS):
         credentials_file: str | None = None,
     ) -> None:
         """
-        if no credentials is provided, it will use the credentials on the environment
-        GOOGLE_APPLICATION_CREDENTIALS (default behavior of Google TextToSpeechAsyncClient)
+        Create a new instance of Google TTS.
+
+        Credentials must be provided, either by using the ``credentials_info`` dict, or reading
+        from the file specified in ``credentials_file`` or the ``GOOGLE_APPLICATION_CREDENTIALS``
+        environmental variable.
         """
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,

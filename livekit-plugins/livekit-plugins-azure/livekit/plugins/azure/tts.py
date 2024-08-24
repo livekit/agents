@@ -42,6 +42,13 @@ class TTS(tts.TTS):
         speech_region: str | None = None,
         voice: str | None = None,
     ) -> None:
+        """
+        Create a new instance of Azure TTS.
+
+        ``speech_key`` and ``speech_region`` must be set, either using arguments or by setting the
+        ``AZURE_SPEECH_KEY`` and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
+        """
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,

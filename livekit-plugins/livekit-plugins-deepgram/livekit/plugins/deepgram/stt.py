@@ -68,6 +68,13 @@ class STT(stt.STT):
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
+        """
+        Create a new instance of Deepgram STT.
+
+        ``api_key`` must be set to your Deepgram API key, either using the argument or by setting
+        the ``DEEPGRAM_API_KEY`` environmental variable.
+        """
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True, interim_results=interim_results
