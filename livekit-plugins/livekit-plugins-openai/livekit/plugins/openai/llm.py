@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, MutableSet
 
@@ -182,11 +183,11 @@ class LLM(llm.LLM):
         Create a new instance of OctoAI LLM.
 
         ``api_key`` must be set to your OctoAI API key, either using the argument or by setting
-        the ``OCTO_API_KEY`` environmental variable.
+        the ``OCTOAI_TOKEN`` environmental variable.
         """
 
         # shim for not using OPENAI_API_KEY
-        api_key = api_key or os.environ.get("OCTO_API_KEY")
+        api_key = api_key or os.environ.get("OCTOAI_TOKEN")
         if api_key is None:
             raise ValueError("OctoAI API key is required")
 

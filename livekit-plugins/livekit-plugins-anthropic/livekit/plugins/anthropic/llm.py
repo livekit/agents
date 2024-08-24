@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import inspect
 import json
+import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, List, Tuple, get_args, get_origin
 
