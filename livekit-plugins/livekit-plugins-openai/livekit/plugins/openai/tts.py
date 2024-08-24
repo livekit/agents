@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import AsyncContextManager
 
@@ -48,6 +49,13 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
     ) -> None:
+        """
+        Create a new instance of OpenAI TTS.
+
+        ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
+        ``OPENAI_API_KEY`` environmental variable.
+        """
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
@@ -55,6 +63,11 @@ class TTS(tts.TTS):
             sample_rate=OPENAI_TTS_SAMPLE_RATE,
             num_channels=OPENAI_TTS_CHANNELS,
         )
+
+        # throw an error on our end
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if api_key is None:
+            raise ValueError("OpenAI API key is required")
 
         self._client = client or openai.AsyncClient(
             api_key=api_key,
