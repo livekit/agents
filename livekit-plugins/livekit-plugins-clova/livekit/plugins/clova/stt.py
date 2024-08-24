@@ -26,7 +26,7 @@ from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE
 
 from .common import resample_audio
 from .log import logger
-from .models import ClovaSttLanguages, ClovaSpeechAPIType, clova_languages_mapping
+from .models import ClovaSpeechAPIType, ClovaSttLanguages, clova_languages_mapping
 
 
 class STT(stt.STT):
