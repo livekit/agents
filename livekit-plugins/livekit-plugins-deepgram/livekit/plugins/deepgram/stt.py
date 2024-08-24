@@ -297,6 +297,7 @@ class SpeechStream(stt.SpeechStream):
 
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
+                    self._req_ch.send_nowait(None)
                     frames = audio_bstream.flush()
                 else:
                     frames = audio_bstream.write(data.data)

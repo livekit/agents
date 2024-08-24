@@ -241,6 +241,7 @@ class SpeechStream(stt.SpeechStream):
 
                         async for frame in self._input_ch:
                             if isinstance(frame, rtc.AudioFrame):
+                                self._req_ch.send_nowait(None)
                                 frame = frame.remix_and_resample(
                                     self._sample_rate, self._num_channels
                                 )

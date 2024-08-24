@@ -114,6 +114,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             async for input in self._input_ch:
                 if isinstance(input, rtc.AudioFrame):
+                    self._req_ch.send_nowait(None)
                     self._stream.write(input.data.tobytes())
 
             self._stream.close()

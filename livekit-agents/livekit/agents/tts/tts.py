@@ -89,10 +89,7 @@ class ChunkedStream(ABC):
         self._event_ch.close()
 
     async def __anext__(self) -> SynthesizedAudio:
-        try:
-            return await asyncio.wait_for(self._event_ch.__anext__(), self._timeout)
-        except asyncio.TimeoutError as e:
-            raise e.__class__("synthesis timed out")
+        return await asyncio.wait_for(self._event_ch.__anext__(), self._timeout)
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
@@ -105,10 +102,10 @@ class SynthesizeStream(ABC):
     def __init__(self, *, timeout: float | None = 10.0):
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._req_ch = aio.Chan[None]()
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._timeout = timeout
-        self._pending = 0
 
     @abstractmethod
     async def _main_task(self) -> None: ...
@@ -124,7 +121,6 @@ class SynthesizeStream(ABC):
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(self._FlushSentinel())
-        self._pending += 1
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
@@ -136,6 +132,7 @@ class SynthesizeStream(ABC):
         self._input_ch.close()
         await aio.gracefully_cancel(self._task)
         self._event_ch.close()
+        self._req_ch.close()
 
     def _check_not_closed(self) -> None:
         if self._event_ch.closed:
@@ -148,18 +145,10 @@ class SynthesizeStream(ABC):
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
     async def __anext__(self) -> SynthesizedAudio:
-        if self._pending > 0:
-            try:
-                event = await asyncio.wait_for(
-                    self._event_ch.__anext__(), self._timeout
-                )
-            except asyncio.TimeoutError as e:
-                self._pending -= 1
-                raise e
-        else:
-            event = await self._event_ch.__anext__()
-        self._pending -= 1
-        return event
+        await self._req_ch.__anext__()
+        return await asyncio.wait_for(
+            self._event_ch.__anext__(), self._timeout
+        )
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
