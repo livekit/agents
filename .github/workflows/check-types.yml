@@ -40,7 +40,8 @@ jobs:
                       ./livekit-plugins/livekit-plugins-elevenlabs \
                       ./livekit-plugins/livekit-plugins-cartesia \
                       ./livekit-plugins/livekit-plugins-rag \
-                      ./livekit-plugins/livekit-plugins-azure
+                      ./livekit-plugins/livekit-plugins-azure \
+                      ./livekit-plugins/livekit-plugins-anthropic
 
       - name: Install stub packages
         run: |
@@ -67,4 +68,5 @@ jobs:
                -p livekit.plugins.elevenlabs \
                -p livekit.plugins.cartesia \
                -p livekit.plugins.rag \
-               -p livekit.plugins.azure
+               -p livekit.plugins.azure \
+               -p livekit.plugins.anthropic

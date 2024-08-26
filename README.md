@@ -61,6 +61,7 @@ The following plugins are available today:
 
 | Plugin                                                                             | Features                        |
 | ---------------------------------------------------------------------------------- | ------------------------------- |
+| [livekit-plugins-anthropic](https://pypi.org/project/livekit-plugins-anthropic/)   | LLM                             |
 | [livekit-plugins-azure](https://pypi.org/project/livekit-plugins-azure/)           | STT, TTS                        |
 | [livekit-plugins-cartesia](https://pypi.org/project/livekit-plugins-cartesia/)     | TTS                             |
 | [livekit-plugins-deepgram](https://pypi.org/project/livekit-plugins-deepgram/)     | STT                             |
@@ -69,6 +70,37 @@ The following plugins are available today:
 | [livekit-plugins-nltk](https://pypi.org/project/livekit-plugins-nltk/)             | Utilities for working with text |
 | [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-openai/)         | LLM, STT, TTS                   |
 | [livekit-plugins-silero](https://pypi.org/project/livekit-plugins-silero/)         | VAD                             |
+
+## Using LLM models
+
+Agents framework supports a wide range of LLMs and hosting providers.
+
+### OpenAI-compatible models
+
+Most LLM providers offer an OpenAI-compatible API, which can be used with the `livekit-plugins-openai` plugin.
+
+```python
+from livekit.plugins.openai.llm import LLM
+```
+
+- OpenAI: `LLM(model="gpt-4o")`
+- Azure: `LLM.with_azure(azure_endpoint="", azure_deployment="")`
+- Fireworks: `LLM.with_fireworks(api_key="", model="")`
+- Groq: `LLM.with_groq(api_key="", model="")`
+- OctoAI: `LLM.with_octo(api_key="", model="")`
+- Ollama: `LLM.with_ollama(base_url="http://localhost:11434/v1", model="")`
+- Perplexity: `LLM.with_perplexity(api_key="", model="")`
+- TogetherAI: `LLM.with_together(api_key="", model="")`
+
+### Anthropic Claude
+
+Anthropic Claude can be used with `livekit-plugins-anthropic` plugin.
+
+```python
+from livekit.plugins.anthropic.llm import LLM
+
+myllm = LLM(model="claude-3-opus-20240229")
+```
 
 ## Concepts
 
@@ -153,7 +185,9 @@ class MyPlugin(Plugin):
 ```
 
 <!--BEGIN_REPO_NAV-->
+
 <br/><table>
+
 <thead><tr><th colspan="2">LiveKit Ecosystem</th></tr></thead>
 <tbody>
 <tr><td>Realtime SDKs</td><td><a href="https://github.com/livekit/components-js">React Components</a> · <a href="https://github.com/livekit/client-sdk-js">Browser</a> · <a href="https://github.com/livekit/components-swift">Swift Components</a> · <a href="https://github.com/livekit/client-sdk-swift">iOS/macOS/visionOS</a> · <a href="https://github.com/livekit/client-sdk-android">Android</a> · <a href="https://github.com/livekit/client-sdk-flutter">Flutter</a> · <a href="https://github.com/livekit/client-sdk-react-native">React Native</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/client-sdk-unity-web">Unity (web)</a> · <a href="https://github.com/livekit/client-sdk-unity">Unity (beta)</a></td></tr><tr></tr>

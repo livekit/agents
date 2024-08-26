@@ -1,4 +1,4 @@
-livekit-agents>=0.8.6
+livekit-agents>=0.8.7
 livekit-plugins-openai>=0.8.1
 livekit-plugins-deepgram>=0.6.5
 livekit-plugins-silero>=0.6.4

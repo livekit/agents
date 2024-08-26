@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import io
+import os
 import wave
 from dataclasses import dataclass
 
@@ -49,6 +50,13 @@ class STT(stt.STT):
         client: openai.AsyncClient | None = None,
         timeout: float | None = 10.0,
     ):
+        """
+        Create a new instance of OpenAI STT.
+
+        ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
+        ``OPENAI_API_KEY`` environmental variable.
+        """
+
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False),
             timeout=timeout,
@@ -61,6 +69,11 @@ class STT(stt.STT):
             detect_language=detect_language,
             model=model,
         )
+
+        # throw an error on our end
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if api_key is None:
+            raise ValueError("OpenAI API key is required")
 
         self._client = client or openai.AsyncClient(
             api_key=api_key,

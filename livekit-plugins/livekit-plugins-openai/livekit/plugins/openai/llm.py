@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, MutableSet
 
@@ -52,6 +53,18 @@ class LLM(llm.LLM):
         user: str | None = None,
         client: openai.AsyncClient | None = None,
     ) -> None:
+        """
+        Create a new instance of OpenAI LLM.
+
+        ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
+        ``OPENAI_API_KEY`` environmental variable.
+        """
+
+        # throw an error on our end
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if api_key is None:
+            raise ValueError("OpenAI API key is required")
+
         self._opts = LLMOptions(model=model, user=user)
         self._client = client or openai.AsyncClient(
             api_key=api_key,
@@ -116,6 +129,18 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
     ) -> LLM:
+        """
+        Create a new instance of Fireworks LLM.
+
+        ``api_key`` must be set to your Fireworks API key, either using the argument or by setting
+        the ``FIREWORKS_API_KEY`` environmental variable.
+        """
+
+        # shim for not using OPENAI_API_KEY
+        api_key = api_key or os.environ.get("FIREWORKS_API_KEY")
+        if api_key is None:
+            raise ValueError("Fireworks API key is required")
+
         return LLM(
             model=model, api_key=api_key, base_url=base_url, client=client, user=user
         )
@@ -129,6 +154,18 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
     ) -> LLM:
+        """
+        Create a new instance of Groq LLM.
+
+        ``api_key`` must be set to your Groq API key, either using the argument or by setting
+        the ``GROQ_API_KEY`` environmental variable.
+        """
+
+        # shim for not using OPENAI_API_KEY
+        api_key = api_key or os.environ.get("GROQ_API_KEY")
+        if api_key is None:
+            raise ValueError("Groq API key is required")
+
         return LLM(
             model=model, api_key=api_key, base_url=base_url, client=client, user=user
         )
@@ -142,6 +179,18 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
     ) -> LLM:
+        """
+        Create a new instance of OctoAI LLM.
+
+        ``api_key`` must be set to your OctoAI API key, either using the argument or by setting
+        the ``OCTOAI_TOKEN`` environmental variable.
+        """
+
+        # shim for not using OPENAI_API_KEY
+        api_key = api_key or os.environ.get("OCTOAI_TOKEN")
+        if api_key is None:
+            raise ValueError("OctoAI API key is required")
+
         return LLM(
             model=model, api_key=api_key, base_url=base_url, client=client, user=user
         )
@@ -153,6 +202,10 @@ class LLM(llm.LLM):
         base_url: str | None = "http://localhost:11434/v1",
         client: openai.AsyncClient | None = None,
     ) -> LLM:
+        """
+        Create a new instance of Ollama LLM.
+        """
+
         return LLM(model=model, api_key="ollama", base_url=base_url, client=client)
 
     @staticmethod
@@ -177,6 +230,18 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
     ) -> LLM:
+        """
+        Create a new instance of TogetherAI LLM.
+
+        ``api_key`` must be set to your TogetherAI API key, either using the argument or by setting
+        the ``TOGETHER_API_KEY`` environmental variable.
+        """
+
+        # shim for not using OPENAI_API_KEY
+        api_key = api_key or os.environ.get("TOGETHER_API_KEY")
+        if api_key is None:
+            raise ValueError("TogetherAI API key is required")
+
         return LLM(
             model=model, api_key=api_key, base_url=base_url, client=client, user=user
         )

@@ -58,6 +58,13 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         timeout: float | None = 10.0,
     ) -> None:
+        """
+        Create a new instance of Cartesia TTS.
+
+        ``api_key`` must be set to your Cartesia API key, either using the argument or by setting
+        the ``CARTESIA_API_KEY`` environmental variable.
+        """
+
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,

@@ -567,7 +567,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         _commit_user_question_if_needed()
 
         collected_text = speech_handle.synthesis_handle.tts_forwarder.played_text
-        interrupted = speech_handle.synthesis_handle.interrupted
+        interrupted = speech_handle.interrupted
         is_using_tools = isinstance(speech_handle.source, LLMStream) and len(
             speech_handle.source.function_calls
         )
@@ -704,8 +704,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         # in some bad timing, we could end up with two pushed agent replies inside the speech queue.
         # so make sure we directly interrupt every reply when validating a new one
         for speech in self._speech_q:
-            if speech.allow_interruptions and speech.is_reply:
-                speech.interrupt()
+            if not speech.is_reply:
+                continue
+
+            if not speech.allow_interruptions:
+                return  # we shouldn't validate this speech to avoid stacking replies
+
+            speech.interrupt()
 
         logger.debug(
             "validated agent reply",
@@ -722,7 +727,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if (
             self._playing_speech is None
             or not self._playing_speech.allow_interruptions
-            or self._playing_speech.synthesis_handle.interrupted
+            or self._playing_speech.interrupted
         ):
             return
 
