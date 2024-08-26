@@ -119,8 +119,10 @@ class SpeechStream(ABC):
         self._req_ch.close()
 
     async def __anext__(self) -> SpeechEvent:
-        await self._req_ch.__anext__()
-        return await asyncio.wait_for(self._event_ch.__anext__(), self._timeout)
+        try:
+            await self._req_ch.__anext__()
+        finally:
+            return await asyncio.wait_for(self._event_ch.__anext__(), self._timeout)
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
         return self
