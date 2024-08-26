@@ -242,7 +242,7 @@ class ChunkedStream(tts.ChunkedStream):
                             )
                         )
         except aiohttp.ServerTimeoutError as e:
-            raise TimeoutError() from e
+            raise asyncio.TimeoutError() from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):

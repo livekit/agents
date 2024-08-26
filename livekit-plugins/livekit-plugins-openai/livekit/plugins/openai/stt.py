@@ -122,6 +122,6 @@ class STT(stt.STT):
                     ],
                 )
             except openai.APITimeoutError as e:
-                raise TimeoutError from e
+                raise asyncio.TimeoutError() from e
 
         return await asyncio.wait_for(_request(), self._timeout)

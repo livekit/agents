@@ -167,7 +167,7 @@ class STT(stt.STT):
                         config.language, await res.json()
                     )
             except aiohttp.ServerTimeoutError as e:
-                raise TimeoutError() from e
+                raise asyncio.TimeoutError() from e
 
         return await asyncio.wait_for(_request(), self._timeout)
 

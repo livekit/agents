@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from typing import AsyncContextManager
@@ -178,4 +179,4 @@ class ChunkedStream(tts.ChunkedStream):
                             )
                         )
         except openai.APITimeoutError as e:
-            raise TimeoutError from e
+            raise asyncio.TimeoutError() from e

@@ -105,6 +105,7 @@ class SynthesizeStream(ABC):
         self._req_ch = aio.Chan[None]()
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._task.add_done_callback(lambda _: self._req_ch.close())
         self._timeout = timeout
 
     @abstractmethod
