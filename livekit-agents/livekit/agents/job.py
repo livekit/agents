@@ -24,7 +24,8 @@ from livekit import rtc
 from livekit.protocol import agent, models
 from .log import logger
 
-T = TypeVar('T')
+T = TypeVar("T")
+
 
 class AutoSubscribe(str, Enum):
     SUBSCRIBE_ALL = "subscribe_all"
@@ -47,9 +48,8 @@ class RunningJobInfo:
     url: str
     token: str
 
+
 _ParticipantFilterFnc = Callable[[int, rtc.RemoteParticipant], bool]
-
-
 
 
 class JobContext:
@@ -140,6 +140,7 @@ class JobContext:
         per participant. If the task needs to be run again, it should be re-added after awaiting the future that
         is returned.
         """
+
         def _filter_fnc(p: rtc.RemoteParticipant) -> bool:
             if filter_fnc and identity:
                 raise ValueError("cannot specify both identity and filter_fnc")
@@ -153,14 +154,13 @@ class JobContext:
             return True
 
         fut = asyncio.Future[T]()
+
         async def _coro_wrapper(p: rtc.RemoteParticipant):
             try:
                 res = await task_fnc(p)
                 fut.set_result(res)
             except Exception as e:
                 fut.set_exception(e)
-
-
 
         self._participant_coro_lookup[_filter_fnc] = _coro_wrapper
         return fut
