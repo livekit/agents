@@ -281,22 +281,22 @@ class SpeechStream(stt.SpeechStream):
                 == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
             ):
                 result = resp.results[0]
+                speech_data = _streaming_recognize_response_to_speech_data(resp)
+                if speech_data is None:
+                    continue
+
                 if not result.is_final:
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[
-                                _streaming_recognize_response_to_speech_data(resp)
-                            ],
+                            alternatives=[speech_data],
                         )
                     )
                 else:
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[
-                                _streaming_recognize_response_to_speech_data(resp)
-                            ],
+                            alternatives=[speech_data],
                         )
                     )
 
@@ -340,15 +340,20 @@ def _recognize_response_to_speech_event(
 
 def _streaming_recognize_response_to_speech_data(
     resp: cloud_speech.StreamingRecognizeResponse,
-) -> stt.SpeechData:
+) -> stt.SpeechData | None:
     text = ""
     confidence = 0.0
     for result in resp.results:
+        if len(result.alternatives) == 0:
+            continue
         text += result.alternatives[0].transcript
         confidence += result.alternatives[0].confidence
 
     confidence /= len(resp.results)
     lg = resp.results[0].language_code
+
+    if text == "":
+        return None
 
     data = stt.SpeechData(
         language=lg, start_time=0, end_time=0, confidence=confidence, text=text
