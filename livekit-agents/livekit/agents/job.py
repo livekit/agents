@@ -48,9 +48,6 @@ class RunningJobInfo:
     token: str
 
 
-_ParticipantFilterFnc = Callable[[int, rtc.RemoteParticipant], bool]
-
-
 class JobContext:
     def __init__(
         self,
