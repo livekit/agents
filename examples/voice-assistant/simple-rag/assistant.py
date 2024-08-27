@@ -1,4 +1,3 @@
-import asyncio
 import pickle
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
