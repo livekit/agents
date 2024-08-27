@@ -56,7 +56,7 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        timeout: float | None = 10.0,
+        timeout: float | None = 30.0,
     ):
         """
         Create a new instance of Google STT.
