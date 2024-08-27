@@ -183,7 +183,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._human_input: HumanInput | None = None
         self._agent_output: AgentOutput | None = None
 
-        # done when the agent output track is published and a participant is listening
+        # done when the agent output track is published
         self._track_published_fut = asyncio.Future[None]()
 
         self._pending_agent_reply: SpeechHandle | None = None
@@ -418,7 +418,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         agent_playout.on("playout_started", _on_playout_started)
         agent_playout.on("playout_stopped", _on_playout_stopped)
 
-        await self._agent_publication.wait_for_subscription()
         self._track_published_fut.set_result(None)
 
         while True:
@@ -510,6 +509,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             await speech_handle.wait_for_initialization()
         except asyncio.CancelledError:
             return
+
+        await self._agent_publication.wait_for_subscription()
 
         synthesis_handle = speech_handle.synthesis_handle
         if synthesis_handle.interrupted:
