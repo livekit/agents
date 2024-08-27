@@ -18,10 +18,11 @@ import asyncio
 import multiprocessing as mp
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Coroutine, Set, Awaitable, TypeVar
+from typing import Any, Callable, Coroutine
 
 from livekit import rtc
 from livekit.protocol import agent, models
+
 from .log import logger
 
 
@@ -171,7 +172,7 @@ class JobContext:
                 self._participant_tasks.pop(p.identity)
 
             try:
-                res = await task_fnc(p)
+                await task_fnc(p)
             except Exception as e:
                 logger.exception("participant task exception", exc_info=e)
 

@@ -2,8 +2,7 @@ import asyncio
 import logging
 
 from livekit import rtc
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, WorkerType, cli
-from dataclasses import dataclass
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
