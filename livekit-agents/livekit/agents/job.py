@@ -24,8 +24,6 @@ from livekit import rtc
 from livekit.protocol import agent, models
 from .log import logger
 
-T = TypeVar("T")
-
 
 class AutoSubscribe(str, Enum):
     SUBSCRIBE_ALL = "subscribe_all"
@@ -72,7 +70,7 @@ class JobContext:
             Callable[[rtc.RemoteParticipant], bool],
             Callable[[rtc.RemoteParticipant], Coroutine[None, Any, None]],
         ]()
-        self._participant_tasks = set[asyncio.Task[Any]]()
+        self._participant_tasks = dict[str, asyncio.Task[None]]()
         self._room.on("participant_connected", self._on_participant_connected)
 
     @property
@@ -120,25 +118,25 @@ class JobContext:
         self._on_shutdown(reason)
 
     def _on_participant_connected(self, p: rtc.RemoteParticipant) -> None:
-        _participant_coro_lookup_copy = self._participant_coro_lookup.copy()
-        for filter, coro in _participant_coro_lookup_copy.items():
+        for filter, coro in self._participant_coro_lookup.items():
             if filter(p):
                 task = asyncio.create_task(coro(p))
-                self._participant_tasks.add(task)
-                task.add_done_callback(self._participant_tasks.remove)
-                self._participant_coro_lookup.pop(filter)
+                self._participant_tasks[p.identity] = task
+                task.add_done_callback(
+                    lambda _: self._participant_tasks.pop(p.identity)
+                )
 
     def add_participant_task(
         self,
         *,
-        task_fnc: Callable[[rtc.RemoteParticipant], Coroutine[None, None, T]],
+        task_fnc: Callable[[rtc.RemoteParticipant], Coroutine[None, None, None]],
         identity: str | None = None,
         filter_fnc: Callable[[rtc.RemoteParticipant], bool] | None = None,
-    ) -> asyncio.Future[T]:
+    ):
         """Adds a task to be run when a participant that matches the filter joins the room. In cases where
         the participant has already joined, the task will be run immediately. The task will only be run once
-        per participant. If the task needs to be run again, it should be re-added after awaiting the future that
-        is returned.
+        per matching participant. In cases where a participant leaves and then rejoins with the same identity,
+        the new task will not be started until the old task has completed.
         """
 
         def _filter_fnc(p: rtc.RemoteParticipant) -> bool:
@@ -153,17 +151,31 @@ class JobContext:
 
             return True
 
-        fut = asyncio.Future[T]()
-
         async def _coro_wrapper(p: rtc.RemoteParticipant):
+            if p.identity in self._participant_tasks:
+                t = self._participant_tasks[p.identity]
+
+                try:
+                    async with asyncio.timeout(5):
+                        await t
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "previous participant task taking a long time and it is preventing the new participant task from starting"
+                    )
+
+                try:
+                    await t
+                except Exception:
+                    pass
+
+                self._participant_tasks.pop(p.identity)
+
             try:
                 res = await task_fnc(p)
-                fut.set_result(res)
             except Exception as e:
-                fut.set_exception(e)
+                logger.exception("participant task exception", exc_info=e)
 
         self._participant_coro_lookup[_filter_fnc] = _coro_wrapper
-        return fut
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
