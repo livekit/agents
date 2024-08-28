@@ -1,9 +1,10 @@
 import asyncio
 import logging
 
+from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
-from dotenv import load_dotenv
+
 load_dotenv()
 
 logger = logging.getLogger("my-worker")
