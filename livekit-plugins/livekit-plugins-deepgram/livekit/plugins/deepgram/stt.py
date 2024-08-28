@@ -67,7 +67,6 @@ class STT(stt.STT):
         keywords: list[Tuple[str, float]] = [],
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        timeout: float | None = 10.0,
     ) -> None:
         """
         Create a new instance of Deepgram STT.
@@ -79,8 +78,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True, interim_results=interim_results
-            ),
-            timeout=timeout,
+            )
         )
 
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
@@ -152,24 +150,18 @@ class STT(stt.STT):
 
         data = io_buffer.getvalue()
 
-        async def _request():
-            try:
-                async with self._ensure_session().post(
-                    url=_to_deepgram_url(recognize_config),
-                    data=data,
-                    headers={
-                        "Authorization": f"Token {self._api_key}",
-                        "Accept": "application/json",
-                        "Content-Type": "audio/wav",
-                    },
-                ) as res:
-                    return prerecorded_transcription_to_speech_event(
-                        config.language, await res.json()
-                    )
-            except aiohttp.ServerTimeoutError as e:
-                raise asyncio.TimeoutError() from e
-
-        return await asyncio.wait_for(_request(), self._timeout)
+        async with self._ensure_session().post(
+            url=_to_deepgram_url(recognize_config),
+            data=data,
+            headers={
+                "Authorization": f"Token {self._api_key}",
+                "Accept": "application/json",
+                "Content-Type": "audio/wav",
+            },
+        ) as res:
+            return prerecorded_transcription_to_speech_event(
+                config.language, await res.json()
+            )
 
     def stream(
         self, *, language: DeepgramLanguages | str | None = None
@@ -179,7 +171,6 @@ class STT(stt.STT):
             config,
             self._api_key,
             self._ensure_session(),
-            timeout=self._timeout,
         )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
@@ -202,10 +193,8 @@ class SpeechStream(stt.SpeechStream):
         api_key: str,
         http_session: aiohttp.ClientSession,
         max_retry: int = 32,
-        *,
-        timeout: float | None,
     ) -> None:
-        super().__init__(timeout=timeout)
+        super().__init__()
 
         if opts.detect_language and opts.language is None:
             raise ValueError("language detection is not supported in streaming mode")
@@ -253,7 +242,6 @@ class SpeechStream(stt.SpeechStream):
                 ws = await self._session.ws_connect(
                     _to_deepgram_url(live_config, websocket=True),
                     headers=headers,
-                    heartbeat=self._timeout,
                 )
                 retry_count = 0  # connected successfully, reset the retry_count
 

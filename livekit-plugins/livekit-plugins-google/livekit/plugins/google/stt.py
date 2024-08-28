@@ -56,7 +56,6 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        timeout: float | None = 30.0,
     ):
         """
         Create a new instance of Google STT.
@@ -67,7 +66,6 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
-            timeout=timeout,
         )
 
         self._client: SpeechAsyncClient | None = None
@@ -158,19 +156,14 @@ class STT(stt.STT):
             language_codes=config.languages,
         )
 
-        async def _request():
-            raw = await self._ensure_client().recognize(
-                cloud_speech.RecognizeRequest(
-                    recognizer=self._recognizer,
-                    config=config,
-                    content=frame.data.tobytes(),
-                ),
-                timeout=self._timeout,
-            )
-            return _recognize_response_to_speech_event(raw)
-
-        return await asyncio.wait_for(_request(), self._timeout)
-
+        raw = await self._ensure_client().recognize(
+            cloud_speech.RecognizeRequest(
+                recognizer=self._recognizer,
+                config=config,
+                content=frame.data.tobytes(),
+            ),
+        )
+        return _recognize_response_to_speech_event(raw)
     def stream(
         self, *, language: SpeechLanguages | str | None = None
     ) -> "SpeechStream":
@@ -192,10 +185,7 @@ class SpeechStream(stt.SpeechStream):
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
-        super().__init__(timeout=None)
-        logger.info(
-            "Google speech-to-text does not support timeouts with the stream() method"
-        )
+        super().__init__()
 
         self._client = client
         self._recognizer = recognizer

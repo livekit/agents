@@ -44,7 +44,6 @@ class STT(stt.STT):
         sample_rate: int = 48000,
         num_channels: int = 1,
         languages: list[str] = [],  # when empty, auto-detect the language
-        timeout: float | None = 10.0,
     ):
         """
         Create a new instance of Azure STT.
@@ -55,7 +54,6 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
-            timeout=timeout,
         )
 
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
@@ -90,10 +88,7 @@ class SpeechStream(stt.SpeechStream):
         self,
         opts: STTOptions,
     ) -> None:
-        super().__init__(timeout=None)
-        logger.info(
-            "Azure speech-to-text does not support timeouts with the stream() method"
-        )
+        super().__init__()
 
         self._opts = opts
         self._speaking = False

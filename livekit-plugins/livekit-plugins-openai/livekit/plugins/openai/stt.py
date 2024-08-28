@@ -48,7 +48,6 @@ class STT(stt.STT):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        timeout: float | None = 10.0,
     ):
         """
         Create a new instance of OpenAI STT.
@@ -59,7 +58,6 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False),
-            timeout=timeout,
         )
         if detect_language:
             language = ""
@@ -79,7 +77,6 @@ class STT(stt.STT):
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
-                timeout=self._timeout,
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,
@@ -106,22 +103,16 @@ class STT(stt.STT):
             wav.setframerate(buffer.sample_rate)
             wav.writeframes(buffer.data)
 
-        async def _request():
-            try:
-                resp = await self._client.audio.transcriptions.create(
-                    file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
-                    model=self._opts.model,
-                    language=config.language,
-                    response_format="json",
-                )
+        resp = await self._client.audio.transcriptions.create(
+            file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
+            model=self._opts.model,
+            language=config.language,
+            response_format="json",
+        )
 
-                return stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(text=resp.text, language=language or "")
-                    ],
-                )
-            except openai.APITimeoutError as e:
-                raise asyncio.TimeoutError() from e
-
-        return await asyncio.wait_for(_request(), self._timeout)
+        return stt.SpeechEvent(
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[
+                stt.SpeechData(text=resp.text, language=language or "")
+            ],
+        )
