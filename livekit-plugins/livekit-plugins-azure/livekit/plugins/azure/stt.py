@@ -44,13 +44,18 @@ class STT(stt.STT):
         sample_rate: int = 48000,
         num_channels: int = 1,
         languages: list[str] = [],  # when empty, auto-detect the language
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float | None = 10.0,
     ):
+        """
+        Create a new instance of Azure STT.
+
+        ``speech_key`` and ``speech_region`` must be set, either using arguments or by setting the
+        ``AZURE_SPEECH_KEY`` and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
+        """
+
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
 
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
@@ -77,18 +82,18 @@ class STT(stt.STT):
     def stream(self, *, language: str | None = None) -> "SpeechStream":
         return SpeechStream(
             self._config,
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
-        self, opts: STTOptions, *, connect_timeout: float, keepalive_timeout: float
+        self,
+        opts: STTOptions,
+        *,
+        timeout: float | None,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
         self._opts = opts
         self._speaking = False
 
@@ -116,6 +121,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             async for input in self._input_ch:
                 if isinstance(input, rtc.AudioFrame):
+                    self._req_ch.send_nowait(None)
                     self._stream.write(input.data.tobytes())
 
             self._stream.close()
@@ -177,7 +183,7 @@ class SpeechStream(stt.SpeechStream):
     def _on_session_stopped(self, evt: speechsdk.SpeechRecognitionEventArgs):
         self._loop.call_soon_threadsafe(self._done_event.set)
 
-    def _threadsafe_send(self, evt: stt.SpeechEvent | None):
+    def _threadsafe_send(self, evt: stt.SpeechEvent):
         self._loop.call_soon_threadsafe(self._event_ch.send_nowait, evt)
 
 

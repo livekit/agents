@@ -48,6 +48,16 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     def processes(self) -> list[SupervisedProc]:
         return self._processes
 
+    def get_by_job_id(self, job_id: str) -> SupervisedProc | None:
+        return next(
+            (
+                x
+                for x in self._processes
+                if x.running_job and x.running_job.job.id == job_id
+            ),
+            None,
+        )
+
     def start(self) -> None:
         if self._started:
             return

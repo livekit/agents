@@ -103,17 +103,22 @@ class TTS(tts.TTS):
         ),
         chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float | None = 10.0,
     ) -> None:
+        """
+        Create a new instance of ElevenLabs TTS.
+
+        ``api_key`` must be set to your ElevenLabs API key, either using the argument or by setting
+        the ``ELEVEN_API_KEY`` environmental variable.
+        """
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
             ),
             sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
         if not api_key:
@@ -150,16 +155,14 @@ class TTS(tts.TTS):
             text,
             self._opts,
             self._ensure_session(),
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
     def stream(self) -> "SynthesizeStream":
         return SynthesizeStream(
             self._ensure_session(),
             self._opts,
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
 
@@ -172,12 +175,9 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float | None,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
         self._text, self._opts, self._session = text, opts, session
         if _encoding_from_format(self._opts.encoding) == "mp3":
             self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
@@ -201,43 +201,48 @@ class ChunkedStream(tts.ChunkedStream):
             "voice_settings": voice_settings,
         }
 
-        async with self._session.post(
-            _synthesize_url(self._opts),
-            headers={AUTHORIZATION_HEADER: self._opts.api_key},
-            json=data,
-        ) as resp:
-            if not resp.content_type.startswith("audio/"):
-                content = await resp.text()
-                logger.error("11labs returned non-audio data: %s", content)
-                return
-            encoding = _encoding_from_format(self._opts.encoding)
-            if encoding == "mp3":
-                async for bytes_data, _ in resp.content.iter_chunks():
-                    for frame in self._mp3_decoder.decode_chunk(bytes_data):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                request_id=request_id,
-                                segment_id=segment_id,
-                                frame=frame,
+        try:
+            async with self._session.post(
+                _synthesize_url(self._opts),
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                json=data,
+            ) as resp:
+                if not resp.content_type.startswith("audio/"):
+                    content = await resp.text()
+                    logger.error("11labs returned non-audio data: %s", content)
+                    return
+                encoding = _encoding_from_format(self._opts.encoding)
+                if encoding == "mp3":
+                    async for bytes_data, _ in resp.content.iter_chunks():
+                        for frame in self._mp3_decoder.decode_chunk(bytes_data):
+                            self._event_ch.send_nowait(
+                                tts.SynthesizedAudio(
+                                    request_id=request_id,
+                                    segment_id=segment_id,
+                                    frame=frame,
+                                )
                             )
-                        )
-            else:
-                async for bytes_data, _ in resp.content.iter_chunks():
-                    for frame in bstream.write(bytes_data):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                request_id=request_id,
-                                segment_id=segment_id,
-                                frame=frame,
+                else:
+                    async for bytes_data, _ in resp.content.iter_chunks():
+                        for frame in bstream.write(bytes_data):
+                            self._event_ch.send_nowait(
+                                tts.SynthesizedAudio(
+                                    request_id=request_id,
+                                    segment_id=segment_id,
+                                    frame=frame,
+                                )
                             )
-                        )
 
-                for frame in bstream.flush():
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id, segment_id=segment_id, frame=frame
+                    for frame in bstream.flush():
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
+                            )
                         )
-                    )
+        except aiohttp.ServerTimeoutError as e:
+            raise asyncio.TimeoutError() from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -248,12 +253,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         session: aiohttp.ClientSession,
         opts: _TTSOptions,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float | None,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
         self._opts, self._session = opts, session
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
@@ -275,6 +277,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
                     if word_stream is not None:
+                        self._req_ch.send_nowait(None)
                         word_stream.end_input()
 
                     word_stream = None

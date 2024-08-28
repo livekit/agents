@@ -41,17 +41,22 @@ class TTS(tts.TTS):
         speech_key: str | None = None,
         speech_region: str | None = None,
         voice: str | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float | None = 10.0,
     ) -> None:
+        """
+        Create a new instance of Azure TTS.
+
+        ``speech_key`` and ``speech_region`` must be set, either using arguments or by setting the
+        ``AZURE_SPEECH_KEY`` and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
+        """
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
             ),
             sample_rate=AZURE_SAMPLE_RATE,
             num_channels=AZURE_NUM_CHANNELS,
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
 
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
@@ -70,8 +75,7 @@ class TTS(tts.TTS):
         return ChunkedStream(
             text,
             self._opts,
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
 
@@ -81,12 +85,9 @@ class ChunkedStream(tts.ChunkedStream):
         text: str,
         opts: _TTSOptions,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float | None,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
         self._text, self._opts = text, opts
 
     @utils.log_exceptions()

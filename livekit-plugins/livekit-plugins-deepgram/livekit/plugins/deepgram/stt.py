@@ -55,7 +55,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        model: DeepgramModels = "nova-2-conversationalai",
+        model: DeepgramModels = "nova-2-phonecall",
         language: DeepgramLanguages = "en-US",
         detect_language: bool = False,
         interim_results: bool = True,
@@ -67,15 +67,20 @@ class STT(stt.STT):
         keywords: list[Tuple[str, float]] = [],
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float | None = 10.0,
     ) -> None:
+        """
+        Create a new instance of Deepgram STT.
+
+        ``api_key`` must be set to your Deepgram API key, either using the argument or by setting
+        the ``DEEPGRAM_API_KEY`` environmental variable.
+        """
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True, interim_results=interim_results
             ),
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
 
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
@@ -148,23 +153,23 @@ class STT(stt.STT):
         data = io_buffer.getvalue()
 
         async def _request():
-            async with self._ensure_session().post(
-                url=_to_deepgram_url(recognize_config),
-                data=data,
-                headers={
-                    "Authorization": f"Token {self._api_key}",
-                    "Accept": "application/json",
-                    "Content-Type": "audio/wav",
-                },
-            ) as res:
-                return prerecorded_transcription_to_speech_event(
-                    config.language, await res.json()
-                )
+            try:
+                async with self._ensure_session().post(
+                    url=_to_deepgram_url(recognize_config),
+                    data=data,
+                    headers={
+                        "Authorization": f"Token {self._api_key}",
+                        "Accept": "application/json",
+                        "Content-Type": "audio/wav",
+                    },
+                ) as res:
+                    return prerecorded_transcription_to_speech_event(
+                        config.language, await res.json()
+                    )
+            except aiohttp.ServerTimeoutError as e:
+                raise asyncio.TimeoutError() from e
 
-        if self._connect_timeout > 0:
-            return await asyncio.wait_for(_request(), self._connect_timeout)
-        else:
-            return await _request()
+        return await asyncio.wait_for(_request(), self._timeout)
 
     def stream(
         self, *, language: DeepgramLanguages | str | None = None
@@ -174,8 +179,7 @@ class STT(stt.STT):
             config,
             self._api_key,
             self._ensure_session(),
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
@@ -199,12 +203,9 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         max_retry: int = 32,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float | None,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
 
         if opts.detect_language and opts.language is None:
             raise ValueError("language detection is not supported in streaming mode")
@@ -303,6 +304,7 @@ class SpeechStream(stt.SpeechStream):
 
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
+                    self._req_ch.send_nowait(None)
                     frames = audio_bstream.flush()
                 else:
                     frames = audio_bstream.write(data.data)

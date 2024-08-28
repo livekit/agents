@@ -1,5 +1,11 @@
 # livekit-plugins-nltk
 
+## 0.7.2
+
+### Patch Changes
+
+- fix another semver break - [#659](https://github.com/livekit/agents/pull/659) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.7.1
 
 ### Patch Changes

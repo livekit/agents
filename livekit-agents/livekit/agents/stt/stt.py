@@ -51,12 +51,10 @@ class STT(ABC):
         self,
         *,
         capabilities: STTCapabilities,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float | None = 10.0,
     ) -> None:
         self._capabilities = capabilities
-        self._connect_timeout = connect_timeout
-        self._keepalive_timeout = keepalive_timeout
+        self._timeout = timeout
 
     @property
     def capabilities(self) -> STTCapabilities:
@@ -84,17 +82,17 @@ class SpeechStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self, *, connect_timeout: float = 0, keepalive_timeout: float = 0):
+    def __init__(self, *, timeout: float | None = 10.0):
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, SpeechStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SpeechEvent]()
+        self._req_ch = aio.Chan[None]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
-        self._connect_timeout = connect_timeout
-        self._keepalive_timeout = keepalive_timeout
-        self._timeout = self._connect_timeout
+        self._task.add_done_callback(lambda _: self._req_ch.close())
+        self._timeout = timeout
 
     @abstractmethod
-    def _main_task(self) -> None: ...
+    async def _main_task(self) -> None: ...
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized"""
@@ -118,19 +116,13 @@ class SpeechStream(ABC):
         self._input_ch.close()
         await aio.gracefully_cancel(self._task)
         self._event_ch.close()
+        self._req_ch.close()
 
     async def __anext__(self) -> SpeechEvent:
-        if self._timeout > 0:
-            try:
-                event = await asyncio.wait_for(
-                    self._event_ch.__anext__(), self._timeout
-                )
-            except (TimeoutError, asyncio.TimeoutError) as e:
-                raise e.__class__("speech event timed out")
-        else:
-            event = await self._event_ch.__anext__()
-        self._timeout = self._keepalive_timeout
-        return event
+        try:
+            await self._req_ch.__anext__()
+        finally:
+            return await asyncio.wait_for(self._event_ch.__anext__(), self._timeout)
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
         return self

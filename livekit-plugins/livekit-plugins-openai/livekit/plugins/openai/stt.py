@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import io
+import os
 import wave
 from dataclasses import dataclass
 
@@ -47,13 +48,18 @@ class STT(stt.STT):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float | None = 10.0,
     ):
+        """
+        Create a new instance of OpenAI STT.
+
+        ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
+        ``OPENAI_API_KEY`` environmental variable.
+        """
+
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False),
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
         if detect_language:
             language = ""
@@ -64,11 +70,16 @@ class STT(stt.STT):
             model=model,
         )
 
+        # throw an error on our end
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if api_key is None:
+            raise ValueError("OpenAI API key is required")
+
         self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
-                timeout=5.0,
+                timeout=self._timeout,
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,
@@ -96,19 +107,21 @@ class STT(stt.STT):
             wav.writeframes(buffer.data)
 
         async def _request():
-            resp = await self._client.audio.transcriptions.create(
-                file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
-                model=self._opts.model,
-                language=config.language,
-                response_format="json",
-            )
+            try:
+                resp = await self._client.audio.transcriptions.create(
+                    file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
+                    model=self._opts.model,
+                    language=config.language,
+                    response_format="json",
+                )
 
-            return stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                alternatives=[stt.SpeechData(text=resp.text, language=language or "")],
-            )
+                return stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[
+                        stt.SpeechData(text=resp.text, language=language or "")
+                    ],
+                )
+            except openai.APITimeoutError as e:
+                raise asyncio.TimeoutError() from e
 
-        if self._connect_timeout > 0:
-            return await asyncio.wait_for(_request(), self._connect_timeout)
-        else:
-            return await _request()
+        return await asyncio.wait_for(_request(), self._timeout)

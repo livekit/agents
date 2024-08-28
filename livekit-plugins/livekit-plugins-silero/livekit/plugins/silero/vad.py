@@ -52,8 +52,6 @@ class VAD(agents.vad.VAD):
         activation_threshold: float = 0.5,
         sample_rate: int = 16000,
         force_cpu: bool = True,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
     ) -> "VAD":
         """
         Initialize the Silero VAD.
@@ -68,8 +66,6 @@ class VAD(agents.vad.VAD):
             activation_threshold: threshold to consider a frame as speech
             sample_rate: sample rate for the inference (only 8KHz and 16KHz are supported)
             force_cpu: force to use CPU for inference
-            connect_timeout: seconds to wait for first event in stream (0 means no timeout)
-            keepalive_timeout: seconds to wait for all further events in stream (0 means no timeout)
         """
         if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
@@ -83,26 +79,15 @@ class VAD(agents.vad.VAD):
             activation_threshold=activation_threshold,
             sample_rate=sample_rate,
         )
-        return cls(
-            session=session,
-            opts=opts,
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
-        )
+        return cls(session=session, opts=opts)
 
     def __init__(
         self,
         *,
         session: onnxruntime.InferenceSession,
         opts: _VADOptions,
-        connect_timeout: float,
-        keepalive_timeout: float,
     ) -> None:
-        super().__init__(
-            capabilities=agents.vad.VADCapabilities(update_interval=0.032),
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
-        )
+        super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.032))
         self._onnx_session = session
         self._opts = opts
 
@@ -112,23 +97,12 @@ class VAD(agents.vad.VAD):
             onnx_model.OnnxModel(
                 onnx_session=self._onnx_session, sample_rate=self._opts.sample_rate
             ),
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
         )
 
 
 class VADStream(agents.vad.VADStream):
-    def __init__(
-        self,
-        opts: _VADOptions,
-        model: onnx_model.OnnxModel,
-        *,
-        connect_timeout: float,
-        keepalive_timeout: float,
-    ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+    def __init__(self, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
+        super().__init__()
         self._opts, self._model = opts, model
         self._loop = asyncio.get_event_loop()
 

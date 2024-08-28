@@ -89,7 +89,7 @@ def _start_job(
     request_shutdown_fut = asyncio.Future[_ShutdownInfo]()
 
     @room.on("disconnected")
-    def _on_room_disconnected():
+    def _on_room_disconnected(*args):
         with contextlib.suppress(asyncio.InvalidStateError):
             request_shutdown_fut.set_result(
                 _ShutdownInfo(user_initiated=False, reason="room disconnected")

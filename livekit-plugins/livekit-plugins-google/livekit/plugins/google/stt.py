@@ -56,17 +56,18 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float | None = 30.0,
     ):
         """
-        if no credentials is provided, it will use the credentials on the environment
-        GOOGLE_APPLICATION_CREDENTIALS (default behavior of Google SpeechAsyncClient)
+        Create a new instance of Google STT.
+
+        Credentials must be provided, either by using the ``credentials_info`` dict, or reading
+        from the file specified in ``credentials_file`` or the ``GOOGLE_APPLICATION_CREDENTIALS``
+        environmental variable.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
 
         self._client: SpeechAsyncClient | None = None
@@ -163,14 +164,12 @@ class STT(stt.STT):
                     recognizer=self._recognizer,
                     config=config,
                     content=frame.data.tobytes(),
-                )
+                ),
+                timeout=self._timeout,
             )
             return _recognize_response_to_speech_event(raw)
 
-        if self._connect_timeout > 0:
-            return await asyncio.wait_for(_request(), self._connect_timeout)
-        else:
-            return await _request()
+        return await asyncio.wait_for(_request(), self._timeout)
 
     def stream(
         self, *, language: SpeechLanguages | str | None = None
@@ -180,8 +179,7 @@ class STT(stt.STT):
             self._ensure_client(),
             self._recognizer,
             config,
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
 
@@ -195,12 +193,9 @@ class SpeechStream(stt.SpeechStream):
         num_channels: int = 1,
         max_retry: int = 32,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float | None,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
 
         self._client = client
         self._recognizer = recognizer
@@ -249,6 +244,7 @@ class SpeechStream(stt.SpeechStream):
 
                         async for frame in self._input_ch:
                             if isinstance(frame, rtc.AudioFrame):
+                                self._req_ch.send_nowait(None)
                                 frame = frame.remix_and_resample(
                                     self._sample_rate, self._num_channels
                                 )
@@ -263,7 +259,8 @@ class SpeechStream(stt.SpeechStream):
 
                 # try to connect
                 stream = await self._client.streaming_recognize(
-                    requests=input_generator()
+                    requests=input_generator(),
+                    timeout=self._timeout,
                 )
                 retry_count = 0  # connection successful, reset retry count
 
@@ -301,22 +298,22 @@ class SpeechStream(stt.SpeechStream):
                 == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
             ):
                 result = resp.results[0]
+                speech_data = _streaming_recognize_response_to_speech_data(resp)
+                if speech_data is None:
+                    continue
+
                 if not result.is_final:
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[
-                                _streaming_recognize_response_to_speech_data(resp)
-                            ],
+                            alternatives=[speech_data],
                         )
                     )
                 else:
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[
-                                _streaming_recognize_response_to_speech_data(resp)
-                            ],
+                            alternatives=[speech_data],
                         )
                     )
 
@@ -360,15 +357,20 @@ def _recognize_response_to_speech_event(
 
 def _streaming_recognize_response_to_speech_data(
     resp: cloud_speech.StreamingRecognizeResponse,
-) -> stt.SpeechData:
+) -> stt.SpeechData | None:
     text = ""
     confidence = 0.0
     for result in resp.results:
+        if len(result.alternatives) == 0:
+            continue
         text += result.alternatives[0].transcript
         confidence += result.alternatives[0].confidence
 
     confidence /= len(resp.results)
     lg = resp.results[0].language_code
+
+    if text == "":
+        return None
 
     data = stt.SpeechData(
         language=lg, start_time=0, end_time=0, confidence=confidence, text=text

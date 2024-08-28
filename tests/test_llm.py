@@ -4,9 +4,10 @@ import asyncio
 from enum import Enum
 from typing import Annotated, Optional
 
+import pytest
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
-from livekit.plugins import openai
+from livekit.plugins import anthropic, openai
 
 
 class Unit(Enum):
@@ -67,7 +68,7 @@ class FncCtx(FunctionContext):
         ],
     ) -> None: ...
 
-    @ai_callable(description="Update userinfo")
+    @ai_callable(description="Update user info")
     def update_user_info(
         self,
         email: Annotated[
@@ -86,12 +87,24 @@ def test_hashable_typeinfo():
     hash(typeinfo)
 
 
-async def test_chat():
-    llm = openai.LLM(model="gpt-4o")
+LLMS = [
+    openai.LLM(),
+    # anthropic.LLM(),
+]
 
+
+@pytest.mark.parametrize("llm", LLMS)
+async def test_chat(llm: llm.LLM):
     chat_ctx = ChatContext().append(
         text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.'
     )
+
+    # Anthropics LLM requires at least one message (system messages don't count)
+    if isinstance(llm, anthropic.LLM):
+        chat_ctx.append(
+            text="Hello",
+            role="user",
+        )
 
     stream = llm.chat(chat_ctx=chat_ctx)
     text = ""
@@ -103,12 +116,14 @@ async def test_chat():
     assert len(text) > 0
 
 
-async def test_basic_fnc_calls():
+@pytest.mark.parametrize("llm", LLMS)
+async def test_basic_fnc_calls(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
-        llm, "What's the weather in San Francisco and Paris?", fnc_ctx
+        llm,
+        "What's the weather in San Francisco and what's the weather Paris?",
+        fnc_ctx,
     )
     calls = stream.execute_functions()
     await asyncio.gather(*[f.task for f in calls])
@@ -116,9 +131,9 @@ async def test_basic_fnc_calls():
     assert len(calls) == 2, "get_weather should be called twice"
 
 
-async def test_runtime_addition():
+@pytest.mark.parametrize("llm", LLMS)
+async def test_runtime_addition(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
     called_msg = ""
 
     @fnc_ctx.ai_callable(description="Show a message on the screen")
@@ -138,9 +153,9 @@ async def test_runtime_addition():
     assert called_msg == "Hello LiveKit!", "send_message should be called"
 
 
-async def test_cancelled_calls():
+@pytest.mark.parametrize("llm", LLMS)
+async def test_cancelled_calls(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
         llm, "Turn off the lights in the Theo's bedroom", fnc_ctx
@@ -157,9 +172,9 @@ async def test_cancelled_calls():
     ), "toggle_light should have been cancelled"
 
 
-async def test_calls_arrays():
+@pytest.mark.parametrize("llm", LLMS)
+async def test_calls_arrays(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
         llm,
@@ -181,9 +196,9 @@ async def test_calls_arrays():
     ), "select_currencies should have eur, gbp, sek"
 
 
-async def test_calls_choices():
+@pytest.mark.parametrize("llm", LLMS)
+async def test_calls_choices(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(llm, "Set the volume to 30", fnc_ctx)
     calls = stream.execute_functions()
@@ -197,9 +212,9 @@ async def test_calls_choices():
     assert volume == 30, "change_volume should have been called with volume 30"
 
 
-async def test_optional_args():
+@pytest.mark.parametrize("llm", LLMS)
+async def test_optional_args(llm: llm.LLM):
     fnc_ctx = FncCtx()
-    llm = openai.LLM(model="gpt-4o")
 
     stream = await _request_fnc_call(
         llm, "Can you update my information? My name is Theo", fnc_ctx

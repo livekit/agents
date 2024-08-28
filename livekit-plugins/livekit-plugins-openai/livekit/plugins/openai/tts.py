@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 from dataclasses import dataclass
 from typing import AsyncContextManager
 
@@ -47,24 +49,34 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        connect_timeout: float = 0,
-        keepalive_timeout: float = 0,
+        timeout: float | None = 10.0,
     ) -> None:
+        """
+        Create a new instance of OpenAI TTS.
+
+        ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
+        ``OPENAI_API_KEY`` environmental variable.
+        """
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
             ),
             sample_rate=OPENAI_TTS_SAMPLE_RATE,
             num_channels=OPENAI_TTS_CHANNELS,
-            connect_timeout=connect_timeout,
-            keepalive_timeout=keepalive_timeout,
+            timeout=timeout,
         )
+
+        # throw an error on our end
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if api_key is None:
+            raise ValueError("OpenAI API key is required")
 
         self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
-                timeout=5.0,
+                timeout=self._timeout,
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,
@@ -133,8 +145,7 @@ class TTS(tts.TTS):
             stream,
             text,
             self._opts,
-            connect_timeout=self._connect_timeout,
-            keepalive_timeout=self._keepalive_timeout,
+            timeout=self._timeout,
         )
 
 
@@ -145,12 +156,9 @@ class ChunkedStream(tts.ChunkedStream):
         text: str,
         opts: _TTSOptions,
         *,
-        connect_timeout: float,
-        keepalive_timeout: float,
+        timeout: float | None,
     ) -> None:
-        super().__init__(
-            connect_timeout=connect_timeout, keepalive_timeout=keepalive_timeout
-        )
+        super().__init__(timeout=timeout)
         self._opts, self._text = opts, text
         self._oai_stream = oai_stream
 
@@ -159,11 +167,16 @@ class ChunkedStream(tts.ChunkedStream):
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
         decoder = utils.codecs.Mp3StreamDecoder()
-        async with self._oai_stream as stream:
-            async for data in stream.iter_bytes(4096):
-                for frame in decoder.decode_chunk(data):
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id, segment_id=segment_id, frame=frame
+        try:
+            async with self._oai_stream as stream:
+                async for data in stream.iter_bytes(4096):
+                    for frame in decoder.decode_chunk(data):
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
+                            )
                         )
-                    )
+        except openai.APITimeoutError as e:
+            raise asyncio.TimeoutError() from e
