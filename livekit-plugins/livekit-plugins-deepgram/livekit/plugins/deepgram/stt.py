@@ -55,7 +55,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        model: DeepgramModels = "nova-2-conversationalai",
+        model: DeepgramModels = "nova-2-phonecall",
         language: DeepgramLanguages = "en-US",
         detect_language: bool = False,
         interim_results: bool = True,

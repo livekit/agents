@@ -1,4 +1,3 @@
-import asyncio
 import enum
 import logging
 from typing import Annotated
@@ -107,7 +106,6 @@ async def entrypoint(ctx: JobContext):
     # it finds in the current room. If you need to specify a particular participant, use the participant parameter.
     assistant.start(ctx.room)
 
-    await asyncio.sleep(2)
     await assistant.say("Hey, how can I help you today?")
 
 

@@ -44,7 +44,6 @@ async def entrypoint(ctx: JobContext):
         if msg.message:
             asyncio.create_task(answer_from_text(msg.message))
 
-    await asyncio.sleep(1)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
 

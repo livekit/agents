@@ -510,6 +510,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         except asyncio.CancelledError:
             return
 
+        await self._agent_publication.wait_for_subscription()
+
         synthesis_handle = speech_handle.synthesis_handle
         if synthesis_handle.interrupted:
             return
