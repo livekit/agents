@@ -120,7 +120,7 @@ class JobContext:
                 logger.warning(
                     f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"
                 )
-            task_name = f'part-entry-{p.identity}-{coro.__name__}'
+            task_name = f"part-entry-{p.identity}-{coro.__name__}"
             task = asyncio.create_task(coro(p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
             task.add_done_callback(

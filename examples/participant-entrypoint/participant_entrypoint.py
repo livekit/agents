@@ -14,7 +14,6 @@ logger.setLevel(logging.INFO)
 async def entrypoint(ctx: JobContext):
     logger.info("starting entrypoint")
 
-
     async def participant_task_1(p: rtc.RemoteParticipant):
         # You can filter out participants you are not interested in
         # if p.identity != "some_identity_of_interest":
@@ -39,6 +38,7 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
     logger.info("connected to the room")
+
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
