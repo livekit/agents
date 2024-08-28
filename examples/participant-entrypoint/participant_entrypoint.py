@@ -32,6 +32,7 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"participant task 2 starting for {p.identity}")
         await asyncio.sleep(10)
 
+    # Add participant entrypoints before calling ctx.connect
     ctx.add_participant_entrypoint(entrypoint_fnc=participant_task_1)
     ctx.add_participant_entrypoint(entrypoint_fnc=participant_task_2)
 
