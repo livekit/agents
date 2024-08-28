@@ -122,6 +122,7 @@ class SynthesizeStream(ABC):
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(self._FlushSentinel())
+        self._req_ch.send_nowait(None)
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""

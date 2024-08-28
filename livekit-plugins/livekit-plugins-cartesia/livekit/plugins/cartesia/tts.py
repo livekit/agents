@@ -223,7 +223,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def input_task():
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    self._req_ch.send_nowait(None)
                     self._sent_tokenizer_stream.flush()
                     continue
                 self._sent_tokenizer_stream.push_text(data)

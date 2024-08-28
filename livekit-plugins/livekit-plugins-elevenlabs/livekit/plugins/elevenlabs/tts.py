@@ -277,7 +277,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
                     if word_stream is not None:
-                        self._req_ch.send_nowait(None)
                         word_stream.end_input()
 
                     word_stream = None
