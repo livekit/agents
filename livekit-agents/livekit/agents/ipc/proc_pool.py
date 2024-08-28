@@ -8,7 +8,8 @@ from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
-from .supervised_proc import SupervisedProc
+from . import proc_job_runner, thread_job_runner
+from .job_runner import JobRunner
 
 EventTypes = Literal[
     "process_created", "process_started", "process_ready", "process_closed"
@@ -26,7 +27,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
-        mp_ctx: BaseContext,
+        mp_ctx: BaseContext | None,  # None = single-process mode
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
@@ -39,20 +40,20 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
         self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
         self._proc_needed_sem = asyncio.Semaphore(num_idle_processes)
-        self._warmed_proc_queue = asyncio.Queue[SupervisedProc]()
-        self._processes: list[SupervisedProc] = []
+        self._warmed_proc_queue = asyncio.Queue[JobRunner]()
+        self._runners: list[JobRunner] = []
         self._started = False
         self._closed = False
 
     @property
-    def processes(self) -> list[SupervisedProc]:
-        return self._processes
+    def processes(self) -> list[JobRunner]:
+        return self._runners
 
-    def get_by_job_id(self, job_id: str) -> SupervisedProc | None:
+    def get_by_job_id(self, job_id: str) -> JobRunner | None:
         return next(
             (
                 x
-                for x in self._processes
+                for x in self._runners
                 if x.running_job and x.running_job.job.id == job_id
             ),
             None,
@@ -79,16 +80,19 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _proc_watch_task(self) -> None:
-        proc = SupervisedProc(
-            initialize_process_fnc=self._initialize_process_fnc,
-            job_entrypoint_fnc=self._job_entrypoint_fnc,
-            initialize_timeout=self._initialize_timeout,
-            close_timeout=self._close_timeout,
-            mp_ctx=self._mp_ctx,
-            loop=self._loop,
-        )
+        if self._mp_ctx is None:
+            proc = thread_job_runner.SupervisedProc()
+        else:
+            proc = proc_job_runner.SupervisedProc(
+                initialize_process_fnc=self._initialize_process_fnc,
+                job_entrypoint_fnc=self._job_entrypoint_fnc,
+                initialize_timeout=self._initialize_timeout,
+                close_timeout=self._close_timeout,
+                mp_ctx=self._mp_ctx,
+                loop=self._loop,
+            )
         try:
-            self._processes.append(proc)
+            self._runners.append(proc)
 
             async with self._init_sem:
                 if self._closed:
@@ -109,7 +113,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             await proc.join()
             self.emit("process_closed", proc)
         finally:
-            self._processes.remove(proc)
+            self._runners.remove(proc)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -121,5 +125,5 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 watch_tasks.append(task)
                 task.add_done_callback(watch_tasks.remove)
         except asyncio.CancelledError:
-            await asyncio.gather(*[proc.aclose() for proc in self._processes])
+            await asyncio.gather(*[proc.aclose() for proc in self._runners])
             await asyncio.gather(*watch_tasks)

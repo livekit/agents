@@ -17,16 +17,6 @@ NO_MESSAGE_TIMEOUT = 15.0
 
 
 @dataclass
-class ProcStartArgs:
-    initialize_process_fnc: Callable[[JobProcess], Any]
-    job_entrypoint_fnc: Callable[[JobContext], Any]
-    log_cch: socket.socket
-    mp_cch: socket.socket
-    asyncio_debug: bool
-    user_arguments: Any | None = None
-
-
-@dataclass
 class InitializeRequest:
     """sent by the main process to the subprocess to initialize it. this is going to call initialize_process_fnc"""
 
