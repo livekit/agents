@@ -1,6 +1,6 @@
-# Participant Task Example
+# Participant Entrypoint Example
 
-This example shows how to do things when participants joins. For example, a common use case is to fetch some external data based on the participant's attributes.
+This example shows how to do things when participants join. For example, a common use case is to fetch some external data based on the participant's attributes.
 
 ## Run
 
@@ -23,7 +23,7 @@ export LIVEKIT_API_SECRET=<your API Secret>
 
 ### Run the agent worker:
 
-`python minimal_assistant.py dev`
+`python participant_entrypoint.py dev`
 
 ### Test with a LiveKit frontend:
 

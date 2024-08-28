@@ -13,8 +13,12 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
     logger.info("connected to the room")
 
-    async def participant_task(p: rtc.RemoteParticipant):
-        logger.info(f"participant task starting for {p.identity}")
+    async def participant_task_1(p: rtc.RemoteParticipant):
+        # You can filter out participants you are not interested in
+        # if p.identity != "some_identity_of_interest":
+            # return
+
+        logger.info(f"participant task 1 starting for {p.identity}")
         # Do something with p.attributes, p.identity, p.metadata, etc.
         # my_stuff = await fetch_stuff_from_my_db(p)
 
@@ -22,7 +26,13 @@ async def entrypoint(ctx: JobContext):
         await asyncio.sleep(60)
         logger.info(f"participant task done for {p.identity}")
 
-    ctx.add_participant_task(task_fnc=participant_task, filter_fnc=lambda p: True)
+    async def participant_task_2(p: rtc.RemoteParticipant):
+        # multiple tasks can be run concurrently for each participant
+        await asyncio.sleep(10)
+
+
+    ctx.add_participant_entrypoint(entrypoint_fnc=participant_task_1)
+    ctx.add_participant_entrypoint(entrypoint_fnc=participant_task_2)
 
 
 if __name__ == "__main__":

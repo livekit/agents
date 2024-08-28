@@ -18,7 +18,7 @@ import asyncio
 import multiprocessing as mp
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, Tuple
 
 from livekit import rtc
 from livekit.protocol import agent, models
@@ -64,11 +64,8 @@ class JobContext:
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
         self._shutdown_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
-        self._participant_coro_lookup = dict[
-            Callable[[rtc.RemoteParticipant], bool],
-            Callable[[rtc.RemoteParticipant], Coroutine[None, Any, None]],
-        ]()
-        self._participant_tasks = dict[str, asyncio.Task[None]]()
+        self._participant_entrypoints: list[Callable[[rtc.RemoteParticipant], Coroutine[None, None, None]]] = []
+        self._participant_tasks = dict[Tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._on_participant_connected)
 
     @property
@@ -116,58 +113,29 @@ class JobContext:
         self._on_shutdown(reason)
 
     def _on_participant_connected(self, p: rtc.RemoteParticipant) -> None:
-        for filter, coro in self._participant_coro_lookup.items():
-            if filter(p):
-                task = asyncio.create_task(coro(p))
-                self._participant_tasks[p.identity] = task
-                task.add_done_callback(
-                    lambda _: self._participant_tasks.pop(p.identity)
-                )
+        for coro in self._participant_entrypoints:
+            if (p.identity, coro) in self._participant_tasks:
+                logger.warning(f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'")
+            task = asyncio.create_task(coro(p))
+            self._participant_tasks[(p.identity, coro)] = task
+            task.add_done_callback(
+                lambda _: self._participant_tasks.pop((p.identity, coro))
+            )
 
-    def add_participant_task(
+    def add_participant_entrypoint(
         self,
         *,
-        task_fnc: Callable[[rtc.RemoteParticipant], Coroutine[None, None, None]],
-        identity: str | None = None,
-        filter_fnc: Callable[[rtc.RemoteParticipant], bool] | None = None,
+        entrypoint_fnc: Callable[[rtc.RemoteParticipant], Coroutine[None, None, None]],
     ):
-        """Adds a task to be run when a participant that matches the filter joins the room. In cases where
-        the participant has already joined, the task will be run immediately. The task will only be run once
-        per matching participant. In cases where a participant leaves and then rejoins with the same identity,
-        the new task will not be started until the old task has completed.
+        """Adds an entrypoint function to be run when a participant that matches the filter joins the room. In cases where
+        the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
+        added and they will each be run in parallel for each participant.
         """
 
-        def _filter_fnc(p: rtc.RemoteParticipant) -> bool:
-            if filter_fnc and identity:
-                raise ValueError("cannot specify both identity and filter_fnc")
+        if entrypoint_fnc in self._participant_entrypoints:
+            raise ValueError("entrypoints cannot be added more than once")
 
-            if identity:
-                return p.identity == identity
-
-            if filter_fnc:
-                return filter_fnc(p)
-
-            return True
-
-        async def _coro_wrapper(p: rtc.RemoteParticipant):
-            if p.identity in self._participant_tasks:
-                t = self._participant_tasks[p.identity]
-                if not t.done:
-                    logger.warning("previous participant task not complete when trying to start a new one")
-                    try:
-                        await t
-                    except Exception as e:
-                        logger.error("Exception when awaiting previous task", exc_info=e)
-
-
-                self._participant_tasks.pop(p.identity)
-
-            try:
-                await task_fnc(p)
-            except Exception as e:
-                logger.exception("participant task exception", exc_info=e)
-
-        self._participant_coro_lookup[_filter_fnc] = _coro_wrapper
+        self._participant_entrypoints.append(entrypoint_fnc)
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
