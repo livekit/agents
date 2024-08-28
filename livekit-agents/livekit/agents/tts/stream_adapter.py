@@ -64,8 +64,12 @@ class StreamAdapterWrapper(SynthesizeStream):
 
         async def _synthesize():
             async for ev in self._sent_stream:
-                async for audio in self._tts.synthesize(ev.token):
-                    self._event_ch.send_nowait(audio)
+                try:
+                    async for audio in self._tts.synthesize(ev.token):
+                        self._event_ch.send_nowait(audio)
+                except asyncio.TimeoutError:
+                    # sleep forever to cause outer TTS to timeout
+                    await asyncio.Future()
 
         tasks = [
             asyncio.create_task(_forward_input()),

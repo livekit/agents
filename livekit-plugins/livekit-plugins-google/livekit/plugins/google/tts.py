@@ -22,6 +22,7 @@ from livekit.agents import tts, utils
 
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
+from google import api_core
 
 from .log import logger
 from .models import AudioEncoding, Gender, SpeechLanguages
@@ -142,34 +143,37 @@ class ChunkedStream(tts.ChunkedStream):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
-        response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
-            input=texttospeech.SynthesisInput(text=self._text),
-            voice=self._opts.voice,
-            audio_config=self._opts.audio_config,
-            timeout=self._timeout,
-        )
+        try:
+            request_id = utils.shortuuid()
+            segment_id = utils.shortuuid()
+            response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
+                input=texttospeech.SynthesisInput(text=self._text),
+                voice=self._opts.voice,
+                audio_config=self._opts.audio_config,
+                timeout=self._timeout,
+            )
 
-        data = response.audio_content
-        if self._opts.audio_config.audio_encoding == "mp3":
-            decoder = utils.codecs.Mp3StreamDecoder()
-            for frame in decoder.decode_chunk(data):
+            data = response.audio_content
+            if self._opts.audio_config.audio_encoding == "mp3":
+                decoder = utils.codecs.Mp3StreamDecoder()
+                for frame in decoder.decode_chunk(data):
+                    self._event_ch.send_nowait(
+                        tts.SynthesizedAudio(
+                            request_id=request_id, segment_id=segment_id, frame=frame
+                        )
+                    )
+            else:
                 self._event_ch.send_nowait(
                     tts.SynthesizedAudio(
-                        request_id=request_id, segment_id=segment_id, frame=frame
+                        request_id=request_id,
+                        segment_id=segment_id,
+                        frame=rtc.AudioFrame(
+                            data=data,
+                            sample_rate=self._opts.audio_config.sample_rate_hertz,
+                            num_channels=1,
+                            samples_per_channel=len(data) // 2,  # 16-bit
+                        ),
                     )
                 )
-        else:
-            self._event_ch.send_nowait(
-                tts.SynthesizedAudio(
-                    request_id=request_id,
-                    segment_id=segment_id,
-                    frame=rtc.AudioFrame(
-                        data=data,
-                        sample_rate=self._opts.audio_config.sample_rate_hertz,
-                        num_channels=1,
-                        samples_per_channel=len(data) // 2,  # 16-bit
-                    ),
-                )
-            )
+        except api_core.exceptions.DeadlineExceeded as e:
+            raise TimeoutError() from e

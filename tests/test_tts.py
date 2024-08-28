@@ -3,6 +3,7 @@ Check if all Text-To-Speech are producing valid audio.
 We verify the content using a good STT model
 """
 
+import asyncio
 import os
 import pathlib
 
@@ -101,3 +102,43 @@ async def test_stream(tts: agents.tts.TTS):
     await _assert_valid_synthesized_audio(
         frames, tts, TEST_AUDIO_SYNTHESIZE, SIMILARITY_THRESHOLD
     )
+
+TIMEOUT_TTS = [
+    elevenlabs.TTS(timeout=0.1),
+    cartesia.TTS(timeout=0.1),
+    agents.tts.StreamAdapter(
+        tts=openai.TTS(timeout=0.1), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    ),
+    agents.tts.StreamAdapter(
+        tts=google.TTS(timeout=0.1), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    ),
+    agents.tts.StreamAdapter(tts=azure.TTS(timeout=0.1), sentence_tokenizer=STREAM_SENT_TOKENIZER),
+]
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("tts", TIMEOUT_TTS)
+async def test_timeout(tts: agents.tts.TTS):
+    with pytest.raises(asyncio.TimeoutError):
+        await tts.synthesize(TEST_AUDIO_SYNTHESIZE).__anext__()
+
+    pattern = [1, 2, 4]
+    text = TEST_AUDIO_SYNTHESIZE
+    chunks = []
+    pattern_iter = iter(pattern * (len(text) // sum(pattern) + 1))
+
+    for chunk_size in pattern_iter:
+        if not text:
+            break
+        chunks.append(text[:chunk_size])
+        text = text[chunk_size:]
+
+    stream = tts.stream()
+
+    for chunk in chunks:
+        stream.push_text(chunk)
+
+    stream.flush()
+    stream.end_input()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await stream.__anext__()
