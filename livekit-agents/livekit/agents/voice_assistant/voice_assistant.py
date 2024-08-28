@@ -308,7 +308,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     def set_state(self, state: VoiceAssistantState):
         """Set the current state of the voice assistant"""
         t = asyncio.create_task(
-            self._room.local_participant.set_attributes({"agent.state": state})
+            self._room.local_participant.set_attributes(
+                {"voice_assistant.state": state}
+            )
         )
         self._state_tasks.add(t)
         t.add_done_callback(self._state_tasks.remove)
