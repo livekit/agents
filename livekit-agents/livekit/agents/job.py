@@ -64,7 +64,9 @@ class JobContext:
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
         self._shutdown_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
-        self._participant_entrypoints: list[Callable[[rtc.RemoteParticipant], Coroutine[None, None, None]]] = []
+        self._participant_entrypoints: list[
+            Callable[[rtc.RemoteParticipant], Coroutine[None, None, None]]
+        ] = []
         self._participant_tasks = dict[Tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._on_participant_connected)
 
@@ -115,7 +117,9 @@ class JobContext:
     def _on_participant_connected(self, p: rtc.RemoteParticipant) -> None:
         for coro in self._participant_entrypoints:
             if (p.identity, coro) in self._participant_tasks:
-                logger.warning(f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'")
+                logger.warning(
+                    f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"
+                )
             task = asyncio.create_task(coro(p))
             self._participant_tasks[(p.identity, coro)] = task
             task.add_done_callback(

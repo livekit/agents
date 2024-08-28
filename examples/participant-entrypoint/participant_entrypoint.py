@@ -16,7 +16,7 @@ async def entrypoint(ctx: JobContext):
     async def participant_task_1(p: rtc.RemoteParticipant):
         # You can filter out participants you are not interested in
         # if p.identity != "some_identity_of_interest":
-            # return
+        # return
 
         logger.info(f"participant task 1 starting for {p.identity}")
         # Do something with p.attributes, p.identity, p.metadata, etc.
@@ -29,7 +29,6 @@ async def entrypoint(ctx: JobContext):
     async def participant_task_2(p: rtc.RemoteParticipant):
         # multiple tasks can be run concurrently for each participant
         await asyncio.sleep(10)
-
 
     ctx.add_participant_entrypoint(entrypoint_fnc=participant_task_1)
     ctx.add_participant_entrypoint(entrypoint_fnc=participant_task_2)
