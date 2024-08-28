@@ -22,7 +22,7 @@ async def entrypoint(ctx: JobContext):
         await asyncio.sleep(60)
         logger.info(f"participant task done for {p.identity}")
 
-    await ctx.add_participant_task(task_fnc=participant_task, filter_fnc=lambda p: True)
+    ctx.add_participant_task(task_fnc=participant_task, filter_fnc=lambda p: True)
 
 
 if __name__ == "__main__":
