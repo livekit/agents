@@ -179,7 +179,6 @@ class STT(stt.STT):
             self._ensure_client(),
             self._recognizer,
             config,
-            timeout=self._timeout,
         )
 
 
@@ -192,10 +191,11 @@ class SpeechStream(stt.SpeechStream):
         sample_rate: int = 48000,
         num_channels: int = 1,
         max_retry: int = 32,
-        *,
-        timeout: float | None,
     ) -> None:
-        super().__init__(timeout=timeout)
+        super().__init__(timeout=None)
+        logger.info(
+            "Google speech-to-text does not support timeouts with the stream() method"
+        )
 
         self._client = client
         self._recognizer = recognizer
@@ -259,7 +259,6 @@ class SpeechStream(stt.SpeechStream):
                 # try to connect
                 stream = await self._client.streaming_recognize(
                     requests=input_generator(),
-                    timeout=self._timeout,
                 )
                 retry_count = 0  # connection successful, reset retry count
 

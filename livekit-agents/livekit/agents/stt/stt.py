@@ -105,7 +105,6 @@ class SpeechStream(ABC):
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(self._FlushSentinel())
-        self._req_ch.send_nowait(None)
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
@@ -117,13 +116,9 @@ class SpeechStream(ABC):
         self._input_ch.close()
         await aio.gracefully_cancel(self._task)
         self._event_ch.close()
-        self._req_ch.close()
 
     async def __anext__(self) -> SpeechEvent:
-        try:
-            await self._req_ch.__anext__()
-        finally:
-            return await asyncio.wait_for(self._event_ch.__anext__(), self._timeout)
+        return await self._event_ch.__anext__()
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
         return self

@@ -251,7 +251,9 @@ class SpeechStream(stt.SpeechStream):
 
                 headers = {"Authorization": f"Token {self._api_key}"}
                 ws = await self._session.ws_connect(
-                    _to_deepgram_url(live_config, websocket=True), headers=headers
+                    _to_deepgram_url(live_config, websocket=True),
+                    headers=headers,
+                    heartbeat=self._timeout,
                 )
                 retry_count = 0  # connected successfully, reset the retry_count
 

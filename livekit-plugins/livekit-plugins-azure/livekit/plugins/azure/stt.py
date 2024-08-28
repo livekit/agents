@@ -82,7 +82,6 @@ class STT(stt.STT):
     def stream(self, *, language: str | None = None) -> "SpeechStream":
         return SpeechStream(
             self._config,
-            timeout=self._timeout,
         )
 
 
@@ -90,10 +89,12 @@ class SpeechStream(stt.SpeechStream):
     def __init__(
         self,
         opts: STTOptions,
-        *,
-        timeout: float | None,
     ) -> None:
-        super().__init__(timeout=timeout)
+        super().__init__(timeout=None)
+        logger.info(
+            "Azure speech-to-text does not support timeouts with the stream() method"
+        )
+
         self._opts = opts
         self._speaking = False
 
