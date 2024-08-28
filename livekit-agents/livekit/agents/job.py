@@ -120,7 +120,8 @@ class JobContext:
                 logger.warning(
                     f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"
                 )
-            task = asyncio.create_task(coro(p))
+            task_name = f'part-entry-{p.identity}-{coro.__name__}'
+            task = asyncio.create_task(coro(p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
             task.add_done_callback(
                 lambda _: self._participant_tasks.pop((p.identity, coro))
@@ -128,7 +129,6 @@ class JobContext:
 
     def add_participant_entrypoint(
         self,
-        *,
         entrypoint_fnc: Callable[[rtc.RemoteParticipant], Coroutine[None, None, None]],
     ):
         """Adds an entrypoint function to be run when a participant that matches the filter joins the room. In cases where
