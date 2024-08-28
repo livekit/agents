@@ -152,19 +152,13 @@ class JobContext:
         async def _coro_wrapper(p: rtc.RemoteParticipant):
             if p.identity in self._participant_tasks:
                 t = self._participant_tasks[p.identity]
-
-                try:
-                    async with asyncio.timeout(5):
+                if not t.done:
+                    logger.warning("previous participant task not complete when trying to start a new one")
+                    try:
                         await t
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "previous participant task taking a long time and it is preventing the new participant task from starting"
-                    )
+                    except Exception as e:
+                        logger.error("Exception when awaiting previous task", exc_info=e)
 
-                try:
-                    await t
-                except Exception:
-                    pass
 
                 self._participant_tasks.pop(p.identity)
 
