@@ -82,7 +82,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     async def _proc_watch_task(self) -> None:
         proc: JobRunner
         if self._mp_ctx is None:
-            proc = thread_job_runner.SupervisedProc(
+            proc = thread_job_runner.ThreadJobRunner(
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 initialize_timeout=self._initialize_timeout,
@@ -90,7 +90,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 loop=self._loop,
             )
         else:
-            proc = proc_job_runner.SupervisedProc(
+            proc = proc_job_runner.ProcJobRunner(
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 initialize_timeout=self._initialize_timeout,

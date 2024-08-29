@@ -22,7 +22,7 @@ class _ProcOpts:
     close_timeout: float
 
 
-class SupervisedProc:
+class ThreadJobRunner:
     def __init__(
         self,
         *,
