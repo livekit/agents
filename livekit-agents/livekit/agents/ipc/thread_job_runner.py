@@ -103,6 +103,8 @@ class SupervisedProc:
             )
             t.start()
 
+            self._main_atask = asyncio.create_task(self._main_task())
+
     async def join(self) -> None:
         """wait for the job process to finish"""
         if not self.started:

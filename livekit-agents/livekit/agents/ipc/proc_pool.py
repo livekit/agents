@@ -97,6 +97,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 mp_ctx=self._mp_ctx,
                 loop=self._loop,
             )
+
         try:
             self._runners.append(proc)
 
