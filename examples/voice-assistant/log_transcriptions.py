@@ -44,14 +44,24 @@ async def entrypoint(ctx: JobContext):
         if msg.message:
             asyncio.create_task(answer_from_text(msg.message))
 
-    async def log_context():
-        with open("transcriptions.log", "w") as f:
-            chat_ctx = assistant.chat_ctx.copy()
-            for msg in chat_ctx.messages:
-                f.write(msg.role + "\n")
-                f.write(msg.content + "\n\n")
+    # clear file before writing to it
+    with open("transcriptions.log", "w"):
+        pass
 
-    ctx.add_shutdown_callback(log_context)
+    @assistant.on("user_speech_committed")
+    def on_user_speech_committed(msg: llm.ChatMessage):
+        # convert string lists to strings, drop images
+        if isinstance(msg.content, list):
+            msg.content = "\n".join(
+                "[image]" if isinstance(x, llm.ChatImage) else x for x in msg
+            )
+        with open("transcriptions.log", "a+") as f:
+            f.write(f"USER:\n{msg.content}\n\n")
+
+    @assistant.on("agent_speech_committed")
+    def on_agent_speech_committed(msg: llm.ChatMessage):
+        with open("transcriptions.log", "a+") as f:
+            f.write(f"AGENT:\n{msg.content}\n\n")
 
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
