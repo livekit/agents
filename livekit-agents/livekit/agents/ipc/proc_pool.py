@@ -81,9 +81,15 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     @utils.log_exceptions(logger=logger)
     async def _proc_watch_task(self) -> None:
         if self._mp_ctx is None:
-            proc = thread_job_runner.SupervisedProc()
+            proc: JobRunner = thread_job_runner.SupervisedProc(
+                initialize_process_fnc=self._initialize_process_fnc,
+                job_entrypoint_fnc=self._job_entrypoint_fnc,
+                initialize_timeout=self._initialize_timeout,
+                close_timeout=self._close_timeout,
+                loop=self._loop,
+            )
         else:
-            proc = proc_job_runner.SupervisedProc(
+            proc: JobRunner = proc_job_runner.SupervisedProc(
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 initialize_timeout=self._initialize_timeout,

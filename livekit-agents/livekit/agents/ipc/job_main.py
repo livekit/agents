@@ -9,7 +9,7 @@ import queue
 import socket
 import threading
 from dataclasses import dataclass
-from typing import Optional, Callable, Any
+from typing import Any, Callable, Optional
 
 from livekit import rtc
 
@@ -323,9 +323,9 @@ def thread_main(
         ), "first message must be InitializeRequest"
         job_proc = JobProcess(start_arguments=args.user_arguments)
 
-        logger.debug("initializing process", extra={"tid": tid})
+        logger.debug("initializing job runner", extra={"tid": tid})
         args.initialize_process_fnc(job_proc)
-        logger.debug("process initialized", extra={"tid": tid})
+        logger.debug("job runner initialized", extra={"tid": tid})
         channel.send_message(cch, proto.InitializeResponse())
 
         main_task = loop.create_task(

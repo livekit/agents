@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from ..job import JobContext, RunningJobInfo
+from ..job import RunningJobInfo
 
 
 class JobRunner(Protocol):
@@ -22,10 +22,8 @@ class JobRunner(Protocol):
 
     async def join(self) -> None: ...
 
-    async def initialize(self, job: JobContext) -> None: ...
+    async def initialize(self) -> None: ...
 
     async def aclose(self) -> None: ...
-
-    async def kill(self) -> None: ...
 
     async def launch_job(self, info: RunningJobInfo) -> None: ...

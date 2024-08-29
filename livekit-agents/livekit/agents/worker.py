@@ -108,6 +108,8 @@ class WorkerOptions:
     """A function to perform any necessary initialization before the job starts."""
     load_fnc: Callable[[], float] = _DefaultLoadCalc.get_load
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
+    multi_process_mode: bool = True
+    """Whether to use multiprocessing or threading for running jobs."""
     load_threshold: float = 0.65
     """When the load exceeds this threshold, the worker will be marked as unavailable."""
     num_idle_processes: int = 3
@@ -182,7 +184,10 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         # using spawn context for all platforms. We may have further optimizations for
         # Linux with forkserver, but for now, this is the safest option
-        mp_ctx = mp.get_context("spawn")
+        mp_ctx = None
+        if opts.multi_process_mode:
+            mp_ctx = mp.get_context("spawn")
+
         self._proc_pool = ipc.proc_pool.ProcPool(
             initialize_process_fnc=opts.prewarm_fnc,
             job_entrypoint_fnc=opts.entrypoint_fnc,

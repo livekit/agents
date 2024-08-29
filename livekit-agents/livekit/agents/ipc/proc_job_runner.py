@@ -15,7 +15,7 @@ from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils.aio import duplex_unix
-from . import channel, proc_main, proto
+from . import channel, job_main, proto
 
 
 class LogQueueListener:
@@ -155,7 +155,7 @@ class SupervisedProc:
             log_listener = LogQueueListener(log_pch, _add_proc_ctx_log)
             log_listener.start()
 
-            self._proc_args = proto.ProcStartArgs(
+            self._proc_args = job_main.ProcStartArgs(
                 initialize_process_fnc=self._opts.initialize_process_fnc,
                 job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
                 log_cch=mp_log_cch,
@@ -165,7 +165,7 @@ class SupervisedProc:
             )
 
             self._proc = self._opts.mp_ctx.Process(  # type: ignore
-                target=proc_main.main, args=(self._proc_args,), name="job_proc"
+                target=job_main.proc_main, args=(self._proc_args,), name="job_proc"
             )
 
             self._proc.start()

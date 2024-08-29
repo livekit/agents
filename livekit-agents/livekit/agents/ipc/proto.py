@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import io
-import socket
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar
+from typing import ClassVar
 
 from livekit.protocol import agent
 
-from ..job import JobAcceptArguments, JobContext, JobProcess, RunningJobInfo
+from ..job import JobAcceptArguments, RunningJobInfo
 from . import channel
 
 PING_INTERVAL = 2.5
