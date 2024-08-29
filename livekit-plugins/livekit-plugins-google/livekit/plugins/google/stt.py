@@ -164,6 +164,7 @@ class STT(stt.STT):
             ),
         )
         return _recognize_response_to_speech_event(raw)
+
     def stream(
         self, *, language: SpeechLanguages | str | None = None
     ) -> "SpeechStream":

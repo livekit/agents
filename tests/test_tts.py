@@ -103,6 +103,7 @@ async def test_stream(tts: agents.tts.TTS):
         frames, tts, TEST_AUDIO_SYNTHESIZE, SIMILARITY_THRESHOLD
     )
 
+
 TIMEOUT_TTS = [
     elevenlabs.TTS(timeout=0.1),
     cartesia.TTS(timeout=0.1),
@@ -112,8 +113,11 @@ TIMEOUT_TTS = [
     agents.tts.StreamAdapter(
         tts=google.TTS(timeout=0.1), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
-    agents.tts.StreamAdapter(tts=azure.TTS(timeout=0.1), sentence_tokenizer=STREAM_SENT_TOKENIZER),
+    agents.tts.StreamAdapter(
+        tts=azure.TTS(timeout=0.1), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    ),
 ]
+
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts", TIMEOUT_TTS)

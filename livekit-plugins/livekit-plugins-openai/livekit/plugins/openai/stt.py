@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import io
 import os
@@ -112,7 +111,5 @@ class STT(stt.STT):
 
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[
-                stt.SpeechData(text=resp.text, language=language or "")
-            ],
+            alternatives=[stt.SpeechData(text=resp.text, language=language or "")],
         )

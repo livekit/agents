@@ -20,9 +20,9 @@ from typing import Union
 from livekit import rtc
 from livekit.agents import tts, utils
 
+from google import api_core
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
-from google import api_core
 
 from .log import logger
 from .models import AudioEncoding, Gender, SpeechLanguages
