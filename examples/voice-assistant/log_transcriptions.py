@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -48,20 +49,26 @@ async def entrypoint(ctx: JobContext):
     with open("transcriptions.log", "w"):
         pass
 
-    @assistant.on("user_speech_committed")
-    def on_user_speech_committed(msg: llm.ChatMessage):
+    async def log_user_speech(msg: llm.ChatMessage):
         # convert string lists to strings, drop images
         if isinstance(msg.content, list):
             msg.content = "\n".join(
                 "[image]" if isinstance(x, llm.ChatImage) else x for x in msg
             )
         with open("transcriptions.log", "a+") as f:
-            f.write(f"USER:\n{msg.content}\n\n")
+            f.write(f"[{datetime.now()}] USER:\n{msg.content}\n\n")
+
+    async def log_agent_speech(msg: llm.ChatMessage):
+        with open("transcriptions.log", "a+") as f:
+            f.write(f"[{datetime.now()}] AGENT:\n{msg.content}\n\n")
+
+    @assistant.on("user_speech_committed")
+    def on_user_speech_committed(msg: llm.ChatMessage):
+        asyncio.create_task(log_user_speech(msg))
 
     @assistant.on("agent_speech_committed")
     def on_agent_speech_committed(msg: llm.ChatMessage):
-        with open("transcriptions.log", "a+") as f:
-            f.write(f"AGENT:\n{msg.content}\n\n")
+        asyncio.create_task(log_agent_speech(msg))
 
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
