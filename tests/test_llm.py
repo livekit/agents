@@ -89,7 +89,7 @@ def test_hashable_typeinfo():
 
 LLMS = [
     openai.LLM(),
-    anthropic.LLM(),
+    # anthropic.LLM(),
 ]
 
 

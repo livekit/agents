@@ -18,10 +18,12 @@ import asyncio
 import multiprocessing as mp
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, Tuple
 
 from livekit import rtc
 from livekit.protocol import agent, models
+
+from .log import logger
 
 
 class AutoSubscribe(str, Enum):
@@ -62,6 +64,11 @@ class JobContext:
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
         self._shutdown_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
+        self._participant_entrypoints: list[
+            Callable[[rtc.RemoteParticipant], Coroutine[None, None, None]]
+        ] = []
+        self._participant_tasks = dict[Tuple[str, Callable], asyncio.Task[None]]()
+        self._room.on("participant_connected", self._on_participant_connected)
 
     @property
     def proc(self) -> JobProcess:
@@ -99,11 +106,40 @@ class JobContext:
 
         await self._room.connect(self._info.url, self._info.token, options=room_options)
         self._on_connect()
+        for p in self._room.remote_participants.values():
+            self._on_participant_connected(p)
 
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
 
     def shutdown(self, reason: str = "") -> None:
         self._on_shutdown(reason)
+
+    def _on_participant_connected(self, p: rtc.RemoteParticipant) -> None:
+        for coro in self._participant_entrypoints:
+            if (p.identity, coro) in self._participant_tasks:
+                logger.warning(
+                    f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"
+                )
+            task_name = f"part-entry-{p.identity}-{coro.__name__}"
+            task = asyncio.create_task(coro(p), name=task_name)
+            self._participant_tasks[(p.identity, coro)] = task
+            task.add_done_callback(
+                lambda _: self._participant_tasks.pop((p.identity, coro))
+            )
+
+    def add_participant_entrypoint(
+        self,
+        entrypoint_fnc: Callable[[rtc.RemoteParticipant], Coroutine[None, None, None]],
+    ):
+        """Adds an entrypoint function to be run when a participant that matches the filter joins the room. In cases where
+        the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
+        added and they will each be run in parallel for each participant.
+        """
+
+        if entrypoint_fnc in self._participant_entrypoints:
+            raise ValueError("entrypoints cannot be added more than once")
+
+        self._participant_entrypoints.append(entrypoint_fnc)
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:

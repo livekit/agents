@@ -1,4 +1,3 @@
-import asyncio
 import pickle
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
@@ -52,7 +51,6 @@ async def entrypoint(ctx: JobContext):
 
     assistant.start(ctx.room)
 
-    await asyncio.sleep(1)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
 
