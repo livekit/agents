@@ -53,7 +53,7 @@ async def entrypoint(ctx: JobContext):
         # convert string lists to strings, drop images
         if isinstance(msg.content, list):
             msg.content = "\n".join(
-                x if isinstance(x, llm.ChatImage) else "[image]" for x in msg
+                "[image]" if isinstance(x, llm.ChatImage) else x for x in msg
             )
         with open("transcriptions.log", "a+") as f:
             f.write(f"USER:\n{msg.content}\n\n")
