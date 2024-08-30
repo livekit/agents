@@ -61,21 +61,21 @@ async def entrypoint(ctx: JobContext):
     def on_agent_speech_committed(msg: llm.ChatMessage):
         log_queue.put_nowait(f"[{datetime.now()}] AGENT:\n{msg.content}\n\n")
 
-    async def finish_queue():
-        log_queue.put_nowait(None)
-
-    ctx.add_shutdown_callback(finish_queue)
-
     async def write_transcription():
         async with open("transcriptions.log", "w") as f:
             while True:
                 msg = await log_queue.get()
                 if msg is None:
-                    print("woops!")
                     break
                 await f.write(msg)
 
-    asyncio.create_task(write_transcription())
+    write_task = asyncio.create_task(write_transcription())
+
+    async def finish_queue():
+        log_queue.put_nowait(None)
+        await write_task
+
+    ctx.add_shutdown_callback(finish_queue)
 
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
