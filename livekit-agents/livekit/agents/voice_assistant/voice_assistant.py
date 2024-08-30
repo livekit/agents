@@ -305,16 +305,22 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
         self._add_speech_for_playout(new_handle)
 
-    def set_state(self, state: VoiceAssistantState):
+    def _update_state(self, state: VoiceAssistantState, delay: float = 0.0):
         """Set the current state of the voice assistant"""
-        t = asyncio.create_task(
-            self._room.local_participant.set_attributes(
-                {"voice_assistant.state": state}
-            )
-        )
-        self._state_tasks.add(t)
-        t.add_done_callback(self._state_tasks.remove)
 
+        @utils.log_exceptions(logger=logger)
+        async def _run_task(delay: float) -> None:
+            await asyncio.sleep(delay)
+
+            if self._room.isconnected():
+                await self._room.local_participant.set_attributes(
+                    {"voice_assistant.state": state}
+                )
+
+        if self._update_state_task is not None:
+            self._update_state_task.cancel()
+
+        self._update_state_task = asyncio.create_task(_run_task(delay))
     async def aclose(self) -> None:
         """Close the voice assistant"""
         if not self._started:
