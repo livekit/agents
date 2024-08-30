@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 
 from dotenv import load_dotenv
+from aiofile import async_open as open
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
@@ -46,7 +47,7 @@ async def entrypoint(ctx: JobContext):
             asyncio.create_task(answer_from_text(msg.message))
 
     # clear file before writing to it
-    with open("transcriptions.log", "w"):
+    async with open("transcriptions.log", "w"):
         pass
 
     async def log_user_speech(msg: llm.ChatMessage):
@@ -55,12 +56,12 @@ async def entrypoint(ctx: JobContext):
             msg.content = "\n".join(
                 "[image]" if isinstance(x, llm.ChatImage) else x for x in msg
             )
-        with open("transcriptions.log", "a+") as f:
-            f.write(f"[{datetime.now()}] USER:\n{msg.content}\n\n")
+        async with open("transcriptions.log", "a+") as f:
+            await f.write(f"[{datetime.now()}] USER:\n{msg.content}\n\n")
 
     async def log_agent_speech(msg: llm.ChatMessage):
-        with open("transcriptions.log", "a+") as f:
-            f.write(f"[{datetime.now()}] AGENT:\n{msg.content}\n\n")
+        async with open("transcriptions.log", "a+") as f:
+            await f.write(f"[{datetime.now()}] AGENT:\n{msg.content}\n\n")
 
     @assistant.on("user_speech_committed")
     def on_user_speech_committed(msg: llm.ChatMessage):
