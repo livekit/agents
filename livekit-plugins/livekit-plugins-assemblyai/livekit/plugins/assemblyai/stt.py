@@ -82,10 +82,10 @@ class STT(stt.STT):
         self._session = http_session
         self._token_expires_in = token_expires_in
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    @property
+    def session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_session()
-
         return self._session
 
     async def recognize(
@@ -104,7 +104,7 @@ class STT(stt.STT):
         return SpeechStream(
             config,
             self._api_key,
-            self._ensure_session(),
+            self.session,
         )
 
 
