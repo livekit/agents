@@ -22,7 +22,7 @@ import os
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -38,7 +38,7 @@ ENGLISH = "en"
 class STTOptions:
     sample_rate: Optional[int] = None
     word_boost: Optional[str] = None
-    encoding: Optional[str] = None  # Allowed values: pcm_s16le, pcm_mulaw
+    encoding: Optional[Literal["pcm_s16le", "pcm_mulaw"]] = None
     disable_partial_transcripts: bool = False
     enable_extra_session_information: bool = False
     end_utterance_silence_threshold: Optional[int] = None
@@ -393,7 +393,7 @@ def live_transcription_to_speech_data(
 
 
 def prerecorded_transcription_to_speech_event(
-    language: str | None,
+    language: Optional[str],
     data: dict,
 ) -> stt.SpeechEvent:
     return stt.SpeechEvent(
