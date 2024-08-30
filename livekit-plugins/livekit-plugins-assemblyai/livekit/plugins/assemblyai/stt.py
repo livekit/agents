@@ -136,6 +136,9 @@ class SpeechStream(stt.SpeechStream):
         self._closed = False
         self._main_task = asyncio.create_task(self._run(max_retry))
 
+        if self._num_channels != 1:
+            raise ValueError(f"AssemblyAI only supports mono audio, but a `num_channels` of {self._num_channels} was provided")
+
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: List[stt.SpeechEvent] = []
 
