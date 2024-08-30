@@ -64,7 +64,9 @@ class STT(stt.STT):
         super().__init__(streaming_supported=True)
         api_key = api_key or os.environ.get("ASSEMBLYAI_API_KEY")
         if api_key is None:
-            raise ValueError("Assembly AI API key is required")
+            raise ValueError("AssemblyAI API key is required. " \
+                             "Pass one in via the `api_key` parameter, " \
+                             "or set it as the `ASSEMBLYAI_API_KEY` environment variable")
         self._api_key = api_key
 
         self._opts = STTOptions(
