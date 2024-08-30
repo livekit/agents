@@ -187,7 +187,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self, max_retry: int) -> None:
         """
-        Run a single websocket connection to Assembly AI and make sure to reconnect
+        Run a single websocket connection to AssemblyAI and make sure to reconnect
         when something went wrong.
         """
         if self._token is None or time.time() > self._token_expires_at:
@@ -216,7 +216,7 @@ class SpeechStream(stt.SpeechStream):
                     # Something went wrong, retry the connection
                     if retry_count >= max_retry:
                         print(
-                            f"failed to connect to Assembly AI after {max_retry} tries"
+                            f"failed to connect to AssemblyAI after {max_retry} tries"
                         )
                         break
 
@@ -224,11 +224,11 @@ class SpeechStream(stt.SpeechStream):
                     retry_count += 1  # increment after calculating the delay, the first retry should happen directly
 
                     print(
-                        f"Assembly AI connection failed, retrying in {retry_delay}s",
+                        f"AssemblyAI connection failed, retrying in {retry_delay}s",
                     )
                     await asyncio.sleep(retry_delay)
         except Exception:
-            print("Assembly AI task failed")
+            print("AssemblyAI task failed")
         finally:
             self._event_queue.put_nowait(None)
 
@@ -242,8 +242,8 @@ class SpeechStream(stt.SpeechStream):
 
         async def send_task():
             nonlocal closing_ws
-            # forward inputs to Assembly AI
-            # if we receive a close message, signal it to Assembly AI and break.
+            # forward inputs to AssemblyAI
+            # if we receive a close message, signal it to AssemblyAI and break.
             # the recv task will then make sure to process the remaining audio and stop
             while True:
                 data = await self._queue.get()
@@ -267,7 +267,7 @@ class SpeechStream(stt.SpeechStream):
                         self._buffer_duration = 0.0
                 elif data == SpeechStream._CLOSE_MSG:
                     closing_ws = True
-                    await ws.send_str(data)  # tell Assembly AI we are done with inputs
+                    await ws.send_str(data)  # tell AssemblyAI we are done with inputs
                     break
 
         async def recv_task():
@@ -283,19 +283,19 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     raise Exception(
-                        "Assembly AI connection closed unexpectedly",
+                        "AssemblyAI connection closed unexpectedly",
                     )  # this will trigger a reconnection, see the _run loop
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    print("unexpected Assembly AI message type %s", msg.type)
+                    print("unexpected AssemblyAI message type %s", msg.type)
                     continue
 
                 try:
-                    # received a message from Assembly AI
+                    # received a message from AssemblyAI
                     data = json.loads(msg.data)
                     self._process_stream_event(data)
                 except Exception:
-                    print("failed to process Assembly AI message")
+                    print("failed to process AssemblyAI message")
 
         await asyncio.gather(send_task(), recv_task())
 
@@ -367,7 +367,7 @@ class SpeechStream(stt.SpeechStream):
                 self._event_queue.put_nowait(final_event)
                 self._end_speech()
         elif data["message_type"] == "RealtimeError":
-            print("Received unexpected error from Assembly AI %s", data)
+            print("Received unexpected error from AssemblyAI %s", data)
 
     async def __anext__(self) -> stt.SpeechEvent:
         evt = await self._event_queue.get()
