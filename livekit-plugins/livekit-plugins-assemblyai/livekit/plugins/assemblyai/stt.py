@@ -36,28 +36,28 @@ ENGLISH = "en"
 
 @dataclass
 class STTOptions:
-    sample_rate: int | None = None
-    word_boost: str | None = None
-    encoding: str | None = None  # Allowed values: pcm_s16le, pcm_mulaw
+    sample_rate: Optional[int] = None
+    word_boost: Optional[str] = None
+    encoding: Optional[str] = None  # Allowed values: pcm_s16le, pcm_mulaw
     disable_partial_transcripts: bool = False
     enable_extra_session_information: bool = False
-    end_utterance_silence_threshold: int = None
-    buffer_size_seconds: int = None
-    token_expires_in: int = None
+    end_utterance_silence_threshold: Optional[int] = None
+    buffer_size_seconds: Optional[int] = None
+    token_expires_in: Optional[int] = None
 
 
 class STT(stt.STT):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        sample_rate: int | None = 16000,
-        word_boost: str | None = None,
-        encoding: str | None = "pcm_s16le",
+        api_key: Optional[str] = None,
+        sample_rate: Optional[int] = 16000,
+        word_boost: Optional[str] = None,
+        encoding: Optional[str] = "pcm_s16le",
         disable_partial_transcripts: bool = False,
         enable_extra_session_information: bool = False,
         end_utterance_silence_threshold: int = 1000,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: Optional[aiohttp.ClientSession] = None,
         token_expires_in: int = 3600,
         buffer_size_seconds: float = 0.2,
     ):
@@ -98,7 +98,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: str | None = None,
+        language: Optional[str] = None,
     ) -> "SpeechStream":
         config = dataclasses.replace(self._opts)
         return SpeechStream(
