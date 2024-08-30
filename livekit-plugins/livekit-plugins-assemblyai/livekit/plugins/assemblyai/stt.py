@@ -149,8 +149,6 @@ class SpeechStream(stt.SpeechStream):
         
         # Buffer to collect frames until we have 100ms worth of audio
         self._buffer_size_seconds = buffer_size_seconds
-        self._buffer = bytearray()
-        self._buffer_duration = 0.0  # duration of audio in the buffer in seconds
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
@@ -243,8 +241,12 @@ class SpeechStream(stt.SpeechStream):
         closing_ws = False
         self._queue.put_nowait(self._END_UTTERANCE_SILENCE_THRESHOLD_MSG)
 
+        # Local variables for buffering
+        buffer = bytearray()
+        buffer_duration = 0.0
+
         async def send_task():
-            nonlocal closing_ws
+            nonlocal closing_ws, buffer, buffer_duration
             # forward inputs to AssemblyAI
             # if we receive a close message, signal it to AssemblyAI and break.
             # the recv task will then make sure to process the remaining audio and stop
@@ -253,21 +255,21 @@ class SpeechStream(stt.SpeechStream):
                 self._queue.task_done()
 
                 if isinstance(data, rtc.AudioFrame):
-                    # TODO(theomonnom): The remix_and_resample method is low quality
+                    # TODO: The remix_and_resample method is low quality
                     # and should be replaced with a continuous resampling
                     frame = data.remix_and_resample(
                         self._sample_rate,
                         self._num_channels,
                     )
-                    self._buffer.extend(frame.data.tobytes())
-                    self._buffer_duration += len(frame.data) / (
+                    buffer.extend(frame.data.tobytes())
+                    buffer_duration += len(frame.data) / (
                         self._sample_rate * self._num_channels
                     )
 
-                    if self._buffer_duration >= self._buffer_size_seconds:
-                        await ws.send_bytes(bytes(self._buffer))
-                        self._buffer.clear()
-                        self._buffer_duration = 0.0
+                    if buffer_duration >= self._buffer_size_seconds:
+                        await ws.send_bytes(bytes(buffer))
+                        buffer.clear()
+                        buffer_duration = 0.0
                 elif data == SpeechStream._CLOSE_MSG:
                     closing_ws = True
                     await ws.send_str(data)  # tell AssemblyAI we are done with inputs
