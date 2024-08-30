@@ -321,6 +321,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._update_state_task.cancel()
 
         self._update_state_task = asyncio.create_task(_run_task(delay))
+
     async def aclose(self) -> None:
         """Close the voice assistant"""
         if not self._started:
@@ -353,7 +354,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("user_started_speaking")
             self.emit("user_started_speaking")
             self._deferred_validation.on_human_start_of_speech(ev)
-            self.set_state("listening")
+            self._update_state("listening")
 
         def _on_vad_updated(ev: vad.VADEvent) -> None:
             if not self._track_published_fut.done():
@@ -380,7 +381,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self.emit("user_stopped_speaking")
             self._deferred_validation.on_human_end_of_speech(ev)
             self._last_end_of_speech_time = time.time()
-            self.set_state("thinking")
 
         def _on_interim_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_interim_text = ev.alternatives[0].text
@@ -415,7 +415,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if self._opts.plotting:
             await self._plotter.start()
 
-        self.set_state("initializing")
+        self._update_state("initializing")
         audio_source = rtc.AudioSource(self._tts.sample_rate, self._tts.num_channels)
         track = rtc.LocalAudioTrack.create_audio_track("assistant_voice", audio_source)
         self._agent_publication = await self._room.local_participant.publish_track(
@@ -433,12 +433,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         def _on_playout_started() -> None:
             self._plotter.plot_event("agent_started_speaking")
             self.emit("agent_started_speaking")
-            self.set_state("speaking")
+            self._update_state("speaking")
 
         def _on_playout_stopped(interrupted: bool) -> None:
             self._plotter.plot_event("agent_stopped_speaking")
             self.emit("agent_stopped_speaking")
-            self.set_state("listening")
+            self._update_state("listening")
 
         agent_playout.on("playout_started", _on_playout_started)
         agent_playout.on("playout_stopped", _on_playout_stopped)
@@ -463,6 +463,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         if self._pending_agent_reply is not None:
             self._pending_agent_reply.interrupt()
+
+        if not self._human_input.speaking:
+            self._update_state("thinking")
 
         self._pending_agent_reply = new_handle = SpeechHandle.create_assistant_reply(
             allow_interruptions=self._opts.allow_interruptions,
