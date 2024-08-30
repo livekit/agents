@@ -46,30 +46,32 @@ async def entrypoint(ctx: JobContext):
         if msg.message:
             asyncio.create_task(answer_from_text(msg.message))
 
-    # clear file before writing to it
-    async with open("transcriptions.log", "w"):
-        pass
+    log_queue = asyncio.Queue()
 
-    async def log_user_speech(msg: llm.ChatMessage):
+    @assistant.on("user_speech_committed")
+    def on_user_speech_committed(msg: llm.ChatMessage):
         # convert string lists to strings, drop images
         if isinstance(msg.content, list):
             msg.content = "\n".join(
                 "[image]" if isinstance(x, llm.ChatImage) else x for x in msg
             )
-        async with open("transcriptions.log", "a+") as f:
-            await f.write(f"[{datetime.now()}] USER:\n{msg.content}\n\n")
-
-    async def log_agent_speech(msg: llm.ChatMessage):
-        async with open("transcriptions.log", "a+") as f:
-            await f.write(f"[{datetime.now()}] AGENT:\n{msg.content}\n\n")
-
-    @assistant.on("user_speech_committed")
-    def on_user_speech_committed(msg: llm.ChatMessage):
-        asyncio.create_task(log_user_speech(msg))
+        log_queue.put_nowait(f"[{datetime.now()}] USER:\n{msg.content}\n\n")
 
     @assistant.on("agent_speech_committed")
     def on_agent_speech_committed(msg: llm.ChatMessage):
-        asyncio.create_task(log_agent_speech(msg))
+        log_queue.put_nowait(f"[{datetime.now()}] AGENT:\n{msg.content}\n\n")
+
+    @ctx.room.on("disconnected")
+    def on_disconnected(*args):
+        log_queue.task_done()
+
+    async def write_transcription():
+        async with open("transcriptions.log", "w") as f:
+            while True:
+                msg = await log_queue.get()
+                await f.write(msg)
+
+    asyncio.shield(asyncio.create_task(write_transcription()))
 
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
