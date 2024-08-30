@@ -42,7 +42,7 @@ class STTOptions:
     disable_partial_transcripts: bool = False
     enable_extra_session_information: bool = False
     end_utterance_silence_threshold: Optional[int] = None
-    buffer_size_seconds: Optional[int] = None
+    buffer_size_seconds: Optional[float] = None
     token_expires_in: Optional[int] = None
 
 
@@ -120,7 +120,7 @@ class SpeechStream(stt.SpeechStream):
         num_channels: int = 1,
         max_retry: int = 32,
         token_expires_in: int = 3600,
-        buffer_size_seconds: int = 0.2,
+        buffer_size_seconds: float = 0.2,
         end_utterance_silence_threshold: int = 1000,
     ) -> None:
         super().__init__()
