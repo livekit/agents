@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from dataclasses import dataclass
 
@@ -103,6 +104,7 @@ class ChunkedStream(tts.ChunkedStream):
         def _synthesize() -> speechsdk.SpeechSynthesisResult:
             return synthesizer.speak_text_async(self._text).get()  # type: ignore
 
+        result = None
         try:
             result = await asyncio.to_thread(_synthesize)
             if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
@@ -110,9 +112,9 @@ class ChunkedStream(tts.ChunkedStream):
                     f"failed to synthesize audio: {result.reason} {result.cancellation_details}"
                 )
         finally:
-
             def _cleanup() -> None:
                 nonlocal synthesizer, result
+                synthesizer.stop_speaking_async().get()
                 del synthesizer
                 del result
 
@@ -142,7 +144,8 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
                 samples_per_channel=audio_buffer.nbytes // 2,
             ),
         )
-        self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
         return audio_buffer.nbytes
 
 
