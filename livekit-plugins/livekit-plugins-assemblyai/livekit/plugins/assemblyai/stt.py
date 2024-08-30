@@ -33,6 +33,12 @@ from livekit.agents.utils import AudioBuffer
 
 ENGLISH = "en"
 
+# Define bytes per frame for different encoding types
+bytes_per_frame = {
+    "pcm_s16le": 2,
+    "pcm_mulaw": 1,
+}
+
 
 @dataclass
 class STTOptions:
@@ -262,9 +268,11 @@ class SpeechStream(stt.SpeechStream):
                         self._num_channels,
                     )
                     buffer.extend(frame.data.tobytes())
-                    buffer_duration += len(frame.data) / (
-                        self._sample_rate * self._num_channels
-                    )
+
+                    # Calculate buffer duration
+                    total_frames = len(buffer) / bytes_per_frame[self._opts.encoding]
+                    samples_per_second = self._sample_rate * self._num_channels
+                    buffer_duration = total_frames / samples_per_second
 
                     if buffer_duration >= self._buffer_size_seconds:
                         await ws.send_bytes(bytes(buffer))
