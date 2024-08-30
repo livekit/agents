@@ -122,8 +122,10 @@ TIMEOUT_TTS = [
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts", TIMEOUT_TTS)
 async def test_timeout(tts: agents.tts.TTS):
+    synthesize = tts.synthesize(TEST_AUDIO_SYNTHESIZE)
     with pytest.raises(asyncio.TimeoutError):
-        await tts.synthesize(TEST_AUDIO_SYNTHESIZE).__anext__()
+        await synthesize.__anext__()
+    await synthesize.aclose()
 
     pattern = [1, 2, 4]
     text = TEST_AUDIO_SYNTHESIZE
@@ -146,3 +148,4 @@ async def test_timeout(tts: agents.tts.TTS):
 
     with pytest.raises(asyncio.TimeoutError):
         await stream.__anext__()
+    await stream.aclose()

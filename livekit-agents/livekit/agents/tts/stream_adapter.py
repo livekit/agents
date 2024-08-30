@@ -46,7 +46,7 @@ class StreamAdapterWrapper(SynthesizeStream):
         tts: TTS,
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
-        super().__init__()
+        super().__init__(timeout=tts._timeout)
         self._tts = tts
         self._sent_stream = sentence_tokenizer.stream()
 
@@ -78,4 +78,4 @@ class StreamAdapterWrapper(SynthesizeStream):
         try:
             await asyncio.gather(*tasks)
         finally:
-            await utils.aio.gracefully_cancel(*tasks)
+            await asyncio.shield(utils.aio.gracefully_cancel(*tasks))

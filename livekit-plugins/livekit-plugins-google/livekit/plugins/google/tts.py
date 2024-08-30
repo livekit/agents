@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Union
 
@@ -176,4 +177,4 @@ class ChunkedStream(tts.ChunkedStream):
                     )
                 )
         except api_core.exceptions.DeadlineExceeded as e:
-            raise TimeoutError() from e
+            raise asyncio.TimeoutError() from e
