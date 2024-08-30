@@ -203,7 +203,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._last_end_of_speech_time: float | None = None
 
-        self._state_tasks = set[asyncio.Task[None]]()
+        self._update_state_task: asyncio.Task | None = None
 
     @property
     def fnc_ctx(self) -> FunctionContext | None:
