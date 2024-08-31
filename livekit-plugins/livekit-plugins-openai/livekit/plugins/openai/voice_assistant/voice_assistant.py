@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from collections import deque
-import os
 import asyncio
-from dataclasses import dataclass
-from typing import AsyncIterator, Literal, Union
 import base64
+import os
+from dataclasses import dataclass
+from typing import Literal
 
 import aiohttp
 from livekit import rtc
@@ -220,7 +219,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             playout_atask: asyncio.Task | None = None
             playout_ch: utils.aio.Chan[rtc.AudioFrame] | None = None
-
 
             while True:
                 msg = await ws_conn.receive()
