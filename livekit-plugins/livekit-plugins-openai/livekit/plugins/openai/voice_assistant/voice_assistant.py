@@ -18,7 +18,7 @@ SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 
 INPUT_PCM_FRAME_SIZE = 3000  # 125ms
-OUTPUT_PCM_FRAME_SIZE = 3000  # 125ms
+OUTPUT_PCM_FRAME_SIZE = 2400  # 100ms
 
 AssistantVoices = Literal["alloy", "shimmer", "echo"]
 
@@ -91,20 +91,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=INPUT_PCM_FRAME_SIZE
             )
 
-            # save to wav file
-            with open("input.wav", "wb") as f:
-                import wave
-
-                with wave.open(f, "wb") as wf:
-                    wf.setnchannels(NUM_CHANNELS)
-                    wf.setsampwidth(2)
-                    wf.setframerate(SAMPLE_RATE)
-                    wf.setnframes(0)
-
-                    async for ev in audio_stream:
-                        for frame in bstream.write(ev.frame.data.tobytes()):
-                            self._input_audio_ch.send_nowait(frame)
-                            wf.writeframes(frame.data.tobytes())
+            async for ev in audio_stream:
+                for frame in bstream.write(ev.frame.data.tobytes()):
+                    self._input_audio_ch.send_nowait(frame)
 
         for publication in self._linked_participant.track_publications.values():
             if publication.source != rtc.TrackSource.SOURCE_MICROPHONE:
@@ -232,6 +221,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             playout_atask: asyncio.Task | None = None
             playout_ch: utils.aio.Chan[rtc.AudioFrame] | None = None
 
+
             while True:
                 msg = await ws_conn.receive()
                 if msg.type in (
@@ -247,7 +237,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
                 data = msg.json()
                 event = data["event"]
-                print(event)
                 if event == "start_session":
                     print(data)
                 elif event == "audio_buffer_add":
@@ -258,6 +247,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                         playout_atask = asyncio.create_task(_playout_task(playout_ch))
 
                     audio_data = base64.b64decode(data["data"])
+
                     frame = rtc.AudioFrame(
                         audio_data, SAMPLE_RATE, NUM_CHANNELS, len(audio_data) // 2
                     )
@@ -265,13 +255,16 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 elif event == "tool_call":
                     pass
                 elif event == "turn_finished":
+                    print("turn_finished")
                     if playout_ch is not None:
                         playout_ch.close()
                         playout_ch = None
 
                 elif event == "model_listening":
+                    print("cancelling")
                     if playout_atask is not None:
                         playout_atask.cancel()
+                        playout_ch = None
 
                 elif event == "tool_call_buffer_add":
                     pass
