@@ -21,6 +21,8 @@ from .stt import STT
 from .tts import TTS
 from .version import __version__
 
+from .voice_assistant import VoiceAssistant
+
 __all__ = [
     "STT",
     "TTS",
@@ -32,6 +34,7 @@ __all__ = [
     "TTSVoices",
     "create_embeddings",
     "EmbeddingData",
+    "VoiceAssistant",
     "__version__",
 ]
 
