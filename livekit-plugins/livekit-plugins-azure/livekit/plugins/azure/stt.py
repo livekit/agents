@@ -44,6 +44,7 @@ class STT(stt.STT):
         sample_rate: int = 48000,
         num_channels: int = 1,
         languages: list[str] = [],  # when empty, auto-detect the language
+        timeout: float | None = 10.0,
     ):
         """
         Create a new instance of Azure STT.
@@ -54,6 +55,7 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
+            timeout=timeout,
         )
 
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
@@ -80,6 +82,7 @@ class STT(stt.STT):
     def stream(self, *, language: str | None = None) -> "SpeechStream":
         return SpeechStream(
             self._config,
+            timeout=self._timeout,
         )
 
 
@@ -87,8 +90,10 @@ class SpeechStream(stt.SpeechStream):
     def __init__(
         self,
         opts: STTOptions,
+        *,
+        timeout: float | None = 10.0,
     ) -> None:
-        super().__init__()
+        super().__init__(timeout=timeout)
 
         self._opts = opts
         self._speaking = False
