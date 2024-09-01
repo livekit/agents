@@ -47,6 +47,7 @@ class LogQueueHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
+            # from https://github.com/python/cpython/blob/91b7f2e7f6593acefda4fa860250dd87d6f849bf/Lib/logging/handlers.py#L1453
             msg = self.format(record)
             record = copy.copy(record)
             record.message = msg
@@ -54,6 +55,7 @@ class LogQueueHandler(logging.Handler):
             record.args = None
             record.exc_info = None
             record.exc_text = None
+            record.stack_info = None
             self._send_q.put_nowait(record)
         except Exception:
             self.handleError(record)
