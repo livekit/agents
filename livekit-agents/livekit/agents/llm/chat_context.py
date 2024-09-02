@@ -37,6 +37,7 @@ class ChatImage:
 @dataclass
 class ChatMessage:
     role: ChatRole
+    words: list[dict]
     name: str | None = None
     content: str | list[str | ChatImage] | None = None
     tool_calls: list[function_context.FunctionCallInfo] | None = None
@@ -70,10 +71,10 @@ class ChatMessage:
 
     @staticmethod
     def create(
-        *, text: str = "", images: list[ChatImage] = [], role: ChatRole = "system"
+        *, text: str = "", images: list[ChatImage] = [], role: ChatRole = "system", words: list[dict] = []
     ) -> "ChatMessage":
         if len(images) == 0:
-            return ChatMessage(role=role, content=text)
+            return ChatMessage(role=role, content=text, words=words if role == "user" else [])
         else:
             content: list[str | ChatImage] = []
             if text:
@@ -81,8 +82,7 @@ class ChatMessage:
 
             if len(images) > 0:
                 content.extend(images)
-
-            return ChatMessage(role=role, content=content)
+            return ChatMessage(role=role, content=content, words=words if role == "user" else [])
 
     def copy(self):
         content = self.content
@@ -93,12 +93,15 @@ class ChatMessage:
         if tool_calls is not None:
             tool_calls = tool_calls.copy()
 
+        words = self.words.copy() if self.role == "user" and self.words else []
+
         return ChatMessage(
             role=self.role,
             name=self.name,
             content=content,
             tool_calls=tool_calls,
             tool_call_id=self.tool_call_id,
+            words=words
         )
 
 
@@ -108,9 +111,9 @@ class ChatContext:
     _metadata: dict[str, Any] = field(default_factory=dict, repr=False, init=False)
 
     def append(
-        self, *, text: str = "", images: list[ChatImage] = [], role: ChatRole = "system"
+        self, *, text: str = "", images: list[ChatImage] = [], role: ChatRole = "system", words: list[dict] = []
     ) -> ChatContext:
-        self.messages.append(ChatMessage.create(text=text, images=images, role=role))
+        self.messages.append(ChatMessage.create(text=text, images=images, role=role, words=words if role == "user" else []))
         return self
 
     def copy(self) -> ChatContext:

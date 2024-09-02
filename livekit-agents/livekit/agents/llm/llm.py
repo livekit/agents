@@ -13,6 +13,7 @@ from .chat_context import ChatContext, ChatRole
 @dataclass
 class ChoiceDelta:
     role: ChatRole
+    words: list[dict] = field(default_factory=list)
     content: str | None = None
     tool_calls: list[function_context.FunctionCallInfo] | None = None
 
