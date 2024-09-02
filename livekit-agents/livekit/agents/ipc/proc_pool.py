@@ -5,7 +5,7 @@ from multiprocessing.context import BaseContext
 from typing import Any, Awaitable, Callable, Literal
 
 from .. import utils
-from ..job import JobContext, JobProcess, RunningJobInfo
+from ..job import JobContext, JobExecutor, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
 from . import proc_job_runner, thread_job_runner
@@ -27,10 +27,12 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
-        mp_ctx: BaseContext | None,  # None = single-process mode
+        job_executor: JobExecutor,
+        mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
+        self._job_executor = job_executor
         self._mp_ctx = mp_ctx
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
@@ -81,7 +83,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     @utils.log_exceptions(logger=logger)
     async def _proc_watch_task(self) -> None:
         proc: JobRunner
-        if self._mp_ctx is None:
+        if self._job_executor == JobExecutor.THREAD:
             proc = thread_job_runner.ThreadJobRunner(
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
@@ -89,7 +91,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 close_timeout=self._close_timeout,
                 loop=self._loop,
             )
-        else:
+        elif self._job_executor == JobExecutor.PROCESS:
             proc = proc_job_runner.ProcJobRunner(
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
@@ -98,6 +100,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 mp_ctx=self._mp_ctx,
                 loop=self._loop,
             )
+        else:
+            raise ValueError(f"unsupported job executor: {self._job_executor}")
 
         try:
             self._runners.append(proc)

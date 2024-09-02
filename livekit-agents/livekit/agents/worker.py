@@ -34,7 +34,14 @@ from livekit.protocol import agent, models
 
 from . import http_server, ipc, utils
 from .exceptions import AssignmentTimeoutError
-from .job import JobAcceptArguments, JobContext, JobProcess, JobRequest, RunningJobInfo
+from .job import (
+    JobAcceptArguments,
+    JobContext,
+    JobExecutor,
+    JobProcess,
+    JobRequest,
+    RunningJobInfo,
+)
 from .log import DEV_LEVEL, logger
 from .version import __version__
 
@@ -108,8 +115,8 @@ class WorkerOptions:
     """A function to perform any necessary initialization before the job starts."""
     load_fnc: Callable[[], float] = _DefaultLoadCalc.get_load
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
-    multi_process_mode: bool = True
-    """Whether to use multiprocessing or threading for running jobs."""
+    job_executor: JobExecutor = JobExecutor.PROCESS
+    """Which executor to use to run jobs. (currently thread or process are supported)"""
     load_threshold: float = 0.65
     """When the load exceeds this threshold, the worker will be marked as unavailable."""
     num_idle_processes: int = 3
@@ -184,15 +191,13 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         # using spawn context for all platforms. We may have further optimizations for
         # Linux with forkserver, but for now, this is the safest option
-        mp_ctx = None
-        if opts.multi_process_mode:
-            mp_ctx = mp.get_context("spawn")
-
+        mp_ctx = mp.get_context("spawn")
         self._proc_pool = ipc.proc_pool.ProcPool(
             initialize_process_fnc=opts.prewarm_fnc,
             job_entrypoint_fnc=opts.entrypoint_fnc,
             num_idle_processes=opts.num_idle_processes,
             loop=self._loop,
+            job_executor=opts.job_executor,
             mp_ctx=mp_ctx,
             initialize_timeout=opts.initialize_process_timeout,
             close_timeout=opts.shutdown_process_timeout,

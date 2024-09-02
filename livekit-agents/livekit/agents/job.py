@@ -17,13 +17,19 @@ from __future__ import annotations
 import asyncio
 import multiprocessing as mp
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, unique
 from typing import Any, Callable, Coroutine, Tuple
 
 from livekit import rtc
 from livekit.protocol import agent, models
 
 from .log import logger
+
+
+@unique
+class JobExecutor(Enum):
+    PROCESS = "process"
+    THREAD = "thread"
 
 
 class AutoSubscribe(str, Enum):
