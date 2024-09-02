@@ -65,7 +65,7 @@ class JobContext:
         self._on_shutdown = on_shutdown
         self._shutdown_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
         self._participant_entrypoints: list[
-            Callable[[rtc.RemoteParticipant], Coroutine[None, None, None]]
+            Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]]
         ] = []
         self._participant_tasks = dict[Tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._on_participant_connected)
@@ -121,7 +121,7 @@ class JobContext:
                     f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"
                 )
             task_name = f"part-entry-{p.identity}-{coro.__name__}"
-            task = asyncio.create_task(coro(p), name=task_name)
+            task = asyncio.create_task(coro(self, p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
             task.add_done_callback(
                 lambda _: self._participant_tasks.pop((p.identity, coro))
@@ -129,7 +129,9 @@ class JobContext:
 
     def add_participant_entrypoint(
         self,
-        entrypoint_fnc: Callable[[rtc.RemoteParticipant], Coroutine[None, None, None]],
+        entrypoint_fnc: Callable[
+            [JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]
+        ],
     ):
         """Adds an entrypoint function to be run when a participant that matches the filter joins the room. In cases where
         the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
