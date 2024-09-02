@@ -129,7 +129,9 @@ class JobContext:
 
     def add_participant_entrypoint(
         self,
-        entrypoint_fnc: Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
+        entrypoint_fnc: Callable[
+            [JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]
+        ],
     ):
         """Adds an entrypoint function to be run when a participant that matches the filter joins the room. In cases where
         the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
