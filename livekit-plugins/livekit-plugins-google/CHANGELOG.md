@@ -1,5 +1,11 @@
 # livekit-plugins-google
 
+## 0.6.3
+
+### Patch Changes
+
+- Fix Google STT exception when no valid speech is recognized - [#680](https://github.com/livekit/agents/pull/680) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.6.2
 
 ### Patch Changes

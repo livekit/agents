@@ -1,5 +1,13 @@
 # livekit-agents
 
+## 0.8.9
+
+### Patch Changes
+
+- Introduce easy api for starting tasks for remote participants - [#679](https://github.com/livekit/agents/pull/679) ([@keepingitneil](https://github.com/keepingitneil))
+
+- update livekit to 0.14.0 and await tracksubscribed - [#678](https://github.com/livekit/agents/pull/678) ([@nbsp](https://github.com/nbsp))
+
 ## 0.8.8
 
 ### Patch Changes
