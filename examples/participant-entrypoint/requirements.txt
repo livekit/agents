@@ -1,1 +1,1 @@
-livekit-agents>=0.8.9
+livekit-agents>=0.8.10
