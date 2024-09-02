@@ -53,29 +53,32 @@ class StreamAdapterWrapper(SpeechStream):
 
         async def _recognize():
             """recognize speech from vad"""
-            async for event in self._vad_stream:
-                if event.type == VADEventType.START_OF_SPEECH:
-                    self._event_ch.send_nowait(
-                        SpeechEvent(SpeechEventType.START_OF_SPEECH)
-                    )
-                elif event.type == VADEventType.END_OF_SPEECH:
-                    self._event_ch.send_nowait(
-                        SpeechEvent(
-                            type=SpeechEventType.END_OF_SPEECH,
+            try:
+                async for event in self._vad_stream:
+                    if event.type == VADEventType.START_OF_SPEECH:
+                        self._event_ch.send_nowait(
+                            SpeechEvent(SpeechEventType.START_OF_SPEECH)
                         )
-                    )
-
-                    merged_frames = utils.merge_frames(event.frames)
-                    t_event = await self._stt.recognize(
-                        buffer=merged_frames, *self._args, **self._kwargs
-                    )
-
-                    self._event_ch.send_nowait(
-                        SpeechEvent(
-                            type=SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[t_event.alternatives[0]],
+                    elif event.type == VADEventType.END_OF_SPEECH:
+                        self._event_ch.send_nowait(
+                            SpeechEvent(
+                                type=SpeechEventType.END_OF_SPEECH,
+                            )
                         )
-                    )
+
+                        merged_frames = utils.merge_frames(event.frames)
+                        t_event = await self._stt.recognize(
+                            buffer=merged_frames, *self._args, **self._kwargs
+                        )
+
+                        self._event_ch.send_nowait(
+                            SpeechEvent(
+                                type=SpeechEventType.FINAL_TRANSCRIPT,
+                                alternatives=[t_event.alternatives[0]],
+                            )
+                        )
+            except asyncio.TimeoutError as e:
+                self._timeout_exc = e
 
         tasks = [
             asyncio.create_task(_forward_input(), name="forward_input"),

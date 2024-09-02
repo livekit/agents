@@ -125,3 +125,45 @@ async def test_stream(stt: agents.stt.STT):
     await asyncio.wait_for(
         asyncio.gather(_stream_input(), _stream_output()), timeout=60
     )
+
+
+TIMEOUT_STT = [
+    deepgram.STT(timeout=0.1),
+    google.STT(timeout=0.1),
+    agents.stt.StreamAdapter(stt=openai.STT(timeout=0.1), vad=STREAM_VAD),
+    azure.STT(timeout=0.1),
+]
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("stt", TIMEOUT_STT)
+async def test_timeout(stt: agents.stt.STT):
+    frame = read_mp3_file(TEST_AUDIO_FILEPATH)
+    chunk_size = frame.sample_rate // 100
+    frames = []
+    for i in range(0, len(frame.data), chunk_size):
+        data = frame.data[i : i + chunk_size]
+        frames.append(
+            rtc.AudioFrame(
+                data=data.tobytes() + b"\0\0" * (chunk_size - len(data)),
+                num_channels=frame.num_channels,
+                samples_per_channel=chunk_size,
+                sample_rate=frame.sample_rate,
+            )
+        )
+
+    stream = stt.stream()
+
+    async def _stream_input():
+        for frame in frames:
+            stream.push_frame(frame)
+            await asyncio.sleep(0.001)
+        stream.end_input()
+
+    async def _stream_output():
+        await stream.__anext__()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.gather(_stream_input(), _stream_output())
+
+    await stream.aclose()

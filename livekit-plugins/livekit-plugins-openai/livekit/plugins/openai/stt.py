@@ -48,7 +48,7 @@ class STT(stt.STT):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        timeout: float | None = 10.0
+        timeout: float | None = 10.0,
     ):
         """
         Create a new instance of OpenAI STT.

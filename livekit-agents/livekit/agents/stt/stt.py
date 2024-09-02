@@ -85,23 +85,24 @@ class SpeechStream(ABC):
     def __init__(self, *, timeout: float | None = 10.0):
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, SpeechStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SpeechEvent]()
-        self._req_ch = aio.Chan[None]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
-        self._task.add_done_callback(lambda _: self._req_ch.close())
         self._timeout = timeout
+        self._timeout_exc: asyncio.TimeoutError | None = None
 
     @abstractmethod
     async def _main_task(self) -> None: ...
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized"""
+        self._check_not_timed_out()
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(frame)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
+        self._check_not_timed_out()
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(self._FlushSentinel())
@@ -118,7 +119,11 @@ class SpeechStream(ABC):
         self._event_ch.close()
 
     async def __anext__(self) -> SpeechEvent:
-        return await self._event_ch.__anext__()
+        try:
+            return await self._event_ch.__anext__()
+        except StopAsyncIteration as e:
+            self._check_not_timed_out()
+            raise e
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
         return self
@@ -132,3 +137,7 @@ class SpeechStream(ABC):
         if self._input_ch.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
+
+    def _check_not_timed_out(self) -> None:
+        if self._timeout_exc is not None:
+            raise self._timeout_exc

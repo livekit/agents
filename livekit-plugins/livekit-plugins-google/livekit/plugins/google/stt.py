@@ -56,7 +56,7 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        timeout: float | None = 10.0,
+        timeout: float | None = 20.0,
     ):
         """
         Create a new instance of Google STT.
@@ -180,6 +180,7 @@ class STT(stt.STT):
             self._ensure_client(),
             self._recognizer,
             config,
+            timeout=self._timeout,
         )
 
 
@@ -192,8 +193,10 @@ class SpeechStream(stt.SpeechStream):
         sample_rate: int = 48000,
         num_channels: int = 1,
         max_retry: int = 32,
+        *,
+        timeout: float | None = 10.0,
     ) -> None:
-        super().__init__(timeout=None)
+        super().__init__(timeout=timeout)
 
         self._client = client
         self._recognizer = recognizer
@@ -261,6 +264,14 @@ class SpeechStream(stt.SpeechStream):
                 retry_count = 0  # connection successful, reset retry count
 
                 await self._run_stream(stream)
+            except asyncio.TimeoutError as e:
+                # stream connected but _run_stream() failed
+                logger.warning(
+                    f"timed out waiting for transcription after {self._timeout}s",
+                    exc_info=e,
+                )
+                self._timeout_exc = e
+                break
             except Exception as e:
                 if retry_count >= max_retry:
                     logger.error(
@@ -280,7 +291,14 @@ class SpeechStream(stt.SpeechStream):
     async def _run_stream(
         self, stream: AsyncIterable[cloud_speech.StreamingRecognizeResponse]
     ):
-        async for resp in stream:
+        while True:
+            try:
+                resp = await asyncio.wait_for(
+                    stream.__aiter__().__anext__(), timeout=self._timeout
+                )
+            except StopAsyncIteration:
+                break
+
             if (
                 resp.speech_event_type
                 == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN

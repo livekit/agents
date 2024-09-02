@@ -116,12 +116,15 @@ class SpeechStream(stt.SpeechStream):
         self._recognizer.start_continuous_recognition()
         self._done_event = asyncio.Event()
         self._loop = asyncio.get_running_loop()
+        self._countdown_task: asyncio.Task | None = None
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         try:
             async for input in self._input_ch:
                 if isinstance(input, rtc.AudioFrame):
+                    if self._countdown_task is None:
+                        self._start_countdown()
                     self._stream.write(input.data.tobytes())
 
             self._stream.close()
@@ -166,6 +169,24 @@ class SpeechStream(stt.SpeechStream):
             )
         )
 
+    # azure streaming timeouts work like this:
+    # - for every first AudioFrame after a SpeechEvent, we start a countdown
+    # - for every SpeechEvent following, we clear that countdown
+    # if any of those countdowns ever reach zero, we send a TimeoutError.
+    def _start_countdown(self):
+        async def countdown():
+            await asyncio.sleep(self._timeout)
+            self._timeout_exc = asyncio.TimeoutError()
+            self._input_ch.close()
+
+        if self._timeout is not None:
+            self._countdown_task = asyncio.create_task(countdown())
+
+    def _clear_countdown(self):
+        if self._countdown_task is not None:
+            self._countdown_task.cancel()
+            self._countdown_task = None
+
     def _on_speech_start(self, evt: speechsdk.SpeechRecognitionEventArgs):
         if self._speaking:
             return
@@ -185,6 +206,7 @@ class SpeechStream(stt.SpeechStream):
 
     def _threadsafe_send(self, evt: stt.SpeechEvent):
         self._loop.call_soon_threadsafe(self._event_ch.send_nowait, evt)
+        self._clear_countdown()
 
 
 def _create_speech_recognizer(

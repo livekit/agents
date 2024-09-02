@@ -112,6 +112,7 @@ class ChunkedStream(tts.ChunkedStream):
                     f"failed to synthesize audio: {result.reason} {result.cancellation_details}"
                 )
         finally:
+
             def _cleanup() -> None:
                 nonlocal synthesizer, result
                 synthesizer.stop_speaking_async().get()
