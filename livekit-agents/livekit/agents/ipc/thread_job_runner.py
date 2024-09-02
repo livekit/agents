@@ -76,7 +76,7 @@ class ThreadJobRunner:
 
     async def _start(self) -> None:
         async with self._lock:
-            # to simplify the runners implementation, we also use a duplex in single process mode
+            # to simplify the runners implementation, we also use a duplex in the threaded executor
             # (ThreadedRunners), so we can use the same protocol
             mp_pch, mp_cch = socket.socketpair()
             self._pch = await duplex_unix._AsyncDuplex.open(mp_pch)
@@ -106,7 +106,7 @@ class ThreadJobRunner:
             self._main_atask = asyncio.create_task(self._main_task())
 
     async def join(self) -> None:
-        """wait for the job process to finish"""
+        """wait for the thread to finish"""
         if not self.started:
             raise RuntimeError("runner not started")
 
@@ -141,7 +141,10 @@ class ThreadJobRunner:
             self._initialize_fut.set_result(None)
 
     async def aclose(self) -> None:
-        """attempt to gracefully close the job process"""
+        """
+        attempt to gracefully close the job. warn if it takes too long to close
+        (in the threaded executor, the job can't be "killed")
+        """
         if not self.started:
             return
 
@@ -164,9 +167,9 @@ class ThreadJobRunner:
                 await asyncio.shield(self._main_atask)
 
     async def launch_job(self, info: RunningJobInfo) -> None:
-        """start/assign a job to the process"""
+        """start/assign a job to the executor"""
         if self._running_job is not None:
-            raise RuntimeError("process already has a running job")
+            raise RuntimeError("executor already has a running job")
 
         self._running_job = info
         start_req = proto.StartJobRequest()
@@ -182,7 +185,6 @@ class ThreadJobRunner:
         except Exception:
             pass  # initialization failed
 
-        # the process is killed if it doesn't respond to ping requests
         pong_timeout = utils.aio.sleep(proto.PING_TIMEOUT)
         ping_task = asyncio.create_task(self._ping_pong_task(pong_timeout))
         monitor_task = asyncio.create_task(self._monitor_task(pong_timeout))
@@ -205,7 +207,7 @@ class ThreadJobRunner:
                 delay = utils.time_ms() - msg.timestamp
                 if delay > proto.HIGH_PING_THRESHOLD * 1000:
                     logger.warning(
-                        "job process is unresponsive",
+                        "job executor is unresponsive",
                         extra={"delay": delay, **self.logging_extra()},
                     )
 
