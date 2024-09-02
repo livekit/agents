@@ -11,6 +11,7 @@ from livekit import rtc
 
 from .. import tokenize, utils
 from ..log import logger
+from ..tokenize.tokenizer import PUNCTUATIONS
 from . import _utils
 
 # 3.83 is the "baseline", the number of hyphens per second TTS returns in avg.
@@ -317,6 +318,9 @@ class TTSSegmentsForwarder:
             # elapsed time since the start of the seg
             elapsed_time = time.time() - seg.forward_start_time
             text = self._opts.word_tokenizer.format_words(processed_words)
+
+            # remove any punctuation at the end of a non-final transcript
+            text = text.rstrip("".join(PUNCTUATIONS))
 
             speed = self._opts.speed
             if seg.real_speed is not None:

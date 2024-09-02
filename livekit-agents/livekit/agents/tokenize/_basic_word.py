@@ -1,5 +1,7 @@
 import re
 
+from . import tokenizer
+
 
 def split_words(
     text: str, ignore_punctuation: bool = True
@@ -8,12 +10,6 @@ def split_words(
     Split the text into words.
     Returns a list of words with their start and end indices of the original text.
     """
-    # fmt: off
-    punctuations = ['!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=', '>',
-                    '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~', '±', '—', '‘', '’', '“', '”', '…']
-
-    # fmt: on
-
     matches = re.finditer(r"\S+", text)
     words: list[tuple[str, int, int]] = []
 
@@ -24,7 +20,7 @@ def split_words(
 
         if ignore_punctuation:
             # TODO(theomonnom): acronyms passthrough
-            translation_table = str.maketrans("", "", "".join(punctuations))
+            translation_table = str.maketrans("", "", "".join(tokenizer.PUNCTUATIONS))
             word = word.translate(translation_table)
 
             if not word:
