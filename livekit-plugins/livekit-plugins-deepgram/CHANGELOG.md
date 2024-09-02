@@ -1,5 +1,11 @@
 # livekit-plugins-deepgram
 
+## 0.6.6
+
+### Patch Changes
+
+- deepgram: switch the default model to phonecall - [#676](https://github.com/livekit/agents/pull/676) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.5
 
 ### Patch Changes
