@@ -464,7 +464,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if self._pending_agent_reply is not None:
             self._pending_agent_reply.interrupt()
 
-        if self._human_input is None or not self._human_input.speaking:
+        if self._human_input is not None and not self._human_input.speaking:
             self._update_state("thinking", 0.2)
 
         self._pending_agent_reply = new_handle = SpeechHandle.create_assistant_reply(
