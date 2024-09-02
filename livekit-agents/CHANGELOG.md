@@ -1,5 +1,13 @@
 # livekit-agents
 
+## 0.8.10
+
+### Patch Changes
+
+- Pass JobContext to participant entrypoint function - [#694](https://github.com/livekit/agents/pull/694) ([@davidzhao](https://github.com/davidzhao))
+
+- voiceassistant: keep punctuations when sending agent transcription - [#648](https://github.com/livekit/agents/pull/648) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.8.9
 
 ### Patch Changes
