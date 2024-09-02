@@ -105,16 +105,16 @@ async def test_stream(tts: agents.tts.TTS):
 
 
 TIMEOUT_TTS = [
-    elevenlabs.TTS(timeout=0.1),
-    cartesia.TTS(timeout=0.1),
+    elevenlabs.TTS(timeout=0),
+    cartesia.TTS(timeout=0),
     agents.tts.StreamAdapter(
-        tts=openai.TTS(timeout=0.1), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        tts=openai.TTS(timeout=0), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
     agents.tts.StreamAdapter(
-        tts=google.TTS(timeout=0.1), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        tts=google.TTS(timeout=0), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
     agents.tts.StreamAdapter(
-        tts=azure.TTS(timeout=0.1), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        tts=azure.TTS(timeout=0), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
 ]
 
