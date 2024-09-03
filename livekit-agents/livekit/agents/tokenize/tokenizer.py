@@ -6,6 +6,12 @@ from typing import AsyncIterator
 
 from ..utils import aio
 
+# fmt: off
+PUNCTUATIONS = ['!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=', '>',
+                '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~', '±', '—', '‘', '’', '“', '”', '…']
+
+# fmt: on
+
 
 @dataclass
 class TokenData:
