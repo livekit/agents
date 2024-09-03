@@ -3,12 +3,11 @@ import os
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import deepgram, openai, silero, llama_index
-
+from livekit.plugins import deepgram, llama_index, openai, silero
 from llama_index.core import (
-    VectorStoreIndex,
     SimpleDirectoryReader,
     StorageContext,
+    VectorStoreIndex,
     load_index_from_storage,
 )
 from llama_index.core.chat_engine.types import ChatMode
@@ -29,6 +28,7 @@ else:
     index = load_index_from_storage(storage_context)
 
 chat_engine = index.as_chat_engine(chat_mode=ChatMode.CONTEXT)
+
 
 async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 from livekit.agents import llm
+
 from llama_index.core.chat_engine.types import (
     BaseChatEngine,
     StreamingAgentChatResponse,
 )
-from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.llms import ChatMessage, MessageRole
 
-from livekit.agents import llm
-from openai import chat
 from .log import logger
 
 

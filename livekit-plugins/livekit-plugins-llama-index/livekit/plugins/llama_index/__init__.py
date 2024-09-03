@@ -14,11 +14,12 @@
 
 from livekit.agents import Plugin
 
+from .llm import LLM, LLMStream
 from .log import logger
 from .version import __version__
-from .llm import LLM, LLMStream
 
 __all__ = ["LLM", "LLMStream"]
+
 
 class LlamaIndexPlugin(Plugin):
     def __init__(self):
