@@ -57,6 +57,8 @@ class LogQueueHandler(logging.Handler):
             record.exc_text = None
             record.stack_info = None
 
+            # https://websockets.readthedocs.io/en/stable/topics/logging.html#logging-to-json
+            # webosckets library add "websocket" attribute to log records, which is not pickleable
             if hasattr(record, "websocket"):
                 record.websocket = None
 
