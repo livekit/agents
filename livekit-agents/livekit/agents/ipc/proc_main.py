@@ -26,7 +26,7 @@ class LogQueueHandler(logging.Handler):
     def __init__(self, duplex: utils.aio.duplex_unix._Duplex) -> None:
         super().__init__()
         self._duplex = duplex
-        self._send_q = queue.SimpleQueue[Optional[logging.LogRecord]]()
+        self._send_q = queue.SimpleQueue[Optional[bytes]]()
         self._send_thread = threading.Thread(
             target=self._forward_logs, name="ipc_log_forwarder"
         )
@@ -34,12 +34,12 @@ class LogQueueHandler(logging.Handler):
 
     def _forward_logs(self):
         while True:
-            record = self._send_q.get()
-            if record is None:
+            serialized_record = self._send_q.get()
+            if serialized_record is None:
                 break
 
             try:
-                self._duplex.send_bytes(pickle.dumps(record))
+                self._duplex.send_bytes(serialized_record)
             except duplex_unix.DuplexClosed:
                 break
 
@@ -56,7 +56,12 @@ class LogQueueHandler(logging.Handler):
             record.exc_info = None
             record.exc_text = None
             record.stack_info = None
-            self._send_q.put_nowait(record)
+
+            if hasattr(record, "websocket"):
+                record.websocket = None
+
+            self._send_q.put_nowait(pickle.dumps(record))
+
         except Exception:
             self.handleError(record)
 
