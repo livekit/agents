@@ -34,7 +34,8 @@ jobs:
       inputs.package == 'livekit-plugins-nltk' ||
       inputs.package == 'livekit-plugins-openai' ||
       inputs.package == 'livekit-plugins-rag' ||
-      inputs.package == 'livekit-plugins-silero'
+      inputs.package == 'livekit-plugins-silero' ||
+      inputs.package == 'livekit-plugins-anthropic'
 
     defaults:
       run:
