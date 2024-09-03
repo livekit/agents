@@ -86,5 +86,8 @@ class StreamAdapterWrapper(SpeechStream):
         ]
         try:
             await asyncio.gather(*tasks)
+        except Exception as e:
+            logger.warning('what is this error ~>', exc_info=e)
+            raise e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
