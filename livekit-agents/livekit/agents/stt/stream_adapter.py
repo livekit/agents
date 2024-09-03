@@ -32,7 +32,7 @@ class StreamAdapter(STT):
 
 class StreamAdapterWrapper(SpeechStream):
     def __init__(self, vad: VAD, stt: STT, *args: Any, **kwargs: Any) -> None:
-        super().__init__()
+        super().__init__(timeout=stt._timeout)
         self._vad = vad
         self._stt = stt
         self._vad_stream = self._vad.stream()
