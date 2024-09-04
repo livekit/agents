@@ -349,6 +349,11 @@ class LLMStream(llm.LLMStream):
     def _parse_choice(self, choice: Choice) -> llm.ChatChunk | None:
         delta = choice.delta
 
+        # https://github.com/livekit/agents/issues/688
+        # the delta can be None when using Azure OpenAI using content filtering
+        if delta is None:
+            return None
+
         if delta.tool_calls:
             # check if we have functions to calls
             for tool in delta.tool_calls:
