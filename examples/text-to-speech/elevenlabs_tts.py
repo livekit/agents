@@ -2,12 +2,15 @@ import asyncio
 import logging
 from typing import Optional
 
+from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.plugins import elevenlabs
 
 logger = logging.getLogger("elevenlabs-tts-demo")
 logger.setLevel(logging.INFO)
+
+load_dotenv()
 
 
 def _text_to_chunks(text: str) -> list[str]:

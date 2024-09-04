@@ -151,7 +151,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self, opts: WorkerOptions, *, loop: asyncio.AbstractEventLoop | None = None
     ) -> None:
         super().__init__()
-        opts.ws_url = opts.ws_url or opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
+        opts.ws_url = opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
         opts.api_key = opts.api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         opts.api_secret = opts.api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
 
