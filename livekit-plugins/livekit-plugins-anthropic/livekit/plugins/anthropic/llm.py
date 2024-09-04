@@ -323,11 +323,10 @@ def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
             content=msg.content,
             is_error=False,
         )
-        u_msg: anthropic.types.MessageCreateParams = {
+        return {
             "role": "user",
             "content": [u_content],
         }
-        return u_msg
 
     return None
 
