@@ -17,14 +17,13 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, MutableSet, Union
 
 import httpx
 from livekit.agents import llm
 
 from openai import AsyncAssistantEventHandler, AsyncClient
-from openai.types.beta.assistant import ToolResources
 from openai.types.beta.threads import Text, TextDelta
 from openai.types.beta.threads.run_create_params import AdditionalMessage
 from openai.types.beta.threads.runs import (
@@ -35,7 +34,7 @@ from openai.types.beta.threads.runs import (
 )
 
 from ..log import logger
-from ..models import AssistantTools, ChatModels
+from ..models import ChatModels
 from ..utils import build_oai_message
 
 DEFAULT_MODEL = "gpt-4o"
