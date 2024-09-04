@@ -1,5 +1,5 @@
 import pytest
-from livekit.agents import tokenize
+from livekit.agents import tokenize, utils
 from livekit.agents.tokenize import basic
 from livekit.plugins import nltk
 
@@ -141,3 +141,32 @@ def test_hyphenate_word():
     for i, word in enumerate(HYPHENATOR_TEXT):
         hyphenated = basic.hyphenate_word(word)
         assert hyphenated == HYPHENATOR_EXPECTED[i]
+
+
+REPLACE_TEXT = "This is a test. Hello world, I'm creating this agents..     framework"
+REPLACE_EXPECTED = (
+    "This is a test. Hello universe, I'm creating this agents..     library"
+)
+
+REPLACE_REPLACEMENTS = {
+    "world": "universe",
+    "framework": "library",
+}
+
+
+def test_replace_words():
+    replaced = utils.replace_words(text=REPLACE_TEXT, replacements=REPLACE_REPLACEMENTS)
+    assert replaced == REPLACE_EXPECTED
+
+
+async def text_replace_words_async():
+    pattern = [1, 2, 4]
+    text = REPLACE_TEXT
+    chunks = []
+    pattern_iter = iter(pattern * (len(text) // sum(pattern) + 1))
+
+    for chunk_size in pattern_iter:
+        if not text:
+            break
+        chunks.append(text[:chunk_size])
+        text = text[chunk_size:]
