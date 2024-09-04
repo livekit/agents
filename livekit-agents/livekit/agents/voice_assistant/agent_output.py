@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import time
 from typing import Any, AsyncIterable, Awaitable, Callable, Union
 
