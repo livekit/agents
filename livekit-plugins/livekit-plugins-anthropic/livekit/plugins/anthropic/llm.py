@@ -317,6 +317,8 @@ def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
         if not isinstance(msg.content, str):
             logger.warning("tool message content is not a string")
             return None
+        if not msg.tool_call_id:
+            return None
         u_content = anthropic.types.ToolResultBlockParam(
             tool_use_id=msg.tool_call_id,
             type="tool_result",
