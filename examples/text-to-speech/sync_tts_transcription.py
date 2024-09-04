@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Optional
 
+from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import (
     AutoSubscribe,
@@ -12,6 +13,8 @@ from livekit.agents import (
     tts,
 )
 from livekit.plugins import elevenlabs
+
+load_dotenv()
 
 logger = logging.getLogger("transcription-forwarding-demo")
 logger.setLevel(logging.INFO)
