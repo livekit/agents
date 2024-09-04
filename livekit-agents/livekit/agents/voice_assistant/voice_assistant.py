@@ -22,6 +22,13 @@ WillSynthesizeAssistantReply = Callable[
     Union[Optional[LLMStream], Awaitable[Optional[LLMStream]]],
 ]
 
+
+WillSynthesizeAssistantSpeech = Callable[
+    ["VoiceAssistant", Union[str, AsyncIterable[str]]],
+    Union[str, AsyncIterable[str], Awaitable[str]],
+]
+
+
 EventTypes = Literal[
     "user_started_speaking",
     "user_stopped_speaking",
@@ -72,6 +79,12 @@ def _default_will_synthesize_assistant_reply(
     return assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
 
 
+def _default_will_synthesize_assistant_speech(
+    assistant: VoiceAssistant, text: str | AsyncIterable[str]
+) -> str | AsyncIterable[str]:
+    return text
+
+
 @dataclass(frozen=True)
 class _ImplOptions:
     allow_interruptions: bool
@@ -79,6 +92,7 @@ class _ImplOptions:
     int_min_words: int
     preemptive_synthesis: bool
     will_synthesize_assistant_reply: WillSynthesizeAssistantReply
+    will_synthesize_assistant_speech: WillSynthesizeAssistantSpeech
     plotting: bool
     transcription: AssistantTranscriptionOptions
 
@@ -124,6 +138,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         preemptive_synthesis: bool = True,
         transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply = _default_will_synthesize_assistant_reply,
+        will_synthesize_assistant_speech: WillSynthesizeAssistantSpeech = _default_will_synthesize_assistant_speech,
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -145,6 +160,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             transcription: Options for assistant transcription.
             will_synthesize_assistant_reply: Callback called when the assistant is about to synthesize a reply.
                 This can be used to customize the reply (e.g: inject context/RAG).
+            will_synthesize_assistant_speech: Callback called when the assistant is about to
+                synthesize a speech. This can be used to customize text before the speech synthesis.
+                (e.g: editing the pronunciation of a word).
             plotting: Whether to enable plotting for debugging. matplotlib must be installed.
             loop: Event loop to use. Default to asyncio.get_event_loop().
         """
@@ -158,6 +176,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             preemptive_synthesis=preemptive_synthesis,
             transcription=transcription,
             will_synthesize_assistant_reply=will_synthesize_assistant_reply,
+            will_synthesize_assistant_speech=will_synthesize_assistant_speech,
         )
         self._plotter = AssistantPlotter(self._loop)
 
@@ -712,9 +731,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if isinstance(source, LLMStream):
             source = _llm_stream_to_str_iterable(speech_id, source)
 
+        speech_source = self._opts.will_synthesize_assistant_speech(self, source)
+
         return self._agent_output.synthesize(
             speech_id=speech_id,
-            transcript=source,
+            transcript=speech_source,
             transcription=self._opts.transcription.agent_transcription,
             transcription_speed=self._opts.transcription.agent_transcription_speed,
             sentence_tokenizer=self._opts.transcription.sentence_tokenizer,

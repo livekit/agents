@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
-from typing import Any, AsyncIterable, Callable, Union
+from typing import Any, AsyncIterable, Awaitable, Callable, Union
 
 from livekit import rtc
 
@@ -12,7 +13,7 @@ from .. import tts as text_to_speech
 from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
 
-SpeechSource = Union[AsyncIterable[str], str]
+SpeechSource = Union[AsyncIterable[str], str, Awaitable[str]]
 
 
 class SynthesisHandle:
@@ -155,10 +156,15 @@ class AgentOutput:
     @utils.log_exceptions(logger=logger)
     async def _synthesize_task(self, handle: SynthesisHandle) -> None:
         """Synthesize speech from the source"""
-        if isinstance(handle._speech_source, str):
-            co = _str_synthesis_task(handle._speech_source, handle)
+        speech_source = handle._speech_source
+
+        if isinstance(speech_source, Awaitable):
+            speech_source = await speech_source
+            co = _str_synthesis_task(speech_source, handle)
+        elif isinstance(speech_source, str):
+            co = _str_synthesis_task(speech_source, handle)
         else:
-            co = _stream_synthesis_task(handle._speech_source, handle)
+            co = _stream_synthesis_task(speech_source, handle)
 
         synth = asyncio.create_task(co)
         synth.add_done_callback(lambda _: handle._buf_ch.close())
