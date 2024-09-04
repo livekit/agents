@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import (
     AutoSubscribe,
@@ -11,6 +12,8 @@ from livekit.agents import (
     transcription,
 )
 from livekit.plugins import deepgram
+
+load_dotenv()
 
 logger = logging.getLogger("deepgram-stt-demo")
 logger.setLevel(logging.INFO)
