@@ -163,7 +163,7 @@ async def test_timeout(stt: agents.stt.STT):
     async def _stream_output():
         await stream.__anext__()
 
-    with pytest.raises(asyncio.TimeoutError):
+    with pytest.raises(asyncio.TimeoutError) as e:
         await asyncio.gather(_stream_input(), _stream_output())
 
     await stream.aclose()
