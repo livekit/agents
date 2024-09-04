@@ -33,7 +33,7 @@ EmbeddingModels = Literal[
     "text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large"
 ]
 
-AssistantTools = Literal["code_interpreter"]
+AssistantTools = Literal["code_interpreter", "file_search", "function"]
 
 # adapters for OpenAI-compatible LLMs
 

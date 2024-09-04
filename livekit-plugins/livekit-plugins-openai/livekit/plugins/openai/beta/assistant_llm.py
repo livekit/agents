@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, MutableSet, Union
@@ -23,9 +24,15 @@ import httpx
 from livekit.agents import llm
 
 from openai import AsyncAssistantEventHandler, AsyncClient
+from openai.types.beta.assistant import ToolResources
 from openai.types.beta.threads import Text, TextDelta
 from openai.types.beta.threads.run_create_params import AdditionalMessage
-from openai.types.beta.threads.runs import ToolCall, ToolCallDelta
+from openai.types.beta.threads.runs import (
+    CodeInterpreterToolCall,
+    FileSearchToolCall,
+    FunctionToolCall,
+    ToolCall,
+)
 
 from ..log import logger
 from ..models import AssistantTools, ChatModels
@@ -56,13 +63,14 @@ class AssistantCreateOptions:
     instructions: str
     model: ChatModels
     temperature: float | None = None
+    tool_resources: ToolResources | None = None
     tools: list[AssistantTools] = field(default_factory=list)
 
 
 @dataclass
 class AssistantLoadOptions:
     assistant_id: str
-    thread_id: str
+    thread_id: str | None
 
 
 class AssistantLLM(llm.LLM):
@@ -107,7 +115,12 @@ class AssistantLLM(llm.LLM):
                 "tools": [
                     {"type": t} for t in self._assistant_opts.create_options.tools
                 ],
+                "tool_resources": self._assistant_opts.create_options.tool_resources,
             }
+            if self._assistant_opts.create_options.tool_resources:
+                kwargs["tool_resources"] = (
+                    self._assistant_opts.create_options.tool_resources
+                )
             if self._assistant_opts.create_options.temperature:
                 kwargs["temperature"] = self._assistant_opts.create_options.temperature
             assistant = await self._client.beta.assistants.create(**kwargs)
@@ -115,6 +128,9 @@ class AssistantLLM(llm.LLM):
             thread = await self._client.beta.threads.create()
             return AssistantLoadOptions(assistant_id=assistant.id, thread_id=thread.id)
         elif self._assistant_opts.load_options:
+            if not self._assistant_opts.load_options.thread_id:
+                thread = await self._client.beta.threads.create()
+                self._assistant_opts.load_options.thread_id = thread.id
             return self._assistant_opts.load_options
 
         raise Exception("One of create_options or load_options must be set")
@@ -152,10 +168,12 @@ class AssistantLLMStream(llm.LLMStream):
             self,
             output_queue: asyncio.Queue[llm.ChatChunk | Exception | None],
             chat_ctx: llm.ChatContext,
+            fnc_ctx: llm.FunctionContext | None = None,
         ):
             super().__init__()
             self._chat_ctx = chat_ctx
             self._output_queue = output_queue
+            self._fnc_ctx = fnc_ctx
 
         async def on_text_delta(self, delta: TextDelta, snapshot: Text):
             self._output_queue.put_nowait(
@@ -171,9 +189,33 @@ class AssistantLLMStream(llm.LLMStream):
         async def on_tool_call_created(self, tool_call: ToolCall):
             print(f"\nassistant > {tool_call.type}\n", flush=True)
 
-        async def on_tool_call_delta(self, delta: ToolCallDelta, snapshot: ToolCall):
-            if delta.type == "code_interpreter":
-                pass
+        async def on_tool_call_done(
+            self,
+            tool_call: CodeInterpreterToolCall | FileSearchToolCall | FunctionToolCall,
+        ) -> None:
+            if tool_call.type == "code_interpreter":
+                logger.warning("code interpreter tool call not yet implemented")
+            elif tool_call.type == "file_search":
+                logger.warning("file_search tool call not yet implemented")
+            elif tool_call.type == "function":
+                if not self._fnc_ctx:
+                    logger.error("function tool called without function context")
+                    return
+                fnc = llm.FunctionCallInfo(
+                    function_info=self._fnc_ctx.ai_functions[tool_call.function.name],
+                    arguments=json.loads(tool_call.function.arguments),
+                    tool_call_id=tool_call.id,
+                    raw_arguments=tool_call.function.arguments,
+                )
+                chunk = llm.ChatChunk(
+                    choices=[
+                        llm.Choice(
+                            delta=llm.ChoiceDelta(role="assistant", tool_calls=[fnc]),
+                            index=0,
+                        )
+                    ]
+                )
+                self._output_queue.put_nowait(chunk)
 
     def __init__(
         self,
@@ -289,8 +331,9 @@ class AssistantLLMStream(llm.LLMStream):
                     lk_msg_id_dict[load_options.thread_id] = msg_id
 
             eh = AssistantLLMStream.EventHandler(
-                self._output_queue, chat_ctx=self._chat_ctx
+                self._output_queue, chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx
             )
+            assert load_options.thread_id
             async with self._client.beta.threads.runs.stream(
                 additional_messages=additional_messages,
                 thread_id=load_options.thread_id,
