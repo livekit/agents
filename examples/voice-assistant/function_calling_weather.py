@@ -34,7 +34,6 @@ class AssistantFnc(llm.FunctionContext):
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
-        print("NEIL get_weather")
         return "The weather is sunny."
 
 
@@ -44,7 +43,6 @@ def prewarm_process(proc: JobProcess):
 
 
 async def handle_participant(ctx: JobContext, participant: rtc.RemoteParticipant):
-    logger.info("NEIL handle_participant")
     fnc_ctx = AssistantFnc()  # create our fnc ctx instance
     initial_chat_ctx = llm.ChatContext().append(
         text=(
@@ -53,9 +51,7 @@ async def handle_participant(ctx: JobContext, participant: rtc.RemoteParticipant
         ),
         role="system",
     )
-    logger.info("NEIL Starting voice assistant 0")
     allm = anthropic.LLM()
-    logger.info("NEIL Starting voice assistant")
     assistant = VoiceAssistant(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
@@ -71,7 +67,6 @@ async def handle_participant(ctx: JobContext, participant: rtc.RemoteParticipant
 
 
 async def entrypoint(ctx: JobContext):
-    print("NEILLL")
     ctx.add_participant_entrypoint(handle_participant)
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
