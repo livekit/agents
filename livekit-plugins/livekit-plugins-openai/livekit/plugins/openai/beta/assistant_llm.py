@@ -292,6 +292,7 @@ class AssistantLLMStream(llm.LLMStream):
                 msg_id = msg._metadata.get(OPENAI_MESSAGE_ID_KEY, {}).get(
                     load_options.thread_id
                 )
+                assert load_options.thread_id
                 if msg_id and msg_id not in openai_addded_messages_set:
                     await self._client.beta.threads.messages.delete(
                         thread_id=load_options.thread_id,
