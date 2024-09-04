@@ -344,13 +344,26 @@ class AssistantLLMStream(llm.LLMStream):
                 self._output_queue, chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx
             )
             assert load_options.thread_id
-            async with self._client.beta.threads.runs.stream(
-                additional_messages=additional_messages,
-                thread_id=load_options.thread_id,
-                assistant_id=load_options.assistant_id,
-                event_handler=eh,
-                temperature=self._temperature,
-            ) as stream:
+            kwargs: dict[str, Any] = {
+                "additional_messages": additional_messages,
+                "thread_id": load_options.thread_id,
+                "assistant_id": load_options.assistant_id,
+                "event_handler": eh,
+                "temperature": self._temperature,
+            }
+            if self._fnc_ctx:
+                kwargs["tools"] = [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "parameters": t.arguments,
+                            "description": t.description,
+                        },
+                    }
+                    for t in self._fnc_ctx.ai_functions.values()
+                ]
+            async with self._client.beta.threads.runs.stream(**kwargs) as stream:
                 await stream.until_done()
 
             await self._output_queue.put(None)
