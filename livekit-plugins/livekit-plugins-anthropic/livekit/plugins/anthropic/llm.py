@@ -133,6 +133,7 @@ class LLMStream(llm.LLMStream):
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
+        text_remainder = ""
 
     async def aclose(self) -> None:
         if self._anthropic_stream:
@@ -144,7 +145,11 @@ class LLMStream(llm.LLMStream):
         if not self._anthropic_stream:
             self._anthropic_stream = await self._awaitable_anthropic_stream
 
+        fn_calling_enabled = self._fnc_ctx is not None
+        ignore = False
+
         async for event in self._anthropic_stream:
+            print("NEIL event", event)
             if event.type == "message_start":
                 pass
             elif event.type == "message_delta":
@@ -159,18 +164,34 @@ class LLMStream(llm.LLMStream):
             elif event.type == "content_block_delta":
                 delta = event.delta
                 if delta.type == "text_delta":
+                    text = delta.text
+
+                    # Anthropic seems to add a prompt when tool calling is enabled
+                    # where responses always start with a "<thinking>" block containing
+                    # the LLM's chain of thought. It's very verbose and not useful for voice
+                    # applications.
+                    if fn_calling_enabled:
+                        if text.startswith("<thinking>"):
+                            ignore = True
+
+                        if "</thinking>" in text:
+                            text = text.split("</thinking>")[-1]
+                            ignore = False
+
+                    if ignore:
+                        continue
+
                     return llm.ChatChunk(
                         choices=[
                             llm.Choice(
-                                delta=llm.ChoiceDelta(
-                                    content=delta.text, role="assistant"
-                                )
+                                delta=llm.ChoiceDelta(content=text, role="assistant")
                             )
                         ]
                     )
                 elif delta.type == "input_json_delta":
                     assert self._fnc_raw_arguments is not None
                     self._fnc_raw_arguments += delta.partial_json
+
             elif event.type == "content_block_stop":
                 if self._tool_call_id is not None and self._fnc_ctx:
                     assert self._fnc_name is not None
