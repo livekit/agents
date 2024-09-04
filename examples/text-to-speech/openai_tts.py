@@ -4,7 +4,7 @@ import logging
 from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
-from livekit.plugins import google
+from livekit.plugins import openai
 
 load_dotenv()
 
@@ -15,7 +15,7 @@ logger.setLevel(logging.INFO)
 async def entrypoint(job: JobContext):
     logger.info("starting tts example agent")
 
-    tts = google.TTS()
+    tts = openai.TTS(model="tts-1", voice="nova")
 
     source = rtc.AudioSource(tts.sample_rate, tts.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
