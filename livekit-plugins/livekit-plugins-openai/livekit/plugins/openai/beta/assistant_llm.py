@@ -63,8 +63,9 @@ class AssistantCreateOptions:
     instructions: str
     model: ChatModels
     temperature: float | None = None
-    tool_resources: ToolResources | None = None
-    tools: list[AssistantTools] = field(default_factory=list)
+    # TODO: when we implement code_interpreter and file_search tools
+    # tool_resources: ToolResources | None = None
+    # tools: list[AssistantTools] = field(default_factory=list)
 
 
 @dataclass
@@ -108,7 +109,7 @@ class AssistantLLM(llm.LLM):
             self._sync_openai_task = asyncio.create_task(self._sync_openai())
         except Exception:
             logger.error(
-                f"failed to create sync openai task. This can happen when instantiating without a running asyncio event loop (such has when running tests) will try lazily later"
+                "failed to create sync openai task. This can happen when instantiating without a running asyncio event loop (such has when running tests) will try lazily later"
             )
         self._done_futures = list[asyncio.Future[None]]()
 
@@ -118,15 +119,16 @@ class AssistantLLM(llm.LLM):
                 "model": self._assistant_opts.create_options.model,
                 "name": self._assistant_opts.create_options.name,
                 "instructions": self._assistant_opts.create_options.instructions,
-                "tools": [
-                    {"type": t} for t in self._assistant_opts.create_options.tools
-                ],
-                "tool_resources": self._assistant_opts.create_options.tool_resources,
+                # "tools": [
+                #     {"type": t} for t in self._assistant_opts.create_options.tools
+                # ],
+                # "tool_resources": self._assistant_opts.create_options.tool_resources,
             }
-            if self._assistant_opts.create_options.tool_resources:
-                kwargs["tool_resources"] = (
-                    self._assistant_opts.create_options.tool_resources
-                )
+            # TODO when we implement code_interpreter and file_search tools
+            # if self._assistant_opts.create_options.tool_resources:
+            #     kwargs["tool_resources"] = (
+            #         self._assistant_opts.create_options.tool_resources
+            #     )
             if self._assistant_opts.create_options.temperature:
                 kwargs["temperature"] = self._assistant_opts.create_options.temperature
             assistant = await self._client.beta.assistants.create(**kwargs)
@@ -175,11 +177,13 @@ class AssistantLLMStream(llm.LLMStream):
     class EventHandler(AsyncAssistantEventHandler):
         def __init__(
             self,
+            llm_stream: AssistantLLMStream,
             output_queue: asyncio.Queue[llm.ChatChunk | Exception | None],
             chat_ctx: llm.ChatContext,
             fnc_ctx: llm.FunctionContext | None = None,
         ):
             super().__init__()
+            self._llm_stream = llm_stream
             self._chat_ctx = chat_ctx
             self._output_queue = output_queue
             self._fnc_ctx = fnc_ctx
@@ -210,12 +214,15 @@ class AssistantLLMStream(llm.LLMStream):
                 if not self._fnc_ctx:
                     logger.error("function tool called without function context")
                     return
+
                 fnc = llm.FunctionCallInfo(
                     function_info=self._fnc_ctx.ai_functions[tool_call.function.name],
                     arguments=json.loads(tool_call.function.arguments),
                     tool_call_id=tool_call.id,
                     raw_arguments=tool_call.function.arguments,
                 )
+
+                self._llm_stream._function_calls_info.append(fnc)
                 chunk = llm.ChatChunk(
                     choices=[
                         llm.Choice(
@@ -341,7 +348,10 @@ class AssistantLLMStream(llm.LLMStream):
                     lk_msg_id_dict[load_options.thread_id] = msg_id
 
             eh = AssistantLLMStream.EventHandler(
-                self._output_queue, chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx
+                output_queue=self._output_queue,
+                chat_ctx=self._chat_ctx,
+                fnc_ctx=self._fnc_ctx,
+                llm_stream=self,
             )
             assert load_options.thread_id
             kwargs: dict[str, Any] = {
@@ -353,16 +363,10 @@ class AssistantLLMStream(llm.LLMStream):
             }
             if self._fnc_ctx:
                 kwargs["tools"] = [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": t.name,
-                            "parameters": t.arguments,
-                            "description": t.description,
-                        },
-                    }
-                    for t in self._fnc_ctx.ai_functions.values()
+                    llm._oai_api.build_oai_function_description(f)
+                    for f in self._fnc_ctx.ai_functions.values()
                 ]
+
             async with self._client.beta.threads.runs.stream(**kwargs) as stream:
                 await stream.until_done()
 
@@ -400,9 +404,6 @@ class AssistantLLMStream(llm.LLMStream):
             await self._output_queue.put(e)
         finally:
             self._done_future.set_result(None)
-
-    async def aclose(self) -> None:
-        pass
 
     async def __anext__(self):
         item = await self._output_queue.get()
