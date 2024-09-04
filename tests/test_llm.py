@@ -8,6 +8,7 @@ import pytest
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
 from livekit.plugins import anthropic, openai
+import uuid
 
 
 class Unit(Enum):
@@ -89,6 +90,16 @@ def test_hashable_typeinfo():
 
 LLMS = [
     openai.LLM(),
+    openai.beta.AssistantLLM(
+        assistant_opts=openai.beta.AssistantOptions(
+            create_options=openai.beta.AssistantCreateOptions(
+                name=f"test-{uuid.uuid4()}",
+                instructions="",
+                model="gpt-3.5-turbo",
+                tools=["function"],
+            )
+        )
+    ),
     # anthropic.LLM(),
 ]
 
