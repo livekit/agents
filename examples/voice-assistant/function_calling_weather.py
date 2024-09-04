@@ -13,7 +13,7 @@ from livekit.agents import (
     llm,
 )
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import anthropic, deepgram, openai, silero
+from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
 
@@ -34,7 +34,16 @@ class AssistantFnc(llm.FunctionContext):
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
-        return "The weather is sunny."
+        logger.info(f"getting weather for {location}")
+        url = f"https://wttr.in/{location}?format=%C+%t"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    weather_data = await response.text()
+                    # response from the function call is returned to the LLM
+                    return f"The weather in {weather_data}."
+                else:
+                    raise f"Failed to get weather data, status code: {response.status}"
 
 
 def prewarm_process(proc: JobProcess):
@@ -51,11 +60,10 @@ async def handle_participant(ctx: JobContext, participant: rtc.RemoteParticipant
         ),
         role="system",
     )
-    allm = anthropic.LLM()
     assistant = VoiceAssistant(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
-        llm=allm,
+        llm=openai.LLM(),
         tts=openai.TTS(),
         fnc_ctx=fnc_ctx,
         chat_ctx=initial_chat_ctx,
@@ -63,7 +71,9 @@ async def handle_participant(ctx: JobContext, participant: rtc.RemoteParticipant
     # Start the assistant. This will automatically publish a microphone track and listen to the first participant
     # it finds in the current room. If you need to specify a particular participant, use the participant parameter.
     assistant.start(ctx.room, participant=participant)
-    await assistant.say("Hello from the weather station.")
+    await assistant.say(
+        "Hello from the weather station. I can tell you about the whether wherever you are."
+    )
 
 
 async def entrypoint(ctx: JobContext):
