@@ -103,7 +103,13 @@ class AssistantLLM(llm.LLM):
         self._assistant_opts = assistant_opts
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
-        self._sync_openai_task = asyncio.create_task(self._sync_openai())
+        self._sync_openai_task: asyncio.Task[AssistantLoadOptions] | None = None
+        try:
+            self._sync_openai_task = asyncio.create_task(self._sync_openai())
+        except Exception:
+            logger.error(
+                f"failed to create sync openai task. This can happen when instantiating without a running asyncio event loop (such has when running tests) will try lazily later"
+            )
         self._done_futures = list[asyncio.Future[None]]()
 
     async def _sync_openai(self) -> AssistantLoadOptions:
@@ -151,6 +157,9 @@ class AssistantLLM(llm.LLM):
             logger.warning(
                 "OpenAI Assistants does not support the 'parallel_tool_calls' parameter"
             )
+
+        if not self._sync_openai_task:
+            self._sync_openai_task = asyncio.create_task(self._sync_openai())
 
         return AssistantLLMStream(
             temperature=temperature,
