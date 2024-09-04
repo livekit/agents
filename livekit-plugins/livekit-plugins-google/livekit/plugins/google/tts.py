@@ -148,6 +148,7 @@ class ChunkedStream(tts.ChunkedStream):
                     )
                 )
         else:
+            data = data[44:]  # skip WAV header
             self._event_ch.send_nowait(
                 tts.SynthesizedAudio(
                     request_id=request_id,
