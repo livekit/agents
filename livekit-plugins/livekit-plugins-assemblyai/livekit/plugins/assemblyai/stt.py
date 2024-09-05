@@ -48,6 +48,7 @@ class STTOptions:
     disable_partial_transcripts: bool = False
     enable_extra_session_information: bool = False
     end_utterance_silence_threshold: Optional[int] = None
+    # Buffer to collect frames until have 100ms worth of audio
     buffer_size_seconds: Optional[float] = None
 
 
@@ -122,16 +123,12 @@ class SpeechStream(stt.SpeechStream):
         opts: STTOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
-        sample_rate: int = 16000,
         num_channels: int = 1,
         max_retry: int = 32,
-        buffer_size_seconds: float = 0.2,
-        end_utterance_silence_threshold: int = 1000,
     ) -> None:
         super().__init__()
 
         self._opts = opts
-        self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._api_key = api_key
         self._speaking = False
@@ -146,11 +143,6 @@ class SpeechStream(stt.SpeechStream):
 
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: List[stt.SpeechEvent] = []
-
-        self._END_UTTERANCE_SILENCE_THRESHOLD_MSG: str = json.dumps({"end_utterance_silence_threshold": end_utterance_silence_threshold })
-        
-        # Buffer to collect frames until we have 100ms worth of audio
-        self._buffer_size_seconds = buffer_size_seconds
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
@@ -180,7 +172,7 @@ class SpeechStream(stt.SpeechStream):
             while not self._closed:
                 try:
                     live_config = {
-                        "sample_rate": self._sample_rate,
+                        "sample_rate": self._opts.sample_rate,
                         "word_boost": self._opts.word_boost,
                         "encoding": self._opts.encoding,
                         "disable_partial_transcripts": self._opts.disable_partial_transcripts,
@@ -224,7 +216,10 @@ class SpeechStream(stt.SpeechStream):
         """
 
         closing_ws = False
-        self._queue.put_nowait(self._END_UTTERANCE_SILENCE_THRESHOLD_MSG)
+        END_UTTERANCE_SILENCE_THRESHOLD_MSG = json.dumps(
+            {"end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold }
+        )
+        self._queue.put_nowait(END_UTTERANCE_SILENCE_THRESHOLD_MSG)
 
         # Local variables for buffering
         buffer = bytearray()
@@ -243,17 +238,17 @@ class SpeechStream(stt.SpeechStream):
                     # TODO: The remix_and_resample method is low quality
                     # and should be replaced with a continuous resampling
                     frame = data.remix_and_resample(
-                        self._sample_rate,
+                        self._opts.sample_rate,
                         self._num_channels,
                     )
                     buffer.extend(frame.data.tobytes())
 
                     # Calculate buffer duration
                     total_frames = len(buffer) / bytes_per_frame[self._opts.encoding]
-                    samples_per_second = self._sample_rate * self._num_channels
+                    samples_per_second = self._opts.sample_rate * self._num_channels
                     buffer_duration = total_frames / samples_per_second
 
-                    if buffer_duration >= self._buffer_size_seconds:
+                    if buffer_duration >= self._opts.buffer_size_seconds:
                         await ws.send_bytes(bytes(buffer))
                         buffer.clear()
                         buffer_duration = 0.0
