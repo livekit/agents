@@ -1,6 +1,6 @@
-# LiveKit Plugins Azure
+# LiveKit Plugins AssemblyAI
 
-Agent Framework plugin for AssemblyAI. Currently supports STT.
+Agent Framework plugin for AssemblyAI. Currently supports Streaming Speech-to-Text.
 
 ## Installation
 
