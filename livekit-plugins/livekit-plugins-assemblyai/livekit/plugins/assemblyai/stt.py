@@ -90,7 +90,6 @@ class STT(stt.STT):
             end_utterance_silence_threshold=end_utterance_silence_threshold,
         )
         self._session = http_session
-        self._token_expires_in = token_expires_in
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -152,9 +151,6 @@ class SpeechStream(stt.SpeechStream):
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: List[stt.SpeechEvent] = []
 
-        self._token_expires_in = token_expires_in
-        self._token = None
-
         self._END_UTTERANCE_SILENCE_THRESHOLD_MSG: str = json.dumps({"end_utterance_silence_threshold": end_utterance_silence_threshold })
         
         # Buffer to collect frames until we have 100ms worth of audio
@@ -178,32 +174,11 @@ class SpeechStream(stt.SpeechStream):
 
         await self._session.close()
 
-    async def _get_temporary_token(self):
-        url = "https://api.assemblyai.com/v2/realtime/token"
-        headers = {
-            "Authorization": self._api_key,
-            "Content-Type": "application/json",
-        }
-        data = json.dumps(
-            {
-                "expires_in": self._token_expires_in,
-            },
-        )
-        res = await self._session.post(url, headers=headers, data=data)
-        res_json = await res.json()
-        self._token = res_json["token"]
-        if self._token is None:
-            raise ValueError("Failed to get temporary token")
-        self._token_expires_at = time.time() + self._token_expires_in
-
     async def _run(self, max_retry: int) -> None:
         """
         Run a single websocket connection to AssemblyAI and make sure to reconnect
         when something went wrong.
         """
-        if self._token is None or time.time() > self._token_expires_at:
-            await self._get_temporary_token()
-
         try:
             retry_count = 0
             while not self._closed:
@@ -214,12 +189,16 @@ class SpeechStream(stt.SpeechStream):
                         "encoding": self._opts.encoding,
                         "disable_partial_transcripts": self._opts.disable_partial_transcripts,
                         "enable_extra_session_information": self._opts.enable_extra_session_information,
-                        "token": self._token,  # temporary authentication token
+                    }
+
+                    headers = {
+                        "Authorization": self._api_key,
+                        "Content-Type": "application/json",
                     }
 
                     ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
                     url = f"{ws_url}?{urlencode(live_config).lower()}"
-                    ws = await self._session.ws_connect(url)
+                    ws = await self._session.ws_connect(url, headers=headers)
                     retry_count = 0  # connected successfully, reset the retry_count
 
                     await self._run_ws(ws)
