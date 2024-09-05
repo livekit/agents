@@ -379,21 +379,3 @@ def live_transcription_to_speech_data(
             text=data["text"],
         ),
     ]
-
-
-def prerecorded_transcription_to_speech_event(
-    language: Optional[str],
-    data: dict,
-) -> stt.SpeechEvent:
-    return stt.SpeechEvent(
-        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-        alternatives=[
-            stt.SpeechData(
-                language=language,  # AssemblyAI doesn't provide language detection in this format
-                start_time=data["words"][0]["start"] / 1000 if data["words"] else 0,
-                end_time=data["words"][-1]["end"] / 1000 if data["words"] else 0,
-                confidence=data["confidence"],
-                text=data["text"],
-            ),
-        ],
-    )
