@@ -111,7 +111,7 @@ async def test_stream(stt: agents.stt.STT):
                 recv_start = True
                 continue
 
-            # Assembly AI only sends one START_OF_SPEECH per connection
+            # AssemblyAI only sends one START_OF_SPEECH per connection
             if not is_assemblyai_stt:
                 assert recv_start, "START_OF_SPEECH should be sent before any other event"
 
