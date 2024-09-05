@@ -49,7 +49,6 @@ class STTOptions:
     enable_extra_session_information: bool = False
     end_utterance_silence_threshold: Optional[int] = None
     buffer_size_seconds: Optional[float] = None
-    token_expires_in: Optional[int] = None
 
 
 class STT(stt.STT):
@@ -64,7 +63,6 @@ class STT(stt.STT):
         enable_extra_session_information: bool = False,
         end_utterance_silence_threshold: int = 1000,
         http_session: Optional[aiohttp.ClientSession] = None,
-        token_expires_in: int = 3600,
         buffer_size_seconds: float = 0.2,
     ):
         super().__init__(
@@ -86,7 +84,6 @@ class STT(stt.STT):
             disable_partial_transcripts=disable_partial_transcripts,
             enable_extra_session_information=enable_extra_session_information,
             buffer_size_seconds=buffer_size_seconds,
-            token_expires_in=token_expires_in,
             end_utterance_silence_threshold=end_utterance_silence_threshold,
         )
         self._session = http_session
@@ -128,7 +125,6 @@ class SpeechStream(stt.SpeechStream):
         sample_rate: int = 16000,
         num_channels: int = 1,
         max_retry: int = 32,
-        token_expires_in: int = 3600,
         buffer_size_seconds: float = 0.2,
         end_utterance_silence_threshold: int = 1000,
     ) -> None:
