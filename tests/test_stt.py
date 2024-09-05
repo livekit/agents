@@ -161,9 +161,15 @@ async def test_timeout(stt: agents.stt.STT):
         stream.end_input()
 
     async def _stream_output():
-        await stream.__anext__()
+        # StreamAdapter sends speech events through VAD, and we don't care about
+        # those for this test
+        while (await stream.__anext__()).type not in (
+            agents.stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            agents.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        ):
+            pass
 
-    with pytest.raises(asyncio.TimeoutError) as e:
+    with pytest.raises(asyncio.TimeoutError):
         await asyncio.gather(_stream_input(), _stream_output())
 
     await stream.aclose()
