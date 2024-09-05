@@ -94,6 +94,11 @@ class JobContext:
     async def wait_for_participant(
         self, *, identity: str | None = None
     ) -> rtc.RemoteParticipant:
+        """
+        Returns a participant that matches the given identity. If identity is None, the first
+        participant that joins the room will be returned.
+        If the participant has already joined, the function will return immediately.
+        """
         if not self._room.isconnected():
             raise RuntimeError("room is not connected")
 
@@ -142,7 +147,7 @@ class JobContext:
             [JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]
         ],
     ):
-        """Adds an entrypoint function to be run when a participant that matches the filter joins the room. In cases where
+        """Adds an entrypoint function to be run when a participant joins the room. In cases where
         the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
         added and they will each be run in parallel for each participant.
         """
