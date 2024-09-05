@@ -115,7 +115,9 @@ class JobContext:
                 if not fut.done():
                     fut.set_result(p)
 
-        self._room.on("participant_connected", _on_participant_connected)
+        if not fut.done():
+            self._room.on("participant_connected", _on_participant_connected)
+
         return await fut
 
     async def connect(
