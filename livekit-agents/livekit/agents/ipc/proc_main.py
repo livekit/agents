@@ -118,6 +118,7 @@ def _start_job(
             )
 
     info = start_req.running_job
+    room._info.name = info.job.room.name
     job_ctx = JobContext(
         proc=proc,
         info=info,
