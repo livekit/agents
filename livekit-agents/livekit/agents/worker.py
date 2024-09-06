@@ -197,7 +197,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             job_entrypoint_fnc=opts.entrypoint_fnc,
             num_idle_processes=opts.num_idle_processes,
             loop=self._loop,
-            job_executor=opts.job_executor,
+            job_executor_type=opts.job_executor_type,
             mp_ctx=mp_ctx,
             initialize_timeout=opts.initialize_process_timeout,
             close_timeout=opts.shutdown_process_timeout,
