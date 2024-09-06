@@ -72,12 +72,12 @@ class JobContext:
 
     @property
     def proc(self) -> JobProcess:
-        """The process that's running the job, useful for storing process-specific state"""
+        """Returns the process running the job. Useful for storing process-specific state."""
         return self._proc
 
     @property
     def job(self) -> agent.Job:
-        """The job that the worker is running currently"""
+        """Returns the current job that the worker is executing."""
         return self._info.job
 
     @property
