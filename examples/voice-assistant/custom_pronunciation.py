@@ -1,12 +1,11 @@
 from __future__ import annotations
+
 from typing import AsyncIterable
-import asyncio
 
 from dotenv import load_dotenv
-from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm, utils
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import deepgram, cartesia, openai, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 load_dotenv()
 

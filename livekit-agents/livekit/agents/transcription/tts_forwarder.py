@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+import warnings
 from collections import deque
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Deque, Optional, Union
@@ -18,13 +19,16 @@ from . import _utils
 STANDARD_SPEECH_RATE = 3.83
 
 
-WillForwardTranscription = Callable[
+BeforeForwardCallback = Callable[
     ["TTSSegmentsForwarder", rtc.Transcription],
     Union[rtc.Transcription, Awaitable[Optional[rtc.Transcription]]],
 ]
 
 
-def _default_will_forward_transcription(
+WillForwardTranscription = BeforeForwardCallback
+
+
+def _default_before_forward_callback(
     fwd: TTSSegmentsForwarder, transcription: rtc.Transcription
 ) -> rtc.Transcription:
     return transcription
@@ -41,7 +45,7 @@ class _TTSOptions:
     sentence_tokenizer: tokenize.SentenceTokenizer
     hyphenate_word: Callable[[str], list[str]]
     new_sentence_delay: float
-    will_forward_transcription: WillForwardTranscription
+    before_forward_cb: BeforeForwardCallback
 
 
 @dataclass
@@ -84,8 +88,10 @@ class TTSSegmentsForwarder:
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
         sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
-        will_forward_transcription: WillForwardTranscription = _default_will_forward_transcription,
+        before_forward_cb: BeforeForwardCallback = _default_before_forward_callback,
         loop: asyncio.AbstractEventLoop | None = None,
+        # backward compatibility
+        will_forward_transcription: WillForwardTranscription | None = None,
     ):
         """
         Args:
@@ -110,6 +116,14 @@ class TTSSegmentsForwarder:
         elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
             track = track.sid
 
+        if will_forward_transcription is not None:
+            warnings.warn(
+                "will_forward_transcription is deprecated and will be removed in 1.5.0, use before_forward_cb instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            before_forward_cb = will_forward_transcription
+
         speed = speed * STANDARD_SPEECH_RATE
         self._opts = _TTSOptions(
             room=room,
@@ -121,7 +135,7 @@ class TTSSegmentsForwarder:
             sentence_tokenizer=sentence_tokenizer,
             hyphenate_word=hyphenate_word,
             new_sentence_delay=new_sentence_delay,
-            will_forward_transcription=will_forward_transcription,
+            before_forward_cb=before_forward_cb,
         )
         self._closed = False
         self._loop = loop or asyncio.get_event_loop()
@@ -247,15 +261,13 @@ class TTSSegmentsForwarder:
                     segments=[seg],  # no history for now
                 )
 
-                transcription = self._opts.will_forward_transcription(
-                    self, base_transcription
-                )
+                transcription = self._opts.before_forward_cb(self, base_transcription)
                 if asyncio.iscoroutine(transcription):
                     transcription = await transcription
 
                 # fallback to default impl if no custom/user stream is returned
                 if not isinstance(transcription, rtc.Transcription):
-                    transcription = _default_will_forward_transcription(
+                    transcription = _default_before_forward_callback(
                         self, base_transcription
                     )
 
