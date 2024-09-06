@@ -51,7 +51,7 @@ class TTS(tts.TTS):
         speaking_rate: float = 1.0,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        timeout: float | None = 10.0,
+        timeout: float | None = None,
     ) -> None:
         """
         Create a new instance of Google TTS.
@@ -60,6 +60,8 @@ class TTS(tts.TTS):
         from the file specified in ``credentials_file`` or the ``GOOGLE_APPLICATION_CREDENTIALS``
         environmental variable.
         """
+        if timeout is not None:
+            raise NotImplementedError("Google TTS does not support timeouts")
 
         super().__init__(
             capabilities=tts.TTSCapabilities(

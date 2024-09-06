@@ -129,7 +129,7 @@ async def test_stream(stt: agents.stt.STT):
 
 TIMEOUT_STT = [
     deepgram.STT(timeout=0),
-    google.STT(timeout=0),
+    # google.STT(timeout=0),
     agents.stt.StreamAdapter(stt=openai.STT(timeout=0), vad=STREAM_VAD),
     azure.STT(timeout=0),
 ]

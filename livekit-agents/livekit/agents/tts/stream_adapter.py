@@ -78,4 +78,4 @@ class StreamAdapterWrapper(SynthesizeStream):
         try:
             await asyncio.gather(*tasks)
         finally:
-            await asyncio.shield(utils.aio.gracefully_cancel(*tasks))
+            await utils.aio.gracefully_cancel(*tasks)

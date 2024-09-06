@@ -110,9 +110,9 @@ TIMEOUT_TTS = [
     agents.tts.StreamAdapter(
         tts=openai.TTS(timeout=0), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
-    agents.tts.StreamAdapter(
-        tts=google.TTS(timeout=0), sentence_tokenizer=STREAM_SENT_TOKENIZER
-    ),
+    # agents.tts.StreamAdapter(
+    #     tts=google.TTS(timeout=0), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    # ),
     agents.tts.StreamAdapter(
         tts=azure.TTS(timeout=0), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),

@@ -56,7 +56,7 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        timeout: float | None = 20.0,
+        timeout: float | None = None,
     ):
         """
         Create a new instance of Google STT.
@@ -65,6 +65,9 @@ class STT(stt.STT):
         from the file specified in ``credentials_file`` or the ``GOOGLE_APPLICATION_CREDENTIALS``
         environmental variable.
         """
+        if timeout is not None:
+            raise NotImplementedError("Google STT does not support timeouts")
+
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
             timeout=timeout,
