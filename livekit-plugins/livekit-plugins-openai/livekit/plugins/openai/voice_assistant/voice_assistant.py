@@ -8,36 +8,38 @@ from typing import Literal
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import llm, utils, vad
+from livekit.agents.llm import _oai_api
 
 from ..log import logger
+from . import proto
 
-API_URL = "wss://api.openai.com/v1/realtime"
-SAMPLE_RATE = 24000
-NUM_CHANNELS = 1
 
-INPUT_PCM_FRAME_SIZE = 2400 # 100ms
-OUTPUT_PCM_FRAME_SIZE = 1200  # 50ms
-
-AssistantVoices = Literal["alloy", "shimmer", "echo"]
-
-EventTypes = Literal["TODO"]
+EventTypes = Literal[
+    "user_started_speaking",
+    "user_stopped_speaking",
+    "agent_started_speaking",
+    "agent_stopped_speaking",
+]
 
 
 @dataclass(frozen=True)
 class _ImplOptions:
-    voice: AssistantVoices
+    voice: proto.Voices
     api_key: str
+    max_tokens: int
+    temperature: float
 
 
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
-    _FlushSentinel = None
-
     def __init__(
         self,
         *,
         system_message: str,
-        voice: AssistantVoices = "alloy",
+        voice: proto.Voices = "echo",
+        vad: vad.VAD | None = None,
+        max_tokens: int = 2048,
+        temperature: float = 0.8,
         api_key: str | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -49,13 +51,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             raise ValueError("api_key must be provided or set in OPENAI_API_KEY")
 
         self._loop = loop or asyncio.get_event_loop()
+        self._http_session = http_session
         self._opts = _ImplOptions(
             voice=voice,
             api_key=api_key,
+            max_tokens=max_tokens,
+            temperature=temperature,
         )
         self._system_message = system_message
+
+        self._vad = vad
         self._fnc_ctx = fnc_ctx
-        self._http_session = http_session
 
         self._read_micro_task: asyncio.Task | None = None
         self._subscribed_track: rtc.RemoteAudioTrack | None = None
@@ -63,12 +69,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._linked_participant: rtc.RemoteParticipant | None = None
         self._started, self._closed = False, False
-
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._http_session:
-            self._http_session = utils.http_context.http_session()
-
-        return self._http_session
 
     @property
     def system_message(self) -> str:
@@ -78,47 +78,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     def system_message(self, value: str) -> None:
         self._system_message = value
 
-    def _subscribe_to_microphone(self, *args, **kwargs) -> None:
-        """Subscribe to the participant microphone if found"""
+    @property
+    def vad(self) -> vad.VAD | None:
+        return self._vad
 
-        if self._linked_participant is None:
-            return
+    @property
+    def fnc_ctx(self) -> llm.FunctionContext | None:
+        return self._fnc_ctx
 
-        @utils.log_exceptions(logger=logger)
-        async def _read_audio_stream_task(audio_stream: rtc.AudioStream):
-            bstream = utils.audio.AudioByteStream(
-                SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=INPUT_PCM_FRAME_SIZE
-            )
-
-            async for ev in audio_stream:
-                for frame in bstream.write(ev.frame.data.tobytes()):
-                    self._input_audio_ch.send_nowait(frame)
-
-        for publication in self._linked_participant.track_publications.values():
-            if publication.source != rtc.TrackSource.SOURCE_MICROPHONE:
-                continue
-
-            if not publication.subscribed:
-                publication.set_subscribed(True)
-
-            if (
-                publication.track is not None
-                and publication.track != self._subscribed_track
-            ):
-                self._subscribed_track = publication.track  # type: ignore
-                if self._read_micro_task is not None:
-                    self._read_micro_task.cancel()
-
-                self._read_micro_task = asyncio.create_task(
-                    _read_audio_stream_task(
-                        rtc.AudioStream(
-                            self._subscribed_track,  # type: ignore
-                            sample_rate=SAMPLE_RATE,
-                            num_channels=NUM_CHANNELS,
-                        )
-                    )
-                )
-                break
+    @fnc_ctx.setter
+    def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
+        self._fnc_ctx = value
 
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
@@ -145,6 +115,141 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._main_atask = asyncio.create_task(self._main_task())
 
+
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
+        self._audio_source = rtc.AudioSource(proto.SAMPLE_RATE, proto.NUM_CHANNELS)
+        track = rtc.LocalAudioTrack.create_audio_track(
+            "assistant_voice", self._audio_source
+        )
+        self._agent_publication = await self._room.local_participant.publish_track(
+            track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        )
+        await self._agent_publication.wait_for_subscription()
+
+        try:
+            headers = {"Authorization": "Bearer " + self._opts.api_key}
+            ws_conn = await self._ensure_session().ws_connect(
+                proto.API_URL, headers=headers
+            )
+        except Exception:
+            logger.exception("failed to connect to OpenAI API S2S")
+            return
+
+        initial_cfg: proto.ClientMessage.SetInferenceConfig = {
+            "event": "set_inference_config",
+            "system_message": self._system_message,
+            "turn_end_type": "server_detection",
+            "voice": self._opts.voice,
+            "disable_audio": False,
+            "tools": {},
+            "tool_choice": "auto",
+            "audio_format": "pcm16",
+            "temperature": self._opts.temperature,
+            "max_tokens": self._opts.max_tokens,
+            "transcribe_input": True,
+        }
+
+        await ws_conn.send_json(initial_cfg)
+
+        @utils.log_exceptions(logger=logger)
+        async def send_task():
+            async for frame in self._input_audio_ch:
+                await ws_conn.send_json(
+                    {
+                        "event": "add_user_audio",
+                        "data": base64.b64encode(frame.data).decode("utf-8"),
+                    }
+                )
+
+        @utils.log_exceptions(logger=logger)
+        async def recv_task():
+            while True:
+                msg = await ws_conn.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    raise Exception("OpenAI S2S connection closed unexpectedly")
+
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning("unexpected OpenAI S2S message type %s", msg.type)
+                    continue
+
+                try:
+                    self._handle_server_message(msg.json())
+                except Exception:
+                    logger.exception(
+                        "failed to handle OpenAI S2S message", extra={"msg": msg}
+                    )
+
+        tasks = [
+            asyncio.create_task(send_task()),
+            asyncio.create_task(recv_task()),
+        ]
+
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
+
+
+    @utils.log_exceptions(logger=logger)
+    async def _playout_task(self, playout_ch: utils.aio.Chan[rtc.AudioFrame]):
+        bstream = utils.audio.AudioByteStream(
+            proto.SAMPLE_RATE,
+            proto.NUM_CHANNELS,
+            samples_per_channel=proto.OUT_FRAME_SIZE,
+        )
+
+        async for frame in playout_ch:
+            for f in bstream.write(frame.data.tobytes()):
+                await self._audio_source.capture_frame(f)
+
+        for f in bstream.flush():
+            await self._audio_source.capture_frame(f)
+
+    def _handle_server_message(self, data: dict) -> None:
+        event = data["event"]
+        if event == "start_session":
+            print(data)
+        elif event == "add_content":
+            type = data["type"]
+            if type == "audio":
+                if playout_ch is None:
+                    playout_ch = utils.aio.Chan[rtc.AudioFrame]()
+                    playout_atask = asyncio.create_task(_playout_task(playout_ch))
+
+                audio_data = base64.b64decode(data["data"])
+
+                frame = rtc.AudioFrame(
+                    audio_data,
+                    proto.SAMPLE_RATE,
+                    proto.NUM_CHANNELS,
+                    len(audio_data) // 2,
+                )
+                playout_ch.send_nowait(frame)
+            else:
+                print(data)
+        elif event == "turn_finished":
+            print("turn_finished")
+            if playout_ch is not None:
+                playout_ch.close()
+                playout_ch = None
+
+        elif event == "model_listening":
+            print("cancelling")
+            if playout_atask is not None:
+                playout_atask.cancel()
+                playout_ch = None
+
+        elif event == "error":
+            logger.error("OpenAI S2S error: %s", data["error"])
+        else:
+            print(data)
+
+
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if self._linked_participant is None:
             return
@@ -161,125 +266,54 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._subscribe_to_microphone()
 
-    @utils.log_exceptions(logger=logger)
-    async def _main_task(self) -> None:
-        self._audio_source = rtc.AudioSource(SAMPLE_RATE, NUM_CHANNELS)
-        track = rtc.LocalAudioTrack.create_audio_track(
-            "assistant_voice", self._audio_source
-        )
-        self._agent_publication = await self._room.local_participant.publish_track(
-            track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-        )
 
-        await self._agent_publication.wait_for_subscription()
+    def _subscribe_to_microphone(self, *args, **kwargs) -> None:
+        """Subscribe to the participant microphone if found"""
 
-        try:
-            headers = {"Authorization": "Bearer " + self._opts.api_key}
-            ws_conn = await self._ensure_session().ws_connect(API_URL, headers=headers)
-        except Exception:
-            logger.exception("failed to connect to OpenAI API S2S")
+        if self._linked_participant is None:
             return
 
-        await ws_conn.send_json(
-            {
-                "event": "set_inference_config",
-                "system_message": self._system_message,
-                "turn_end_type": "server_detection",
-                "voice": self._opts.voice,
-                "disable_audio": False,
-                "audio_format": "pcm16",
-                "temperature": 0.8,
-                "max_tokens": 2048,
-            }
-        )
-
         @utils.log_exceptions(logger=logger)
-        async def send_task():
-            async for frame in self._input_audio_ch:
-                await ws_conn.send_json(
-                    {
-                        "event": "add_user_audio",
-                        "data": base64.b64encode(frame.data).decode("utf-8"),
-                    }
-                )
+        async def _read_audio_stream_task(audio_stream: rtc.AudioStream):
+            bstream = utils.audio.AudioByteStream(
+                proto.SAMPLE_RATE,
+                proto.NUM_CHANNELS,
+                samples_per_channel=proto.IN_FRAME_SIZE,
+            )
 
-        @utils.log_exceptions(logger=logger)
-        async def recv_task():
-            @utils.log_exceptions(logger=logger)
-            async def _playout_task(playout_ch: utils.aio.Chan[rtc.AudioFrame]):
-                bstream = utils.audio.AudioByteStream(
-                    SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=OUTPUT_PCM_FRAME_SIZE
-                )
+            async for ev in audio_stream:
+                for frame in bstream.write(ev.frame.data.tobytes()):
+                    self._input_audio_ch.send_nowait(frame)
 
-                async for frame in playout_ch:
-                    for f in bstream.write(frame.data.tobytes()):
-                        await self._audio_source.capture_frame(f)
+        for publication in self._linked_participant.track_publications.values():
+            if publication.source != rtc.TrackSource.SOURCE_MICROPHONE:
+                continue
 
-                for f in bstream.flush():
-                    await self._audio_source.capture_frame(f)
+            if not publication.subscribed:
+                publication.set_subscribed(True)
 
-            playout_atask: asyncio.Task | None = None
-            playout_ch: utils.aio.Chan[rtc.AudioFrame] | None = None
+            if (
+                publication.track is not None
+                and publication.track != self._subscribed_track
+            ):
+                self._subscribed_track = publication.track  # type: ignore
+                if self._read_micro_task is not None:
+                    self._read_micro_task.cancel()
 
-            while True:
-                msg = await ws_conn.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    raise Exception("OpenAI S2S connection closed unexpectedly")
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected OpenAI S2S message type %s", msg.type)
-                    continue
-
-                data = msg.json()
-                event = data["event"]
-                if event == "start_session":
-                    print(data)
-                elif event == "add_content":
-
-                    type = data["type"]
-                    if type == "audio":
-                        print("received audio")
-                        if playout_ch is None:
-                            playout_ch = utils.aio.Chan[rtc.AudioFrame]()
-                            playout_atask = asyncio.create_task(_playout_task(playout_ch))
-
-                        audio_data = base64.b64decode(data["data"])
-
-                        frame = rtc.AudioFrame(
-                            audio_data, SAMPLE_RATE, NUM_CHANNELS, len(audio_data) // 2
+                self._read_micro_task = asyncio.create_task(
+                    _read_audio_stream_task(
+                        rtc.AudioStream(
+                            self._subscribed_track,  # type: ignore
+                            sample_rate=proto.SAMPLE_RATE,
+                            num_channels=proto.NUM_CHANNELS,
                         )
-                        playout_ch.send_nowait(frame)
-                elif event == "tool_call":
-                    pass
-                elif event == "turn_finished":
-                    print("turn_finished")
-                    if playout_ch is not None:
-                        playout_ch.close()
-                        playout_ch = None
+                    )
+                )
+                break
 
-                elif event == "model_listening":
-                    print("cancelling")
-                    if playout_atask is not None:
-                        playout_atask.cancel()
-                        playout_ch = None
 
-                elif event == "tool_call_buffer_add":
-                    pass
-                elif event == "error":
-                    logger.error("OpenAI S2S error: %s", data["error"])
-                else:
-                    print(event)
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._http_session:
+            self._http_session = utils.http_context.http_session()
 
-        tasks = [
-            asyncio.create_task(send_task()),
-            asyncio.create_task(recv_task()),
-        ]
-
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
+        return self._http_session
