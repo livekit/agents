@@ -287,8 +287,7 @@ class LLM(llm.LLM):
         base_url: str | None = None,
         user: str | None = None,
     ) -> LLM:
-        logger.warning(
-            "This alias is deprecated. Use LLM.with_azure() instead")
+        logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
         return LLM.with_azure(
             model=model,
             azure_endpoint=azure_endpoint,
@@ -315,8 +314,7 @@ class LLM(llm.LLM):
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
             for fnc in fnc_ctx.ai_functions.values():
-                fncs_desc.append(
-                    llm._oai_api.build_oai_function_description(fnc))
+                fncs_desc.append(llm._oai_api.build_oai_function_description(fnc))
 
             opts["tools"] = fncs_desc
 
@@ -409,8 +407,7 @@ class LLMStream(llm.LLMStream):
         return llm.ChatChunk(
             choices=[
                 llm.Choice(
-                    delta=llm.ChoiceDelta(
-                        content=delta.content, role="assistant"),
+                    delta=llm.ChoiceDelta(content=delta.content, role="assistant"),
                     index=choice.index,
                 )
             ]
@@ -418,8 +415,7 @@ class LLMStream(llm.LLMStream):
 
     def _try_run_function(self, choice: Choice) -> llm.ChatChunk | None:
         if not self._fnc_ctx:
-            logger.warning(
-                "oai stream tried to run function without function context")
+            logger.warning("oai stream tried to run function without function context")
             return None
 
         if self._tool_call_id is None:
@@ -443,8 +439,7 @@ class LLMStream(llm.LLMStream):
         return llm.ChatChunk(
             choices=[
                 llm.Choice(
-                    delta=llm.ChoiceDelta(
-                        role="assistant", tool_calls=[fnc_info]),
+                    delta=llm.ChoiceDelta(role="assistant", tool_calls=[fnc_info]),
                     index=choice.index,
                 )
             ]
@@ -454,5 +449,4 @@ class LLMStream(llm.LLMStream):
 def _build_oai_context(
     chat_ctx: llm.ChatContext, cache_key: Any
 ) -> list[ChatCompletionMessageParam]:
-    # type: ignore
-    return [build_oai_message(msg, cache_key) for msg in chat_ctx.messages]
+    return [build_oai_message(msg, cache_key) for msg in chat_ctx.messages]  # type: ignore
