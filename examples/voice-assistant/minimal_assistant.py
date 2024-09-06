@@ -23,10 +23,11 @@ async def entrypoint(ctx: JobContext):
     assistant = VoiceAssistant(
         vad=silero.VAD.load(),
         stt=deepgram.STT(),
-        llm=openai.LLM(),
+        llm=openai.LLM.with_deepseek(),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
     )
+
     assistant.start(ctx.room)
 
     # listen to incoming chat messages, only required if you'd like the agent to

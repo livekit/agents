@@ -1,14 +1,17 @@
 import asyncio
 import logging
+import os
+from dotenv import load_dotenv, dotenv_values
 
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli
+import random
+
+# Load environment variables
+load_dotenv()
 
 WIDTH = 640
 HEIGHT = 480
-
-# change this color in dev mode and the agent will automatically update
-COLOR = bytes([0, 255, 0, 255])
 
 
 async def entrypoint(job: JobContext):
@@ -25,13 +28,22 @@ async def entrypoint(job: JobContext):
         argb_frame = bytearray(WIDTH * HEIGHT * 4)
         while True:
             await asyncio.sleep(0.1)  # 100ms
+            # Generate random color values for R, G, B
+            r = random.randint(0, 255)
+            g = random.randint(0, 255)
+            b = random.randint(0, 255)
 
-            argb_frame[:] = COLOR * WIDTH * HEIGHT
-            frame = rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, argb_frame)
+            # Create a new random color
+            color = bytes([r, g, b, 255])
+
+            # Fill the frame with the new random color
+            argb_frame[:] = color * WIDTH * HEIGHT
+            frame = rtc.VideoFrame(
+                WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, argb_frame)
             source.capture_frame(frame)
 
     await _draw_color()
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="simple-color"))

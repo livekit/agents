@@ -60,6 +60,11 @@ GroqChatModels = Literal[
     "gemma2-9b-it",
 ]
 
+DeepSeekChatModels = Literal[
+    "deepseek-coder",
+    "deepseek-chat",
+]
+
 TogetherChatModels = Literal[
     "Austism/chronos-hermes-13b",
     "Gryphe/MythoMax-L2-13b",

@@ -33,6 +33,7 @@ from .models import (
     OctoChatModels,
     PerplexityChatModels,
     TogetherChatModels,
+    DeepSeekChatModels,
 )
 from .utils import AsyncAzureADTokenProvider, build_oai_message
 
@@ -171,6 +172,31 @@ class LLM(llm.LLM):
         )
 
     @staticmethod
+    def with_deepseek(
+        *,
+        model: str | DeepSeekChatModels = "deepseek-chat",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.deepseek.com/v1",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of DeepSeek LLM.
+
+        ``api_key`` must be set to your DeepSeek API key, either using the argument or by setting
+        the ``DEEPSEEK_API_KEY`` environmental variable.
+        """
+
+        # shim for not using OPENAI_API_KEY
+        api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
+        if api_key is None:
+            raise ValueError("DeepSeek API key is required")
+
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
+
+    @staticmethod
     def with_octo(
         *,
         model: str | OctoChatModels = "llama-2-13b-chat",
@@ -261,7 +287,8 @@ class LLM(llm.LLM):
         base_url: str | None = None,
         user: str | None = None,
     ) -> LLM:
-        logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
+        logger.warning(
+            "This alias is deprecated. Use LLM.with_azure() instead")
         return LLM.with_azure(
             model=model,
             azure_endpoint=azure_endpoint,
@@ -288,7 +315,8 @@ class LLM(llm.LLM):
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
             for fnc in fnc_ctx.ai_functions.values():
-                fncs_desc.append(llm._oai_api.build_oai_function_description(fnc))
+                fncs_desc.append(
+                    llm._oai_api.build_oai_function_description(fnc))
 
             opts["tools"] = fncs_desc
 
@@ -381,7 +409,8 @@ class LLMStream(llm.LLMStream):
         return llm.ChatChunk(
             choices=[
                 llm.Choice(
-                    delta=llm.ChoiceDelta(content=delta.content, role="assistant"),
+                    delta=llm.ChoiceDelta(
+                        content=delta.content, role="assistant"),
                     index=choice.index,
                 )
             ]
@@ -389,7 +418,8 @@ class LLMStream(llm.LLMStream):
 
     def _try_run_function(self, choice: Choice) -> llm.ChatChunk | None:
         if not self._fnc_ctx:
-            logger.warning("oai stream tried to run function without function context")
+            logger.warning(
+                "oai stream tried to run function without function context")
             return None
 
         if self._tool_call_id is None:
@@ -413,7 +443,8 @@ class LLMStream(llm.LLMStream):
         return llm.ChatChunk(
             choices=[
                 llm.Choice(
-                    delta=llm.ChoiceDelta(role="assistant", tool_calls=[fnc_info]),
+                    delta=llm.ChoiceDelta(
+                        role="assistant", tool_calls=[fnc_info]),
                     index=choice.index,
                 )
             ]
@@ -423,4 +454,5 @@ class LLMStream(llm.LLMStream):
 def _build_oai_context(
     chat_ctx: llm.ChatContext, cache_key: Any
 ) -> list[ChatCompletionMessageParam]:
-    return [build_oai_message(msg, cache_key) for msg in chat_ctx.messages]  # type: ignore
+    # type: ignore
+    return [build_oai_message(msg, cache_key) for msg in chat_ctx.messages]
