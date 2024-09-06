@@ -72,14 +72,27 @@ class JobContext:
 
     @property
     def proc(self) -> JobProcess:
+        """The process that's running the job, useful for storing process-specific state"""
         return self._proc
 
     @property
     def job(self) -> agent.Job:
+        """The job that the worker is running currently"""
         return self._info.job
 
     @property
+    def room_name(self) -> str:
+        """The name of the room that the agent should connect to"""
+        return self.job.room.name
+
+    @property
     def room(self) -> rtc.Room:
+        """The Room object is the main interface that the worker should interact with.
+
+        Note: Before calling JobContext.connect(), the information inside the
+        Room object will not be available. The data is populated only after a
+        successful connection.
+        """
         return self._room
 
     @property
@@ -98,6 +111,13 @@ class JobContext:
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         rtc_config: rtc.RtcConfiguration | None = None,
     ) -> None:
+        """Connect to the room. This method should be called only once.
+
+        Args:
+            e2ee: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
+            auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
+            rtc_config: Custom RTC configuration to use when connecting to the room.
+        """
         room_options = rtc.RoomOptions(
             e2ee=e2ee,
             auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
