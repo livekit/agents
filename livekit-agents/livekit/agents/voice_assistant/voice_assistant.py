@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 import asyncio
 import contextvars
 import time
@@ -17,13 +18,15 @@ from .log import logger
 from .plotter import AssistantPlotter
 from .speech_handle import SpeechHandle
 
-WillSynthesizeAssistantReply = Callable[
+
+PreLLMGenerationCallback = Callable[
     ["VoiceAssistant", ChatContext],
     Union[Optional[LLMStream], Awaitable[Optional[LLMStream]]],
 ]
 
+WillSynthesizeAssistantReply = PreLLMGenerationCallback
 
-WillSynthesizeAssistantSpeech = Callable[
+PreTTSGenerationCallback = Callable[
     ["VoiceAssistant", Union[str, AsyncIterable[str]]],
     Union[str, AsyncIterable[str], Awaitable[str]],
 ]
@@ -73,13 +76,13 @@ class AssistantCallContext:
         return self._llm_stream
 
 
-def _default_will_synthesize_assistant_reply(
+def _default_llm_generation_cb(
     assistant: VoiceAssistant, chat_ctx: ChatContext
 ) -> LLMStream:
     return assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
 
 
-def _default_will_synthesize_assistant_speech(
+def _default_tts_generation_cb(
     assistant: VoiceAssistant, text: str | AsyncIterable[str]
 ) -> str | AsyncIterable[str]:
     return text
@@ -91,8 +94,8 @@ class _ImplOptions:
     int_speech_duration: float
     int_min_words: int
     preemptive_synthesis: bool
-    will_synthesize_assistant_reply: WillSynthesizeAssistantReply
-    will_synthesize_assistant_speech: WillSynthesizeAssistantSpeech
+    pre_llm_generation_cb: PreLLMGenerationCallback
+    pre_tts_generation_cb: PreTTSGenerationCallback
     plotting: bool
     transcription: AssistantTranscriptionOptions
 
@@ -137,10 +140,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         interrupt_min_words: int = 0,
         preemptive_synthesis: bool = True,
         transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
-        will_synthesize_assistant_reply: WillSynthesizeAssistantReply = _default_will_synthesize_assistant_reply,
-        will_synthesize_assistant_speech: WillSynthesizeAssistantSpeech = _default_will_synthesize_assistant_speech,
+        pre_llm_generation_cb: PreLLMGenerationCallback = _default_llm_generation_cb,
+        pre_tts_generation_cb: PreTTSGenerationCallback = _default_tts_generation_cb,
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
+        # backward compatibility
+        will_synthesize_assistant_reply: PreLLMGenerationCallback | None = None,
     ) -> None:
         """
         Create a new VoiceAssistant.
@@ -158,9 +163,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 Defaults to 0 as this may increase the latency depending on the STT.
             preemptive_synthesis: Whether to preemptively synthesize responses.
             transcription: Options for assistant transcription.
-            will_synthesize_assistant_reply: Callback called when the assistant is about to synthesize a reply.
+            pre_llm_generation_cb: Callback called when the assistant is about to synthesize a reply.
                 This can be used to customize the reply (e.g: inject context/RAG).
-            will_synthesize_assistant_speech: Callback called when the assistant is about to
+            pre_tts_generation_cb: Callback called when the assistant is about to
                 synthesize a speech. This can be used to customize text before the speech synthesis.
                 (e.g: editing the pronunciation of a word).
             plotting: Whether to enable plotting for debugging. matplotlib must be installed.
@@ -168,6 +173,15 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
+
+        if will_synthesize_assistant_reply is not None:
+            warnings.warn(
+                "will_synthesize_assistant_reply is deprecated and will be removed in 1.5.0, use on_generate_llm instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            on_generate_llm = will_synthesize_assistant_reply
+
         self._opts = _ImplOptions(
             plotting=plotting,
             allow_interruptions=allow_interruptions,
@@ -175,8 +189,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             int_min_words=interrupt_min_words,
             preemptive_synthesis=preemptive_synthesis,
             transcription=transcription,
-            will_synthesize_assistant_reply=will_synthesize_assistant_reply,
-            will_synthesize_assistant_speech=will_synthesize_assistant_speech,
+            pre_llm_generation_cb=pre_llm_generation_cb,
+            pre_tts_generation_cb=pre_tts_generation_cb,
         )
         self._plotter = AssistantPlotter(self._loop)
 
@@ -524,15 +538,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ChatMessage.create(text=handle.user_question, role="user")
         )
 
-        llm_stream = self._opts.will_synthesize_assistant_reply(self, copied_ctx)
+        llm_stream = self._opts.pre_llm_generation_cb(self, copied_ctx)
         if asyncio.iscoroutine(llm_stream):
             llm_stream = await llm_stream
 
         # fallback to default impl if no custom/user stream is returned
         if not isinstance(llm_stream, LLMStream):
-            llm_stream = _default_will_synthesize_assistant_reply(
-                self, chat_ctx=copied_ctx
-            )
+            llm_stream = _default_llm_generation_cb(self, chat_ctx=copied_ctx)
 
         synthesis_handle = self._synthesize_agent_speech(handle.id, llm_stream)
         handle.initialize(source=llm_stream, synthesis_handle=synthesis_handle)
@@ -731,7 +743,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if isinstance(source, LLMStream):
             source = _llm_stream_to_str_iterable(speech_id, source)
 
-        speech_source = self._opts.will_synthesize_assistant_speech(self, source)
+        speech_source = self._opts.pre_tts_generation_cb(self, source)
+        if speech_source is None:
+            logger.error("pre_tts_generation_cb must return str or AsyncIterable[str]")
 
         return self._agent_output.synthesize(
             speech_id=speech_id,
