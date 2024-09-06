@@ -37,7 +37,7 @@ from .exceptions import AssignmentTimeoutError
 from .job import (
     JobAcceptArguments,
     JobContext,
-    JobExecutor,
+    JobExecutorType,
     JobProcess,
     JobRequest,
     RunningJobInfo,
@@ -115,7 +115,7 @@ class WorkerOptions:
     """A function to perform any necessary initialization before the job starts."""
     load_fnc: Callable[[], float] = _DefaultLoadCalc.get_load
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
-    job_executor: JobExecutor = JobExecutor.PROCESS
+    job_executor_type: JobExecutorType = JobExecutorType.PROCESS
     """Which executor to use to run jobs. (currently thread or process are supported)"""
     load_threshold: float = 0.65
     """When the load exceeds this threshold, the worker will be marked as unavailable."""

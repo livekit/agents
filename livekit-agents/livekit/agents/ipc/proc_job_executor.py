@@ -69,7 +69,7 @@ class _ProcOpts:
     close_timeout: float
 
 
-class ProcJobRunner:
+class ProcJobExecutor:
     def __init__(
         self,
         *,

@@ -22,7 +22,7 @@ class _ProcOpts:
     close_timeout: float
 
 
-class ThreadJobRunner:
+class ThreadJobExecutor:
     def __init__(
         self,
         *,

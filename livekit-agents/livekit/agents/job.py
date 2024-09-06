@@ -27,7 +27,7 @@ from .log import logger
 
 
 @unique
-class JobExecutor(Enum):
+class JobExecutorType(Enum):
     PROCESS = "process"
     THREAD = "thread"
 

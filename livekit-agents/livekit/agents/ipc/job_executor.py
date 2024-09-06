@@ -5,7 +5,7 @@ from typing import Any, Protocol
 from ..job import RunningJobInfo
 
 
-class JobRunner(Protocol):
+class JobExecutor(Protocol):
     @property
     def started(self) -> bool: ...
 
