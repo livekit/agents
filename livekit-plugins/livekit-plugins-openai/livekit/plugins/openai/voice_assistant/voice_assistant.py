@@ -16,8 +16,8 @@ API_URL = "wss://api.openai.com/v1/realtime"
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 
-INPUT_PCM_FRAME_SIZE = 3000  # 125ms
-OUTPUT_PCM_FRAME_SIZE = 2400  # 100ms
+INPUT_PCM_FRAME_SIZE = 2400 # 100ms
+OUTPUT_PCM_FRAME_SIZE = 1200  # 50ms
 
 AssistantVoices = Literal["alloy", "shimmer", "echo"]
 
@@ -161,6 +161,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._subscribe_to_microphone()
 
+    @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         self._audio_source = rtc.AudioSource(SAMPLE_RATE, NUM_CHANNELS)
         track = rtc.LocalAudioTrack.create_audio_track(
@@ -197,7 +198,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             async for frame in self._input_audio_ch:
                 await ws_conn.send_json(
                     {
-                        "event": "audio_buffer_add",
+                        "event": "add_user_audio",
                         "data": base64.b64encode(frame.data).decode("utf-8"),
                     }
                 )
@@ -237,19 +238,21 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 event = data["event"]
                 if event == "start_session":
                     print(data)
-                elif event == "audio_buffer_add":
-                    print("received audio")
+                elif event == "add_content":
 
-                    if playout_ch is None:
-                        playout_ch = utils.aio.Chan[rtc.AudioFrame]()
-                        playout_atask = asyncio.create_task(_playout_task(playout_ch))
+                    type = data["type"]
+                    if type == "audio":
+                        print("received audio")
+                        if playout_ch is None:
+                            playout_ch = utils.aio.Chan[rtc.AudioFrame]()
+                            playout_atask = asyncio.create_task(_playout_task(playout_ch))
 
-                    audio_data = base64.b64decode(data["data"])
+                        audio_data = base64.b64decode(data["data"])
 
-                    frame = rtc.AudioFrame(
-                        audio_data, SAMPLE_RATE, NUM_CHANNELS, len(audio_data) // 2
-                    )
-                    playout_ch.send_nowait(frame)
+                        frame = rtc.AudioFrame(
+                            audio_data, SAMPLE_RATE, NUM_CHANNELS, len(audio_data) // 2
+                        )
+                        playout_ch.send_nowait(frame)
                 elif event == "tool_call":
                     pass
                 elif event == "turn_finished":
@@ -268,6 +271,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     pass
                 elif event == "error":
                     logger.error("OpenAI S2S error: %s", data["error"])
+                else:
+                    print(event)
 
         tasks = [
             asyncio.create_task(send_task()),
