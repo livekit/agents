@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-Add JobContext.room_name to more easily surface room info
+Make ctx.room.name available prior to connection

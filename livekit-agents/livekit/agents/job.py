@@ -81,17 +81,11 @@ class JobContext:
         return self._info.job
 
     @property
-    def room_name(self) -> str:
-        """The name of the room that the agent should connect to"""
-        return self.job.room.name
-
-    @property
     def room(self) -> rtc.Room:
         """The Room object is the main interface that the worker should interact with.
 
-        Note: Before calling JobContext.connect(), the information inside the
-        Room object will not be available. The data is populated only after a
-        successful connection.
+        When the entrypoint is called, the worker has not connected to the Room yet.
+        Certain properties of Room would not be available before calling JobContext.connect()
         """
         return self._room
 
