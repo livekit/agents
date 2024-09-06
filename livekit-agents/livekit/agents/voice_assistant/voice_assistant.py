@@ -515,6 +515,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 self, chat_ctx=copied_ctx
             )
 
+        if handle.interrupted:
+            return
+
         synthesis_handle = self._synthesize_agent_speech(handle.id, llm_stream)
         handle.initialize(source=llm_stream, synthesis_handle=synthesis_handle)
 
