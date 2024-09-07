@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import AsyncIterable
 
 from dotenv import load_dotenv
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm, utils
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm, tokenize
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import cartesia, deepgram, openai, silero
 
@@ -21,18 +21,16 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    async def _will_synthesize_assistant_speech(
-        assistant: VoiceAssistant, text: str | AsyncIterable[str]
-    ):
-        # Cartesia TTS is incorrectly pronouncing "LiveKit", so we'll replace it with a phonetic
+    def _before_tts_cb(assistant: VoiceAssistant, text: str | AsyncIterable[str]):
+        # The TTS is incorrectly pronouncing "LiveKit", so we'll replace it with a phonetic
         # spelling
-        return utils.replace_words(
-            text=text, replacements={"LiveKit": "<<L|ˈaɪ|ve>>Kit"}
+        return tokenize.utils.replace_words(
+            text=text, replacements={"livekit": r"<<l|aɪ|v|k|ɪ|t|>>"}
         )
 
     # also for this example, we also intensify the keyword "LiveKit" to make it more likely to be
     # recognized with the STT
-    deepgram_stt = deepgram.STT(keywords=[("LiveKit", 2.0)])
+    deepgram_stt = deepgram.STT(keywords=[("LiveKit", 3.5)])
 
     assistant = VoiceAssistant(
         vad=silero.VAD.load(),
@@ -40,11 +38,11 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(),
         tts=cartesia.TTS(),
         chat_ctx=initial_ctx,
-        will_synthesize_assistant_speech=_will_synthesize_assistant_speech,
+        before_tts_cb=_before_tts_cb,
     )
     assistant.start(ctx.room)
 
-    await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
+    await assistant.say("Hey, LiveKit is awesome!", allow_interruptions=True)
 
 
 if __name__ == "__main__":
