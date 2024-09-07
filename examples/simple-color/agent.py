@@ -1,11 +1,10 @@
 import asyncio
 import logging
-import os
-from dotenv import load_dotenv, dotenv_values
+import random
 
+from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli
-import random
 
 # Load environment variables
 load_dotenv()
