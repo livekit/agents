@@ -1,5 +1,5 @@
 import pytest
-from livekit.agents import tokenize, utils
+from livekit.agents import tokenize
 from livekit.agents.tokenize import basic
 from livekit.plugins import nltk
 
@@ -143,23 +143,31 @@ def test_hyphenate_word():
         assert hyphenated == HYPHENATOR_EXPECTED[i]
 
 
-REPLACE_TEXT = "This is a test. Hello world, I'm creating this agents..     framework"
+REPLACE_TEXT = (
+    "This is a test. Hello world, I'm creating this agents..     framework. Once again "
+    "framework.  A.B.C"
+)
 REPLACE_EXPECTED = (
-    "This is a test. Hello universe, I'm creating this agents..     library"
+    "This is a test. Hello universe, I'm creating this agents..     library. Twice again "
+    "library.  A.B.C.D"
 )
 
 REPLACE_REPLACEMENTS = {
     "world": "universe",
     "framework": "library",
+    "a.b.c": "A.B.C.D",
+    "once": "twice",
 }
 
 
 def test_replace_words():
-    replaced = utils.replace_words(text=REPLACE_TEXT, replacements=REPLACE_REPLACEMENTS)
+    replaced = tokenize.utils.replace_words(
+        text=REPLACE_TEXT, replacements=REPLACE_REPLACEMENTS
+    )
     assert replaced == REPLACE_EXPECTED
 
 
-async def text_replace_words_async():
+async def test_replace_words_async():
     pattern = [1, 2, 4]
     text = REPLACE_TEXT
     chunks = []
@@ -170,3 +178,17 @@ async def text_replace_words_async():
             break
         chunks.append(text[:chunk_size])
         text = text[chunk_size:]
+
+    async def _replace_words_async():
+        for chunk in chunks:
+            yield chunk
+
+    replaced_chunks = []
+
+    async for chunk in tokenize.utils.replace_words(
+        text=_replace_words_async(), replacements=REPLACE_REPLACEMENTS
+    ):
+        replaced_chunks.append(chunk)
+
+    replaced = "".join(replaced_chunks)
+    assert replaced == REPLACE_EXPECTED
