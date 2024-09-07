@@ -29,11 +29,11 @@ from openai.types.chat.chat_completion_chunk import Choice
 from .log import logger
 from .models import (
     ChatModels,
+    DeepSeekChatModels,
     GroqChatModels,
     OctoChatModels,
     PerplexityChatModels,
     TogetherChatModels,
-    DeepSeekChatModels,
 )
 from .utils import AsyncAzureADTokenProvider, build_oai_message
 
