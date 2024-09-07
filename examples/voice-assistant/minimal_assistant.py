@@ -27,6 +27,7 @@ async def entrypoint(ctx: JobContext):
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
     )
+
     assistant.start(ctx.room)
 
     # listen to incoming chat messages, only required if you'd like the agent to
