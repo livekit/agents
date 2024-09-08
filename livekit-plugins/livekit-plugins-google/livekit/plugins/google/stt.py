@@ -120,6 +120,7 @@ class STT(stt.STT):
             project_id = self._ensure_client().transport._credentials.project_id  # type: ignore
         except AttributeError:
             from google.auth import default as ga_default
+
             _, project_id = ga_default()
         return f"projects/{project_id}/locations/global/recognizers/_"
 
