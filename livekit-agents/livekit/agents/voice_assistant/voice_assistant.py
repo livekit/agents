@@ -745,7 +745,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if isinstance(source, LLMStream):
             source = _llm_stream_to_str_iterable(speech_id, source)
 
-        tts_source = source
+        tts_source: Union[AsyncIterable[str], str, Awaitable[str]] = source
         transcript_source = source
         if isinstance(tts_source, AsyncIterable):
             tts_source, transcript_source = utils.aio.itertools.tee(tts_source, 2)
