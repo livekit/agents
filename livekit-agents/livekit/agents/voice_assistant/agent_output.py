@@ -129,7 +129,7 @@ class AgentOutput:
         word_tokenizer: tokenize.WordTokenizer,
         hyphenate_word: Callable[[str], list[str]],
     ) -> SynthesisHandle:
-        def _will_forward_transcription(
+        def _before_forward(
             fwd: agent_transcription.TTSSegmentsForwarder,
             transcription: rtc.Transcription,
         ):
@@ -145,7 +145,7 @@ class AgentOutput:
             sentence_tokenizer=sentence_tokenizer,
             word_tokenizer=word_tokenizer,
             hyphenate_word=hyphenate_word,
-            will_forward_transcription=_will_forward_transcription,
+            before_forward_cb=_before_forward,
         )
 
         handle = SynthesisHandle(

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import time
-import warnings
 from dataclasses import dataclass
 from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, Union
 
@@ -174,10 +173,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._loop = loop or asyncio.get_event_loop()
 
         if will_synthesize_assistant_reply is not None:
-            warnings.warn(
+            logger.warning(
                 "will_synthesize_assistant_reply is deprecated and will be removed in 1.5.0, use before_llm_cb instead",
-                DeprecationWarning,
-                stacklevel=2,
             )
             before_llm_cb = will_synthesize_assistant_reply
 

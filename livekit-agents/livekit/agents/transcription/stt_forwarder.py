@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import warnings
 from typing import Awaitable, Callable, Optional, Union
 
 from livekit import rtc
@@ -48,10 +47,8 @@ class STTSegmentsForwarder:
             track = track.sid
 
         if will_forward_transcription is not None:
-            warnings.warn(
+            logger.warning(
                 "will_forward_transcription is deprecated and will be removed in 1.5.0, use before_forward_cb instead",
-                DeprecationWarning,
-                stacklevel=2,
             )
             before_forward_cb = will_forward_transcription
 
