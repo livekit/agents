@@ -105,12 +105,16 @@ class JobContext:
         fut = asyncio.Future[rtc.RemoteParticipant]()
 
         for p in self._room.remote_participants.values():
-            if identity is None or p.identity == identity:
+            if (
+                identity is None or p.identity == identity
+            ) and p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
                 fut.set_result(p)
                 break
 
         def _on_participant_connected(p: rtc.RemoteParticipant):
-            if identity is None or p.identity == identity:
+            if (
+                identity is None or p.identity == identity
+            ) and p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
                 self._room.off("participant_connected", _on_participant_connected)
                 if not fut.done():
                     fut.set_result(p)
