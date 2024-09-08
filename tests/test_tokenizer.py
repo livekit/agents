@@ -148,7 +148,7 @@ REPLACE_TEXT = (
     "framework.  A.B.C"
 )
 REPLACE_EXPECTED = (
-    "This is a test. Hello universe, I'm creating this agents..     library. Twice again "
+    "This is a test. Hello universe, I'm creating this assistants..     library. Twice again "
     "library.  A.B.C.D"
 )
 
@@ -157,6 +157,7 @@ REPLACE_REPLACEMENTS = {
     "framework": "library",
     "a.b.c": "A.B.C.D",
     "once": "twice",
+    "agents": "assistants",
 }
 
 
