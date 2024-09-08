@@ -231,7 +231,7 @@ async def _stream_synthesis_task(
 
             handle._buf_ch.send_nowait(audio.frame)
 
-        if handle._tr_fwd and not handle._tr_fwd.closed:
+        if handle._tr_fwd and not handle._tr_fwd.closed and not first_frame:
             # mark_audio_segment_end must be called *after* mart_text_segment_end
             handle._tr_fwd.mark_audio_segment_end()
 
