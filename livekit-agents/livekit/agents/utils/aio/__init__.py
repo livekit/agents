@@ -10,14 +10,12 @@ from .task_set import TaskSet
 
 async def gracefully_cancel(*futures: asyncio.Future):
     loop = asyncio.get_running_loop()
-
     waiters = []
 
     for fut in futures:
         waiter = loop.create_future()
-        waiter.add_done_callback(waiters.remove)
-        waiters.append(waiter)
         cb = functools.partial(_release_waiter, waiter)
+        waiters.append((waiter, cb))
         fut.add_done_callback(cb)
         fut.cancel()
 
@@ -25,8 +23,9 @@ async def gracefully_cancel(*futures: asyncio.Future):
         for waiter in waiters:
             await waiter
     finally:
-        for waiter in waiters:
-            waiter.remove_done_callback(_release_waiter)
+        for i, fut in enumerate(futures):
+            _, cb = waiters[i]
+            fut.remove_done_callback(cb)
 
 
 def _release_waiter(waiter, *args):
