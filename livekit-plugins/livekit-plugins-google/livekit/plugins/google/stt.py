@@ -112,7 +112,11 @@ class STT(stt.STT):
         # recognizers may improve latency https://cloud.google.com/speech-to-text/v2/docs/recognizers#understand_recognizers
 
         # TODO(theomonnom): find a better way to access the project_id
-        project_id = self._ensure_client().transport._credentials.project_id  # type: ignore
+        try:
+            project_id = self._ensure_client().transport._credentials.project_id  # type: ignore
+        except AttributeError:
+            from google.auth import default as ga_default
+            _, project_id = ga_default()
         return f"projects/{project_id}/locations/global/recognizers/_"
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
