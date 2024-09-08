@@ -58,7 +58,8 @@ def replace_words(
                     + text[end_index + offset - punctuation_off :]
                 )
                 offset += len(replacement) - len(word) + punctuation_off
-                processed_index = end_index + offset
+
+            processed_index = end_index + offset
 
         return text, processed_index
 
@@ -77,7 +78,7 @@ def replace_words(
                 if len(words) <= 1:
                     continue
 
-                buffer, procesed_index = _process_words(buffer, words)
+                buffer, procesed_index = _process_words(buffer, words[:-1])
                 yield buffer[:procesed_index]
                 buffer = buffer[procesed_index:]
 

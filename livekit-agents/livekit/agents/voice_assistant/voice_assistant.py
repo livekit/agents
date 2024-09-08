@@ -745,13 +745,19 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if isinstance(source, LLMStream):
             source = _llm_stream_to_str_iterable(speech_id, source)
 
-        speech_source = self._opts.before_tts_cb(self, source)
-        if speech_source is None:
-            logger.error("pre_tts_generation_cb must return str or AsyncIterable[str]")
+        tts_source = source
+        transcript_source = source
+        if isinstance(tts_source, AsyncIterable):
+            tts_source, transcript_source = utils.aio.itertools.tee(tts_source, 2)
+
+        tts_source = self._opts.before_tts_cb(self, tts_source)
+        if tts_source is None:
+            logger.error("before_tts_cb must return str or AsyncIterable[str]")
 
         return self._agent_output.synthesize(
             speech_id=speech_id,
-            transcript=speech_source,
+            tts_source=tts_source,
+            transcript_source=transcript_source,
             transcription=self._opts.transcription.agent_transcription,
             transcription_speed=self._opts.transcription.agent_transcription_speed,
             sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
