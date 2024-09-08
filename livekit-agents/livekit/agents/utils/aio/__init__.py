@@ -20,7 +20,7 @@ async def gracefully_cancel(*futures: asyncio.Future):
         fut.cancel()
 
     try:
-        for waiter in waiters:
+        for waiter, _ in waiters:
             await waiter
     finally:
         for i, fut in enumerate(futures):
