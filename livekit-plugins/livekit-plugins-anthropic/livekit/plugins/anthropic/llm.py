@@ -268,13 +268,15 @@ def _build_anthropic_context(
 ) -> List[anthropic.types.MessageParam]:
     result: List[anthropic.types.MessageParam] = []
     for msg in chat_ctx:
-        a_msg = _build_anthropic_message(msg, cache_key)
+        a_msg = _build_anthropic_message(msg, cache_key, chat_ctx)
         if a_msg:
             result.append(a_msg)
     return result
 
 
-def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
+def _build_anthropic_message(
+    msg: llm.ChatMessage, cache_key: Any, chat_ctx: List[llm.ChatMessage]
+) -> anthropic.types.MessageParam | None:
     if msg.role == "user" or msg.role == "assistant":
         a_msg: anthropic.types.MessageParam = {
             "role": msg.role,
@@ -319,11 +321,12 @@ def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
             return None
         if not msg.tool_call_id:
             return None
+
         u_content = anthropic.types.ToolResultBlockParam(
             tool_use_id=msg.tool_call_id,
             type="tool_result",
             content=msg.content,
-            is_error=False,
+            is_error=msg.tool_exception is not None,
         )
         return {
             "role": "user",
