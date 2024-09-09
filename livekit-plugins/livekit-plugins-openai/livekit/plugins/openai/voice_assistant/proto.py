@@ -54,7 +54,7 @@ class ClientMessage:
         turn_end_type: Literal["client_decision", "server_detection"]
         voice: Voices
         audio_format: Literal["pcm16", "g711-ulaw", "g711-alaw"]
-        tools: dict | None
+        tools: list| None
         tool_choice: Literal["auto", "none", "required"] | None
         temperature: float  # [0.6, 1.2]
         max_tokens: int  # [1, 4096]

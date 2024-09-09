@@ -9,6 +9,7 @@ from typing import Any, Literal, cast, Callable
 import aiohttp
 from livekit import rtc
 from livekit.agents import llm, utils, vad, tokenize, transcription, stt
+from livekit.agents.llm import _oai_api
 
 from ..log import logger
 from . import proto, agent_playout
@@ -93,10 +94,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._input_audio_ch = utils.aio.Chan[rtc.AudioFrame]()
 
         # audio output
-        self._audio_source = rtc.AudioSource(proto.SAMPLE_RATE, proto.NUM_CHANNELS)
-        self._agent_playout = agent_playout.AgentPlayout(
-            audio_source=self._audio_source
-        )
         self._playing_handle: agent_playout.PlayoutHandle | None = None
 
         self._linked_participant: rtc.RemoteParticipant | None = None
@@ -149,6 +146,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        self._audio_source = rtc.AudioSource(proto.SAMPLE_RATE, proto.NUM_CHANNELS)
+        self._agent_playout = agent_playout.AgentPlayout(
+            audio_source=self._audio_source
+        )
+
         track = rtc.LocalAudioTrack.create_audio_track(
             "assistant_voice", self._audio_source
         )
@@ -166,13 +168,20 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             logger.exception("failed to connect to OpenAI API S2S")
             return
 
+
+        fncs_desc = []
+        if self._fnc_ctx is not None:
+            for fnc in self._fnc_ctx.ai_functions.values():
+                fncs_desc.append(llm._oai_api.build_oai_function_description(fnc))
+
+
         initial_cfg: proto.ClientMessage.SetInferenceConfig = {
             "event": "set_inference_config",
             "system_message": self._system_message,
             "turn_end_type": "server_detection",
             "voice": self._opts.voice,
             "disable_audio": False,
-            "tools": None,
+            "tools": fncs_desc,
             "tool_choice": None,
             "audio_format": "pcm16",
             "temperature": self._opts.temperature,
