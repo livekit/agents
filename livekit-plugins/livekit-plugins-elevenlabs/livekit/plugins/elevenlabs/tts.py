@@ -86,6 +86,7 @@ class _TTSOptions:
     streaming_latency: int
     word_tokenizer: tokenize.WordTokenizer
     chunk_length_schedule: list[int]
+    enable_ssml_parsing: bool
 
 
 class TTS(tts.TTS):
@@ -101,6 +102,7 @@ class TTS(tts.TTS):
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False  # punctuation can help for intonation
         ),
+        enable_ssml_parsing: bool = False,
         chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -132,6 +134,7 @@ class TTS(tts.TTS):
             streaming_latency=streaming_latency,
             word_tokenizer=word_tokenizer,
             chunk_length_schedule=chunk_length_schedule,
+            enable_ssml_parsing=enable_ssml_parsing,
         )
         self._session = http_session
 
@@ -441,7 +444,9 @@ def _stream_url(opts: _TTSOptions) -> str:
     model_id = opts.model_id
     output_format = opts.encoding
     latency = opts.streaming_latency
+    enable_ssml = str(opts.enable_ssml_parsing).lower()
     return (
         f"{base_url}/text-to-speech/{voice_id}/stream-input?"
-        f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}"
+        f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}&"
+        f"enable_ssml_parsing={enable_ssml}"
     )

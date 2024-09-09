@@ -34,7 +34,14 @@ from livekit.protocol import agent, models
 
 from . import http_server, ipc, utils
 from .exceptions import AssignmentTimeoutError
-from .job import JobAcceptArguments, JobContext, JobProcess, JobRequest, RunningJobInfo
+from .job import (
+    JobAcceptArguments,
+    JobContext,
+    JobExecutorType,
+    JobProcess,
+    JobRequest,
+    RunningJobInfo,
+)
 from .log import DEV_LEVEL, logger
 from .version import __version__
 
@@ -108,6 +115,8 @@ class WorkerOptions:
     """A function to perform any necessary initialization before the job starts."""
     load_fnc: Callable[[], float] = _DefaultLoadCalc.get_load
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
+    job_executor_type: JobExecutorType = JobExecutorType.PROCESS
+    """Which executor to use to run jobs. (currently thread or process are supported)"""
     load_threshold: float = 0.65
     """When the load exceeds this threshold, the worker will be marked as unavailable."""
     num_idle_processes: int = 3
@@ -151,7 +160,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self, opts: WorkerOptions, *, loop: asyncio.AbstractEventLoop | None = None
     ) -> None:
         super().__init__()
-        opts.ws_url = opts.ws_url or opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
+        opts.ws_url = opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
         opts.api_key = opts.api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         opts.api_secret = opts.api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
 
@@ -188,6 +197,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             job_entrypoint_fnc=opts.entrypoint_fnc,
             num_idle_processes=opts.num_idle_processes,
             loop=self._loop,
+            job_executor_type=opts.job_executor_type,
             mp_ctx=mp_ctx,
             initialize_timeout=opts.initialize_process_timeout,
             close_timeout=opts.shutdown_process_timeout,

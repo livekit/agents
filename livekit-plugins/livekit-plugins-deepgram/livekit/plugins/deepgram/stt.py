@@ -55,7 +55,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        model: DeepgramModels = "nova-2-phonecall",
+        model: DeepgramModels = "nova-2-general",
         language: DeepgramLanguages = "en-US",
         detect_language: bool = False,
         interim_results: bool = True,
@@ -291,7 +291,7 @@ class SpeechStream(stt.SpeechStream):
                 if isinstance(data, self._FlushSentinel):
                     frames = audio_bstream.flush()
                 else:
-                    frames = audio_bstream.write(data.data)
+                    frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
                     await ws.send_bytes(frame.data.tobytes())

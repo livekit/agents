@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from enum import Enum
-from typing import Annotated, Optional
+from typing import Annotated, Callable, Optional
 
 import pytest
 from livekit.agents import llm
@@ -87,26 +88,37 @@ def test_hashable_typeinfo():
     hash(typeinfo)
 
 
-LLMS = [
+LLMS: list[llm.LLM | Callable[[], llm.LLM]] = [
     openai.LLM(),
+    lambda: openai.beta.AssistantLLM(
+        assistant_opts=openai.beta.AssistantOptions(
+            create_options=openai.beta.AssistantCreateOptions(
+                name=f"test-{uuid.uuid4()}",
+                instructions="You are a basic assistant",
+                model="gpt-4o",
+            )
+        )
+    ),
     # anthropic.LLM(),
 ]
 
 
-@pytest.mark.parametrize("llm", LLMS)
-async def test_chat(llm: llm.LLM):
+@pytest.mark.parametrize("input_llm", LLMS)
+async def test_chat(input_llm: llm.LLM | Callable[[], llm.LLM]):
+    if not isinstance(input_llm, llm.LLM):
+        input_llm = input_llm()
     chat_ctx = ChatContext().append(
         text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.'
     )
 
     # Anthropics LLM requires at least one message (system messages don't count)
-    if isinstance(llm, anthropic.LLM):
+    if isinstance(input_llm, anthropic.LLM):
         chat_ctx.append(
             text="Hello",
             role="user",
         )
 
-    stream = llm.chat(chat_ctx=chat_ctx)
+    stream = input_llm.chat(chat_ctx=chat_ctx)
     text = ""
     async for chunk in stream:
         content = chunk.choices[0].delta.content
@@ -116,12 +128,14 @@ async def test_chat(llm: llm.LLM):
     assert len(text) > 0
 
 
-@pytest.mark.parametrize("llm", LLMS)
-async def test_basic_fnc_calls(llm: llm.LLM):
+@pytest.mark.parametrize("input_llm", LLMS)
+async def test_basic_fnc_calls(input_llm: Callable[[], llm.LLM] | llm.LLM):
+    if not isinstance(input_llm, llm.LLM):
+        input_llm = input_llm()
     fnc_ctx = FncCtx()
 
     stream = await _request_fnc_call(
-        llm,
+        input_llm,
         "What's the weather in San Francisco and what's the weather Paris?",
         fnc_ctx,
     )
@@ -131,8 +145,10 @@ async def test_basic_fnc_calls(llm: llm.LLM):
     assert len(calls) == 2, "get_weather should be called twice"
 
 
-@pytest.mark.parametrize("llm", LLMS)
-async def test_runtime_addition(llm: llm.LLM):
+@pytest.mark.parametrize("input_llm", LLMS)
+async def test_runtime_addition(input_llm: Callable[[], llm.LLM] | llm.LLM):
+    if not isinstance(input_llm, llm.LLM):
+        input_llm = input_llm()
     fnc_ctx = FncCtx()
     called_msg = ""
 
@@ -144,7 +160,7 @@ async def test_runtime_addition(llm: llm.LLM):
         called_msg = message
 
     stream = await _request_fnc_call(
-        llm, "Can you show 'Hello LiveKit!' on the screen?", fnc_ctx
+        input_llm, "Can you show 'Hello LiveKit!' on the screen?", fnc_ctx
     )
     fns = stream.execute_functions()
     await asyncio.gather(*[f.task for f in fns])
@@ -153,15 +169,17 @@ async def test_runtime_addition(llm: llm.LLM):
     assert called_msg == "Hello LiveKit!", "send_message should be called"
 
 
-@pytest.mark.parametrize("llm", LLMS)
-async def test_cancelled_calls(llm: llm.LLM):
+@pytest.mark.parametrize("input_llm", LLMS)
+async def test_cancelled_calls(input_llm: Callable[[], llm.LLM] | llm.LLM):
+    if not isinstance(input_llm, llm.LLM):
+        input_llm = input_llm()
     fnc_ctx = FncCtx()
 
     stream = await _request_fnc_call(
-        llm, "Turn off the lights in the Theo's bedroom", fnc_ctx
+        input_llm, "Turn off the lights in the Theo's bedroom", fnc_ctx
     )
     calls = stream.execute_functions()
-    await asyncio.sleep(0)  # wait for the loop executor to start the task
+    await asyncio.sleep(0.2)  # wait for the loop executor to start the task
 
     # don't wait for gather_function_results and directly close (this should cancel the ongoing calls)
     await stream.aclose()
@@ -172,12 +190,14 @@ async def test_cancelled_calls(llm: llm.LLM):
     ), "toggle_light should have been cancelled"
 
 
-@pytest.mark.parametrize("llm", LLMS)
-async def test_calls_arrays(llm: llm.LLM):
+@pytest.mark.parametrize("input_llm", LLMS)
+async def test_calls_arrays(input_llm: Callable[[], llm.LLM] | llm.LLM):
+    if not isinstance(input_llm, llm.LLM):
+        input_llm = input_llm()
     fnc_ctx = FncCtx()
 
     stream = await _request_fnc_call(
-        llm,
+        input_llm,
         "Can you select all currencies in Europe at once?",
         fnc_ctx,
         temperature=0.2,
@@ -196,11 +216,13 @@ async def test_calls_arrays(llm: llm.LLM):
     ), "select_currencies should have eur, gbp, sek"
 
 
-@pytest.mark.parametrize("llm", LLMS)
-async def test_calls_choices(llm: llm.LLM):
+@pytest.mark.parametrize("input_llm", LLMS)
+async def test_calls_choices(input_llm: Callable[[], llm.LLM] | llm.LLM):
+    if not isinstance(input_llm, llm.LLM):
+        input_llm = input_llm()
     fnc_ctx = FncCtx()
 
-    stream = await _request_fnc_call(llm, "Set the volume to 30", fnc_ctx)
+    stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
     calls = stream.execute_functions()
     await asyncio.gather(*[f.task for f in calls])
     await stream.aclose()
@@ -212,12 +234,14 @@ async def test_calls_choices(llm: llm.LLM):
     assert volume == 30, "change_volume should have been called with volume 30"
 
 
-@pytest.mark.parametrize("llm", LLMS)
-async def test_optional_args(llm: llm.LLM):
+@pytest.mark.parametrize("input_llm", LLMS)
+async def test_optional_args(input_llm: Callable[[], llm.LLM] | llm.LLM):
+    if not isinstance(input_llm, llm.LLM):
+        input_llm = input_llm()
     fnc_ctx = FncCtx()
 
     stream = await _request_fnc_call(
-        llm, "Can you update my information? My name is Theo", fnc_ctx
+        input_llm, "Can you update my information? My name is Theo", fnc_ctx
     )
 
     calls = stream.execute_functions()

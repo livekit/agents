@@ -1,16 +1,16 @@
-# Voice Assistant Example
+# Voice Assistant Examples
 
-This example shows a few usages of the VoiceAssistant class:
+We have a few examples that shows the various ways of using using the VoiceAssistant class:
 
 - `minimal_assistant.py`: a basic conversational assistant
 - `function_calling_weather.py`: a weather assistant that calls an API endpoint to retrieve the weather
+- `custom_pronunciation.py`: using the `before_tts_cb` hook to customize how TTS pronounces words
 - `simple_rag`: a simple RAG assistant that answers questions by querying a embeddings index
 
-The assistants use:
+The demo assistants use:
 
 - Deepgram for Speech-to-text
-- OpenAI for LLM
-- OpenAI for Text-to-Speech
+- OpenAI for LLM and Text-to-speech
 
 ## Run
 

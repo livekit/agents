@@ -193,6 +193,7 @@ async def test_proc_pool():
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
         num_idle_processes=num_idle_processes,
+        job_executor_type=job.JobExecutorType.PROCESS,
         initialize_timeout=20.0,
         close_timeout=20.0,
         mp_ctx=mp_ctx,
@@ -209,21 +210,21 @@ async def test_proc_pool():
     exitcodes = []
 
     @pool.on("process_created")
-    def _process_created(proc: ipc.proc_pool.SupervisedProc):
+    def _process_created(proc: ipc.proc_job_executor.ProcJobExecutor):
         created_q.put_nowait(None)
         proc.start_arguments = start_args
 
     @pool.on("process_started")
-    def _process_started(proc: ipc.proc_pool.SupervisedProc):
+    def _process_started(proc: ipc.proc_job_executor.ProcJobExecutor):
         start_q.put_nowait(None)
         pids.append(proc.pid)
 
     @pool.on("process_ready")
-    def _process_ready(proc: ipc.proc_pool.SupervisedProc):
+    def _process_ready(proc: ipc.proc_job_executor.ProcJobExecutor):
         ready_q.put_nowait(None)
 
     @pool.on("process_closed")
-    def _process_closed(proc: ipc.proc_pool.SupervisedProc):
+    def _process_closed(proc: ipc.proc_job_executor.ProcJobExecutor):
         close_q.put_nowait(None)
         exitcodes.append(proc.exitcode)
 
@@ -265,6 +266,7 @@ async def test_slow_initialization():
     loop = asyncio.get_running_loop()
     num_idle_processes = 2
     pool = ipc.proc_pool.ProcPool(
+        job_executor_type=job.JobExecutorType.PROCESS,
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
         num_idle_processes=num_idle_processes,
@@ -283,12 +285,12 @@ async def test_slow_initialization():
     exitcodes = []
 
     @pool.on("process_created")
-    def _process_created(proc: ipc.proc_pool.SupervisedProc):
+    def _process_created(proc: ipc.proc_job_executor.ProcJobExecutor):
         proc.start_arguments = start_args
         start_q.put_nowait(None)
 
     @pool.on("process_closed")
-    def _process_closed(proc: ipc.proc_pool.SupervisedProc):
+    def _process_closed(proc: ipc.proc_job_executor.ProcJobExecutor):
         close_q.put_nowait(None)
         pids.append(proc.pid)
         exitcodes.append(proc.exitcode)
@@ -314,10 +316,10 @@ def _create_proc(
     close_timeout: float,
     mp_ctx: BaseContext,
     initialize_timeout: float = 20.0,
-) -> (ipc.supervised_proc.SupervisedProc, _StartArgs):
+) -> tuple[ipc.proc_job_executor.ProcJobExecutor, _StartArgs]:
     start_args = _new_start_args(mp_ctx)
     loop = asyncio.get_running_loop()
-    proc = ipc.supervised_proc.SupervisedProc(
+    proc = ipc.proc_job_executor.ProcJobExecutor(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
         initialize_timeout=initialize_timeout,

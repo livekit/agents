@@ -3,7 +3,6 @@ from typing import Annotated
 
 import aiohttp
 from dotenv import load_dotenv
-from livekit import rtc
 from livekit.agents import (
     AutoSubscribe,
     JobContext,
@@ -41,7 +40,7 @@ class AssistantFnc(llm.FunctionContext):
                 if response.status == 200:
                     weather_data = await response.text()
                     # response from the function call is returned to the LLM
-                    return f"The weather in {weather_data}."
+                    return f"The weather in {location} is {weather_data}."
                 else:
                     raise f"Failed to get weather data, status code: {response.status}"
 
@@ -51,7 +50,8 @@ def prewarm_process(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
-async def handle_participant(ctx: JobContext, participant: rtc.RemoteParticipant):
+async def entrypoint(ctx: JobContext):
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     fnc_ctx = AssistantFnc()  # create our fnc ctx instance
     initial_chat_ctx = llm.ChatContext().append(
         text=(
@@ -60,6 +60,7 @@ async def handle_participant(ctx: JobContext, participant: rtc.RemoteParticipant
         ),
         role="system",
     )
+    participant = await ctx.wait_for_participant()
     assistant = VoiceAssistant(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
@@ -68,17 +69,11 @@ async def handle_participant(ctx: JobContext, participant: rtc.RemoteParticipant
         fnc_ctx=fnc_ctx,
         chat_ctx=initial_chat_ctx,
     )
-    # Start the assistant. This will automatically publish a microphone track and listen to the first participant
-    # it finds in the current room. If you need to specify a particular participant, use the participant parameter.
-    assistant.start(ctx.room, participant=participant)
+    # Start the assistant. This will automatically publish a microphone track and listen to the participant.
+    assistant.start(ctx.room, participant)
     await assistant.say(
-        "Hello from the weather station. I can tell you about the whether wherever you are."
+        "Hello from the weather station. Would you like to know the weather? If so, tell me your location."
     )
-
-
-async def entrypoint(ctx: JobContext):
-    ctx.add_participant_entrypoint(handle_participant)
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
 
 if __name__ == "__main__":
