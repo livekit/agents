@@ -4,15 +4,14 @@ import asyncio
 import base64
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, cast, Callable
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import llm, utils, vad
-from livekit.agents.llm import _oai_api
+from livekit.agents import llm, utils, vad, tokenize, transcription, stt
 
 from ..log import logger
-from . import proto
+from . import proto, agent_playout
 
 
 EventTypes = Literal[
@@ -29,6 +28,29 @@ class _ImplOptions:
     api_key: str
     max_tokens: int
     temperature: float
+    transcription: AssistantTranscriptionOptions
+
+
+@dataclass(frozen=True)
+class AssistantTranscriptionOptions:
+    user_transcription: bool = True
+    """Whether to forward the user transcription to the client"""
+    agent_transcription: bool = True
+    """Whether to forward the agent transcription to the client"""
+    agent_transcription_speed: float = 1.0
+    """The speed at which the agent's speech transcription is forwarded to the client.
+    We try to mimic the agent's speech speed by adjusting the transcription speed."""
+    sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
+    """The tokenizer used to split the speech into sentences.
+    This is used to decide when to mark a transcript as final for the agent transcription."""
+    word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
+        ignore_punctuation=False
+    )
+    """The tokenizer used to split the speech into words.
+    This is used to simulate the "interim results" of the agent transcription."""
+    hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
+    """A function that takes a string (word) as input and returns a list of strings,
+    representing the hyphenated parts of the word."""
 
 
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
@@ -40,6 +62,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         vad: vad.VAD | None = None,
         max_tokens: int = 2048,
         temperature: float = 0.8,
+        transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
         api_key: str | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -57,15 +80,24 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             api_key=api_key,
             max_tokens=max_tokens,
             temperature=temperature,
+            transcription=transcription,
         )
         self._system_message = system_message
 
         self._vad = vad
         self._fnc_ctx = fnc_ctx
 
-        self._read_micro_task: asyncio.Task | None = None
+        # audio input
+        self._read_micro_atask: asyncio.Task | None = None
         self._subscribed_track: rtc.RemoteAudioTrack | None = None
         self._input_audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+
+        # audio output
+        self._audio_source = rtc.AudioSource(proto.SAMPLE_RATE, proto.NUM_CHANNELS)
+        self._agent_playout = agent_playout.AgentPlayout(
+            audio_source=self._audio_source
+        )
+        self._playing_handle: agent_playout.PlayoutHandle | None = None
 
         self._linked_participant: rtc.RemoteParticipant | None = None
         self._started, self._closed = False, False
@@ -115,10 +147,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._main_atask = asyncio.create_task(self._main_task())
 
-
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        self._audio_source = rtc.AudioSource(proto.SAMPLE_RATE, proto.NUM_CHANNELS)
         track = rtc.LocalAudioTrack.create_audio_track(
             "assistant_voice", self._audio_source
         )
@@ -142,8 +172,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             "turn_end_type": "server_detection",
             "voice": self._opts.voice,
             "disable_audio": False,
-            "tools": {},
-            "tool_choice": "auto",
+            "tools": None,
+            "tool_choice": None,
             "audio_format": "pcm16",
             "temperature": self._opts.temperature,
             "max_tokens": self._opts.max_tokens,
@@ -178,7 +208,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     continue
 
                 try:
-                    self._handle_server_message(msg.json())
+                    await self._handle_server_message(ws_conn, msg.json())
                 except Exception:
                     logger.exception(
                         "failed to handle OpenAI S2S message", extra={"msg": msg}
@@ -194,61 +224,101 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
+    async def _handle_server_message(
+        self, ws_conn: aiohttp.ClientWebSocketResponse, data: dict[Any, Any]
+    ) -> None:
+        event: proto.ServerResponse = data["event"]
 
-    @utils.log_exceptions(logger=logger)
-    async def _playout_task(self, playout_ch: utils.aio.Chan[rtc.AudioFrame]):
-        bstream = utils.audio.AudioByteStream(
-            proto.SAMPLE_RATE,
-            proto.NUM_CHANNELS,
-            samples_per_channel=proto.OUT_FRAME_SIZE,
-        )
-
-        async for frame in playout_ch:
-            for f in bstream.write(frame.data.tobytes()):
-                await self._audio_source.capture_frame(f)
-
-        for f in bstream.flush():
-            await self._audio_source.capture_frame(f)
-
-    def _handle_server_message(self, data: dict) -> None:
-        event = data["event"]
+        event_copy = data.copy()
+        event_copy.pop("data", None)
+        print(event_copy)
         if event == "start_session":
-            print(data)
+            session_data = cast(proto.ServerMessage.StartSession, data)
+            logger.info(
+                "OpenAI S2S session started",
+                extra={
+                    "session_id": session_data["session_id"],
+                    "model": session_data["model"],
+                    "system_fingerprint": session_data["system_fingerprint"],
+                },
+            )
         elif event == "add_content":
-            type = data["type"]
-            if type == "audio":
-                if playout_ch is None:
-                    playout_ch = utils.aio.Chan[rtc.AudioFrame]()
-                    playout_atask = asyncio.create_task(_playout_task(playout_ch))
+            add_content_data = cast(proto.ServerMessage.AddContent, data)
 
-                audio_data = base64.b64decode(data["data"])
-
-                frame = rtc.AudioFrame(
-                    audio_data,
-                    proto.SAMPLE_RATE,
-                    proto.NUM_CHANNELS,
-                    len(audio_data) // 2,
+            if self._playing_handle is None or self._playing_handle.done():
+                tr_fwd = transcription.TTSSegmentsForwarder(
+                    room=self._room,
+                    participant=self._room.local_participant,
+                    speed=self._opts.transcription.agent_transcription_speed,
+                    sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
+                    word_tokenizer=self._opts.transcription.word_tokenizer,
+                    hyphenate_word=self._opts.transcription.hyphenate_word,
                 )
-                playout_ch.send_nowait(frame)
-            else:
-                print(data)
+
+                self._playing_handle = self._agent_playout.play(
+                    message_id=add_content_data["item_id"],
+                    transcription_fwd=tr_fwd,
+                )
+
+            if add_content_data["type"] == "audio":
+                self._playing_handle.push_audio(
+                    base64.b64decode(add_content_data["data"])
+                )
+            elif add_content_data["type"] == "text":
+                self._playing_handle.push_text(add_content_data["data"])
+
         elif event == "turn_finished":
-            print("turn_finished")
-            if playout_ch is not None:
-                playout_ch.close()
-                playout_ch = None
+            turn_finished_data = cast(proto.ServerMessage.TurnFinished, data)
+            if turn_finished_data["reason"] not in ("interrupt", "stop"):
+                logger.warning(
+                    "assistant turn finished unexpectedly",
+                    extra={"reason": turn_finished_data["reason"]},
+                )
+
+            if (
+                self._playing_handle is not None
+                and not self._playing_handle.interrupted
+            ):
+                self._playing_handle.end_input()
 
         elif event == "model_listening":
-            print("cancelling")
-            if playout_atask is not None:
-                playout_atask.cancel()
-                playout_ch = None
+            if self._playing_handle is not None and not self._playing_handle.done():
+                self._playing_handle.interrupt()
+                truncate_data: proto.ClientMessage.TruncateContent = {
+                    "event": "truncate_content",
+                    "message_id": self._playing_handle.message_id,
+                    "index": 0,  # ignored for now (see OAI docs)
+                    "text_chars": self._playing_handle.text_chars,
+                    "audio_samples": self._playing_handle.audio_samples,
+                }
+                logger.debug(
+                    "truncating content",
+                    extra={
+                        "audio_samples": truncate_data["audio_samples"],
+                        "text_chars": truncate_data["text_chars"],
+                    },
+                )
+                await ws_conn.send_json(truncate_data)
 
         elif event == "error":
             logger.error("OpenAI S2S error: %s", data["error"])
+        elif event == "vad_speech_started":
+            self.emit("user_started_speaking")
+        elif event == "vad_speech_stopped":
+            self.emit("user_stopped_speaking")
+        elif event == "input_transcribed":
+            transcript_data = cast(proto.ServerMessage.InputTranscribed, data)
+            transcript = transcript_data["transcript"]
+
+            self._stt_forwarder.update(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language="en", text=transcript)],
+                )
+            )
+
         else:
             print(data)
-
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if self._linked_participant is None:
@@ -297,10 +367,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 and publication.track != self._subscribed_track
             ):
                 self._subscribed_track = publication.track  # type: ignore
-                if self._read_micro_task is not None:
-                    self._read_micro_task.cancel()
+                self._stt_forwarder = transcription.STTSegmentsForwarder(
+                    room=self._room,
+                    participant=self._linked_participant,
+                    track=self._subscribed_track,
+                )
 
-                self._read_micro_task = asyncio.create_task(
+
+                if self._read_micro_atask is not None:
+                    self._read_micro_atask.cancel()
+
+                self._read_micro_atask = asyncio.create_task(
                     _read_audio_stream_task(
                         rtc.AudioStream(
                             self._subscribed_track,  # type: ignore
@@ -310,7 +387,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     )
                 )
                 break
-
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._http_session:

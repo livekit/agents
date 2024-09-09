@@ -40,6 +40,7 @@ ServerResponse = Literal[
     "vad_speech_started",
     "vad_speech_stopped",
     "input_transcribed",
+    "model_listening",
 ]
 
 
@@ -53,8 +54,8 @@ class ClientMessage:
         turn_end_type: Literal["client_decision", "server_detection"]
         voice: Voices
         audio_format: Literal["pcm16", "g711-ulaw", "g711-alaw"]
-        tools: dict
-        tool_choice: Literal["auto", "none", "required"]
+        tools: dict | None
+        tool_choice: Literal["auto", "none", "required"] | None
         temperature: float  # [0.6, 1.2]
         max_tokens: int  # [1, 4096]
         disable_audio: bool
@@ -176,3 +177,6 @@ class ServerMessage:
         type: Literal["input_transcribed"]
         item_id: str
         transcript: str
+
+    class ModelListening(TypedDict):
+        event: Literal["model_listening"]
