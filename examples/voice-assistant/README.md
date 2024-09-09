@@ -9,7 +9,7 @@ We have a few examples that shows the various ways of using using the VoiceAssis
 
 The demo assistants use:
 
-- DeepGram for Speech-to-text
+- Deepgram for Speech-to-text
 - OpenAI for LLM and Text-to-speech
 
 ## Run
