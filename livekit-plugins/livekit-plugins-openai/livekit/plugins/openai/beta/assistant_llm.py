@@ -108,7 +108,7 @@ class AssistantLLM(llm.LLM):
             self._sync_openai_task = asyncio.create_task(self._sync_openai())
         except Exception:
             logger.error(
-                "failed to create sync openai task. This can happen when instantiating without a running asyncio event loop (such has when running tests) will try lazily later"
+                "failed to create sync openai task. This can happen when instantiating without a running asyncio event loop (such has when running tests)"
             )
         self._done_futures = list[asyncio.Future[None]]()
 
