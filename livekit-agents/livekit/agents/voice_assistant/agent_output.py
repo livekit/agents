@@ -256,11 +256,13 @@ async def _stream_synthesis_task(
 
     @utils.log_exceptions(logger=logger)
     async def _read_transcript_task():
+        first_transcript = True
         async for seg in transcript_source:
             if not handle._tr_fwd.closed:
+                first_transcript = False
                 handle._tr_fwd.push_text(seg)
 
-        if not handle.tts_forwarder.closed:
+        if not handle.tts_forwarder.closed and not first_transcript:
             handle.tts_forwarder.mark_text_segment_end()
 
     # otherwise, stream the text to the TTS
