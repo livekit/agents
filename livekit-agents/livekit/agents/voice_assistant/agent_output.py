@@ -251,18 +251,16 @@ async def _stream_synthesis_task(
 
             handle._buf_ch.send_nowait(audio.frame)
 
-        if handle._tr_fwd and not handle._tr_fwd.closed and not first_frame:
+        if handle._tr_fwd and not handle._tr_fwd.closed: 
             handle._tr_fwd.mark_audio_segment_end()
 
     @utils.log_exceptions(logger=logger)
     async def _read_transcript_task():
-        first_transcript = True
         async for seg in transcript_source:
             if not handle._tr_fwd.closed:
-                first_transcript = False
                 handle._tr_fwd.push_text(seg)
 
-        if not handle.tts_forwarder.closed and not first_transcript:
+        if not handle.tts_forwarder.closed:
             handle.tts_forwarder.mark_text_segment_end()
 
     # otherwise, stream the text to the TTS
