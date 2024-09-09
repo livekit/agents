@@ -1,5 +1,15 @@
 # livekit-plugins-google
 
+## 0.7.0
+
+### Minor Changes
+
+- Enable use of Google STT with Application Default Credentials. - [#721](https://github.com/livekit/agents/pull/721) ([@rsinnet](https://github.com/rsinnet))
+
+### Patch Changes
+
+- google-tts: ignore wav header - [#703](https://github.com/livekit/agents/pull/703) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.3
 
 ### Patch Changes
