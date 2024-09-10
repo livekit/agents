@@ -41,6 +41,7 @@ class _TTSOptions:
     encoding: TTSEncoding
     sample_rate: int
     voice: str | list[float]
+    voice_controls: dict[str, any] | None
     api_key: str
     language: str
 
@@ -53,15 +54,25 @@ class TTS(tts.TTS):
         language: str = "en",
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
+        voice_controls: dict[str, any] | None = None,
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
         Create a new instance of Cartesia TTS.
+        
+        See https://docs.cartesia.ai/reference/web-socket/stream-speech/stream-speech for more details on the the Cartesia API.
 
-        ``api_key`` must be set to your Cartesia API key, either using the argument or by setting
-        the ``CARTESIA_API_KEY`` environmental variable.
+        Args:
+            model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-english".
+            language (str, optional): The language code for synthesis. Defaults to "en".
+            encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
+            voice (str | list[float], optional): The voice ID or embedding array.
+            voice_controls (dict[str, any] | None, optional): Experimental voice control parameters. See https://docs.cartesia.ai/user-guides/voice-control for more details.
+            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
+            api_key (str | None, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
+            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
         """
 
         super().__init__(
@@ -80,6 +91,7 @@ class TTS(tts.TTS):
             encoding=encoding,
             sample_rate=sample_rate,
             voice=voice,
+            voice_controls=voice_controls,
             api_key=api_key,
         )
         self._session = http_session
@@ -274,6 +286,9 @@ def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
     else:
         voice["mode"] = "embedding"
         voice["embedding"] = opts.voice
+        
+    if opts.voice_controls:
+        voice["__experimental_controls"] = opts.voice_controls
 
     return {
         "model_id": opts.model,
