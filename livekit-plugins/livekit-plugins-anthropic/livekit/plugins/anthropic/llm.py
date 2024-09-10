@@ -43,7 +43,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "claude-3-opus-20240229",
+        model: str | ChatModels = "claude-3-haiku-20240307",
         api_key: str | None = None,
         base_url: str | None = None,
         user: str | None = None,
@@ -144,6 +144,9 @@ class LLMStream(llm.LLMStream):
         if not self._anthropic_stream:
             self._anthropic_stream = await self._awaitable_anthropic_stream
 
+        fn_calling_enabled = self._fnc_ctx is not None
+        ignore = False
+
         async for event in self._anthropic_stream:
             if event.type == "message_start":
                 pass
@@ -159,18 +162,34 @@ class LLMStream(llm.LLMStream):
             elif event.type == "content_block_delta":
                 delta = event.delta
                 if delta.type == "text_delta":
+                    text = delta.text
+
+                    # Anthropic seems to add a prompt when tool calling is enabled
+                    # where responses always start with a "<thinking>" block containing
+                    # the LLM's chain of thought. It's very verbose and not useful for voice
+                    # applications.
+                    if fn_calling_enabled:
+                        if text.startswith("<thinking>"):
+                            ignore = True
+
+                        if "</thinking>" in text:
+                            text = text.split("</thinking>")[-1]
+                            ignore = False
+
+                    if ignore:
+                        continue
+
                     return llm.ChatChunk(
                         choices=[
                             llm.Choice(
-                                delta=llm.ChoiceDelta(
-                                    content=delta.text, role="assistant"
-                                )
+                                delta=llm.ChoiceDelta(content=text, role="assistant")
                             )
                         ]
                     )
                 elif delta.type == "input_json_delta":
                     assert self._fnc_raw_arguments is not None
                     self._fnc_raw_arguments += delta.partial_json
+
             elif event.type == "content_block_stop":
                 if self._tool_call_id is not None and self._fnc_ctx:
                     assert self._fnc_name is not None
@@ -249,13 +268,15 @@ def _build_anthropic_context(
 ) -> List[anthropic.types.MessageParam]:
     result: List[anthropic.types.MessageParam] = []
     for msg in chat_ctx:
-        a_msg = _build_anthropic_message(msg, cache_key)
+        a_msg = _build_anthropic_message(msg, cache_key, chat_ctx)
         if a_msg:
             result.append(a_msg)
     return result
 
 
-def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
+def _build_anthropic_message(
+    msg: llm.ChatMessage, cache_key: Any, chat_ctx: List[llm.ChatMessage]
+) -> anthropic.types.MessageParam | None:
     if msg.role == "user" or msg.role == "assistant":
         a_msg: anthropic.types.MessageParam = {
             "role": msg.role,
@@ -282,38 +303,35 @@ def _build_anthropic_message(msg: llm.ChatMessage, cache_key: Any):
                     a_content.append(content)
                 elif isinstance(cnt, llm.ChatImage):
                     a_content.append(_build_anthropic_image_content(cnt, cache_key))
-        return a_msg
-    elif msg.role == "tool":
-        ant_msg: anthropic.types.MessageParam = {
-            "role": "assistant",
-            "content": [],
-        }
-        assert isinstance(ant_msg["content"], list)
-        # make sure to provide when function has been called inside the context
-        # (+ raw_arguments)
+
         if msg.tool_calls is not None:
             for fnc in msg.tool_calls:
-                ant_msg["content"].append(
-                    {
-                        "id": fnc.tool_call_id,
-                        "type": "tool_use",
-                        "input": fnc.arguments,
-                        "name": fnc.function_info.name,
-                    }
+                tool_use = anthropic.types.ToolUseBlockParam(
+                    id=fnc.tool_call_id,
+                    type="tool_use",
+                    name=fnc.function_info.name,
+                    input=fnc.arguments,
                 )
-                if isinstance(msg.content, str):
-                    ant_msg["content"].append(
-                        {
-                            "tool_use_id": fnc.tool_call_id,
-                            "type": "tool_result",
-                            "content": msg.content,
-                        }
-                    )
-                else:
-                    logger.warning(
-                        "tool result content is not a string, this is not supported by anthropic"
-                    )
-        return ant_msg
+                a_content.append(tool_use)
+
+        return a_msg
+    elif msg.role == "tool":
+        if not isinstance(msg.content, str):
+            logger.warning("tool message content is not a string")
+            return None
+        if not msg.tool_call_id:
+            return None
+
+        u_content = anthropic.types.ToolResultBlockParam(
+            tool_use_id=msg.tool_call_id,
+            type="tool_result",
+            content=msg.content,
+            is_error=msg.tool_exception is not None,
+        )
+        return {
+            "role": "user",
+            "content": [u_content],
+        }
 
     return None
 

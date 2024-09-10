@@ -28,7 +28,9 @@ from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
 from .models import (
+    CerebrasChatModels,
     ChatModels,
+    DeepSeekChatModels,
     GroqChatModels,
     OctoChatModels,
     PerplexityChatModels,
@@ -121,6 +123,31 @@ class LLM(llm.LLM):
         return LLM(model=model, client=azure_client, user=user)
 
     @staticmethod
+    def with_cerebras(
+        *,
+        model: str | CerebrasChatModels = "llama3.1-8b",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.cerebras.ai/v1",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of Cerebras LLM.
+
+        ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
+        the ``CEREBRAS_API_KEY`` environmental variable.
+        """
+
+        # shim for not using OPENAI_API_KEY
+        api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
+        if api_key is None:
+            raise ValueError("Cerebras API key is required")
+
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
+
+    @staticmethod
     def with_fireworks(
         *,
         model: str = "accounts/fireworks/models/llama-v3p1-70b-instruct",
@@ -165,6 +192,31 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("GROQ_API_KEY")
         if api_key is None:
             raise ValueError("Groq API key is required")
+
+        return LLM(
+            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+        )
+
+    @staticmethod
+    def with_deepseek(
+        *,
+        model: str | DeepSeekChatModels = "deepseek-chat",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.deepseek.com/v1",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of DeepSeek LLM.
+
+        ``api_key`` must be set to your DeepSeek API key, either using the argument or by setting
+        the ``DEEPSEEK_API_KEY`` environmental variable.
+        """
+
+        # shim for not using OPENAI_API_KEY
+        api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
+        if api_key is None:
+            raise ValueError("DeepSeek API key is required")
 
         return LLM(
             model=model, api_key=api_key, base_url=base_url, client=client, user=user

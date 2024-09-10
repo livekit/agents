@@ -17,13 +17,19 @@ from __future__ import annotations
 import asyncio
 import multiprocessing as mp
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, unique
 from typing import Any, Callable, Coroutine, Tuple
 
 from livekit import rtc
 from livekit.protocol import agent, models
 
 from .log import logger
+
+
+@unique
+class JobExecutorType(Enum):
+    PROCESS = "process"
+    THREAD = "thread"
 
 
 class AutoSubscribe(str, Enum):
@@ -68,18 +74,25 @@ class JobContext:
             Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]]
         ] = []
         self._participant_tasks = dict[Tuple[str, Callable], asyncio.Task[None]]()
-        self._room.on("participant_connected", self._on_participant_connected)
+        self._room.on("participant_connected", self._participant_available)
 
     @property
     def proc(self) -> JobProcess:
+        """Returns the process running the job. Useful for storing process-specific state."""
         return self._proc
 
     @property
     def job(self) -> agent.Job:
+        """Returns the current job that the worker is executing."""
         return self._info.job
 
     @property
     def room(self) -> rtc.Room:
+        """The Room object is the main interface that the worker should interact with.
+
+        When the entrypoint is called, the worker has not connected to the Room yet.
+        Certain properties of Room would not be available before calling JobContext.connect()
+        """
         return self._room
 
     @property
@@ -91,6 +104,39 @@ class JobContext:
     ) -> None:
         self._shutdown_callbacks.append(callback)
 
+    async def wait_for_participant(
+        self, *, identity: str | None = None
+    ) -> rtc.RemoteParticipant:
+        """
+        Returns a participant that matches the given identity. If identity is None, the first
+        participant that joins the room will be returned.
+        If the participant has already joined, the function will return immediately.
+        """
+        if not self._room.isconnected():
+            raise RuntimeError("room is not connected")
+
+        fut = asyncio.Future[rtc.RemoteParticipant]()
+
+        for p in self._room.remote_participants.values():
+            if (
+                identity is None or p.identity == identity
+            ) and p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+                fut.set_result(p)
+                break
+
+        def _on_participant_connected(p: rtc.RemoteParticipant):
+            if (
+                identity is None or p.identity == identity
+            ) and p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+                self._room.off("participant_connected", _on_participant_connected)
+                if not fut.done():
+                    fut.set_result(p)
+
+        if not fut.done():
+            self._room.on("participant_connected", _on_participant_connected)
+
+        return await fut
+
     async def connect(
         self,
         *,
@@ -98,6 +144,13 @@ class JobContext:
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         rtc_config: rtc.RtcConfiguration | None = None,
     ) -> None:
+        """Connect to the room. This method should be called only once.
+
+        Args:
+            e2ee: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
+            auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
+            rtc_config: Custom RTC configuration to use when connecting to the room.
+        """
         room_options = rtc.RoomOptions(
             e2ee=e2ee,
             auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
@@ -107,14 +160,30 @@ class JobContext:
         await self._room.connect(self._info.url, self._info.token, options=room_options)
         self._on_connect()
         for p in self._room.remote_participants.values():
-            self._on_participant_connected(p)
+            self._participant_available(p)
 
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
 
     def shutdown(self, reason: str = "") -> None:
         self._on_shutdown(reason)
 
-    def _on_participant_connected(self, p: rtc.RemoteParticipant) -> None:
+    def add_participant_entrypoint(
+        self,
+        entrypoint_fnc: Callable[
+            [JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]
+        ],
+    ):
+        """Adds an entrypoint function to be run when a participant joins the room. In cases where
+        the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
+        added and they will each be run in parallel for each participant.
+        """
+
+        if entrypoint_fnc in self._participant_entrypoints:
+            raise ValueError("entrypoints cannot be added more than once")
+
+        self._participant_entrypoints.append(entrypoint_fnc)
+
+    def _participant_available(self, p: rtc.RemoteParticipant) -> None:
         for coro in self._participant_entrypoints:
             if (p.identity, coro) in self._participant_tasks:
                 logger.warning(
@@ -126,22 +195,6 @@ class JobContext:
             task.add_done_callback(
                 lambda _: self._participant_tasks.pop((p.identity, coro))
             )
-
-    def add_participant_entrypoint(
-        self,
-        entrypoint_fnc: Callable[
-            [JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]
-        ],
-    ):
-        """Adds an entrypoint function to be run when a participant that matches the filter joins the room. In cases where
-        the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
-        added and they will each be run in parallel for each participant.
-        """
-
-        if entrypoint_fnc in self._participant_entrypoints:
-            raise ValueError("entrypoints cannot be added more than once")
-
-        self._participant_entrypoints.append(entrypoint_fnc)
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:

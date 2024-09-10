@@ -1,15 +1,19 @@
-# Voice Assistant Example
+# Voice Assistant Examples
 
-This example shows two usages of the VoiceAssistant class:
+We have a few examples that shows the various ways of using using the VoiceAssistant class:
+
 - `minimal_assistant.py`: a basic conversational assistant
-- `function_calling.py`: a voice assistant capable of obeying commands (turning on/off a mock room's lights)
+- `function_calling_weather.py`: a weather assistant that calls an API endpoint to retrieve the weather
+- `custom_pronunciation.py`: using the `before_tts_cb` hook to customize how TTS pronounces words
+- `simple_rag`: a simple RAG assistant that answers questions by querying a embeddings index
 
-Both assistants use:
+The demo assistants use:
+
 - Deepgram for Speech-to-text
-- OpenAI for LLM
-- Elevenlabs for Text-to-speech
+- OpenAI for LLM and Text-to-speech
 
 ## Run
+
 Instructions for running the two agents are identical, the following steps will assume you are running `minimal_assistant.py`
 
 ### Setup and activate a virtual env:
@@ -24,12 +28,12 @@ Instructions for running the two agents are identical, the following steps will 
 export LIVEKIT_URL=<your LiveKit server URL>
 export LIVEKIT_API_KEY=<your API Key>
 export LIVEKIT_API_SECRET=<your API Secret>
-export ELEVEN_API_KEY=<your ElevenLabs API key>
 export DEEPGRAM_API_KEY=<your Deepgram API key>
 export OPENAI_API_KEY=<your OpenAI API key>
 ```
 
 ### Install requirments:
+
 `pip install -r requirements.txt`
 
 ### Run the agent worker:

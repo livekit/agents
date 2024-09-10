@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import os
 from dataclasses import dataclass
 from typing import AsyncIterable, List, Union
 
 from livekit import agents, rtc
 from livekit.agents import stt, utils
 
+from google.auth import default as gauth_default
+from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
 
@@ -61,8 +62,8 @@ class STT(stt.STT):
         Create a new instance of Google STT.
 
         Credentials must be provided, either by using the ``credentials_info`` dict, or reading
-        from the file specified in ``credentials_file`` or the ``GOOGLE_APPLICATION_CREDENTIALS``
-        environmental variable.
+        from the file specified in ``credentials_file`` or via Application Default Credentials as
+        described in https://cloud.google.com/docs/authentication/application-default-credentials
         """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
@@ -73,10 +74,13 @@ class STT(stt.STT):
         self._credentials_file = credentials_file
 
         if credentials_file is None and credentials_info is None:
-            creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-            if not creds:
+            try:
+                gauth_default()
+            except DefaultCredentialsError:
                 raise ValueError(
-                    "GOOGLE_APPLICATION_CREDENTIALS must be set if no credentials is provided"
+                    "Application default credentials must be available "
+                    "when using Google STT without explicitly passing "
+                    "credentials through credentials_info or credentials_file."
                 )
 
         if isinstance(languages, str):
@@ -112,7 +116,12 @@ class STT(stt.STT):
         # recognizers may improve latency https://cloud.google.com/speech-to-text/v2/docs/recognizers#understand_recognizers
 
         # TODO(theomonnom): find a better way to access the project_id
-        project_id = self._ensure_client().transport._credentials.project_id  # type: ignore
+        try:
+            project_id = self._ensure_client().transport._credentials.project_id  # type: ignore
+        except AttributeError:
+            from google.auth import default as ga_default
+
+            _, project_id = ga_default()
         return f"projects/{project_id}/locations/global/recognizers/_"
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:

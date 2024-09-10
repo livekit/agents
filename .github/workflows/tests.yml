@@ -32,22 +32,24 @@ jobs:
     name: Run tests (${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         with:
           submodules: true
           lfs: true
 
       - uses: actions/setup-python@v5
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         with:
           python-version: '3.9'
           cache: 'pip'
 
       - name: Install ffmpeg (Linux)
-        if: ${{ matrix.platform == 'linux' }}
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && matrix.platform == 'linux' }}
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
       - name: Install libssl 1.1 (Linux 22.04)
-        if: ${{ matrix.os == 'namespace-profile-default-arm64' }}
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && matrix.os == 'namespace-profile-default-arm64' }}
         run: |
           wget https://old-releases.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
           wget https://old-releases.ubuntu.com/ubuntu/pool/main/o/openssl/libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
@@ -55,15 +57,16 @@ jobs:
           sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
 
       - name: Install ffmpeg (macOS)
-        if: ${{ matrix.platform == 'macos' }}
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && matrix.platform == 'macos' }}
         run: brew update && brew install ffmpeg
 
       - name: Install ffmpeg (Windows)
-        if: ${{ matrix.platform == 'windows' }}
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && matrix.platform == 'windows' }}
         run: choco install ffmpeg
 
       - name: Install packages
         shell: bash
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
           pip3 install -r ./tests/test-requirements.txt
@@ -80,6 +83,7 @@ jobs:
 
       - name: Run tests
         shell: bash
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         env:
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}

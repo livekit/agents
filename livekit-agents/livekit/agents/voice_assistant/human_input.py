@@ -101,7 +101,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         vad_stream = self._vad.stream()
         stt_stream = self._stt.stream()
 
-        def _will_forward_transcription(
+        def _before_forward(
             fwd: transcription.STTSegmentsForwarder, transcription: rtc.Transcription
         ):
             if not self._transcription:
@@ -113,7 +113,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
             room=self._room,
             participant=self._participant,
             track=self._subscribed_track,
-            will_forward_transcription=_will_forward_transcription,
+            before_forward_cb=_before_forward,
         )
 
         async def _audio_stream_co() -> None:
