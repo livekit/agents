@@ -30,6 +30,7 @@ from livekit.agents.utils import AudioBuffer, merge_frames
 
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
+from .utils import BasicAudioEnergyFilter
 
 BASE_URL = "https://api.deepgram.com/v1/listen"
 BASE_URL_WS = "wss://api.deepgram.com/v1/listen"
@@ -200,6 +201,9 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._speaking = False
         self._max_retry = max_retry
+        self._audio_energy_filter = BasicAudioEnergyFilter(
+            threshold=0.1, cooldown_seconds=1
+        )
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -294,7 +298,9 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
-                    await ws.send_bytes(frame.data.tobytes())
+                    has_audio = self._audio_energy_filter.push_frame(frame)
+                    if has_audio:
+                        await ws.send_bytes(frame.data.tobytes())
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True
