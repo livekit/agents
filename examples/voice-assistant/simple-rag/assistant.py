@@ -46,7 +46,7 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=openai.TTS(),
-        before_llm_cb=_enrich_with_rag,
+        will_synthesize_assistant_reply=_enrich_with_rag,
     )
 
     assistant.start(ctx.room)
