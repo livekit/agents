@@ -25,7 +25,7 @@ import aiohttp
 from livekit.agents import tokenize, tts, utils
 
 from .log import logger
-from .models import TTSDefaultVoiceId, TTSEncoding, TTSModels, TTSVoiceSpeed
+from .models import TTSDefaultVoiceId, TTSEncoding, TTSModels, TTSVoiceSpeed, TTSVoiceEmotion
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
@@ -42,7 +42,7 @@ class _TTSOptions:
     sample_rate: int
     voice: str | list[float]
     speed: TTSVoiceSpeed | float | None
-    emotion: list[str] | None
+    emotion: list[TTSVoiceEmotion] | None
     api_key: str
     language: str
 
@@ -56,7 +56,7 @@ class TTS(tts.TTS):
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
         speed: TTSVoiceSpeed | float | None = None,
-        emotion: list[str] | None = None,
+        emotion: list[TTSVoiceEmotion] | None = None,
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -72,7 +72,7 @@ class TTS(tts.TTS):
             encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
             voice (str | list[float], optional): The voice ID or embedding array.
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
-            emotion (list[str], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
+            emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
