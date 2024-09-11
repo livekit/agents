@@ -1,5 +1,13 @@
 # livekit-plugins-openai
 
+## 0.8.3
+
+### Patch Changes
+
+- Introduce function calling to OpenAI Assistants - [#710](https://github.com/livekit/agents/pull/710) ([@keepingitneil](https://github.com/keepingitneil))
+
+- Add Cerebras to OpenAI Plugin - [#731](https://github.com/livekit/agents/pull/731) ([@henrytwo](https://github.com/henrytwo))
+
 ## 0.8.2
 
 ### Patch Changes

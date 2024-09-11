@@ -1,2 +1,2 @@
-livekit-agents>=0.8.11
-livekit-plugins-deepgram>=0.6.6
+livekit-agents>=0.8.12
+livekit-plugins-deepgram>=0.6.7

@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.8.12
+
+### Patch Changes
+
+- tts*forwarder: don't raise inside mark*{audio,text}\_segment_end when nothing was pushed - [#730](https://github.com/livekit/agents/pull/730) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.8.11
 
 ### Patch Changes
