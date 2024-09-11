@@ -291,7 +291,7 @@ def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
         voice["mode"] = "embedding"
         voice["embedding"] = opts.voice
         
-    voice_controls = {}
+    voice_controls: dict = {}
     if opts.speed is not None:
         voice_controls["speed"] = opts.speed
     if opts.emotion is not None:
