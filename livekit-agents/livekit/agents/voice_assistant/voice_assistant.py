@@ -128,7 +128,7 @@ class AssistantTranscriptionOptions:
 @dataclass
 class LLMOptions:
     temperature: float | None = None
-    """The temperature to use for the LLM chat."""
+    """The temperature to use for LLM chat compmletions."""
 
 
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
