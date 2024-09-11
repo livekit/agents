@@ -15,7 +15,10 @@ logger.setLevel(logging.INFO)
 async def entrypoint(job: JobContext):
     logger.info("starting tts example agent")
 
-    tts = cartesia.TTS(voice_controls={"speed": "fastest", "emotion": ["surprise:highest"]})
+    tts = cartesia.TTS(
+        speed="fastest",
+        emotion=["surprise:highest"],
+    )
 
     source = rtc.AudioSource(tts.sample_rate, tts.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
