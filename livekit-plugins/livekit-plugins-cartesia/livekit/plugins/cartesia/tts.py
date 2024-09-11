@@ -48,7 +48,7 @@ class _TTSOptions:
     sample_rate: int
     voice: str | list[float]
     speed: TTSVoiceSpeed | float | None
-    emotion: list[TTSVoiceEmotion] | None
+    emotion: list[TTSVoiceEmotion | str] | None
     api_key: str
     language: str
 
@@ -62,7 +62,7 @@ class TTS(tts.TTS):
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
         speed: TTSVoiceSpeed | float | None = None,
-        emotion: list[TTSVoiceEmotion] | None = None,
+        emotion: list[TTSVoiceEmotion | str] | None = None,
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -297,7 +297,7 @@ def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
         voice["mode"] = "embedding"
         voice["embedding"] = opts.voice
 
-    voice_controls = {}
+    voice_controls: dict = {}
     if opts.speed is not None:
         voice_controls["speed"] = opts.speed
     if opts.emotion is not None:
