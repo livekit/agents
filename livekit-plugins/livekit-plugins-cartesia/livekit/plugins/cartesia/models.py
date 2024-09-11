@@ -37,5 +37,5 @@ TTSVoiceEmotion = Literal[
     "curiosity:low",
     "curiosity",
     "curiosity:high",
-    "curiosity:highest"
+    "curiosity:highest",
 ]

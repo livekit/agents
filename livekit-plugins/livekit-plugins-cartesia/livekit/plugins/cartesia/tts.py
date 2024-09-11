@@ -25,7 +25,13 @@ import aiohttp
 from livekit.agents import tokenize, tts, utils
 
 from .log import logger
-from .models import TTSDefaultVoiceId, TTSEncoding, TTSModels, TTSVoiceSpeed, TTSVoiceEmotion
+from .models import (
+    TTSDefaultVoiceId,
+    TTSEncoding,
+    TTSModels,
+    TTSVoiceEmotion,
+    TTSVoiceSpeed,
+)
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
@@ -63,7 +69,7 @@ class TTS(tts.TTS):
     ) -> None:
         """
         Create a new instance of Cartesia TTS.
-        
+
         See https://docs.cartesia.ai/reference/web-socket/stream-speech/stream-speech for more details on the the Cartesia API.
 
         Args:
@@ -290,7 +296,7 @@ def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
     else:
         voice["mode"] = "embedding"
         voice["embedding"] = opts.voice
-        
+
     voice_controls = {}
     if opts.speed is not None:
         voice_controls["speed"] = opts.speed
