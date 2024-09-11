@@ -77,7 +77,11 @@ class AssistantCallContext:
 def _default_before_llm_cb(
     assistant: VoiceAssistant, chat_ctx: ChatContext
 ) -> LLMStream:
-    return assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
+    return assistant.llm.chat(
+        chat_ctx=chat_ctx,
+        fnc_ctx=assistant.fnc_ctx,
+        temperature=assistant._opts.llm_options.temperature,
+    )
 
 
 def _default_before_tts_cb(
@@ -96,6 +100,7 @@ class _ImplOptions:
     before_tts_cb: BeforeTTSCallback
     plotting: bool
     transcription: AssistantTranscriptionOptions
+    llm_options: LLMOptions
 
 
 @dataclass(frozen=True)
@@ -120,6 +125,12 @@ class AssistantTranscriptionOptions:
     representing the hyphenated parts of the word."""
 
 
+@dataclass
+class LLMOptions:
+    temperature: float | None = None
+    """The temperature to use for the LLM chat."""
+
+
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
     MIN_TIME_PLAYED_FOR_COMMIT = 1.5
     """Minimum time played for the user speech to be committed to the chat context"""
@@ -140,6 +151,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
         before_llm_cb: BeforeLLMCallback = _default_before_llm_cb,
         before_tts_cb: BeforeTTSCallback = _default_before_tts_cb,
+        llm_options: LLMOptions = LLMOptions(),
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
         # backward compatibility
@@ -187,6 +199,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             transcription=transcription,
             before_llm_cb=before_llm_cb,
             before_tts_cb=before_tts_cb,
+            llm_options=llm_options,
         )
         self._plotter = AssistantPlotter(self._loop)
 
@@ -690,7 +703,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 chat_ctx.messages.extend(extra_tools_messages)
 
                 answer_llm_stream = self._llm.chat(
-                    chat_ctx=chat_ctx, fnc_ctx=self._fnc_ctx
+                    chat_ctx=chat_ctx,
+                    fnc_ctx=self._fnc_ctx,
+                    temperature=self._opts.llm_options.temperature,
                 )
                 answer_synthesis = self._synthesize_agent_speech(
                     speech_handle.id, answer_llm_stream
