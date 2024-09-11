@@ -42,7 +42,7 @@ class _TTSOptions:
     sample_rate: int
     voice: str | list[float]
     speed: TTSVoiceSpeed | float | None
-    emotion: list[TTSVoiceEmotion] | None
+    emotion: list[TTSVoiceEmotion | str] | None
     api_key: str
     language: str
 
