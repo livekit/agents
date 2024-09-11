@@ -56,7 +56,7 @@ class TTS(tts.TTS):
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
         speed: TTSVoiceSpeed | float | None = None,
-        emotion: list[TTSVoiceEmotion] | None = None,
+        emotion: list[TTSVoiceEmotion | str] | None = None,
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
