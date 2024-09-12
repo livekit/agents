@@ -11,7 +11,7 @@ from livekit.agents import (
     cli,
     llm,
 )
-from livekit.agents.voice_assistant import LLMOptions, VoiceAssistant
+from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
@@ -46,10 +46,9 @@ async def entrypoint(ctx: JobContext):
     assistant = VoiceAssistant(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model=dg_model),
-        llm=openai.LLM(),
+        llm=openai.LLM(temperature=1),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
-        llm_options=LLMOptions(temperature=1),
     )
 
     assistant.start(ctx.room, participant)

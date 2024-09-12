@@ -48,6 +48,7 @@ class LLM(llm.LLM):
         base_url: str | None = None,
         user: str | None = None,
         client: anthropic.AsyncClient | None = None,
+        temperature: float | None = None,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -55,6 +56,7 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
         """
+        super().__init__(temperature=temperature)
 
         # throw an error on our end
         api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
@@ -85,6 +87,9 @@ class LLM(llm.LLM):
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
     ) -> "LLMStream":
+        if temperature is None:
+            temperature = self._temperature
+
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc: list[anthropic.types.ToolParam] = []
