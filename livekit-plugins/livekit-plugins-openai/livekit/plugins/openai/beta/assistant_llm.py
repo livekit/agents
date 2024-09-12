@@ -82,9 +82,6 @@ class AssistantLLM(llm.LLM):
         api_key: str | None = None,
         base_url: str | None = None,
     ) -> None:
-        # temperature is handled via AssistantOptions
-        super().__init__()
-
         test_ctx = llm.ChatContext()
         if not hasattr(test_ctx, "_metadata"):
             raise Exception(

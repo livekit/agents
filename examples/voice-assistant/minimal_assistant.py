@@ -46,7 +46,7 @@ async def entrypoint(ctx: JobContext):
     assistant = VoiceAssistant(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model=dg_model),
-        llm=openai.LLM(temperature=1),
+        llm=openai.LLM(),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
     )

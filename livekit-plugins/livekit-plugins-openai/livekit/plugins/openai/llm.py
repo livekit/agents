@@ -43,6 +43,7 @@ from .utils import AsyncAzureADTokenProvider, build_oai_message
 class LLMOptions:
     model: str | ChatModels
     user: str | None
+    temperature: float | None
 
 
 class LLM(llm.LLM):
@@ -62,15 +63,12 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
         """
-
-        super().__init__(temperature=temperature)
-
         # throw an error on our end
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if api_key is None:
             raise ValueError("OpenAI API key is required")
 
-        self._opts = LLMOptions(model=model, user=user)
+        self._opts = LLMOptions(model=model, user=user, temperature=temperature)
         self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
@@ -404,7 +402,7 @@ class LLM(llm.LLM):
 
         user = self._opts.user or openai.NOT_GIVEN
         if temperature is None:
-            temperature = self._temperature
+            temperature = self._opts.temperature
 
         messages = _build_oai_context(chat_ctx, id(self))
         cmp = self._client.chat.completions.create(

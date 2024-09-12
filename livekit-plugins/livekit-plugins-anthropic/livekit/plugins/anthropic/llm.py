@@ -37,6 +37,7 @@ from .models import (
 class LLMOptions:
     model: str | ChatModels
     user: str | None
+    temperature: float | None
 
 
 class LLM(llm.LLM):
@@ -56,14 +57,12 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
         """
-        super().__init__(temperature=temperature)
-
         # throw an error on our end
         api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if api_key is None:
             raise ValueError("Anthropic API key is required")
 
-        self._opts = LLMOptions(model=model, user=user)
+        self._opts = LLMOptions(model=model, user=user, temperature=temperature)
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,
             base_url=base_url,
@@ -88,7 +87,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: bool | None = None,
     ) -> "LLMStream":
         if temperature is None:
-            temperature = self._temperature
+            temperature = self._opts.temperature
 
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:

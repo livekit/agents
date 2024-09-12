@@ -29,10 +29,6 @@ class ChatChunk:
 
 
 class LLM(abc.ABC):
-    def __init__(self, *, temperature: float | None = None):
-        # set default temperature, used by `chat` method when temperature isn't provided
-        self._temperature = temperature
-
     @abc.abstractmethod
     def chat(
         self,
