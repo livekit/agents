@@ -57,6 +57,7 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
+        timeout: float | None = None,
     ):
         """
         Create a new instance of Google STT.
@@ -65,8 +66,12 @@ class STT(stt.STT):
         from the file specified in ``credentials_file`` or via Application Default Credentials as
         described in https://cloud.google.com/docs/authentication/application-default-credentials
         """
+        if timeout is not None:
+            raise NotImplementedError("Google STT does not support timeouts")
+
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
+            timeout=timeout,
         )
 
         self._client: SpeechAsyncClient | None = None
@@ -165,18 +170,30 @@ class STT(stt.STT):
             language_codes=config.languages,
         )
 
-        raw = await self._ensure_client().recognize(
-            cloud_speech.RecognizeRequest(
-                recognizer=self._recognizer, config=config, content=frame.data.tobytes()
+        client = self._ensure_client()
+
+        async def _recognize():
+            return await client.recognize(
+                cloud_speech.RecognizeRequest(
+                    recognizer=self._recognizer,
+                    config=config,
+                    content=frame.data.tobytes(),
+                ),
             )
-        )
+
+        raw = await asyncio.wait_for(_recognize(), self._timeout)
         return _recognize_response_to_speech_event(raw)
 
     def stream(
         self, *, language: SpeechLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(self._ensure_client(), self._recognizer, config)
+        return SpeechStream(
+            self._ensure_client(),
+            self._recognizer,
+            config,
+            timeout=self._timeout,
+        )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -188,8 +205,10 @@ class SpeechStream(stt.SpeechStream):
         sample_rate: int = 48000,
         num_channels: int = 1,
         max_retry: int = 32,
+        *,
+        timeout: float | None = 10.0,
     ) -> None:
-        super().__init__()
+        super().__init__(timeout=timeout)
 
         self._client = client
         self._recognizer = recognizer
@@ -252,11 +271,19 @@ class SpeechStream(stt.SpeechStream):
 
                 # try to connect
                 stream = await self._client.streaming_recognize(
-                    requests=input_generator()
+                    requests=input_generator(),
                 )
                 retry_count = 0  # connection successful, reset retry count
 
                 await self._run_stream(stream)
+            except asyncio.TimeoutError as e:
+                # stream connected but _run_stream() failed
+                logger.warning(
+                    f"timed out waiting for transcription after {self._timeout}s",
+                    exc_info=e,
+                )
+                self._timeout_exc = e
+                break
             except Exception as e:
                 if retry_count >= max_retry:
                     logger.error(
@@ -276,7 +303,14 @@ class SpeechStream(stt.SpeechStream):
     async def _run_stream(
         self, stream: AsyncIterable[cloud_speech.StreamingRecognizeResponse]
     ):
-        async for resp in stream:
+        while True:
+            try:
+                resp = await asyncio.wait_for(
+                    stream.__aiter__().__anext__(), timeout=self._timeout
+                )
+            except StopAsyncIteration:
+                break
+
             if (
                 resp.speech_event_type
                 == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN

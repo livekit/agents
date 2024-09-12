@@ -14,12 +14,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Union
 
 from livekit import rtc
 from livekit.agents import tts, utils
 
+from google import api_core
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
 
@@ -49,6 +51,7 @@ class TTS(tts.TTS):
         speaking_rate: float = 1.0,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         """
         Create a new instance of Google TTS.
@@ -57,6 +60,8 @@ class TTS(tts.TTS):
         from the file specified in ``credentials_file`` or the ``GOOGLE_APPLICATION_CREDENTIALS``
         environmental variable.
         """
+        if timeout is not None:
+            raise NotImplementedError("Google TTS does not support timeouts")
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -64,6 +69,7 @@ class TTS(tts.TTS):
             ),
             sample_rate=sample_rate,
             num_channels=1,
+            timeout=timeout,
         )
 
         self._client: texttospeech.TextToSpeechAsyncClient | None = None
@@ -118,46 +124,60 @@ class TTS(tts.TTS):
         return self._client
 
     def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts, self._ensure_client())
+        return ChunkedStream(
+            text,
+            self._opts,
+            self._ensure_client(),
+            timeout=self._timeout,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
-        self, text: str, opts: _TTSOptions, client: texttospeech.TextToSpeechAsyncClient
+        self,
+        text: str,
+        opts: _TTSOptions,
+        client: texttospeech.TextToSpeechAsyncClient,
+        *,
+        timeout: float | None,
     ) -> None:
-        super().__init__()
+        super().__init__(timeout=timeout)
         self._text, self._opts, self._client = text, opts, client
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
-        response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
-            input=texttospeech.SynthesisInput(text=self._text),
-            voice=self._opts.voice,
-            audio_config=self._opts.audio_config,
-        )
+        try:
+            request_id = utils.shortuuid()
+            segment_id = utils.shortuuid()
+            response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
+                input=texttospeech.SynthesisInput(text=self._text),
+                voice=self._opts.voice,
+                audio_config=self._opts.audio_config,
+                timeout=self._timeout,
+            )
 
-        data = response.audio_content
-        if self._opts.audio_config.audio_encoding == "mp3":
-            decoder = utils.codecs.Mp3StreamDecoder()
-            for frame in decoder.decode_chunk(data):
+            data = response.audio_content
+            if self._opts.audio_config.audio_encoding == "mp3":
+                decoder = utils.codecs.Mp3StreamDecoder()
+                for frame in decoder.decode_chunk(data):
+                    self._event_ch.send_nowait(
+                        tts.SynthesizedAudio(
+                            request_id=request_id, segment_id=segment_id, frame=frame
+                        )
+                    )
+            else:
+                data = data[44:]  # skip WAV header
                 self._event_ch.send_nowait(
                     tts.SynthesizedAudio(
-                        request_id=request_id, segment_id=segment_id, frame=frame
+                        request_id=request_id,
+                        segment_id=segment_id,
+                        frame=rtc.AudioFrame(
+                            data=data,
+                            sample_rate=self._opts.audio_config.sample_rate_hertz,
+                            num_channels=1,
+                            samples_per_channel=len(data) // 2,  # 16-bit
+                        ),
                     )
                 )
-        else:
-            data = data[44:]  # skip WAV header
-            self._event_ch.send_nowait(
-                tts.SynthesizedAudio(
-                    request_id=request_id,
-                    segment_id=segment_id,
-                    frame=rtc.AudioFrame(
-                        data=data,
-                        sample_rate=self._opts.audio_config.sample_rate_hertz,
-                        num_channels=1,
-                        samples_per_channel=len(data) // 2,  # 16-bit
-                    ),
-                )
-            )
+        except api_core.exceptions.DeadlineExceeded as e:
+            raise asyncio.TimeoutError() from e

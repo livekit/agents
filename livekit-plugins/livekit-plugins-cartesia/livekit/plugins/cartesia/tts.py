@@ -66,6 +66,7 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        timeout: float | None = 10.0,
     ) -> None:
         """
         Create a new instance of Cartesia TTS.
@@ -88,6 +89,7 @@ class TTS(tts.TTS):
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
+            timeout=timeout,
         )
 
         api_key = api_key or os.environ.get("CARTESIA_API_KEY")
@@ -113,19 +115,33 @@ class TTS(tts.TTS):
         return self._session
 
     def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts, self._ensure_session())
+        return ChunkedStream(
+            text,
+            self._opts,
+            self._ensure_session(),
+            timeout=self._timeout,
+        )
 
     def stream(self) -> "SynthesizeStream":
-        return SynthesizeStream(self._opts, self._ensure_session())
+        return SynthesizeStream(
+            self._opts,
+            self._ensure_session(),
+            timeout=self._timeout,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize chunked text using the bytes endpoint"""
 
     def __init__(
-        self, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
+        self,
+        text: str,
+        opts: _TTSOptions,
+        session: aiohttp.ClientSession,
+        *,
+        timeout: float | None,
     ) -> None:
-        super().__init__()
+        super().__init__(timeout=timeout)
         self._text, self._opts, self._session = text, opts, session
 
     @utils.log_exceptions(logger=logger)
@@ -138,28 +154,33 @@ class ChunkedStream(tts.ChunkedStream):
         data = _to_cartesia_options(self._opts)
         data["transcript"] = self._text
 
-        async with self._session.post(
-            "https://api.cartesia.ai/tts/bytes",
-            headers={
-                API_AUTH_HEADER: self._opts.api_key,
-                API_VERSION_HEADER: API_VERSION,
-            },
-            json=data,
-        ) as resp:
-            async for data, _ in resp.content.iter_chunks():
-                for frame in bstream.write(data):
+        try:
+            async with self._session.post(
+                "https://api.cartesia.ai/tts/bytes",
+                headers={
+                    API_AUTH_HEADER: self._opts.api_key,
+                    API_VERSION_HEADER: API_VERSION,
+                },
+                json=data,
+            ) as resp:
+                async for data, _ in resp.content.iter_chunks():
+                    for frame in bstream.write(data):
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
+                            )
+                        )
+
+                for frame in bstream.flush():
                     self._event_ch.send_nowait(
                         tts.SynthesizedAudio(
                             request_id=request_id, segment_id=segment_id, frame=frame
                         )
                     )
-
-            for frame in bstream.flush():
-                self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(
-                        request_id=request_id, segment_id=segment_id, frame=frame
-                    )
-                )
+        except aiohttp.ServerTimeoutError as e:
+            raise asyncio.TimeoutError() from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -167,8 +188,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
+        *,
+        timeout: float | None,
     ):
-        super().__init__()
+        super().__init__(timeout=timeout)
         self._opts, self._session = opts, session
         self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT

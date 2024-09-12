@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from dataclasses import dataclass
 
@@ -41,6 +42,7 @@ class TTS(tts.TTS):
         speech_key: str | None = None,
         speech_region: str | None = None,
         voice: str | None = None,
+        timeout: float | None = 10.0,
     ) -> None:
         """
         Create a new instance of Azure TTS.
@@ -55,6 +57,7 @@ class TTS(tts.TTS):
             ),
             sample_rate=AZURE_SAMPLE_RATE,
             num_channels=AZURE_NUM_CHANNELS,
+            timeout=timeout,
         )
 
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
@@ -70,12 +73,22 @@ class TTS(tts.TTS):
         )
 
     def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts)
+        return ChunkedStream(
+            text,
+            self._opts,
+            timeout=self._timeout,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, text: str, opts: _TTSOptions) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        text: str,
+        opts: _TTSOptions,
+        *,
+        timeout: float | None,
+    ) -> None:
+        super().__init__(timeout=timeout)
         self._text, self._opts = text, opts
 
     @utils.log_exceptions()
@@ -91,6 +104,7 @@ class ChunkedStream(tts.ChunkedStream):
         def _synthesize() -> speechsdk.SpeechSynthesisResult:
             return synthesizer.speak_text_async(self._text).get()  # type: ignore
 
+        result = None
         try:
             result = await asyncio.to_thread(_synthesize)
             if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
@@ -101,6 +115,7 @@ class ChunkedStream(tts.ChunkedStream):
 
             def _cleanup() -> None:
                 nonlocal synthesizer, result
+                synthesizer.stop_speaking_async().get()
                 del synthesizer
                 del result
 
@@ -130,7 +145,8 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
                 samples_per_channel=audio_buffer.nbytes // 2,
             ),
         )
-        self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
         return audio_buffer.nbytes
 
 

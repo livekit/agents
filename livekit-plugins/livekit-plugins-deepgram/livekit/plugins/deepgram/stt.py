@@ -68,6 +68,7 @@ class STT(stt.STT):
         keywords: list[Tuple[str, float]] = [],
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        timeout: float | None = 10.0,
     ) -> None:
         """
         Create a new instance of Deepgram STT.
@@ -79,7 +80,8 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True, interim_results=interim_results
-            )
+            ),
+            timeout=timeout,
         )
 
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
@@ -151,24 +153,35 @@ class STT(stt.STT):
 
         data = io_buffer.getvalue()
 
-        async with self._ensure_session().post(
-            url=_to_deepgram_url(recognize_config),
-            data=data,
-            headers={
-                "Authorization": f"Token {self._api_key}",
-                "Accept": "application/json",
-                "Content-Type": "audio/wav",
-            },
-        ) as res:
-            return prerecorded_transcription_to_speech_event(
-                config.language, await res.json()
-            )
+        session = self._ensure_session()
+
+        res = await asyncio.wait_for(
+            session.post(
+                url=_to_deepgram_url(recognize_config),
+                data=data,
+                headers={
+                    "Authorization": f"Token {self._api_key}",
+                    "Accept": "application/json",
+                    "Content-Type": "audio/wav",
+                },
+            ),
+            timeout=self._timeout,
+        )
+
+        return prerecorded_transcription_to_speech_event(
+            config.language, await res.json()
+        )
 
     def stream(
         self, *, language: DeepgramLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(config, self._api_key, self._ensure_session())
+        return SpeechStream(
+            config,
+            self._api_key,
+            self._ensure_session(),
+            timeout=self._timeout,
+        )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
@@ -190,8 +203,10 @@ class SpeechStream(stt.SpeechStream):
         api_key: str,
         http_session: aiohttp.ClientSession,
         max_retry: int = 32,
+        *,
+        timeout: float | None = 10.0,
     ) -> None:
-        super().__init__()
+        super().__init__(timeout=timeout)
 
         if opts.detect_language and opts.language is None:
             raise ValueError("language detection is not supported in streaming mode")
@@ -238,11 +253,18 @@ class SpeechStream(stt.SpeechStream):
 
                 headers = {"Authorization": f"Token {self._api_key}"}
                 ws = await self._session.ws_connect(
-                    _to_deepgram_url(live_config, websocket=True), headers=headers
+                    _to_deepgram_url(live_config, websocket=True),
+                    headers=headers,
+                    heartbeat=self._timeout,
                 )
                 retry_count = 0  # connected successfully, reset the retry_count
 
                 await self._run_ws(ws)
+            except aiohttp.ServerTimeoutError as e:
+                # ws got WSMsgType.ERROR of type ServerTimeoutError, which means heartbeat failed
+                logger.warning(f"deepgram timed out after {self._timeout}s", exc_info=e)
+                self._timeout_exc = asyncio.TimeoutError()
+                break
             except Exception as e:
                 if self._session.closed:
                     break
@@ -318,6 +340,9 @@ class SpeechStream(stt.SpeechStream):
 
                     # this will trigger a reconnection, see the _run loop
                     raise Exception("deepgram connection closed unexpectedly")
+
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    raise ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)

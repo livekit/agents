@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from typing import AsyncContextManager
@@ -48,6 +49,7 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
+        timeout: float | None = 10.0,
     ) -> None:
         """
         Create a new instance of OpenAI TTS.
@@ -62,6 +64,7 @@ class TTS(tts.TTS):
             ),
             sample_rate=OPENAI_TTS_SAMPLE_RATE,
             num_channels=OPENAI_TTS_CHANNELS,
+            timeout=timeout,
         )
 
         # throw an error on our end
@@ -73,7 +76,7 @@ class TTS(tts.TTS):
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
-                timeout=5.0,
+                timeout=self._timeout,
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,
@@ -138,7 +141,12 @@ class TTS(tts.TTS):
             speed=self._opts.speed,
         )
 
-        return ChunkedStream(stream, text, self._opts)
+        return ChunkedStream(
+            stream,
+            text,
+            self._opts,
+            timeout=self._timeout,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -147,8 +155,10 @@ class ChunkedStream(tts.ChunkedStream):
         oai_stream: AsyncContextManager[openai.AsyncAPIResponse[bytes]],
         text: str,
         opts: _TTSOptions,
+        *,
+        timeout: float | None,
     ) -> None:
-        super().__init__()
+        super().__init__(timeout=timeout)
         self._opts, self._text = opts, text
         self._oai_stream = oai_stream
 
@@ -157,11 +167,16 @@ class ChunkedStream(tts.ChunkedStream):
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
         decoder = utils.codecs.Mp3StreamDecoder()
-        async with self._oai_stream as stream:
-            async for data in stream.iter_bytes(4096):
-                for frame in decoder.decode_chunk(data):
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id, segment_id=segment_id, frame=frame
+        try:
+            async with self._oai_stream as stream:
+                async for data in stream.iter_bytes(4096):
+                    for frame in decoder.decode_chunk(data):
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
+                            )
                         )
-                    )
+        except openai.APITimeoutError as e:
+            raise asyncio.TimeoutError() from e
