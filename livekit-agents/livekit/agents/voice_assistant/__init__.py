@@ -4,4 +4,8 @@ from .voice_assistant import (
     VoiceAssistant,
 )
 
-__all__ = ["VoiceAssistant", "AssistantCallContext", "AssistantTranscriptionOptions"]
+__all__ = [
+    "VoiceAssistant",
+    "AssistantCallContext",
+    "AssistantTranscriptionOptions",
+]

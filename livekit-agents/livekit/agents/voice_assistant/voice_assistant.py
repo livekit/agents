@@ -77,7 +77,10 @@ class AssistantCallContext:
 def _default_before_llm_cb(
     assistant: VoiceAssistant, chat_ctx: ChatContext
 ) -> LLMStream:
-    return assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
+    return assistant.llm.chat(
+        chat_ctx=chat_ctx,
+        fnc_ctx=assistant.fnc_ctx,
+    )
 
 
 def _default_before_tts_cb(
@@ -690,7 +693,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 chat_ctx.messages.extend(extra_tools_messages)
 
                 answer_llm_stream = self._llm.chat(
-                    chat_ctx=chat_ctx, fnc_ctx=self._fnc_ctx
+                    chat_ctx=chat_ctx,
+                    fnc_ctx=self._fnc_ctx,
                 )
                 answer_synthesis = self._synthesize_agent_speech(
                     speech_handle.id, answer_llm_stream
