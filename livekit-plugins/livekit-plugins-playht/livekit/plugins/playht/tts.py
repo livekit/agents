@@ -165,13 +165,6 @@ class ChunkedStream(tts.ChunkedStream):
                         request_id=request_id, segment_id=segment_id, frame=frame
                     )
                 )
-
-            audio_buffer.seek(0)
-            os.makedirs(f"{parent_path}/audio-example", exist_ok=True)
-            generatedAudioFilePath = f"{parent_path}/audio-example/example.mp3"
-
-            with open(generatedAudioFilePath, 'wb') as f:
-                f.write(audio_buffer.getvalue())
         except Exception as e:
             print(e)
 
