@@ -857,7 +857,7 @@ class _DeferredReplyValidation:
 
     # if the STT gives us punctuation, we can try validate the reply faster.
     PUNCTUATION = ".!?"
-    PUNCTUATION_REDUCE_FACTOR = 0.2
+    PUNCTUATION_REDUCE_FACTOR = 0.75
 
     LATE_TRANSCRIPT_TOLERANCE = 1.5  # late compared to end of speech
 
