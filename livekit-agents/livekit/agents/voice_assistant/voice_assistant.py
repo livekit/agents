@@ -140,7 +140,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         allow_interruptions: bool = True,
         interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
-        turn_completion_delay: float = 0.5,
+        min_endpointing_delay: float = 0.5,
         preemptive_synthesis: bool = True,
         transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
         before_llm_cb: BeforeLLMCallback = _default_before_llm_cb,
@@ -164,7 +164,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             interrupt_speech_duration: Minimum duration of speech to consider for interruption.
             interrupt_min_words: Minimum number of words to consider for interruption.
                 Defaults to 0 as this may increase the latency depending on the STT.
-            turn_completion_delay: Delay to wait before considering the user finished speaking.
+            min_endpointing_delay: Delay to wait before considering the user finished speaking.
             preemptive_synthesis: Whether to preemptively synthesize responses.
             transcription: Options for assistant transcription.
             before_llm_cb: Callback called when the assistant is about to synthesize a reply.
@@ -189,7 +189,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             allow_interruptions=allow_interruptions,
             int_speech_duration=interrupt_speech_duration,
             int_min_words=interrupt_min_words,
-            turn_completion_delay=turn_completion_delay,
+            turn_completion_delay=min_endpointing_delay,
             preemptive_synthesis=preemptive_synthesis,
             transcription=transcription,
             before_llm_cb=before_llm_cb,
@@ -864,7 +864,7 @@ class _DeferredReplyValidation:
     def __init__(
         self,
         validate_fnc: Callable[[], None],
-        turn_completion_delay: float,
+        min_endpointing_delay: float,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._validate_fnc = validate_fnc
@@ -873,8 +873,8 @@ class _DeferredReplyValidation:
         self._last_recv_end_of_speech_time: float = 0.0
         self._speaking = False
 
-        self._end_of_speech_delay = turn_completion_delay
-        self._final_transcript_delay = turn_completion_delay + 1.0
+        self._end_of_speech_delay = min_endpointing_delay
+        self._final_transcript_delay = min_endpointing_delay + 1.0
 
     @property
     def validating(self) -> bool:
