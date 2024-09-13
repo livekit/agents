@@ -94,6 +94,7 @@ class _ImplOptions:
     allow_interruptions: bool
     int_speech_duration: float
     int_min_words: int
+    turn_completion_delay: float
     preemptive_synthesis: bool
     before_llm_cb: BeforeLLMCallback
     before_tts_cb: BeforeTTSCallback
@@ -139,6 +140,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         allow_interruptions: bool = True,
         interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
+        turn_completion_delay: float = 0.5,
         preemptive_synthesis: bool = True,
         transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
         before_llm_cb: BeforeLLMCallback = _default_before_llm_cb,
@@ -186,6 +188,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             allow_interruptions=allow_interruptions,
             int_speech_duration=interrupt_speech_duration,
             int_min_words=interrupt_min_words,
+            turn_completion_delay=turn_completion_delay,
             preemptive_synthesis=preemptive_synthesis,
             transcription=transcription,
             before_llm_cb=before_llm_cb,
@@ -229,7 +232,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._transcribed_text, self._transcribed_interim_text = "", ""
 
         self._deferred_validation = _DeferredReplyValidation(
-            self._validate_reply_if_possible, loop=self._loop
+            self._validate_reply_if_possible, self._opts.turn_completion_delay, loop=self._loop
         )
 
         self._speech_q: list[SpeechHandle] = []
@@ -851,20 +854,24 @@ class _DeferredReplyValidation:
 
     # if the STT gives us punctuation, we can try validate the reply faster.
     PUNCTUATION = ".!?"
-    PUNCTUATION_REDUCE_FACTOR = 0.5
+    PUNCTUATION_REDUCE_FACTOR = 0.2
 
-    DEFER_DELAY_END_OF_SPEECH = 0.2
-    DEFER_DELAY_FINAL_TRANSCRIPT = 1.0
     LATE_TRANSCRIPT_TOLERANCE = 1.5  # late compared to end of speech
 
     def __init__(
-        self, validate_fnc: Callable[[], None], loop: asyncio.AbstractEventLoop
+        self,
+        validate_fnc: Callable[[], None],
+        turn_completion_delay: float,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._validate_fnc = validate_fnc
         self._validating_task: asyncio.Task | None = None
         self._last_final_transcript: str = ""
         self._last_recv_end_of_speech_time: float = 0.0
         self._speaking = False
+
+        self._end_of_speech_delay = turn_completion_delay
+        self._final_transcript_delay = turn_completion_delay + 1.0
 
     @property
     def validating(self) -> bool:
@@ -881,9 +888,9 @@ class _DeferredReplyValidation:
             < self.LATE_TRANSCRIPT_TOLERANCE
         )
         delay = (
-            self.DEFER_DELAY_END_OF_SPEECH
+            self._end_of_speech_delay
             if has_recent_end_of_speech
-            else self.DEFER_DELAY_FINAL_TRANSCRIPT
+            else self._final_transcript_delay
         )
         delay = (
             delay * self.PUNCTUATION_REDUCE_FACTOR
@@ -905,7 +912,7 @@ class _DeferredReplyValidation:
 
         if self._last_final_transcript:
             delay = (
-                self.DEFER_DELAY_END_OF_SPEECH * self.PUNCTUATION_REDUCE_FACTOR
+                self._end_of_speech_delay * self.PUNCTUATION_REDUCE_FACTOR
                 if self._end_with_punctuation()
                 else 1.0
             )
