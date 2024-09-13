@@ -44,7 +44,7 @@ class PlayoutHandle:
         if self._total_played_time is not None:
             return self._total_played_time
 
-        return self._pushed_duration - self._audio_source.queue_duration
+        return self._pushed_duration - self._audio_source.queued_duration
 
     def done(self) -> bool:
         return self._done_fut.done() or self._interrupted
@@ -117,13 +117,13 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         if old_task is not None:
             await utils.aio.gracefully_cancel(old_task)
 
-        if self._audio_source.queue_duration > 0:
+        if self._audio_source.queued_duration > 0:
             # this should not happen, but log it just in case
             logger.warning(
                 "new playout while the source is still playing",
                 extra={
                     "speech_id": handle.speech_id,
-                    "queue_duration": self._audio_source.queue_duration,
+                    "queued_duration": self._audio_source.queued_duration,
                 },
             )
 
