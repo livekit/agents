@@ -456,7 +456,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         )
 
-        agent_playout = AgentPlayout(source=audio_source)
+        agent_playout = AgentPlayout(audio_source=audio_source)
         self._agent_output = AgentOutput(
             room=self._room,
             agent_playout=agent_playout,
