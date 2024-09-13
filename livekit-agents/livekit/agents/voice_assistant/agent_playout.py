@@ -23,7 +23,7 @@ class PlayoutHandle:
         self._audio_source = audio_source
         self._tr_fwd = transcription_fwd
         self._interrupted = False
-        self._int_fut = asyncio.Future()
+        self._int_fut = asyncio.Future[None]()
         self._done_fut = asyncio.Future[None]()
         self._speech_id = speech_id
 
