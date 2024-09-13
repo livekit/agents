@@ -157,11 +157,26 @@ class ChunkedStream(tts.ChunkedStream):
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
         decoder = utils.codecs.Mp3StreamDecoder()
+        audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=OPENAI_TTS_SAMPLE_RATE,
+            num_channels=OPENAI_TTS_CHANNELS,
+        )
+
         async with self._oai_stream as stream:
-            async for data in stream.iter_bytes(4096):
+            async for data in stream.iter_bytes():
                 for frame in decoder.decode_chunk(data):
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id, segment_id=segment_id, frame=frame
+                    for frame in audio_bstream.write(frame.data):
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
+                            )
                         )
+
+            for frame in audio_bstream.flush():
+                self._event_ch.send_nowait(
+                    tts.SynthesizedAudio(
+                        request_id=request_id, segment_id=segment_id, frame=frame
                     )
+                )
