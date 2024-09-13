@@ -19,7 +19,7 @@ from .speech_handle import SpeechHandle
 
 BeforeLLMCallback = Callable[
     ["VoiceAssistant", ChatContext],
-    Union[Optional[LLMStream], Awaitable[Optional[LLMStream]]],
+    Union[Optional[LLMStream], Awaitable[Optional[LLMStream]], False],
 ]
 
 WillSynthesizeAssistantReply = BeforeLLMCallback
@@ -538,6 +538,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         )
 
         llm_stream = self._opts.before_llm_cb(self, copied_ctx)
+        if llm_stream is False:
+            return
+
         if asyncio.iscoroutine(llm_stream):
             llm_stream = await llm_stream
 
