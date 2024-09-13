@@ -16,7 +16,6 @@ import asyncio
 import os
 from dataclasses import dataclass
 
-from livekit import rtc
 from livekit.agents import tts, utils
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
