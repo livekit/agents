@@ -141,7 +141,18 @@ class ChunkedStream(tts.ChunkedStream):
         data = response.audio_content
         if self._opts.audio_config.audio_encoding == "mp3":
             decoder = utils.codecs.Mp3StreamDecoder()
+            bstream = utils.audio.AudioByteStream(
+                sample_rate=self._opts.audio_config.sample_rate_hertz, num_channels=1
+            )
             for frame in decoder.decode_chunk(data):
+                for frame in bstream.write(frame):
+                    self._event_ch.send_nowait(
+                        tts.SynthesizedAudio(
+                            request_id=request_id, segment_id=segment_id, frame=frame
+                        )
+                    )
+
+            for frame in bstream.flush():
                 self._event_ch.send_nowait(
                     tts.SynthesizedAudio(
                         request_id=request_id, segment_id=segment_id, frame=frame

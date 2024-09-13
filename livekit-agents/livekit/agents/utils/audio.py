@@ -18,7 +18,7 @@ class AudioByteStream:
         self._num_channels = num_channels
 
         if samples_per_channel is None:
-            samples_per_channel = sample_rate // 50  # 20ms by default
+            samples_per_channel = sample_rate // 10  # 100ms by default
 
         self._bytes_per_frame = (
             num_channels * samples_per_channel * ctypes.sizeof(ctypes.c_int16)
