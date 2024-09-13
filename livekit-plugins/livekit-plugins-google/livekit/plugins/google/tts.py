@@ -145,7 +145,7 @@ class ChunkedStream(tts.ChunkedStream):
                 sample_rate=self._opts.audio_config.sample_rate_hertz, num_channels=1
             )
             for frame in decoder.decode_chunk(data):
-                for frame in bstream.write(frame):
+                for frame in bstream.write(frame.data):
                     self._event_ch.send_nowait(
                         tts.SynthesizedAudio(
                             request_id=request_id, segment_id=segment_id, frame=frame
