@@ -232,7 +232,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._transcribed_text, self._transcribed_interim_text = "", ""
 
         self._deferred_validation = _DeferredReplyValidation(
-            self._validate_reply_if_possible, self._opts.turn_completion_delay, loop=self._loop
+            self._validate_reply_if_possible,
+            self._opts.turn_completion_delay,
+            loop=self._loop,
         )
 
         self._speech_q: list[SpeechHandle] = []
