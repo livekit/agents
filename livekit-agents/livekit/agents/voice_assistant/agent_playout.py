@@ -159,7 +159,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             await utils.aio.gracefully_cancel(capture_task)
 
             handle._total_played_time = (
-                handle._pushed_duration - self._audio_source.queue_duration
+                handle._pushed_duration - self._audio_source.queued_duration
             )
             if not first_frame:
                 if not handle.interrupted:
