@@ -164,6 +164,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             interrupt_speech_duration: Minimum duration of speech to consider for interruption.
             interrupt_min_words: Minimum number of words to consider for interruption.
                 Defaults to 0 as this may increase the latency depending on the STT.
+            turn_completion_delay: Delay to wait before considering the user finished speaking.
             preemptive_synthesis: Whether to preemptively synthesize responses.
             transcription: Options for assistant transcription.
             before_llm_cb: Callback called when the assistant is about to synthesize a reply.
