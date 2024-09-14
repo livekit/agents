@@ -56,6 +56,8 @@ class LLM(llm.LLM):
         user: str | None = None,
         client: openai.AsyncClient | None = None,
         temperature: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -68,7 +70,7 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError("OpenAI API key is required")
 
-        self._opts = LLMOptions(model=model, user=user, temperature=temperature)
+        self._opts = LLMOptions(model=model, user=user, temperature=temperature, presence_penalty=presence_penalty, frequency_penalty=frequency_penalty)
         self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
