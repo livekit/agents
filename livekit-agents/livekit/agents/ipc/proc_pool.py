@@ -15,7 +15,7 @@ EventTypes = Literal[
     "process_created", "process_started", "process_ready", "process_closed"
 ]
 
-MAX_CONCURRENT_INITIALIZATIONS = 3
+MAX_CONCURRENT_INITIALIZATIONS = 1
 
 
 class ProcPool(utils.EventEmitter[EventTypes]):
