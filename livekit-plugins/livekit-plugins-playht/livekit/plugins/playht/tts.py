@@ -162,8 +162,8 @@ class ChunkedStream(tts.ChunkedStream):
             headers = {
                 "accept": ACCEPT_HEADER[self._opts.encoding],
                 "content-type": "application/json",
-                "AUTHORIZATION": "67742fd9345b4177a48088ad4a8a970b",
-                "X-USER-ID": "yuz4uMmKeeX7D1oCwsLm9d658B52"
+                "AUTHORIZATION": self._opts.api_key,
+                "X-USER-ID": self._opts.user_id
             }
             json_data = {
                 "text": "Hello, How are you?",
