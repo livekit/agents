@@ -19,6 +19,7 @@ import contextlib
 import datetime
 import multiprocessing as mp
 import os
+import sys
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
@@ -102,6 +103,13 @@ class WorkerPermissions:
     hidden: bool = False
 
 
+if sys.platform.startswith("win"):
+    # Some python versions on Windows gets a BrokenPipeError when creating a new process
+    _default_job_executor_type = JobExecutorType.THREAD
+else:
+    _default_job_executor_type = JobExecutorType.PROCESS
+
+
 # NOTE: this object must be pickle-able
 @dataclass
 class WorkerOptions:
@@ -115,7 +123,7 @@ class WorkerOptions:
     """A function to perform any necessary initialization before the job starts."""
     load_fnc: Callable[[], float] = _DefaultLoadCalc.get_load
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
-    job_executor_type: JobExecutorType = JobExecutorType.PROCESS
+    job_executor_type: JobExecutorType = _default_job_executor_type
     """Which executor to use to run jobs. (currently thread or process are supported)"""
     load_threshold: float = 0.65
     """When the load exceeds this threshold, the worker will be marked as unavailable."""
