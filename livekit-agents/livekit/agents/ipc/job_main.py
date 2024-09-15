@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import signal
 import contextlib
 import copy
 import logging
 import pickle
 import queue
+import signal
 import socket
 import threading
 from dataclasses import dataclass
