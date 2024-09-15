@@ -200,9 +200,6 @@ def run_app(opts: WorkerOptions) -> None:
 
 
 def run_worker(args: proto.CliArgs) -> None:
-    class Shutdown(SystemExit):
-        pass
-
     setup_logging(args.log_level, args.production)
 
     loop = asyncio.get_event_loop()
@@ -222,7 +219,7 @@ def run_worker(args: proto.CliArgs) -> None:
     try:
 
         def _signal_handler():
-            raise Shutdown
+            raise KeyboardInterrupt
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _signal_handler)
@@ -249,18 +246,19 @@ def run_worker(args: proto.CliArgs) -> None:
         main_task = loop.create_task(_worker_run(worker), name="agent_runner")
         try:
             loop.run_until_complete(main_task)
-        except (Shutdown, KeyboardInterrupt):
-            signal.signal(
-                signal.SIGINT, signal.SIG_IGN
-            )  # ignore future signals to exit gracefully
+        except KeyboardInterrupt:
+            pass
 
-        if args.production:
-            loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
+        try:
+            if args.production:
+                loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
 
-        loop.run_until_complete(worker.aclose())
+            loop.run_until_complete(worker.aclose())
 
-        if watch_client:
-            loop.run_until_complete(watch_client.aclose())
+            if watch_client:
+                loop.run_until_complete(watch_client.aclose())
+        except KeyboardInterrupt:
+            logger.warning("exiting forcefully")
     finally:
         try:
             tasks = asyncio.all_tasks(loop)
