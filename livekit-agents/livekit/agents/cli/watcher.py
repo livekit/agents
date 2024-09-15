@@ -144,25 +144,28 @@ class WatchClient:
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
-        self._cch = await utils.aio.duplex_unix._AsyncDuplex.open(self._mp_cch)
+        try:
+            self._cch = await utils.aio.duplex_unix._AsyncDuplex.open(self._mp_cch)
 
-        await channel.asend_message(self._cch, proto.ReloadJobsRequest())
-        while True:
-            try:
-                msg = await channel.arecv_message(self._cch, proto.IPC_MESSAGES)
-            except utils.aio.duplex_unix.DuplexClosed:
-                break
+            await channel.asend_message(self._cch, proto.ReloadJobsRequest())
+            while True:
+                try:
+                    msg = await channel.arecv_message(self._cch, proto.IPC_MESSAGES)
+                except utils.aio.duplex_unix.DuplexClosed:
+                    break
 
-            if isinstance(msg, proto.ActiveJobsRequest):
-                jobs = self._worker.active_jobs
+                if isinstance(msg, proto.ActiveJobsRequest):
+                    jobs = self._worker.active_jobs
 
-                await channel.asend_message(
-                    self._cch, proto.ActiveJobsResponse(jobs=jobs)
-                )
-            elif isinstance(msg, proto.ReloadJobsResponse):
-                # TODO(theomonnom): wait for the worker to be fully initialized/connected
-                await self._worker._reload_jobs(msg.jobs)
-                await channel.asend_message(self._cch, proto.Reloaded())
+                    await channel.asend_message(
+                        self._cch, proto.ActiveJobsResponse(jobs=jobs)
+                    )
+                elif isinstance(msg, proto.ReloadJobsResponse):
+                    # TODO(theomonnom): wait for the worker to be fully initialized/connected
+                    await self._worker._reload_jobs(msg.jobs)
+                    await channel.asend_message(self._cch, proto.Reloaded())
+        except utils.aio.duplex_unix.DuplexClosed:
+            pass
 
     async def aclose(self) -> None:
         if not self._main_task:
