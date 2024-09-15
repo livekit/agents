@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import signal
 import contextlib
 import copy
 import logging
@@ -261,6 +262,10 @@ class ProcStartArgs:
 
 def proc_main(args: ProcStartArgs) -> None:
     """main function for the job process when using the ProcessJobRunner"""
+
+    # ignore keyboard interrupt, we handle the process shutdown ourselves on the worker process
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.NOTSET)
 

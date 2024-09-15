@@ -250,7 +250,9 @@ def run_worker(args: proto.CliArgs) -> None:
         try:
             loop.run_until_complete(main_task)
         except (Shutdown, KeyboardInterrupt):
-            pass
+            signal.signal(
+                signal.SIGINT, signal.SIG_IGN
+            )  # ignore future signals to exit gracefully
 
         if args.production:
             loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
