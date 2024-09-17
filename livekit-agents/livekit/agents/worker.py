@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from __future__ import annotations
-
+import math
 import asyncio
 import contextlib
 import datetime
@@ -24,7 +24,7 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import reduce
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Awaitable, Callable, Literal, Generic, TypeVar
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -110,6 +110,21 @@ else:
     _default_job_executor_type = JobExecutorType.PROCESS
 
 
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class _WorkerEnvOption(Generic[T]):
+    dev_default: T
+    prod_default: T
+
+    @staticmethod
+    def getvalue(opt: T | _WorkerEnvOption[T], devmode: bool) -> T:
+        if isinstance(opt, _WorkerEnvOption):
+            return opt.dev_default if devmode else opt.prod_default
+        return opt
+
+
 # NOTE: this object must be pickle-able
 @dataclass
 class WorkerOptions:
@@ -125,9 +140,16 @@ class WorkerOptions:
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
     job_executor_type: JobExecutorType = _default_job_executor_type
     """Which executor to use to run jobs. (currently thread or process are supported)"""
-    load_threshold: float = 0.65
-    """When the load exceeds this threshold, the worker will be marked as unavailable."""
-    num_idle_processes: int = 3
+    load_threshold: float | _WorkerEnvOption[float] = _WorkerEnvOption(
+        dev_default=math.inf, prod_default=0.8
+    )
+    """When the load exceeds this threshold, the worker will be marked as unavailable.
+    
+    Defaults to 0.8 on "production" mode, and is disabled in "development" mode.
+    """
+    num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
+        dev_default=0, prod_default=3
+    )
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 60.0
     """Maximum amount of time to wait for a job to shut down gracefully"""
@@ -154,10 +176,13 @@ class WorkerOptions:
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
     host: str = ""  # default to all interfaces
-    port: int = 8081
+    port: int | _WorkerEnvOption[int] = _WorkerEnvOption(
+        dev_default=0, prod_default=8081
+    )
     """Port for local HTTP server to listen on.
 
-    The HTTP server is used as a health check endpoint."""
+    The HTTP server is used as a health check endpoint.
+    """
 
 
 EventTypes = Literal["worker_registered"]
@@ -165,7 +190,11 @@ EventTypes = Literal["worker_registered"]
 
 class Worker(utils.EventEmitter[EventTypes]):
     def __init__(
-        self, opts: WorkerOptions, *, loop: asyncio.AbstractEventLoop | None = None
+        self,
+        opts: WorkerOptions,
+        *,
+        devmode: bool = True,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__()
         opts.ws_url = opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
@@ -196,6 +225,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
         self._close_future: asyncio.Future[None] | None = None
         self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
+        self._devmode = devmode
 
         # using spawn context for all platforms. We may have further optimizations for
         # Linux with forkserver, but for now, this is the safest option
@@ -203,7 +233,9 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._proc_pool = ipc.proc_pool.ProcPool(
             initialize_process_fnc=opts.prewarm_fnc,
             job_entrypoint_fnc=opts.entrypoint_fnc,
-            num_idle_processes=opts.num_idle_processes,
+            num_idle_processes=_WorkerEnvOption.getvalue(
+                opts.num_idle_processes, self._devmode
+            ),
             loop=self._loop,
             job_executor_type=opts.job_executor_type,
             mp_ctx=mp_ctx,
@@ -214,7 +246,9 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._api: api.LiveKitAPI | None = None
         self._http_session: aiohttp.ClientSession | None = None
         self._http_server = http_server.HttpServer(
-            opts.host, opts.port, loop=self._loop
+            opts.host,
+            _WorkerEnvOption.getvalue(opts.port, self._devmode),
+            loop=self._loop,
         )
 
         self._main_task: asyncio.Task[None] | None = None
@@ -433,7 +467,9 @@ class Worker(utils.EventEmitter[EventTypes]):
                     None, self._opts.load_fnc
                 )
 
-                is_full = current_load >= self._opts.load_threshold
+                is_full = current_load >= _WorkerEnvOption.getvalue(
+                    self._opts.load_threshold, self._devmode
+                )
                 currently_available = not is_full and not self._draining
 
                 current_status = (
