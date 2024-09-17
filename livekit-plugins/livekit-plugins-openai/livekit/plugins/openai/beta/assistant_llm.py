@@ -18,7 +18,7 @@ import asyncio
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Coroutine, Dict, Literal, MutableSet, Union
+from typing import Any, Callable, Dict, Literal, MutableSet, Union
 
 import httpx
 from livekit import rtc
