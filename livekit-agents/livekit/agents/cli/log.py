@@ -11,6 +11,15 @@ from typing import Any, Dict, Tuple
 
 from ..plugin import Plugin
 
+# noisy loggers are set to warn by default
+NOISY_LOGGERS = [
+    "httpx",
+    "httpcore",
+    "openai",
+    "livekit",
+    "watchfiles",
+]
+
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
 _RESERVED_ATTRS: Tuple[str, ...] = (
@@ -92,6 +101,7 @@ class JsonFormatter(logging.Formatter):
         """Formats a log record and serializes to json"""
         message_dict: Dict[str, Any] = {}
         message_dict["level"] = record.levelname
+        message_dict["name"] = record.name
 
         if isinstance(record.msg, dict):
             message_dict = record.msg
@@ -196,9 +206,12 @@ def setup_logging(log_level: str, devmode: bool) -> None:
 
     root = logging.getLogger()
     root.addHandler(handler)
+    root.setLevel(log_level)
 
-    if root.level == logging.NOTSET:
-        root.setLevel(logging.WARN)
+    for noisy_logger in NOISY_LOGGERS:
+        logger = logging.getLogger(noisy_logger)
+        if logger.level == logging.NOTSET:
+            logger.setLevel(logging.WARN)
 
     from ..log import logger
 
