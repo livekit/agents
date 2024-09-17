@@ -14,6 +14,7 @@
 
 from . import ipc, llm, stt, tokenize, transcription, tts, utils, vad, voice_assistant
 from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequest
+from .proto import AgentState
 from .plugin import Plugin
 from .version import __version__
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
@@ -29,6 +30,7 @@ __all__ = [
     "JobRequest",
     "JobExecutorType",
     "AutoSubscribe",
+    "AgentState",
     "Plugin",
     "ipc",
     "stt",
