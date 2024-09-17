@@ -17,6 +17,7 @@ NOISY_LOGGERS = [
     "httpcore",
     "openai",
     "livekit",
+    "watchfiles",
 ]
 
 # skip default LogRecord attributes
@@ -205,9 +206,7 @@ def setup_logging(log_level: str, devmode: bool) -> None:
 
     root = logging.getLogger()
     root.addHandler(handler)
-
-    if root.level == logging.NOTSET:
-        root.setLevel(log_level)
+    root.setLevel(log_level)
 
     for noisy_logger in NOISY_LOGGERS:
         logger = logging.getLogger(noisy_logger)
