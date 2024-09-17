@@ -16,7 +16,7 @@ from ..worker import WorkerOptions
 class CliArgs:
     opts: WorkerOptions
     log_level: str
-    production: bool
+    devmode: bool
     asyncio_debug: bool
     watch: bool
     drain_timeout: int

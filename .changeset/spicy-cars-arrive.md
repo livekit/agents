@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-ipc: add threaded job runner 
+better dev defaults

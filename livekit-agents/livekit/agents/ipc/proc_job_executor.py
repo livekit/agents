@@ -15,7 +15,7 @@ from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils.aio import duplex_unix
-from . import channel, job_main, proto
+from . import channel, job_main, proc_lazy_main, proto
 
 
 class LogQueueListener:
@@ -165,7 +165,9 @@ class ProcJobExecutor:
             )
 
             self._proc = self._opts.mp_ctx.Process(  # type: ignore
-                target=job_main.proc_main, args=(self._proc_args,), name="job_proc"
+                target=proc_lazy_main.proc_main,
+                args=(self._proc_args,),
+                name="job_proc",
             )
 
             self._proc.start()
@@ -279,7 +281,7 @@ class ProcJobExecutor:
         except ValueError:
             return
 
-        logger.debug("killing job process", extra=self.logging_extra())
+        logger.info("killing job process", extra=self.logging_extra())
         if sys.platform == "win32":
             self._proc.terminate()
         else:
@@ -335,7 +337,7 @@ class ProcJobExecutor:
                     pong_timeout.reset()
 
             if isinstance(msg, proto.Exiting):
-                logger.debug(
+                logger.info(
                     "job exiting", extra={"reason": msg.reason, **self.logging_extra()}
                 )
 

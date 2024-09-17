@@ -182,8 +182,9 @@ class TTSSegmentsForwarder:
         self._check_not_closed()
 
         if self._audio_data is None:
-            raise RuntimeError("mark_audio_segment_end called before any push_audio")
+            self.push_audio(rtc.AudioFrame(bytes(), 24000, 1, 0))
 
+        assert self._audio_data is not None
         self._audio_data.done = True
         self._audio_data = None
 
@@ -204,8 +205,9 @@ class TTSSegmentsForwarder:
         self._check_not_closed()
 
         if self._text_data is None:
-            raise RuntimeError("mark_text_segment_end called before any push_text")
+            self.push_text("")
 
+        assert self._text_data is not None
         self._text_data.done = True
         self._text_data.sentence_stream.end_input()
         self._text_data = None

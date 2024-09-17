@@ -85,6 +85,7 @@ from livekit.plugins.openai.llm import LLM
 
 - OpenAI: `LLM(model="gpt-4o")`
 - Azure: `LLM.with_azure(azure_endpoint="", azure_deployment="")`
+- Cerebras: `LLM.with_cerebras(api_key="", model="")`
 - Fireworks: `LLM.with_fireworks(api_key="", model="")`
 - Groq: `LLM.with_groq(api_key="", model="")`
 - OctoAI: `LLM.with_octo(api_key="", model="")`

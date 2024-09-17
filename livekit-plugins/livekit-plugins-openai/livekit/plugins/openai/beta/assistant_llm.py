@@ -15,8 +15,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, MutableSet, Union
 
 import httpx
@@ -25,10 +26,15 @@ from livekit.agents import llm
 from openai import AsyncAssistantEventHandler, AsyncClient
 from openai.types.beta.threads import Text, TextDelta
 from openai.types.beta.threads.run_create_params import AdditionalMessage
-from openai.types.beta.threads.runs import ToolCall, ToolCallDelta
+from openai.types.beta.threads.runs import (
+    CodeInterpreterToolCall,
+    FileSearchToolCall,
+    FunctionToolCall,
+    ToolCall,
+)
 
 from ..log import logger
-from ..models import AssistantTools, ChatModels
+from ..models import ChatModels
 from ..utils import build_oai_message
 
 DEFAULT_MODEL = "gpt-4o"
@@ -56,13 +62,15 @@ class AssistantCreateOptions:
     instructions: str
     model: ChatModels
     temperature: float | None = None
-    tools: list[AssistantTools] = field(default_factory=list)
+    # TODO: when we implement code_interpreter and file_search tools
+    # tool_resources: ToolResources | None = None
+    # tools: list[AssistantTools] = field(default_factory=list)
 
 
 @dataclass
 class AssistantLoadOptions:
     assistant_id: str
-    thread_id: str
+    thread_id: str | None
 
 
 class AssistantLLM(llm.LLM):
@@ -95,7 +103,13 @@ class AssistantLLM(llm.LLM):
         self._assistant_opts = assistant_opts
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
-        self._sync_openai_task = asyncio.create_task(self._sync_openai())
+        self._sync_openai_task: asyncio.Task[AssistantLoadOptions] | None = None
+        try:
+            self._sync_openai_task = asyncio.create_task(self._sync_openai())
+        except Exception:
+            logger.error(
+                "failed to create sync openai task. This can happen when instantiating without a running asyncio event loop (such has when running tests)"
+            )
         self._done_futures = list[asyncio.Future[None]]()
 
     async def _sync_openai(self) -> AssistantLoadOptions:
@@ -104,10 +118,16 @@ class AssistantLLM(llm.LLM):
                 "model": self._assistant_opts.create_options.model,
                 "name": self._assistant_opts.create_options.name,
                 "instructions": self._assistant_opts.create_options.instructions,
-                "tools": [
-                    {"type": t} for t in self._assistant_opts.create_options.tools
-                ],
+                # "tools": [
+                #     {"type": t} for t in self._assistant_opts.create_options.tools
+                # ],
+                # "tool_resources": self._assistant_opts.create_options.tool_resources,
             }
+            # TODO when we implement code_interpreter and file_search tools
+            # if self._assistant_opts.create_options.tool_resources:
+            #     kwargs["tool_resources"] = (
+            #         self._assistant_opts.create_options.tool_resources
+            #     )
             if self._assistant_opts.create_options.temperature:
                 kwargs["temperature"] = self._assistant_opts.create_options.temperature
             assistant = await self._client.beta.assistants.create(**kwargs)
@@ -115,6 +135,9 @@ class AssistantLLM(llm.LLM):
             thread = await self._client.beta.threads.create()
             return AssistantLoadOptions(assistant_id=assistant.id, thread_id=thread.id)
         elif self._assistant_opts.load_options:
+            if not self._assistant_opts.load_options.thread_id:
+                thread = await self._client.beta.threads.create()
+                self._assistant_opts.load_options.thread_id = thread.id
             return self._assistant_opts.load_options
 
         raise Exception("One of create_options or load_options must be set")
@@ -136,6 +159,9 @@ class AssistantLLM(llm.LLM):
                 "OpenAI Assistants does not support the 'parallel_tool_calls' parameter"
             )
 
+        if not self._sync_openai_task:
+            self._sync_openai_task = asyncio.create_task(self._sync_openai())
+
         return AssistantLLMStream(
             temperature=temperature,
             assistant_llm=self,
@@ -150,12 +176,16 @@ class AssistantLLMStream(llm.LLMStream):
     class EventHandler(AsyncAssistantEventHandler):
         def __init__(
             self,
+            llm_stream: AssistantLLMStream,
             output_queue: asyncio.Queue[llm.ChatChunk | Exception | None],
             chat_ctx: llm.ChatContext,
+            fnc_ctx: llm.FunctionContext | None = None,
         ):
             super().__init__()
+            self._llm_stream = llm_stream
             self._chat_ctx = chat_ctx
             self._output_queue = output_queue
+            self._fnc_ctx = fnc_ctx
 
         async def on_text_delta(self, delta: TextDelta, snapshot: Text):
             self._output_queue.put_nowait(
@@ -171,9 +201,36 @@ class AssistantLLMStream(llm.LLMStream):
         async def on_tool_call_created(self, tool_call: ToolCall):
             print(f"\nassistant > {tool_call.type}\n", flush=True)
 
-        async def on_tool_call_delta(self, delta: ToolCallDelta, snapshot: ToolCall):
-            if delta.type == "code_interpreter":
-                pass
+        async def on_tool_call_done(
+            self,
+            tool_call: CodeInterpreterToolCall | FileSearchToolCall | FunctionToolCall,
+        ) -> None:
+            if tool_call.type == "code_interpreter":
+                logger.warning("code interpreter tool call not yet implemented")
+            elif tool_call.type == "file_search":
+                logger.warning("file_search tool call not yet implemented")
+            elif tool_call.type == "function":
+                if not self._fnc_ctx:
+                    logger.error("function tool called without function context")
+                    return
+
+                fnc = llm.FunctionCallInfo(
+                    function_info=self._fnc_ctx.ai_functions[tool_call.function.name],
+                    arguments=json.loads(tool_call.function.arguments),
+                    tool_call_id=tool_call.id,
+                    raw_arguments=tool_call.function.arguments,
+                )
+
+                self._llm_stream._function_calls_info.append(fnc)
+                chunk = llm.ChatChunk(
+                    choices=[
+                        llm.Choice(
+                            delta=llm.ChoiceDelta(role="assistant", tool_calls=[fnc]),
+                            index=0,
+                        )
+                    ]
+                )
+                self._output_queue.put_nowait(chunk)
 
     def __init__(
         self,
@@ -250,6 +307,7 @@ class AssistantLLMStream(llm.LLMStream):
                 msg_id = msg._metadata.get(OPENAI_MESSAGE_ID_KEY, {}).get(
                     load_options.thread_id
                 )
+                assert load_options.thread_id
                 if msg_id and msg_id not in openai_addded_messages_set:
                     await self._client.beta.threads.messages.delete(
                         thread_id=load_options.thread_id,
@@ -289,15 +347,26 @@ class AssistantLLMStream(llm.LLMStream):
                     lk_msg_id_dict[load_options.thread_id] = msg_id
 
             eh = AssistantLLMStream.EventHandler(
-                self._output_queue, chat_ctx=self._chat_ctx
+                output_queue=self._output_queue,
+                chat_ctx=self._chat_ctx,
+                fnc_ctx=self._fnc_ctx,
+                llm_stream=self,
             )
-            async with self._client.beta.threads.runs.stream(
-                additional_messages=additional_messages,
-                thread_id=load_options.thread_id,
-                assistant_id=load_options.assistant_id,
-                event_handler=eh,
-                temperature=self._temperature,
-            ) as stream:
+            assert load_options.thread_id
+            kwargs: dict[str, Any] = {
+                "additional_messages": additional_messages,
+                "thread_id": load_options.thread_id,
+                "assistant_id": load_options.assistant_id,
+                "event_handler": eh,
+                "temperature": self._temperature,
+            }
+            if self._fnc_ctx:
+                kwargs["tools"] = [
+                    llm._oai_api.build_oai_function_description(f)
+                    for f in self._fnc_ctx.ai_functions.values()
+                ]
+
+            async with self._client.beta.threads.runs.stream(**kwargs) as stream:
                 await stream.until_done()
 
             await self._output_queue.put(None)
@@ -334,9 +403,6 @@ class AssistantLLMStream(llm.LLMStream):
             await self._output_queue.put(e)
         finally:
             self._done_future.set_result(None)
-
-    async def aclose(self) -> None:
-        pass
 
     async def __anext__(self):
         item = await self._output_queue.get()

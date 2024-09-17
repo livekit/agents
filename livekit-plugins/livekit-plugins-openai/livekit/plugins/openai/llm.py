@@ -28,6 +28,7 @@ from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
 from .models import (
+    CerebrasChatModels,
     ChatModels,
     DeepSeekChatModels,
     GroqChatModels,
@@ -42,6 +43,7 @@ from .utils import AsyncAzureADTokenProvider, build_oai_message
 class LLMOptions:
     model: str | ChatModels
     user: str | None
+    temperature: float | None
 
 
 class LLM(llm.LLM):
@@ -53,6 +55,7 @@ class LLM(llm.LLM):
         base_url: str | None = None,
         user: str | None = None,
         client: openai.AsyncClient | None = None,
+        temperature: float | None = None,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -60,13 +63,12 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
         """
-
         # throw an error on our end
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if api_key is None:
             raise ValueError("OpenAI API key is required")
 
-        self._opts = LLMOptions(model=model, user=user)
+        self._opts = LLMOptions(model=model, user=user, temperature=temperature)
         self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
@@ -96,6 +98,7 @@ class LLM(llm.LLM):
         project: str | None = None,
         base_url: str | None = None,
         user: str | None = None,
+        temperature: float | None = None,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -119,7 +122,38 @@ class LLM(llm.LLM):
             base_url=base_url,
         )  # type: ignore
 
-        return LLM(model=model, client=azure_client, user=user)
+        return LLM(model=model, client=azure_client, user=user, temperature=temperature)
+
+    @staticmethod
+    def with_cerebras(
+        *,
+        model: str | CerebrasChatModels = "llama3.1-8b",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.cerebras.ai/v1",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+        temperature: float | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of Cerebras LLM.
+
+        ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
+        the ``CEREBRAS_API_KEY`` environmental variable.
+        """
+
+        # shim for not using OPENAI_API_KEY
+        api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
+        if api_key is None:
+            raise ValueError("Cerebras API key is required")
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+        )
 
     @staticmethod
     def with_fireworks(
@@ -129,6 +163,7 @@ class LLM(llm.LLM):
         base_url: str | None = "https://api.fireworks.ai/inference/v1",
         client: openai.AsyncClient | None = None,
         user: str | None = None,
+        temperature: float | None = None,
     ) -> LLM:
         """
         Create a new instance of Fireworks LLM.
@@ -143,7 +178,12 @@ class LLM(llm.LLM):
             raise ValueError("Fireworks API key is required")
 
         return LLM(
-            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
         )
 
     @staticmethod
@@ -154,6 +194,7 @@ class LLM(llm.LLM):
         base_url: str | None = "https://api.groq.com/openai/v1",
         client: openai.AsyncClient | None = None,
         user: str | None = None,
+        temperature: float | None = None,
     ) -> LLM:
         """
         Create a new instance of Groq LLM.
@@ -168,7 +209,12 @@ class LLM(llm.LLM):
             raise ValueError("Groq API key is required")
 
         return LLM(
-            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
         )
 
     @staticmethod
@@ -179,6 +225,7 @@ class LLM(llm.LLM):
         base_url: str | None = "https://api.deepseek.com/v1",
         client: openai.AsyncClient | None = None,
         user: str | None = None,
+        temperature: float | None = None,
     ) -> LLM:
         """
         Create a new instance of DeepSeek LLM.
@@ -193,7 +240,12 @@ class LLM(llm.LLM):
             raise ValueError("DeepSeek API key is required")
 
         return LLM(
-            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
         )
 
     @staticmethod
@@ -204,6 +256,7 @@ class LLM(llm.LLM):
         base_url: str | None = "https://text.octoai.run/v1",
         client: openai.AsyncClient | None = None,
         user: str | None = None,
+        temperature: float | None = None,
     ) -> LLM:
         """
         Create a new instance of OctoAI LLM.
@@ -218,7 +271,12 @@ class LLM(llm.LLM):
             raise ValueError("OctoAI API key is required")
 
         return LLM(
-            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
         )
 
     @staticmethod
@@ -227,12 +285,19 @@ class LLM(llm.LLM):
         model: str = "llama3.1",
         base_url: str | None = "http://localhost:11434/v1",
         client: openai.AsyncClient | None = None,
+        temperature: float | None = None,
     ) -> LLM:
         """
         Create a new instance of Ollama LLM.
         """
 
-        return LLM(model=model, api_key="ollama", base_url=base_url, client=client)
+        return LLM(
+            model=model,
+            api_key="ollama",
+            base_url=base_url,
+            client=client,
+            temperature=temperature,
+        )
 
     @staticmethod
     def with_perplexity(
@@ -242,9 +307,15 @@ class LLM(llm.LLM):
         base_url: str | None = "https://api.perplexity.ai",
         client: openai.AsyncClient | None = None,
         user: str | None = None,
+        temperature: float | None = None,
     ) -> LLM:
         return LLM(
-            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
         )
 
     @staticmethod
@@ -255,6 +326,7 @@ class LLM(llm.LLM):
         base_url: str | None = "https://api.together.xyz/v1",
         client: openai.AsyncClient | None = None,
         user: str | None = None,
+        temperature: float | None = None,
     ) -> LLM:
         """
         Create a new instance of TogetherAI LLM.
@@ -269,7 +341,12 @@ class LLM(llm.LLM):
             raise ValueError("TogetherAI API key is required")
 
         return LLM(
-            model=model, api_key=api_key, base_url=base_url, client=client, user=user
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
         )
 
     @staticmethod
@@ -286,6 +363,7 @@ class LLM(llm.LLM):
         project: str | None = None,
         base_url: str | None = None,
         user: str | None = None,
+        temperature: float | None = None,
     ) -> LLM:
         logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
         return LLM.with_azure(
@@ -299,6 +377,7 @@ class LLM(llm.LLM):
             project=project,
             base_url=base_url,
             user=user,
+            temperature=temperature,
         )
 
     def chat(
@@ -322,6 +401,8 @@ class LLM(llm.LLM):
                 opts["parallel_tool_calls"] = parallel_tool_calls
 
         user = self._opts.user or openai.NOT_GIVEN
+        if temperature is None:
+            temperature = self._opts.temperature
 
         messages = _build_oai_context(chat_ctx, id(self))
         cmp = self._client.chat.completions.create(

@@ -197,6 +197,7 @@ class ChunkedStream(tts.ChunkedStream):
                 content = await resp.text()
                 logger.error("11labs returned non-audio data: %s", content)
                 return
+
             encoding = _encoding_from_format(self._opts.encoding)
             if encoding == "mp3":
                 async for bytes_data, _ in resp.content.iter_chunks():
@@ -209,7 +210,6 @@ class ChunkedStream(tts.ChunkedStream):
                                     frame=frame,
                                 )
                             )
-                        )
             else:
                 async for bytes_data, _ in resp.content.iter_chunks():
                     for frame in bstream.write(bytes_data):
@@ -221,12 +221,12 @@ class ChunkedStream(tts.ChunkedStream):
                             )
                         )
 
-                for frame in bstream.flush():
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id, segment_id=segment_id, frame=frame
-                        )
+            for frame in bstream.flush():
+                self._event_ch.send_nowait(
+                    tts.SynthesizedAudio(
+                        request_id=request_id, segment_id=segment_id, frame=frame
                     )
+                )
 
 
 class SynthesizeStream(tts.SynthesizeStream):
