@@ -1,5 +1,4 @@
 import asyncio
-import functools
 import pathlib
 import signal
 import sys

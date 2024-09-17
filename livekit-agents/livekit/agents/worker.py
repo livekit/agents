@@ -13,10 +13,11 @@
 # limitations under the License.
 
 from __future__ import annotations
-import math
+
 import asyncio
 import contextlib
 import datetime
+import math
 import multiprocessing as mp
 import os
 import sys
@@ -24,7 +25,7 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import reduce
-from typing import Any, Awaitable, Callable, Literal, Generic, TypeVar
+from typing import Any, Awaitable, Callable, Generic, Literal, TypeVar
 from urllib.parse import urljoin, urlparse
 
 import aiohttp

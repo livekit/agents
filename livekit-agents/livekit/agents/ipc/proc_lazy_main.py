@@ -1,8 +1,8 @@
 import multiprocessing
 
 if multiprocessing.current_process().name == "job_proc":
-    import sys
     import signal
+    import sys
 
     # ignore signals in the jobs process (the parent process will handle them)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -20,12 +20,13 @@ def proc_main(args) -> None:
     """main function for the job process when using the ProcessJobRunner"""
 
     # import every package lazily
-    import logging
     import asyncio
+    import logging
+
     from .. import utils
-    from ..log import logger
-    from . import channel, proto, job_main
     from ..job import JobProcess
+    from ..log import logger
+    from . import channel, job_main, proto
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.NOTSET)
