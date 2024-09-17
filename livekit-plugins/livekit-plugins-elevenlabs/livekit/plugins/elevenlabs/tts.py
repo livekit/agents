@@ -328,6 +328,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             xml_content = []
             async for data in word_stream:
                 text = data.token
+
+                # send the xml phoneme in one go
                 if (
                     self._opts.enable_ssml_parsing
                     and data.token.startswith("<phoneme")
