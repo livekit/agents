@@ -202,7 +202,7 @@ class ChunkedStream(tts.ChunkedStream):
             if encoding == "mp3":
                 async for bytes_data, _ in resp.content.iter_chunks():
                     for frame in self._mp3_decoder.decode_chunk(bytes_data):
-                        for frame in bstream.write(frame.data):
+                        for frame in bstream.write(frame.data.tobytes()):
                             self._event_ch.send_nowait(
                                 tts.SynthesizedAudio(
                                     request_id=request_id,
@@ -325,14 +325,32 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def send_task():
             nonlocal eos_sent
 
+            xml_content = []
             async for data in word_stream:
+                text = data.token
+                if (
+                    self._opts.enable_ssml_parsing
+                    and data.token.startswith("<phoneme")
+                    or xml_content
+                ):
+                    xml_content.append(text)
+                    if data.token.find("</phoneme>") > -1:
+                        text = self._opts.word_tokenizer.format_words(xml_content)
+                        xml_content = []
+                    else:
+                        continue
+
                 # try_trigger_generation=True is a bad practice, we expose
                 # chunk_length_schedule instead
                 data_pkt = dict(
-                    text=f"{data.token} ",  # must always end with a space
+                    text=f"{text} ",  # must always end with a space
                     try_trigger_generation=False,
                 )
+                print(data_pkt)
                 await ws_conn.send_str(json.dumps(data_pkt))
+
+            if xml_content:
+                logger.warning("11labs stream ended with incomplete xml content")
 
             # no more token, mark eos
             eos_pkt = dict(text="")
