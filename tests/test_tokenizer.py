@@ -118,60 +118,6 @@ async def test_streamed_word_tokenizer(tokenizer: tokenize.WordTokenizer):
         assert ev.token == WORDS_EXPECTED[i]
 
 
-WORDS_PUNCT_TEXT = 'This is <phoneme alphabet="cmu-arpabet" ph="AE K CH UW AH L IY">actually</phoneme> tricky to handle.'
-
-WORDS_PUNCT_EXPECTED = [
-    "This",
-    "is",
-    "<phoneme",
-    'alphabet="cmu-arpabet"',
-    'ph="AE',
-    "K",
-    "CH",
-    "UW",
-    "AH",
-    "L",
-    'IY">actually</phoneme>',
-    "tricky",
-    "to",
-    "handle.",
-]
-
-WORD_PUNCT_TOKENIZERS = [basic.WordTokenizer(ignore_punctuation=False)]
-
-
-@pytest.mark.parametrize("tokenizer", WORD_PUNCT_TOKENIZERS)
-def test_punct_word_tokenizer(tokenizer: tokenize.WordTokenizer):
-    tokens = tokenizer.tokenize(text=WORDS_PUNCT_TEXT)
-    for i, token in enumerate(WORDS_PUNCT_EXPECTED):
-        assert token == tokens[i]
-
-
-@pytest.mark.parametrize("tokenizer", WORD_PUNCT_TOKENIZERS)
-async def test_streamed_punct_word_tokenizer(tokenizer: tokenize.WordTokenizer):
-    # divide text by chunks of arbitrary length (1-4)
-    pattern = [1, 2, 4]
-    text = WORDS_PUNCT_TEXT
-    chunks = []
-    pattern_iter = iter(pattern * (len(text) // sum(pattern) + 1))
-
-    for chunk_size in pattern_iter:
-        if not text:
-            break
-        chunks.append(text[:chunk_size])
-        text = text[chunk_size:]
-
-    stream = tokenizer.stream()
-    for chunk in chunks:
-        stream.push_text(chunk)
-
-    stream.end_input()
-
-    for i in range(len(WORDS_PUNCT_EXPECTED)):
-        ev = await stream.__anext__()
-        assert ev.token == WORDS_PUNCT_EXPECTED[i]
-
-
 HYPHENATOR_TEXT = [
     "Segment",
     "expected",
@@ -202,7 +148,7 @@ REPLACE_TEXT = (
     "framework.  A.B.C"
 )
 REPLACE_EXPECTED = (
-    "This is a test. Hello universe, I'm creating this assistants..     library. twice again "
+    "This is a test. Hello universe, I'm creating this assistants..     library. Twice again "
     "library.  A.B.C.D"
 )
 

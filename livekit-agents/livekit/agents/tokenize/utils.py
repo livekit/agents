@@ -36,6 +36,14 @@ def replace_words(
 
     replacements = {k.lower(): v for k, v in replacements.items()}
 
+    def _match_case(word, replacement):
+        if word.isupper():
+            return replacement.upper()
+        elif word.istitle():
+            return replacement.title()
+        else:
+            return replacement.lower()
+
     def _process_words(text, words):
         offset = 0
         processed_index = 0
@@ -46,14 +54,13 @@ def replace_words(
             if replacement:
                 text = (
                     text[: start_index + offset]
-                    + replacement
+                    + _match_case(word, replacement)
                     + text[end_index + offset - punctuation_off :]
                 )
                 offset += len(replacement) - len(word) + punctuation_off
 
             processed_index = end_index + offset
 
-        print(text)
         return text, processed_index
 
     if isinstance(text, str):

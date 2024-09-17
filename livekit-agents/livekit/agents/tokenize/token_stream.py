@@ -26,70 +26,65 @@ class BufferedTokenStream:
         self._current_segment_id = shortuuid()
 
         self._buf_tokens: list[str] = []  # <= min_token_len
-        self._in_buf = ""
-        self._out_buf = ""
+        self._buf = ""
 
     @typing.no_type_check
     def push_text(self, text: str) -> None:
         self._check_not_closed()
-        self._in_buf += text
+        self._buf += text
 
-        if len(self._in_buf) < self._min_ctx_len:
+        if len(self._buf) < self._min_ctx_len:
             return
 
-        while True:
-            tokens = self._tokenize_fnc(self._in_buf)
-            if len(tokens) <= 1:
-                break
+        tokens = self._tokenize_fnc(self._buf)
 
-            if self._out_buf:
-                self._out_buf += " "
+        buf_toks = []
+        buf = ""
+        while len(tokens) > 1:
+            if buf:
+                buf += " "
 
             tok = tokens.pop(0)
             tok_text = tok
             if isinstance(tok, tuple):
                 tok_text = tok[0]
 
-            self._out_buf += tok_text
-            if len(self._out_buf) >= self._min_token_len:
+            buf += tok_text
+            buf_toks.append(tok)
+            if len(buf) >= self._min_token_len:
                 self._event_ch.send_nowait(
-                    TokenData(token=self._out_buf, segment_id=self._current_segment_id)
+                    TokenData(token=buf, segment_id=self._current_segment_id)
                 )
 
-                self._out_buf = ""
+                if isinstance(tok, tuple):
+                    self._buf = self._buf[tok[2] :]
+                else:
+                    for i, tok in enumerate(buf_toks):
+                        tok_i = max(self._buf.find(tok), 0)
+                        self._buf = self._buf[tok_i + len(tok) :].lstrip()
 
-            if isinstance(tok, tuple):
-                self._in_buf = self._in_buf[tok[2] :]
-            else:
-                tok_i = max(self._in_buf.find(tok), 0)
-                print(self._in_buf.find(tok), self._in_buf, tok)
-                self._in_buf = self._in_buf[tok_i + len(tok) :].lstrip()
-                print(self._in_buf)
+                buf_toks = []
+                buf = ""
 
     @typing.no_type_check
     def flush(self) -> None:
         self._check_not_closed()
-
-        if self._in_buf or self._out_buf:
-            tokens = self._tokenize_fnc(self._in_buf)
+        if self._buf:
+            tokens = self._tokenize_fnc(self._buf)
             if tokens:
-                if self._out_buf:
-                    self._out_buf += " "
-
                 if isinstance(tokens[0], tuple):
-                    self._out_buf += " ".join([tok[0] for tok in tokens])
+                    buf = " ".join([tok[0] for tok in tokens])
                 else:
-                    self._out_buf += " ".join(tokens)
+                    buf = " ".join(tokens)
+            else:
+                buf = self._buf
 
-            if self._out_buf:
-                self._event_ch.send_nowait(
-                    TokenData(token=self._out_buf, segment_id=self._current_segment_id)
-                )
-
+            self._event_ch.send_nowait(
+                TokenData(token=buf, segment_id=self._current_segment_id)
+            )
             self._current_segment_id = shortuuid()
 
-        self._in_buf = ""
-        self._out_buf = ""
+        self._buf = ""
 
     def end_input(self) -> None:
         self.flush()
