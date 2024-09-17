@@ -40,6 +40,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._initialize_timeout = initialize_timeout
         self._loop = loop
 
+        self._num_idle_processes = num_idle_processes
         self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
         self._proc_needed_sem = asyncio.Semaphore(num_idle_processes)
         self._warmed_proc_queue = asyncio.Queue[JobExecutor]()
@@ -76,8 +77,13 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         await aio.gracefully_cancel(self._main_atask)
 
     async def launch_job(self, info: RunningJobInfo) -> None:
-        proc = await self._warmed_proc_queue.get()
-        self._proc_needed_sem.release()  # notify that a new process needs to be warmed/started
+        if self._num_idle_processes == 0:
+            self._proc_needed_sem.release()  # ask for a process if prewarmed processes are not disabled
+            proc = await self._warmed_proc_queue.get()
+        else:
+            proc = await self._warmed_proc_queue.get()
+            self._proc_needed_sem.release()  # notify that a new process can be warmed/started
+
         await proc.launch_job(info)
 
     @utils.log_exceptions(logger=logger)
