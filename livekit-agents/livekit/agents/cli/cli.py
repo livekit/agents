@@ -292,6 +292,9 @@ def run_worker(args: proto.CliArgs) -> None:
                 loop.run_until_complete(watch_client.aclose())
         except KeyboardInterrupt:
             logger.warning("exiting forcefully")
+            import os
+
+            os._exit(1)  # TODO(theomonnom): add aclose(force=True) in worker
     finally:
         try:
             tasks = asyncio.all_tasks(loop)
