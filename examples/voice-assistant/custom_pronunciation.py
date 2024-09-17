@@ -5,7 +5,7 @@ from typing import AsyncIterable
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm, tokenize
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import elevenlabs, deepgram, openai, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 load_dotenv()
 
@@ -36,7 +36,7 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD.load(),
         stt=deepgram_stt,
         llm=openai.LLM(),
-        tts=elevenlabs.TTS(),
+        tts=cartesia.TTS(),
         chat_ctx=initial_ctx,
         before_tts_cb=_before_tts_cb,
     )
