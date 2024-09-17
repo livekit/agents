@@ -82,7 +82,7 @@ class OnFileUploadedInfo:
     openai_file_object: FileObject
 
 
-type OnFileUploaded = Callable[[OnFileUploadedInfo], None | Coroutine[None, None, None]]
+OnFileUploaded = Callable[[OnFileUploadedInfo], None | Coroutine[None, None, None]]
 
 
 class AssistantLLM(llm.LLM):
