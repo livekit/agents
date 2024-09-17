@@ -180,10 +180,10 @@ class ColoredFormatter(logging.Formatter):
         return msg + self._esc_codes["esc_reset"]
 
 
-def setup_logging(log_level: str, production: bool = True) -> None:
+def setup_logging(log_level: str, devmode: bool) -> None:
     handler = logging.StreamHandler()
 
-    if not production:
+    if devmode:
         # colorful logs for dev (improves readability)
         colored_formatter = ColoredFormatter(
             "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(extra)s"
