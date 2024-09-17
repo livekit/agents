@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import uuid
 from dataclasses import dataclass
@@ -176,6 +177,7 @@ class AssistantLLM(llm.LLM):
         if not self._sync_openai_task:
             self._sync_openai_task = asyncio.create_task(self._sync_openai())
 
+        print("NEIL chatting with", chat_ctx)
         return AssistantLLMStream(
             temperature=temperature,
             assistant_llm=self,
@@ -408,14 +410,18 @@ class AssistantLLMStream(llm.LLMStream):
                 "event_handler": eh,
                 "temperature": self._temperature,
             }
+            print("NEIL kwargs", kwargs)
             if self._fnc_ctx:
                 kwargs["tools"] = [
                     llm._oai_api.build_oai_function_description(f)
                     for f in self._fnc_ctx.ai_functions.values()
                 ]
 
-            async with self._client.beta.threads.runs.stream(**kwargs) as stream:
-                await stream.until_done()
+            try:
+                async with self._client.beta.threads.runs.stream(**kwargs) as stream:
+                    await stream.until_done()
+            except Exception as e:
+                print("NEIL error", e)
 
             await self._output_queue.put(None)
 
@@ -470,9 +476,10 @@ class AssistantLLMStream(llm.LLMStream):
 
         encoded_data = utils.images.encode(frame, opts)
         fileObj = await self._client.files.create(
-            file=encoded_data,
+            file=("image.jpg", encoded_data),
             purpose="vision",
         )
+
         return fileObj
 
     async def __anext__(self):
@@ -505,7 +512,7 @@ def build_oai_message(msg: llm.ChatMessage, cache_key: Any):
                     oai_content.append(
                         {
                             "type": "image_file",
-                            "image_file": {"file": cnt._cache[OPENAI_FILE_ID_KEY]},
+                            "image_file": {"file_id": cnt._cache[OPENAI_FILE_ID_KEY]},
                         }
                     )
 
