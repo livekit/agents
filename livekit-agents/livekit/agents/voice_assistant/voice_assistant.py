@@ -9,8 +9,8 @@ from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, U
 from livekit import rtc
 
 from .. import stt, tokenize, tts, utils, vad
-from ..proto import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from ..proto import AgentState
 from .agent_output import AgentOutput, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
