@@ -1,6 +1,5 @@
 ---
 "livekit-agents": patch
-"livekit-plugins-deepgram": patch
 "livekit-plugins-elevenlabs": patch
 ---
 
