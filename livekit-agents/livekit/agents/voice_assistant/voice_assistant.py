@@ -19,7 +19,7 @@ from .plotter import AssistantPlotter
 from .speech_handle import SpeechHandle
 
 BeforeLLMCallback = Callable[
-    ["VoiceAssistant", ChatContext],
+    ["VoiceAssistant", ChatContext, Optional[str]],
     Union[Optional[LLMStream], Awaitable[Optional[LLMStream]], Literal[False]],
 ]
 
@@ -73,11 +73,12 @@ class AssistantCallContext:
 
 
 def _default_before_llm_cb(
-    assistant: VoiceAssistant, chat_ctx: ChatContext
+    assistant: VoiceAssistant, chat_ctx: ChatContext, inference_id: str
 ) -> LLMStream:
     return assistant.llm.chat(
         chat_ctx=chat_ctx,
         fnc_ctx=assistant.fnc_ctx,
+        inference_id=inference_id,
     )
 
 
@@ -329,6 +330,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         *,
         allow_interruptions: bool = True,
         add_to_chat_ctx: bool = True,
+        inference_id: str | None = None,
     ) -> None:
         """
         Play a speech source through the voice assistant.
@@ -342,7 +344,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         await self._track_published_fut
 
         new_handle = SpeechHandle.create_assistant_speech(
-            allow_interruptions=allow_interruptions, add_to_chat_ctx=add_to_chat_ctx
+            allow_interruptions=allow_interruptions,
+            add_to_chat_ctx=add_to_chat_ctx,
+            inference_id=inference_id,
         )
         synthesis_handle = self._synthesize_agent_speech(new_handle.id, source)
         new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
@@ -539,6 +543,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     ChatMessage.create(
                         text=playing_speech.synthesis_handle.tts_forwarder.played_text,
                         role="assistant",
+                        inference_id=playing_speech.id,
                     )
                 )
 
@@ -546,7 +551,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ChatMessage.create(text=handle.user_question, role="user")
         )
 
-        llm_stream = self._opts.before_llm_cb(self, copied_ctx)
+        llm_stream = self._opts.before_llm_cb(self, copied_ctx, inference_id=handle.id)
         if llm_stream is False:
             return
 
@@ -555,7 +560,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         # fallback to default impl if no custom/user stream is returned
         if not isinstance(llm_stream, LLMStream):
-            llm_stream = _default_before_llm_cb(self, chat_ctx=copied_ctx)
+            llm_stream = _default_before_llm_cb(
+                self, chat_ctx=copied_ctx, inference_id=handle.id
+            )
 
         if handle.interrupted:
             return
@@ -727,7 +734,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             if interrupted:
                 collected_text += "..."
 
-            msg = ChatMessage.create(text=collected_text, role="assistant")
+            msg = ChatMessage.create(
+                text=collected_text, role="assistant", inference_id=speech_handle.id
+            )
             self._chat_ctx.messages.append(msg)
 
             speech_handle.mark_speech_commited()

@@ -38,6 +38,7 @@ class LLM(abc.ABC):
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
+        inference_id: str | None = None,
     ) -> "LLMStream": ...
 
 
