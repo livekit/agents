@@ -18,10 +18,11 @@ import asyncio
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, MutableSet, Union
+from typing import Any, Callable, Coroutine, Dict, Literal, MutableSet, Union
 
 import httpx
-from livekit.agents import llm
+from livekit import rtc
+from livekit.agents import llm, utils
 
 from openai import AsyncAssistantEventHandler, AsyncClient
 from openai.types.beta.threads import Text, TextDelta
@@ -32,15 +33,16 @@ from openai.types.beta.threads.runs import (
     FunctionToolCall,
     ToolCall,
 )
+from openai.types.file_object import FileObject
 
 from ..log import logger
 from ..models import ChatModels
-from ..utils import build_oai_message
 
 DEFAULT_MODEL = "gpt-4o"
 OPENAI_MESSAGE_ID_KEY = "__openai_message_id__"
 LIVEKIT_MESSAGE_ID_KEY = "__livekit_message_id__"
 OPENAI_MESSAGES_ADDED_KEY = "__openai_messages_added__"
+OPENAI_FILE_ID_KEY = "__openai_file_id__"
 
 
 @dataclass
@@ -73,6 +75,16 @@ class AssistantLoadOptions:
     thread_id: str | None
 
 
+@dataclass
+class OnFileUploadedInfo:
+    type: Literal["image"]
+    original_file: llm.ChatImage
+    openai_file_object: FileObject
+
+
+type OnFileUploaded = Callable[[OnFileUploadedInfo], None | Coroutine[None, None, None]]
+
+
 class AssistantLLM(llm.LLM):
     def __init__(
         self,
@@ -81,6 +93,7 @@ class AssistantLLM(llm.LLM):
         client: AsyncClient | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
+        on_file_uploaded: OnFileUploaded | None = None,
     ) -> None:
         test_ctx = llm.ChatContext()
         if not hasattr(test_ctx, "_metadata"):
@@ -102,6 +115,7 @@ class AssistantLLM(llm.LLM):
         )
         self._assistant_opts = assistant_opts
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
+        self._on_file_uploaded = on_file_uploaded
 
         self._sync_openai_task: asyncio.Task[AssistantLoadOptions] | None = None
         try:
@@ -169,6 +183,7 @@ class AssistantLLM(llm.LLM):
             client=self._client,
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
+            on_file_uploaded=self._on_file_uploaded,
         )
 
 
@@ -241,11 +256,13 @@ class AssistantLLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
         temperature: float | None,
+        on_file_uploaded: OnFileUploaded | None,
     ) -> None:
         super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._llm = assistant_llm
         self._client = client
         self._temperature = temperature
+        self._on_file_uploaded = on_file_uploaded
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
@@ -317,6 +334,37 @@ class AssistantLLMStream(llm.LLMStream):
                         f"Deleted message '{msg_id}' in thread '{load_options.thread_id}'"
                     )
                     openai_addded_messages_set.remove(msg_id)
+
+            # Upload any images in the chat_ctx that have not been uploaded to OpenAI
+            for msg in self._chat_ctx.messages:
+                if msg.role != "user":
+                    continue
+
+                if not isinstance(msg.content, list):
+                    continue
+
+                for cnt in msg.content:
+                    if (
+                        not isinstance(cnt, llm.ChatImage)
+                        or OPENAI_FILE_ID_KEY in cnt._cache
+                    ):
+                        continue
+
+                    if isinstance(cnt.image, str):
+                        continue
+
+                    file_obj = await self._upload_frame(
+                        cnt.image, cnt.inference_width, cnt.inference_height
+                    )
+                    cnt._cache[OPENAI_FILE_ID_KEY] = file_obj.id
+                    if self._on_file_uploaded:
+                        self._on_file_uploaded(
+                            OnFileUploadedInfo(
+                                type="image",
+                                original_file=cnt,
+                                openai_file_object=file_obj,
+                            )
+                        )
 
             # Keep track of the new messages in the chat_ctx that we need to add to OpenAI
             additional_messages: list[AdditionalMessage] = []
@@ -404,6 +452,29 @@ class AssistantLLMStream(llm.LLMStream):
         finally:
             self._done_future.set_result(None)
 
+    async def _upload_frame(
+        self,
+        frame: rtc.VideoFrame,
+        inference_width: int | None,
+        inference_height: int | None,
+    ):
+        # inside our internal implementation, we allow to put extra metadata to
+        # each ChatImage (avoid to reencode each time we do a chatcompletion request)
+        opts = utils.images.EncodeOptions()
+        if inference_width and inference_height:
+            opts.resize_options = utils.images.ResizeOptions(
+                width=inference_width,
+                height=inference_height,
+                strategy="center_aspect_fit",
+            )
+
+        encoded_data = utils.images.encode(frame, opts)
+        fileObj = await self._client.files.create(
+            file=encoded_data,
+            purpose="vision",
+        )
+        return fileObj
+
     async def __anext__(self):
         item = await self._output_queue.get()
         if item is None:
@@ -413,3 +484,53 @@ class AssistantLLMStream(llm.LLMStream):
             raise item
 
         return item
+
+
+def build_oai_message(msg: llm.ChatMessage, cache_key: Any):
+    oai_msg: dict[str, Any] = {"role": msg.role}
+
+    if msg.name:
+        oai_msg["name"] = msg.name
+
+    # add content if provided
+    if isinstance(msg.content, str):
+        oai_msg["content"] = msg.content
+    elif isinstance(msg.content, list):
+        oai_content: list[dict[str, Any]] = []
+        for cnt in msg.content:
+            if isinstance(cnt, str):
+                oai_content.append({"type": "text", "text": cnt})
+            elif isinstance(cnt, llm.ChatImage):
+                if cnt._cache[OPENAI_FILE_ID_KEY]:
+                    oai_content.append(
+                        {
+                            "type": "image_file",
+                            "image_file": {"file": cnt._cache[OPENAI_FILE_ID_KEY]},
+                        }
+                    )
+
+        oai_msg["content"] = oai_content
+
+    # make sure to provide when function has been called inside the context
+    # (+ raw_arguments)
+    if msg.tool_calls is not None:
+        tool_calls: list[dict[str, Any]] = []
+        oai_msg["tool_calls"] = tool_calls
+        for fnc in msg.tool_calls:
+            tool_calls.append(
+                {
+                    "id": fnc.tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": fnc.function_info.name,
+                        "arguments": fnc.raw_arguments,
+                    },
+                }
+            )
+
+    # tool_call_id is set when the message is a response/result to a function call
+    # (content is a string in this case)
+    if msg.tool_call_id:
+        oai_msg["tool_call_id"] = msg.tool_call_id
+
+    return oai_msg
