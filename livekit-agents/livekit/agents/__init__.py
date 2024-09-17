@@ -31,7 +31,7 @@ __all__ = [
     "JobExecutorType",
     "AutoSubscribe",
     "AgentState",
-    "ATTR_AGENT_STATE"
+    "ATTR_AGENT_STATE",
     "Plugin",
     "ipc",
     "stt",
