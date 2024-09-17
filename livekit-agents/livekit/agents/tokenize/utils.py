@@ -53,7 +53,6 @@ def replace_words(
 
             processed_index = end_index + offset
 
-        print(text)
         return text, processed_index
 
     if isinstance(text, str):

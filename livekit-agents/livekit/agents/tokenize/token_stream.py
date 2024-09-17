@@ -62,9 +62,7 @@ class BufferedTokenStream:
                 self._in_buf = self._in_buf[tok[2] :]
             else:
                 tok_i = max(self._in_buf.find(tok), 0)
-                print(self._in_buf.find(tok), self._in_buf, tok)
                 self._in_buf = self._in_buf[tok_i + len(tok) :].lstrip()
-                print(self._in_buf)
 
     @typing.no_type_check
     def flush(self) -> None:
