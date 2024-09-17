@@ -142,11 +142,11 @@ class WorkerOptions:
     job_executor_type: JobExecutorType = _default_job_executor_type
     """Which executor to use to run jobs. (currently thread or process are supported)"""
     load_threshold: float | _WorkerEnvOption[float] = _WorkerEnvOption(
-        dev_default=math.inf, prod_default=0.8
+        dev_default=math.inf, prod_default=0.75
     )
     """When the load exceeds this threshold, the worker will be marked as unavailable.
     
-    Defaults to 0.8 on "production" mode, and is disabled in "development" mode.
+    Defaults to 0.75 on "production" mode, and is disabled in "development" mode.
     """
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
         dev_default=0, prod_default=3
