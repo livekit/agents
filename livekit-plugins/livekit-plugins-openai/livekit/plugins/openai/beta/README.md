@@ -16,6 +16,7 @@ from livekit.plugins.openai.beta import (
     AssistantCreateOptions,
     AssistantLLM,
     AssistantOptions,
+    OnFileUploadedInfo
 )
 
 load_dotenv()
@@ -25,6 +26,12 @@ async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext()
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+
+    # When using vision capabilities, files are uploaded.
+    # It's up to you to remove them if desired or otherwise manage
+    # them going forward.
+    def on_file_uploaded(self, info: OnFileUploadedInfo):
+        pass
 
     assistant = VoiceAssistant(
         vad=silero.VAD.load(),
@@ -40,6 +47,7 @@ async def entrypoint(ctx: JobContext):
         ),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
+        on_file_uploaded: on_file_uploaded,
     )
     assistant.start(ctx.room)
 

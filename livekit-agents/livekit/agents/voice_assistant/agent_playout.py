@@ -161,11 +161,13 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             handle._total_played_time = (
                 handle._pushed_duration - self._audio_source.queued_duration
             )
+
+            if handle.interrupted or capture_task.exception():
+                self._audio_source.clear_queue()  # make sure to remove any queued frames
+
             if not first_frame:
                 if not handle.interrupted:
                     handle._tr_fwd.segment_playout_finished()
-                else:
-                    self._audio_source.clear_queue()  # make sure to remove any queued frames
 
                 self.emit("playout_stopped", handle.interrupted)
 
