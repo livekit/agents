@@ -136,7 +136,7 @@ class SpeechStream(stt.SpeechStream):
         self._queue = asyncio.Queue[Union[rtc.AudioFrame, str]]()
         self._event_queue = asyncio.Queue[Optional[stt.SpeechEvent]]()
         self._closed = False
-        self._main_task = asyncio.create_task(self._run(max_retry))
+        self._max_retry = max_retry
 
         if self._num_channels != 1:
             raise ValueError(f"AssemblyAI only supports mono audio, but a `num_channels` of {self._num_channels} was provided")
@@ -161,6 +161,9 @@ class SpeechStream(stt.SpeechStream):
             await self._main_task
 
         await self._session.close()
+
+    async def _main_task(self) -> None:
+        return self._run(self._max_retry)
 
     async def _run(self, max_retry: int) -> None:
         """
