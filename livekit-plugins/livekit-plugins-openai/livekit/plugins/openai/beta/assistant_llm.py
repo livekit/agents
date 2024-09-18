@@ -176,7 +176,6 @@ class AssistantLLM(llm.LLM):
         if not self._sync_openai_task:
             self._sync_openai_task = asyncio.create_task(self._sync_openai())
 
-        print("NEIL chatting with", chat_ctx)
         return AssistantLLMStream(
             temperature=temperature,
             assistant_llm=self,
@@ -409,18 +408,14 @@ class AssistantLLMStream(llm.LLMStream):
                 "event_handler": eh,
                 "temperature": self._temperature,
             }
-            print("NEIL kwargs", kwargs)
             if self._fnc_ctx:
                 kwargs["tools"] = [
                     llm._oai_api.build_oai_function_description(f)
                     for f in self._fnc_ctx.ai_functions.values()
                 ]
 
-            try:
-                async with self._client.beta.threads.runs.stream(**kwargs) as stream:
-                    await stream.until_done()
-            except Exception as e:
-                print("NEIL error", e)
+            async with self._client.beta.threads.runs.stream(**kwargs) as stream:
+                await stream.until_done()
 
             await self._output_queue.put(None)
 
