@@ -170,7 +170,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 Returning None will create a default LLM stream. You can also return your own llm
                 stream by calling the llm.chat() method.
 
-                Return False will cancel the synthesis of the reply.
+                Returning False will cancel the synthesis of the reply.
             before_tts_cb: Callback called when the assistant is about to
                 synthesize a speech. This can be used to customize text before the speech synthesis.
                 (e.g: editing the pronunciation of a word).
