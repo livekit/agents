@@ -94,7 +94,7 @@ class _ImplOptions:
     allow_interruptions: bool
     int_speech_duration: float
     int_min_words: int
-    turn_completion_delay: float
+    min_endpointing_delay: float
     preemptive_synthesis: bool
     before_llm_cb: BeforeLLMCallback
     before_tts_cb: BeforeTTSCallback
@@ -189,7 +189,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             allow_interruptions=allow_interruptions,
             int_speech_duration=interrupt_speech_duration,
             int_min_words=interrupt_min_words,
-            turn_completion_delay=min_endpointing_delay,
+            min_endpointing_delay=min_endpointing_delay,
             preemptive_synthesis=preemptive_synthesis,
             transcription=transcription,
             before_llm_cb=before_llm_cb,
@@ -234,7 +234,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         self._deferred_validation = _DeferredReplyValidation(
             self._validate_reply_if_possible,
-            self._opts.turn_completion_delay,
+            self._opts.min_endpointing_delay,
             loop=self._loop,
         )
 
