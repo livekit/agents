@@ -3,6 +3,8 @@ from .assistant_llm import (
     AssistantLLM,
     AssistantLoadOptions,
     AssistantOptions,
+    OnFileUploaded,
+    OnFileUploadedInfo,
 )
 
 __all__ = [
@@ -10,4 +12,6 @@ __all__ = [
     "AssistantOptions",
     "AssistantCreateOptions",
     "AssistantLoadOptions",
+    "OnFileUploaded",
+    "OnFileUploadedInfo",
 ]
