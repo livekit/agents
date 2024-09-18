@@ -19,7 +19,7 @@ from .speech_handle import SpeechHandle
 
 BeforeLLMCallback = Callable[
     ["VoiceAssistant", ChatContext],
-    Union[Optional[LLMStream], Awaitable[Optional[LLMStream]]],
+    Union[Optional[LLMStream], Awaitable[Optional[LLMStream]], Literal[False]],
 ]
 
 WillSynthesizeAssistantReply = BeforeLLMCallback
@@ -166,6 +166,11 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             transcription: Options for assistant transcription.
             before_llm_cb: Callback called when the assistant is about to synthesize a reply.
                 This can be used to customize the reply (e.g: inject context/RAG).
+
+                Returning None will create a default LLM stream. You can also return your own llm
+                stream by calling the llm.chat() method.
+
+                Returning False will cancel the synthesis of the reply.
             before_tts_cb: Callback called when the assistant is about to
                 synthesize a speech. This can be used to customize text before the speech synthesis.
                 (e.g: editing the pronunciation of a word).
@@ -538,6 +543,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         )
 
         llm_stream = self._opts.before_llm_cb(self, copied_ctx)
+        if llm_stream is False:
+            return
+
         if asyncio.iscoroutine(llm_stream):
             llm_stream = await llm_stream
 
