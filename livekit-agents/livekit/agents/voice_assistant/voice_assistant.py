@@ -10,6 +10,7 @@ from livekit import rtc
 
 from .. import stt, tokenize, tts, utils, vad
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from ..proto import ATTR_AGENT_STATE, AgentState
 from .agent_output import AgentOutput, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
@@ -41,9 +42,6 @@ EventTypes = Literal[
     "function_calls_collected",
     "function_calls_finished",
 ]
-
-VoiceAssistantState = Literal["initializing", "listening", "thinking", "speaking"]
-
 
 _CallContextVar = contextvars.ContextVar["AssistantCallContext"](
     "voice_assistant_contextvar"
@@ -350,8 +348,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
         self._add_speech_for_playout(new_handle)
 
-    def _update_state(self, state: VoiceAssistantState, delay: float = 0.0):
-        """Set the current state of the voice assistant"""
+    def _update_state(self, state: AgentState, delay: float = 0.0):
+        """Set the current state of the agent"""
 
         @utils.log_exceptions(logger=logger)
         async def _run_task(delay: float) -> None:
@@ -359,7 +357,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
             if self._room.isconnected():
                 await self._room.local_participant.set_attributes(
-                    {"voice_assistant.state": state}
+                    {ATTR_AGENT_STATE: state}
                 )
 
         if self._update_state_task is not None:
