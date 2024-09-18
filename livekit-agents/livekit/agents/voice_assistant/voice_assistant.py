@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import time
 from dataclasses import dataclass
+from enum import Enum, unique
 from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, Union
 
 from livekit import rtc
@@ -48,6 +49,13 @@ VoiceAssistantState = Literal["initializing", "listening", "thinking", "speaking
 _CallContextVar = contextvars.ContextVar["AssistantCallContext"](
     "voice_assistant_contextvar"
 )
+
+
+@unique
+class TranscriptionType(Enum):
+    TRANSCRIPTION = "transcription"
+    CHAT = "chat"
+    CHAT_AND_TRANSCRIPTION = "chat_and_transcription"
 
 
 class AssistantCallContext:
@@ -122,6 +130,9 @@ class AssistantTranscriptionOptions:
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
     """A function that takes a string (word) as input and returns a list of strings,
     representing the hyphenated parts of the word."""
+    type: TranscriptionType = TranscriptionType.CHAT_AND_TRANSCRIPTION
+    """Allows to specify in which form audio transcriptions are forwarded to the client.
+    By default transcriptions will be sent as native transcriptions and as chat messages."""
 
 
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
