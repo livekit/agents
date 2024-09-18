@@ -25,7 +25,13 @@ import aiohttp
 from livekit.agents import tokenize, tts, utils
 
 from .log import logger
-from .models import TTSDefaultVoiceId, TTSEncoding, TTSModels
+from .models import (
+    TTSDefaultVoiceId,
+    TTSEncoding,
+    TTSModels,
+    TTSVoiceEmotion,
+    TTSVoiceSpeed,
+)
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
@@ -41,6 +47,8 @@ class _TTSOptions:
     encoding: TTSEncoding
     sample_rate: int
     voice: str | list[float]
+    speed: TTSVoiceSpeed | float | None
+    emotion: list[TTSVoiceEmotion | str] | None
     api_key: str
     language: str
 
@@ -53,6 +61,8 @@ class TTS(tts.TTS):
         language: str = "en",
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
+        speed: TTSVoiceSpeed | float | None = None,
+        emotion: list[TTSVoiceEmotion | str] | None = None,
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -60,8 +70,18 @@ class TTS(tts.TTS):
         """
         Create a new instance of Cartesia TTS.
 
-        ``api_key`` must be set to your Cartesia API key, either using the argument or by setting
-        the ``CARTESIA_API_KEY`` environmental variable.
+        See https://docs.cartesia.ai/reference/web-socket/stream-speech/stream-speech for more details on the the Cartesia API.
+
+        Args:
+            model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-english".
+            language (str, optional): The language code for synthesis. Defaults to "en".
+            encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
+            voice (str | list[float], optional): The voice ID or embedding array.
+            speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
+            emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
+            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
+            api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
+            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
         """
 
         super().__init__(
@@ -80,6 +100,8 @@ class TTS(tts.TTS):
             encoding=encoding,
             sample_rate=sample_rate,
             voice=voice,
+            speed=speed,
+            emotion=emotion,
             api_key=api_key,
         )
         self._session = http_session
@@ -274,6 +296,15 @@ def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
     else:
         voice["mode"] = "embedding"
         voice["embedding"] = opts.voice
+
+    voice_controls: dict = {}
+    if opts.speed is not None:
+        voice_controls["speed"] = opts.speed
+    if opts.emotion is not None:
+        voice_controls["emotion"] = opts.emotion
+
+    if voice_controls:
+        voice["__experimental_controls"] = voice_controls
 
     return {
         "model_id": opts.model,

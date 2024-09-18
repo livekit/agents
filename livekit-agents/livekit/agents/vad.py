@@ -69,7 +69,7 @@ class VADStream(ABC):
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @abstractmethod
-    def _main_task(self) -> None: ...
+    async def _main_task(self) -> None: ...
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push some text to be synthesized"""

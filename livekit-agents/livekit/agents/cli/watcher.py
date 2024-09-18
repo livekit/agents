@@ -6,6 +6,7 @@ import json
 import pathlib
 import socket
 import urllib.parse
+import urllib.request
 from importlib.metadata import Distribution, PackageNotFoundError
 from typing import Any, Callable, Set
 
@@ -52,7 +53,9 @@ def _find_watchable_paths(main_file: pathlib.Path) -> list[pathlib.Path]:
             path: str | None = durl_json.get("url")
             if path and path.startswith("file://"):
                 parsed_url = urllib.parse.urlparse(path)
-                file_path = pathlib.Path(urllib.parse.unquote(parsed_url.path))
+                file_url_path = urllib.parse.unquote(parsed_url.path)
+                local_path = urllib.request.url2pathname(file_url_path)
+                file_path = pathlib.Path(local_path)
                 paths.append(file_path)
 
     return paths
@@ -83,15 +86,18 @@ class WatchServer:
         self._pch = await utils.aio.duplex_unix._AsyncDuplex.open(self._mp_pch)
 
         read_ipc_task = self._loop.create_task(self._read_ipc_task())
-        await watchfiles.arun_process(
-            *watch_paths,
-            target=self._worker_runner,
-            args=(self._cli_args,),
-            watch_filter=watchfiles.filters.PythonFilter(),
-            callback=self._on_reload,
-        )
 
-        await utils.aio.gracefully_cancel(read_ipc_task)
+        try:
+            await watchfiles.arun_process(
+                *watch_paths,
+                target=self._worker_runner,
+                args=(self._cli_args,),
+                watch_filter=watchfiles.filters.PythonFilter(),
+                callback=self._on_reload,
+            )
+        finally:
+            await utils.aio.gracefully_cancel(read_ipc_task)
+            await self._pch.aclose()
 
     async def _on_reload(self, _: Set[watchfiles.main.FileChange]) -> None:
         if self._reloading_jobs:
@@ -138,25 +144,28 @@ class WatchClient:
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
-        self._cch = await utils.aio.duplex_unix._AsyncDuplex.open(self._mp_cch)
+        try:
+            self._cch = await utils.aio.duplex_unix._AsyncDuplex.open(self._mp_cch)
 
-        await channel.asend_message(self._cch, proto.ReloadJobsRequest())
-        while True:
-            try:
-                msg = await channel.arecv_message(self._cch, proto.IPC_MESSAGES)
-            except utils.aio.duplex_unix.DuplexClosed:
-                break
+            await channel.asend_message(self._cch, proto.ReloadJobsRequest())
+            while True:
+                try:
+                    msg = await channel.arecv_message(self._cch, proto.IPC_MESSAGES)
+                except utils.aio.duplex_unix.DuplexClosed:
+                    break
 
-            if isinstance(msg, proto.ActiveJobsRequest):
-                jobs = self._worker.active_jobs
+                if isinstance(msg, proto.ActiveJobsRequest):
+                    jobs = self._worker.active_jobs
 
-                await channel.asend_message(
-                    self._cch, proto.ActiveJobsResponse(jobs=jobs)
-                )
-            elif isinstance(msg, proto.ReloadJobsResponse):
-                # TODO(theomonnom): wait for the worker to be fully initialized/connected
-                await self._worker._reload_jobs(msg.jobs)
-                await channel.asend_message(self._cch, proto.Reloaded())
+                    await channel.asend_message(
+                        self._cch, proto.ActiveJobsResponse(jobs=jobs)
+                    )
+                elif isinstance(msg, proto.ReloadJobsResponse):
+                    # TODO(theomonnom): wait for the worker to be fully initialized/connected
+                    await self._worker._reload_jobs(msg.jobs)
+                    await channel.asend_message(self._cch, proto.Reloaded())
+        except utils.aio.duplex_unix.DuplexClosed:
+            pass
 
     async def aclose(self) -> None:
         if not self._main_task:

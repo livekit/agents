@@ -16,7 +16,6 @@ import asyncio
 import os
 from dataclasses import dataclass
 
-from livekit import rtc
 from livekit.agents import tts, utils
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
@@ -80,17 +79,18 @@ class ChunkedStream(tts.ChunkedStream):
 
     @utils.log_exceptions()
     async def _main_task(self):
-        stream_callback = _PushAudioOutputStreamCallback(
-            asyncio.get_running_loop(), self._event_ch
+        stream_callback = speechsdk.audio.PushAudioOutputStream(
+            _PushAudioOutputStreamCallback(asyncio.get_running_loop(), self._event_ch)
         )
         synthesizer = _create_speech_synthesizer(
             config=self._opts,
-            stream=speechsdk.audio.PushAudioOutputStream(stream_callback),
+            stream=stream_callback,
         )
 
         def _synthesize() -> speechsdk.SpeechSynthesisResult:
             return synthesizer.speak_text_async(self._text).get()  # type: ignore
 
+        result = None
         try:
             result = await asyncio.to_thread(_synthesize)
             if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
@@ -100,8 +100,11 @@ class ChunkedStream(tts.ChunkedStream):
         finally:
 
             def _cleanup() -> None:
-                nonlocal synthesizer, result
+                # cleanup resources inside an Executor
+                # to avoid blocking the event loop
+                nonlocal synthesizer, stream_callback, result
                 del synthesizer
+                del stream_callback
                 del result
 
             await asyncio.to_thread(_cleanup)
@@ -119,19 +122,29 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         self._request_id = utils.shortuuid()
         self._segment_id = utils.shortuuid()
 
-    def write(self, audio_buffer: memoryview) -> int:
-        audio = tts.SynthesizedAudio(
-            request_id=self._request_id,
-            segment_id=self._segment_id,
-            frame=rtc.AudioFrame(
-                data=audio_buffer,
-                sample_rate=AZURE_SAMPLE_RATE,
-                num_channels=AZURE_NUM_CHANNELS,
-                samples_per_channel=audio_buffer.nbytes // 2,
-            ),
+        self._bstream = utils.audio.AudioByteStream(
+            sample_rate=AZURE_SAMPLE_RATE, num_channels=AZURE_NUM_CHANNELS
         )
-        self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
+
+    def write(self, audio_buffer: memoryview) -> int:
+        for frame in self._bstream.write(audio_buffer.tobytes()):
+            audio = tts.SynthesizedAudio(
+                request_id=self._request_id,
+                segment_id=self._segment_id,
+                frame=frame,
+            )
+            self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
+
         return audio_buffer.nbytes
+
+    def close(self) -> None:
+        for frame in self._bstream.flush():
+            audio = tts.SynthesizedAudio(
+                request_id=self._request_id,
+                segment_id=self._segment_id,
+                frame=frame,
+            )
+            self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
 
 
 def _create_speech_synthesizer(
