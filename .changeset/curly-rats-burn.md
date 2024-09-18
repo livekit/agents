@@ -1,5 +1,5 @@
 ---
-"livekit-agents": patch
+"livekit-agents": minor
 ---
 
 rename voice_assistant.state to agent.state
