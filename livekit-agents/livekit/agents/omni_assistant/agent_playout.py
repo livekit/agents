@@ -120,11 +120,11 @@ class AgentPlayout:
                 handle._tr_fwd.push_audio(frame)
 
                 for f in bstream.write(frame.data.tobytes()):
-                    handle._pushed_duration += samples_per_channel / f.sample_rate
+                    handle._pushed_duration += f.samples_per_channel/ f.sample_rate
                     await self._source.capture_frame(f)
 
             for f in bstream.flush():
-                handle._pushed_duration += samples_per_channel / f.sample_rate
+                handle._pushed_duration += f.samples_per_channel / f.sample_rate
                 await self._source.capture_frame(f)
 
             await self._source.wait_for_playout()

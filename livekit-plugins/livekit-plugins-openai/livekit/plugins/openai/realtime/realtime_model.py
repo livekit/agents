@@ -393,13 +393,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
 
                 try:
                     data = msg.json()
-                    import copy
-
-                    test = copy.deepcopy(data)
-                    # truncate data for print
-                    if "data" in test:
-                        test["data"] = test["data"][:100]
-                    print(test)
                     event: api_proto.ServerEventType = data["event"]
 
                     if event == "start_session":
