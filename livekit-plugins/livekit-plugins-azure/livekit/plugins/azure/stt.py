@@ -45,6 +45,13 @@ class STT(stt.STT):
         num_channels: int = 1,
         languages: list[str] = [],  # when empty, auto-detect the language
     ):
+        """
+        Create a new instance of Azure STT.
+
+        ``speech_key`` and ``speech_region`` must be set, either using arguments or by setting the
+        ``AZURE_SPEECH_KEY`` and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
+        """
+
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
         )

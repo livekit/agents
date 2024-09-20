@@ -1,4 +1,3 @@
-import asyncio
 import pickle
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
@@ -13,9 +12,10 @@ with open("my_data.pkl", "rb") as f:
 
 
 async def entrypoint(ctx: JobContext):
-    async def _will_synthesize_assistant_answer(
-        assistant: VoiceAssistant, chat_ctx: llm.ChatContext
-    ):
+    async def _enrich_with_rag(assistant: VoiceAssistant, chat_ctx: llm.ChatContext):
+        # locate the last user message and use it to query the RAG model
+        # to get the most relevant paragraph
+        # then provide that as additional context to the LLM
         user_msg = chat_ctx.messages[-1]
         user_embedding = await openai.create_embeddings(
             input=[user_msg.content],
@@ -28,7 +28,6 @@ async def entrypoint(ctx: JobContext):
         user_msg.content = (
             "Context:\n" + paragraph + "\n\nUser question: " + user_msg.content
         )
-        return assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
 
     initial_ctx = llm.ChatContext().append(
         role="system",
@@ -47,12 +46,11 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=openai.TTS(),
-        will_synthesize_assistant_reply=_will_synthesize_assistant_answer,
+        before_llm_cb=_enrich_with_rag,
     )
 
     assistant.start(ctx.room)
 
-    await asyncio.sleep(1)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
 
 

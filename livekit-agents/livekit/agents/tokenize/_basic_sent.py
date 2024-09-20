@@ -1,9 +1,13 @@
 import re
 
 
-# rule based segmentation from https://stackoverflow.com/a/31505798, works surprisingly well
-def split_sentences(text: str, min_sentence_len: int = 20) -> list[str]:
-    """the text can't contains substrings "<prd>" or "<stop>"""
+# rule based segmentation based on https://stackoverflow.com/a/31505798, works surprisingly well
+def split_sentences(
+    text: str, min_sentence_len: int = 20
+) -> list[tuple[str, int, int]]:
+    """
+    the text may not contain substrings "<prd>" or "<stop>"
+    """
     alphabets = r"([A-Za-z])"
     prefixes = r"(Mr|St|Mrs|Ms|Dr)[.]"
     suffixes = r"(Inc|Ltd|Jr|Sr|Co)"
@@ -14,12 +18,11 @@ def split_sentences(text: str, min_sentence_len: int = 20) -> list[str]:
     multiple_dots = r"\.{2,}"
 
     # fmt: off
-    text = " " + text + "  "
     text = text.replace("\n"," ")
-    text = re.sub(prefixes,"\\1<prd>",text)
-    text = re.sub(websites,"<prd>\\1",text)
+    text = re.sub(prefixes,"\\1<prd>", text)
+    text = re.sub(websites,"<prd>\\1", text)
     text = re.sub(digits + "[.]" + digits,"\\1<prd>\\2",text)
-    #text = re.sub(multiple_dots, lambda match: "<prd>" * len(match.group(0)) + "<stop>", text)
+    # text = re.sub(multiple_dots, lambda match: "<prd>" * len(match.group(0)) + "<stop>", text)
     # TODO(theomonnom): need improvement for ""..." dots", check capital + next sentence should not be
     # small
     text = re.sub(multiple_dots, lambda match: "<prd>" * len(match.group(0)), text)
@@ -44,21 +47,29 @@ def split_sentences(text: str, min_sentence_len: int = 20) -> list[str]:
     text = text.replace("?","?<stop>")
     text = text.replace("!","!<stop>")
     text = text.replace("<prd>",".")
-    sentences = text.split("<stop>")
-    sentences = [s.strip() for s in sentences]
-    if sentences and not sentences[-1]:
-        sentences = sentences[:-1]
     # fmt: on
 
-    new_sentences = []
+    splitted_sentences = text.split("<stop>")
+    text = text.replace("<stop>", "")
+
+    sentences: list[tuple[str, int, int]] = []
+
     buff = ""
-    for sentence in sentences:
+    start_pos = 0
+    end_pos = 0
+    for match in splitted_sentences:
+        sentence = match.strip()
+        if not sentence:
+            continue
+
         buff += " " + sentence
+        end_pos += len(match)
         if len(buff) > min_sentence_len:
-            new_sentences.append(buff[1:])
+            sentences.append((buff[1:], start_pos, end_pos))
+            start_pos = end_pos
             buff = ""
 
     if buff:
-        new_sentences.append(buff[1:])
+        sentences.append((buff[1:], start_pos, len(text) - 1))
 
-    return new_sentences
+    return sentences

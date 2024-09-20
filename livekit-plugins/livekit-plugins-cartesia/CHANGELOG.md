@@ -1,5 +1,11 @@
 # livekit-plugins-cartesia
 
+## 0.4.2
+
+### Patch Changes
+
+- Add support for cartesia voice control - [#740](https://github.com/livekit/agents/pull/740) ([@bcherry](https://github.com/bcherry))
+
 ## 0.4.1
 
 ### Patch Changes

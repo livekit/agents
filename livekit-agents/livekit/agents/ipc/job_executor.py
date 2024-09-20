@@ -1,0 +1,29 @@
+from __future__ import annotations
+
+from typing import Any, Protocol
+
+from ..job import RunningJobInfo
+
+
+class JobExecutor(Protocol):
+    @property
+    def started(self) -> bool: ...
+
+    @property
+    def start_arguments(self) -> Any | None: ...
+
+    @start_arguments.setter
+    def start_arguments(self, value: Any | None) -> None: ...
+
+    @property
+    def running_job(self) -> RunningJobInfo | None: ...
+
+    async def start(self) -> None: ...
+
+    async def join(self) -> None: ...
+
+    async def initialize(self) -> None: ...
+
+    async def aclose(self) -> None: ...
+
+    async def launch_job(self, info: RunningJobInfo) -> None: ...

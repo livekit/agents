@@ -51,9 +51,13 @@ class TTS(tts.TTS):
         credentials_file: str | None = None,
     ) -> None:
         """
-        if no credentials is provided, it will use the credentials on the environment
-        GOOGLE_APPLICATION_CREDENTIALS (default behavior of Google TextToSpeechAsyncClient)
+        Create a new instance of Google TTS.
+
+        Credentials must be provided, either by using the ``credentials_info`` dict, or reading
+        from the file specified in ``credentials_file`` or the ``GOOGLE_APPLICATION_CREDENTIALS``
+        environmental variable.
         """
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
@@ -137,13 +141,25 @@ class ChunkedStream(tts.ChunkedStream):
         data = response.audio_content
         if self._opts.audio_config.audio_encoding == "mp3":
             decoder = utils.codecs.Mp3StreamDecoder()
+            bstream = utils.audio.AudioByteStream(
+                sample_rate=self._opts.audio_config.sample_rate_hertz, num_channels=1
+            )
             for frame in decoder.decode_chunk(data):
+                for frame in bstream.write(frame.data):
+                    self._event_ch.send_nowait(
+                        tts.SynthesizedAudio(
+                            request_id=request_id, segment_id=segment_id, frame=frame
+                        )
+                    )
+
+            for frame in bstream.flush():
                 self._event_ch.send_nowait(
                     tts.SynthesizedAudio(
                         request_id=request_id, segment_id=segment_id, frame=frame
                     )
                 )
         else:
+            data = data[44:]  # skip WAV header
             self._event_ch.send_nowait(
                 tts.SynthesizedAudio(
                     request_id=request_id,

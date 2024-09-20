@@ -86,6 +86,7 @@ class _TTSOptions:
     streaming_latency: int
     word_tokenizer: tokenize.WordTokenizer
     chunk_length_schedule: list[int]
+    enable_ssml_parsing: bool
 
 
 class TTS(tts.TTS):
@@ -101,9 +102,17 @@ class TTS(tts.TTS):
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False  # punctuation can help for intonation
         ),
+        enable_ssml_parsing: bool = False,
         chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
+        """
+        Create a new instance of ElevenLabs TTS.
+
+        ``api_key`` must be set to your ElevenLabs API key, either using the argument or by setting
+        the ``ELEVEN_API_KEY`` environmental variable.
+        """
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
@@ -125,6 +134,7 @@ class TTS(tts.TTS):
             streaming_latency=streaming_latency,
             word_tokenizer=word_tokenizer,
             chunk_length_schedule=chunk_length_schedule,
+            enable_ssml_parsing=enable_ssml_parsing,
         )
         self._session = http_session
 
@@ -187,17 +197,19 @@ class ChunkedStream(tts.ChunkedStream):
                 content = await resp.text()
                 logger.error("11labs returned non-audio data: %s", content)
                 return
+
             encoding = _encoding_from_format(self._opts.encoding)
             if encoding == "mp3":
                 async for bytes_data, _ in resp.content.iter_chunks():
                     for frame in self._mp3_decoder.decode_chunk(bytes_data):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                request_id=request_id,
-                                segment_id=segment_id,
-                                frame=frame,
+                        for frame in bstream.write(frame.data.tobytes()):
+                            self._event_ch.send_nowait(
+                                tts.SynthesizedAudio(
+                                    request_id=request_id,
+                                    segment_id=segment_id,
+                                    frame=frame,
+                                )
                             )
-                        )
             else:
                 async for bytes_data, _ in resp.content.iter_chunks():
                     for frame in bstream.write(bytes_data):
@@ -209,12 +221,12 @@ class ChunkedStream(tts.ChunkedStream):
                             )
                         )
 
-                for frame in bstream.flush():
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id, segment_id=segment_id, frame=frame
-                        )
+            for frame in bstream.flush():
+                self._event_ch.send_nowait(
+                    tts.SynthesizedAudio(
+                        request_id=request_id, segment_id=segment_id, frame=frame
                     )
+                )
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -313,14 +325,33 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def send_task():
             nonlocal eos_sent
 
+            xml_content = []
             async for data in word_stream:
+                text = data.token
+
+                # send the xml phoneme in one go
+                if (
+                    self._opts.enable_ssml_parsing
+                    and data.token.startswith("<phoneme")
+                    or xml_content
+                ):
+                    xml_content.append(text)
+                    if data.token.find("</phoneme>") > -1:
+                        text = self._opts.word_tokenizer.format_words(xml_content)
+                        xml_content = []
+                    else:
+                        continue
+
                 # try_trigger_generation=True is a bad practice, we expose
                 # chunk_length_schedule instead
                 data_pkt = dict(
-                    text=f"{data.token} ",  # must always end with a space
+                    text=f"{text} ",  # must always end with a space
                     try_trigger_generation=False,
                 )
                 await ws_conn.send_str(json.dumps(data_pkt))
+
+            if xml_content:
+                logger.warning("11labs stream ended with incomplete xml content")
 
             # no more token, mark eos
             eos_pkt = dict(text="")
@@ -434,7 +465,9 @@ def _stream_url(opts: _TTSOptions) -> str:
     model_id = opts.model_id
     output_format = opts.encoding
     latency = opts.streaming_latency
+    enable_ssml = str(opts.enable_ssml_parsing).lower()
     return (
         f"{base_url}/text-to-speech/{voice_id}/stream-input?"
-        f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}"
+        f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}&"
+        f"enable_ssml_parsing={enable_ssml}"
     )

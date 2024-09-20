@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Optional
 
+from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import (
     AutoSubscribe,
@@ -12,6 +13,8 @@ from livekit.agents import (
     tts,
 )
 from livekit.plugins import elevenlabs
+
+load_dotenv()
 
 logger = logging.getLogger("transcription-forwarding-demo")
 logger.setLevel(logging.INFO)
@@ -27,14 +30,14 @@ async def entrypoint(ctx: JobContext):
     options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
 
     await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
-    await ctx.room.local_participant.publish_track(track, options)
+    publication = await ctx.room.local_participant.publish_track(track, options)
+    await publication.wait_for_subscription()
 
     # start the transcription examples
     tts_forwarder = transcription.TTSSegmentsForwarder(
         room=ctx.room, participant=ctx.room.local_participant
     )
 
-    await asyncio.sleep(2)
     await _eg_single_segment(tts_forwarder, tts_11labs, source)
 
     await asyncio.sleep(2)

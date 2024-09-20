@@ -3,27 +3,31 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections import deque
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Deque, Optional, Union
+from typing import Awaitable, Callable, Optional, Union
 
 from livekit import rtc
+from livekit.rtc.participant import PublishTranscriptionError
 
 from .. import tokenize, utils
 from ..log import logger
+from ..tokenize.tokenizer import PUNCTUATIONS
 from . import _utils
 
 # 3.83 is the "baseline", the number of hyphens per second TTS returns in avg.
 STANDARD_SPEECH_RATE = 3.83
 
 
-WillForwardTranscription = Callable[
+BeforeForwardCallback = Callable[
     ["TTSSegmentsForwarder", rtc.Transcription],
     Union[rtc.Transcription, Awaitable[Optional[rtc.Transcription]]],
 ]
 
 
-def _default_will_forward_transcription(
+WillForwardTranscription = BeforeForwardCallback
+
+
+def _default_before_forward_callback(
     fwd: TTSSegmentsForwarder, transcription: rtc.Transcription
 ) -> rtc.Transcription:
     return transcription
@@ -40,27 +44,23 @@ class _TTSOptions:
     sentence_tokenizer: tokenize.SentenceTokenizer
     hyphenate_word: Callable[[str], list[str]]
     new_sentence_delay: float
-    will_forward_transcription: WillForwardTranscription
+    before_forward_cb: BeforeForwardCallback
 
 
 @dataclass
-class _SegmentData:
-    segment_index: int
+class _AudioData:
+    pushed_duration: float = 0.0
+    done: bool = False
+
+
+@dataclass
+class _TextData:
     sentence_stream: tokenize.SentenceStream
     pushed_text: str = ""
-    pushed_duration: float = 0.0
-    real_speed: float | None = None
-    processed_sentences: int = 0
-    processed_hyphens: int = 0
-    validated: bool = False
-    forward_start_time: float | None = 0.0
+    done: bool = False
 
-
-@dataclass
-class _FormingSegments:
-    audio: _SegmentData
-    text: _SegmentData
-    q: deque[_SegmentData]
+    forwarded_hyphens: int = 0
+    forwarded_sentences: int = 0
 
 
 class TTSSegmentsForwarder:
@@ -83,8 +83,10 @@ class TTSSegmentsForwarder:
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(),
         sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
-        will_forward_transcription: WillForwardTranscription = _default_will_forward_transcription,
+        before_forward_cb: BeforeForwardCallback = _default_before_forward_callback,
         loop: asyncio.AbstractEventLoop | None = None,
+        # backward compatibility
+        will_forward_transcription: WillForwardTranscription | None = None,
     ):
         """
         Args:
@@ -109,6 +111,12 @@ class TTSSegmentsForwarder:
         elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
             track = track.sid
 
+        if will_forward_transcription is not None:
+            logger.warning(
+                "will_forward_transcription is deprecated and will be removed in 1.5.0, use before_forward_cb instead",
+            )
+            before_forward_cb = will_forward_transcription
+
         speed = speed * STANDARD_SPEECH_RATE
         self._opts = _TTSOptions(
             room=room,
@@ -120,30 +128,27 @@ class TTSSegmentsForwarder:
             sentence_tokenizer=sentence_tokenizer,
             hyphenate_word=hyphenate_word,
             new_sentence_delay=new_sentence_delay,
-            will_forward_transcription=will_forward_transcription,
+            before_forward_cb=before_forward_cb,
         )
         self._closed = False
         self._loop = loop or asyncio.get_event_loop()
         self._close_future = asyncio.Future[None]()
 
-        self._next_segment_index = 0
         self._playing_seg_index = -1
         self._finshed_seg_index = -1
 
-        first_segment = self._create_segment()
-        segments_q: Deque[_SegmentData] = deque()
-        segments_q.append(first_segment)
+        self._text_q_changed = asyncio.Event()
+        self._text_q = list[Union[_TextData, None]]()
+        self._audio_q_changed = asyncio.Event()
+        self._audio_q = list[Union[_AudioData, None]]()
 
-        self._forming_segments = _FormingSegments(
-            audio=first_segment, text=first_segment, q=segments_q
-        )
-
-        self._seg_queue = asyncio.Queue[Optional[_SegmentData]]()
-        self._seg_queue.put_nowait(first_segment)
-        self._main_atask = self._loop.create_task(self._main_task())
-        self._task_set = utils.aio.TaskSet(loop)
+        self._text_data: _TextData | None = None
+        self._audio_data: _AudioData | None = None
 
         self._played_text = ""
+
+        self._main_atask = self._loop.create_task(self._main_task())
+        self._task_set = utils.aio.TaskSet(loop)
 
     def segment_playout_started(self) -> None:
         """
@@ -164,47 +169,48 @@ class TTSSegmentsForwarder:
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         self._check_not_closed()
+
+        if self._audio_data is None:
+            self._audio_data = _AudioData()
+            self._audio_q.append(self._audio_data)
+            self._audio_q_changed.set()
+
         frame_duration = frame.samples_per_channel / frame.sample_rate
-        cur_seg = self._forming_segments.audio
-        cur_seg.pushed_duration += frame_duration
-        cur_seg.validated = True
+        self._audio_data.pushed_duration += frame_duration
 
     def mark_audio_segment_end(self) -> None:
         self._check_not_closed()
-        try:
-            # get last ended segment (text always end before audio)
-            seg = self._forming_segments.q.popleft()
-        except IndexError:
-            raise IndexError(
-                "mark_audio_segment_end called before any mark_text_segment_end"
-            )
 
-        if seg.pushed_duration > 0.0:
-            seg.real_speed = (
-                len(self._calc_hyphens(seg.pushed_text)) / seg.pushed_duration
-            )
+        if self._audio_data is None:
+            self.push_audio(rtc.AudioFrame(bytes(), 24000, 1, 0))
 
-        seg.validated = True
-        self._forming_segments.audio = self._forming_segments.q[0]
+        assert self._audio_data is not None
+        self._audio_data.done = True
+        self._audio_data = None
 
     def push_text(self, text: str) -> None:
         self._check_not_closed()
-        cur_seg = self._forming_segments.text
-        cur_seg.pushed_text += text
-        cur_seg.sentence_stream.push_text(text)
+
+        if self._text_data is None:
+            self._text_data = _TextData(
+                sentence_stream=self._opts.sentence_tokenizer.stream()
+            )
+            self._text_q.append(self._text_data)
+            self._text_q_changed.set()
+
+        self._text_data.pushed_text += text
+        self._text_data.sentence_stream.push_text(text)
 
     def mark_text_segment_end(self) -> None:
         self._check_not_closed()
-        stream = self._forming_segments.text.sentence_stream
-        stream.end_input()
 
-        # create a new segment on "mark_text_segment_end"
-        # further text can already be pushed even if mark_audio_segment_end has not been
-        # called yet
-        new_seg = self._create_segment()
-        self._forming_segments.text = new_seg
-        self._forming_segments.q.append(new_seg)
-        self._seg_queue.put_nowait(new_seg)
+        if self._text_data is None:
+            self.push_text("")
+
+        assert self._text_data is not None
+        self._text_data.done = True
+        self._text_data.sentence_stream.end_input()
+        self._text_data = None
 
     @property
     def closed(self) -> bool:
@@ -220,10 +226,15 @@ class TTSSegmentsForwarder:
 
         self._closed = True
         self._close_future.set_result(None)
-        self._seg_queue.put_nowait(None)
 
-        for seg in self._forming_segments.q:
-            await seg.sentence_stream.aclose()
+        for text_data in self._text_q:
+            assert text_data is not None
+            await text_data.sentence_stream.aclose()
+
+        self._text_q.append(None)
+        self._audio_q.append(None)
+        self._text_q_changed.set()
+        self._audio_q_changed.set()
 
         await self._task_set.aclose()
         await self._main_atask
@@ -231,78 +242,105 @@ class TTSSegmentsForwarder:
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         """Main task that forwards the transcription to the room."""
-        rtc_seg_q = asyncio.Queue[Optional[rtc.TranscriptionSegment]]()
+        rtc_seg_ch = utils.aio.Chan[rtc.TranscriptionSegment]()
 
         @utils.log_exceptions(logger=logger)
         async def _forward_task():
-            while True:
-                seg = await rtc_seg_q.get()
-                if seg is None:
-                    break
-
+            async for rtc_seg in rtc_seg_ch:
                 base_transcription = rtc.Transcription(
                     participant_identity=self._opts.participant_identity,
                     track_sid=self._opts.track_id,
-                    segments=[seg],  # no history for now
+                    segments=[rtc_seg],  # no history for now
                 )
 
-                transcription = self._opts.will_forward_transcription(
-                    self, base_transcription
-                )
+                transcription = self._opts.before_forward_cb(self, base_transcription)
                 if asyncio.iscoroutine(transcription):
                     transcription = await transcription
 
                 # fallback to default impl if no custom/user stream is returned
                 if not isinstance(transcription, rtc.Transcription):
-                    transcription = _default_will_forward_transcription(
+                    transcription = _default_before_forward_callback(
                         self, base_transcription
                     )
 
                 if transcription.segments and self._opts.room.isconnected():
-                    await self._opts.room.local_participant.publish_transcription(
-                        transcription
-                    )
+                    try:
+                        await self._opts.room.local_participant.publish_transcription(
+                            transcription
+                        )
+                    except PublishTranscriptionError:
+                        continue
 
         forward_task = asyncio.create_task(_forward_task())
 
-        while True:
-            seg = await self._seg_queue.get()
-            if seg is None:
-                break
+        seg_index = 0
+        q_done = False
+        while not q_done:
+            await self._text_q_changed.wait()
+            await self._audio_q_changed.wait()
 
-            # wait until the segment is validated and has started playing
-            while not self._closed:
-                if seg.validated and self._playing_seg_index >= seg.segment_index:
+            while self._text_q and self._audio_q:
+                text_data = self._text_q.pop(0)
+                audio_data = self._audio_q.pop(0)
+
+                if text_data is None or audio_data is None:
+                    q_done = True
                     break
 
-                await self._sleep_if_not_closed(0.1)
+                # wait until the segment is validated and has started playing
+                while not self._closed:
+                    if self._playing_seg_index >= seg_index:
+                        break
 
-            sentence_stream = seg.sentence_stream
-            seg.forward_start_time = time.time()
+                    await self._sleep_if_not_closed(0.125)
 
-            async for ev in sentence_stream:
-                await self._sync_sentence_co(seg, ev.token, rtc_seg_q)
+                sentence_stream = text_data.sentence_stream
+                forward_start_time = time.time()
 
-        rtc_seg_q.put_nowait(None)
+                async for ev in sentence_stream:
+                    await self._sync_sentence_co(
+                        seg_index,
+                        forward_start_time,
+                        text_data,
+                        audio_data,
+                        ev.token,
+                        rtc_seg_ch,
+                    )
+
+                seg_index += 1
+
+            self._text_q_changed.clear()
+            self._audio_q_changed.clear()
+
+        rtc_seg_ch.close()
         await forward_task
 
     async def _sync_sentence_co(
         self,
-        seg: _SegmentData,
-        tokenized_sentence: str,
-        rtc_seg_q: asyncio.Queue[Optional[rtc.TranscriptionSegment]],
+        segment_index: int,
+        segment_start_time: float,
+        text_data: _TextData,
+        audio_data: _AudioData,
+        sentence: str,
+        rtc_seg_ch: utils.aio.Chan[rtc.TranscriptionSegment],
     ):
         """Synchronize the transcription with the audio playout for a given sentence."""
-        assert seg.forward_start_time is not None
-
         # put each sentence in a different transcription segment
+
+        real_speed = None
+        if audio_data.pushed_duration > 0 and audio_data.done:
+            real_speed = (
+                len(self._calc_hyphens(text_data.pushed_text))
+                / audio_data.pushed_duration
+            )
+
         seg_id = _utils.segment_uuid()
-        words = self._opts.word_tokenizer.tokenize(text=tokenized_sentence)
+        words = self._opts.word_tokenizer.tokenize(text=sentence)
         processed_words: list[str] = []
 
         og_text = self._played_text
         for word in words:
-            if seg.segment_index <= self._finshed_seg_index:
+            if segment_index <= self._finshed_seg_index:
                 # playout of the audio segment already finished
                 # break the loop and send the final transcription
                 break
@@ -315,19 +353,22 @@ class TTSSegmentsForwarder:
             processed_words.append(word)
 
             # elapsed time since the start of the seg
-            elapsed_time = time.time() - seg.forward_start_time
+            elapsed_time = time.time() - segment_start_time
             text = self._opts.word_tokenizer.format_words(processed_words)
 
+            # remove any punctuation at the end of a non-final transcript
+            text = text.rstrip("".join(PUNCTUATIONS))
+
             speed = self._opts.speed
-            if seg.real_speed is not None:
-                speed = seg.real_speed
+            if real_speed is not None:
+                speed = real_speed
                 estimated_pauses_s = (
-                    seg.processed_sentences * self._opts.new_sentence_delay
+                    text_data.forwarded_sentences * self._opts.new_sentence_delay
                 )
                 hyph_pauses = estimated_pauses_s * speed
 
                 target_hyphens = round(speed * elapsed_time)
-                dt = target_hyphens - seg.processed_hyphens - hyph_pauses
+                dt = target_hyphens - text_data.forwarded_hyphens - hyph_pauses
                 to_wait_hyphens = max(0.0, word_hyphens - dt)
                 delay = to_wait_hyphens / speed
             else:
@@ -335,7 +376,8 @@ class TTSSegmentsForwarder:
 
             first_delay = min(delay / 2, 2 / speed)
             await self._sleep_if_not_closed(first_delay)
-            rtc_seg_q.put_nowait(
+
+            rtc_seg_ch.send_nowait(
                 rtc.TranscriptionSegment(
                     id=seg_id,
                     text=text,
@@ -346,23 +388,24 @@ class TTSSegmentsForwarder:
                 )
             )
             self._played_text = f"{og_text} {text}"
-            await self._sleep_if_not_closed(delay - first_delay)
-            seg.processed_hyphens += word_hyphens
 
-        rtc_seg_q.put_nowait(
+            await self._sleep_if_not_closed(delay - first_delay)
+            text_data.forwarded_hyphens += word_hyphens
+
+        rtc_seg_ch.send_nowait(
             rtc.TranscriptionSegment(
                 id=seg_id,
-                text=tokenized_sentence,
+                text=sentence,
                 start_time=0,
                 end_time=0,
                 final=True,
                 language=self._opts.language,
             )
         )
-        self._played_text = f"{og_text} {tokenized_sentence}"
+        self._played_text = f"{og_text} {sentence}"
 
         await self._sleep_if_not_closed(self._opts.new_sentence_delay)
-        seg.processed_sentences += 1
+        text_data.forwarded_sentences += 1
 
     async def _sleep_if_not_closed(self, delay: float) -> None:
         with contextlib.suppress(asyncio.TimeoutError):
@@ -376,14 +419,6 @@ class TTSSegmentsForwarder:
             hyphens.extend(new)
 
         return hyphens
-
-    def _create_segment(self) -> _SegmentData:
-        data = _SegmentData(
-            segment_index=self._next_segment_index,
-            sentence_stream=self._opts.sentence_tokenizer.stream(),
-        )
-        self._next_segment_index += 1
-        return data
 
     def _check_not_closed(self) -> None:
         if self._closed:

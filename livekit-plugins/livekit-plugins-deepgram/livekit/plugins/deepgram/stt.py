@@ -30,6 +30,7 @@ from livekit.agents.utils import AudioBuffer, merge_frames
 
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
+from .utils import BasicAudioEnergyFilter
 
 BASE_URL = "https://api.deepgram.com/v1/listen"
 BASE_URL_WS = "wss://api.deepgram.com/v1/listen"
@@ -55,7 +56,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        model: DeepgramModels = "nova-2-conversationalai",
+        model: DeepgramModels = "nova-2-general",
         language: DeepgramLanguages = "en-US",
         detect_language: bool = False,
         interim_results: bool = True,
@@ -68,6 +69,13 @@ class STT(stt.STT):
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
+        """
+        Create a new instance of Deepgram STT.
+
+        ``api_key`` must be set to your Deepgram API key, either using the argument or by setting
+        the ``DEEPGRAM_API_KEY`` environmental variable.
+        """
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True, interim_results=interim_results
@@ -193,6 +201,7 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._speaking = False
         self._max_retry = max_retry
+        self._audio_energy_filter = BasicAudioEnergyFilter(cooldown_seconds=1)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -284,10 +293,12 @@ class SpeechStream(stt.SpeechStream):
                 if isinstance(data, self._FlushSentinel):
                     frames = audio_bstream.flush()
                 else:
-                    frames = audio_bstream.write(data.data)
+                    frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
-                    await ws.send_bytes(frame.data.tobytes())
+                    has_audio = self._audio_energy_filter.push_frame(frame)
+                    if has_audio:
+                        await ws.send_bytes(frame.data.tobytes())
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True

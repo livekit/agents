@@ -1,5 +1,19 @@
 # livekit-plugins-deepgram
 
+## 0.6.7
+
+### Patch Changes
+
+- Only send actual audio to Deepgram using a basic audio RMS filter - [#738](https://github.com/livekit/agents/pull/738) ([@keepingitneil](https://github.com/keepingitneil))
+
+- defaults to nova-2-general model - [#726](https://github.com/livekit/agents/pull/726) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.6
+
+### Patch Changes
+
+- deepgram: switch the default model to phonecall - [#676](https://github.com/livekit/agents/pull/676) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.5
 
 ### Patch Changes
