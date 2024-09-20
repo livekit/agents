@@ -1,5 +1,5 @@
 from . import _oai_api
-from .chat_context import ChatContext, ChatImage, ChatAudio, ChatMessage, ChatRole
+from .chat_context import ChatAudio, ChatContext, ChatImage, ChatMessage, ChatRole
 from .function_context import (
     USE_DOCSTRING,
     CalledFunction,

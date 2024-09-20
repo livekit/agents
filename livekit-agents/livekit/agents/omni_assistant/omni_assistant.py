@@ -1,21 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import os
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, cast, Callable
-
+from typing import Callable, Literal, Protocol
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import llm, utils, vad, tokenize, transcription, stt
-from livekit.agents.llm import _oai_api
-from livekit.agents.llm.function_context import CalledFunction
+from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 
 from ..log import logger
 from . import agent_playout
-
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import dataclasses
 import io
-import os
 import wave
 from dataclasses import dataclass
 

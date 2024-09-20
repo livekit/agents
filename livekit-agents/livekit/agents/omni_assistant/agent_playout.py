@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from typing import AsyncIterable
+
 from livekit import rtc
-from livekit.agents import utils, transcription
-from livekit.agents.utils import audio
+from livekit.agents import transcription, utils
 
 from ..log import logger
 

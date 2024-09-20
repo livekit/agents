@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from typing import Literal, Union
-from typing_extensions import TypedDict, NotRequired
+
+from typing_extensions import NotRequired, TypedDict
 
 API_URL = "wss://api.openai.com/v1/realtime"
 

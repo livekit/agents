@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import aiohttp
 import logging
+from typing import Annotated
 
+import aiohttp
 from dotenv import load_dotenv
 from livekit.agents import (
     AutoSubscribe,
@@ -13,7 +14,6 @@ from livekit.agents import (
     llm,
     omni_assistant,
 )
-from typing import Annotated
 from livekit.plugins.openai import realtime
 
 load_dotenv()

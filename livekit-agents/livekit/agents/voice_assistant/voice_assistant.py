@@ -677,9 +677,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                     },
                 )
                 try:
-                    content = await called_fnc.task
-                except Exception as e:
-                    content = f"Error: {e}"
+                    await called_fnc.task
+                except Exception:
+                    pass
 
             self.emit("function_calls_finished", called_fncs)
             _CallContextVar.reset(tk)

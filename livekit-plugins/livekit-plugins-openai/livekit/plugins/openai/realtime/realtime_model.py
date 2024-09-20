@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import functools
 import os
-import base64
-import aiohttp
+from dataclasses import dataclass
 from typing import AsyncIterable, Literal, Protocol, Union
 
-from dataclasses import dataclass
+import aiohttp
+from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm import _oai_api
-from livekit import rtc
+
 from . import api_proto
 from .log import logger
 

@@ -1,15 +1,13 @@
+from . import api_proto
 from .realtime_model import (
-    RealtimeConversation,
-    RealtimeSession,
-    RealtimeModel,
     PendingMessage,
     PendingToolCall,
+    RealtimeConversation,
+    RealtimeModel,
+    RealtimeSession,
     StartSessionEvent,
     VadConfig,
 )
-
-from . import api_proto
-
 
 __all__ = [
     "RealtimeConversation",
