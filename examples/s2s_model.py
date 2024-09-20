@@ -72,7 +72,7 @@ async def entrypoint(ctx: JobContext):
     @fnc_ctx.ai_callable()
     async def sentiment(
         sentiment: Annotated[
-            str, llm.TypeInfo(description="the sentiment of the user (e.g angy, happy, sad)")
+            str, llm.TypeInfo(description="the sentiment of the user based on his speech (be explicit)")
         ],
     ):
         print(sentiment)
