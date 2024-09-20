@@ -41,6 +41,7 @@ class ChatMessage:
     content: str | list[str | ChatImage] | None = None
     tool_calls: list[function_context.FunctionCallInfo] | None = None
     tool_call_id: str | None = None
+    tool_exception: Exception | None = None
     _metadata: dict[str, Any] = field(default_factory=dict, repr=False, init=False)
 
     @staticmethod
@@ -50,9 +51,12 @@ class ChatMessage:
         if not called_function.task.done():
             raise ValueError("cannot create a tool result from a running ai function")
 
+        tool_exception: Exception | None = None
         try:
             content = called_function.task.result()
         except BaseException as e:
+            if isinstance(e, Exception):
+                tool_exception = e
             content = f"Error: {e}"
 
         return ChatMessage(
@@ -60,6 +64,7 @@ class ChatMessage:
             name=called_function.call_info.function_info.name,
             content=content,
             tool_call_id=called_function.call_info.tool_call_id,
+            tool_exception=tool_exception,
         )
 
     @staticmethod

@@ -10,4 +10,4 @@ pip install livekit-plugins-google
 
 ## Pre-requisites
 
-For credentials, you'll need a Google Cloud account and obtain the correct credentials. Credentials can be passed directly or set as [GOOGLE_APPLICATION_CREDENTIALS](https://cloud.google.com/docs/authentication/application-default-credentials) environment variable.
+For credentials, you'll need a Google Cloud account and obtain the correct credentials. Credentials can be passed directly or via Application Default Credentials as specified in [How Application Default Credentials works](https://cloud.google.com/docs/authentication/application-default-credentials).

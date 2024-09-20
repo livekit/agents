@@ -9,7 +9,7 @@ import queue
 import socket
 import threading
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from livekit import rtc
 
@@ -26,7 +26,7 @@ class LogQueueHandler(logging.Handler):
     def __init__(self, duplex: utils.aio.duplex_unix._Duplex) -> None:
         super().__init__()
         self._duplex = duplex
-        self._send_q = queue.SimpleQueue[Optional[logging.LogRecord]]()
+        self._send_q = queue.SimpleQueue[Optional[bytes]]()
         self._send_thread = threading.Thread(
             target=self._forward_logs, name="ipc_log_forwarder"
         )
@@ -34,12 +34,12 @@ class LogQueueHandler(logging.Handler):
 
     def _forward_logs(self):
         while True:
-            record = self._send_q.get()
-            if record is None:
+            serialized_record = self._send_q.get()
+            if serialized_record is None:
                 break
 
             try:
-                self._duplex.send_bytes(pickle.dumps(record))
+                self._duplex.send_bytes(serialized_record)
             except duplex_unix.DuplexClosed:
                 break
 
@@ -47,6 +47,7 @@ class LogQueueHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
+            # from https://github.com/python/cpython/blob/91b7f2e7f6593acefda4fa860250dd87d6f849bf/Lib/logging/handlers.py#L1453
             msg = self.format(record)
             record = copy.copy(record)
             record.message = msg
@@ -54,7 +55,15 @@ class LogQueueHandler(logging.Handler):
             record.args = None
             record.exc_info = None
             record.exc_text = None
-            self._send_q.put_nowait(record)
+            record.stack_info = None
+
+            # https://websockets.readthedocs.io/en/stable/topics/logging.html#logging-to-json
+            # webosckets library add "websocket" attribute to log records, which is not pickleable
+            if hasattr(record, "websocket"):
+                record.websocket = None
+
+            self._send_q.put_nowait(pickle.dumps(record))
+
         except Exception:
             self.handleError(record)
 
@@ -77,8 +86,8 @@ class JobTask:
 
 
 def _start_job(
-    args: proto.ProcStartArgs,
     proc: JobProcess,
+    job_entrypoint_fnc: Callable[[JobContext], Any],
     start_req: proto.StartJobRequest,
     exit_proc_fut: asyncio.Event,
     cch: utils.aio.duplex_unix._AsyncDuplex,
@@ -109,6 +118,7 @@ def _start_job(
             )
 
     info = start_req.running_job
+    room._info.name = info.job.room.name
     job_ctx = JobContext(
         proc=proc,
         info=info,
@@ -121,7 +131,7 @@ def _start_job(
     async def _run_job_task() -> None:
         utils.http_context._new_session_ctx()
         job_entry_task = asyncio.create_task(
-            args.job_entrypoint_fnc(job_ctx), name="job_entrypoint"
+            job_entrypoint_fnc(job_ctx), name="job_entrypoint"
         )
 
         async def _warn_not_connected_task():
@@ -179,7 +189,9 @@ def _start_job(
 
 
 async def _async_main(
-    args: proto.ProcStartArgs, proc: JobProcess, mp_cch: socket.socket
+    proc: JobProcess,
+    job_entrypoint_fnc: Callable[[JobContext], Any],
+    mp_cch: socket.socket,
 ) -> None:
     cch = await duplex_unix._AsyncDuplex.open(mp_cch)
 
@@ -192,7 +204,8 @@ async def _async_main(
         nonlocal job_task
         while True:
             msg = await channel.arecv_message(cch, proto.IPC_MESSAGES)
-            no_msg_timeout.reset()
+            with contextlib.suppress(utils.aio.SleepFinished):
+                no_msg_timeout.reset()
 
             if isinstance(msg, proto.PingRequest):
                 pong = proto.PongResponse(
@@ -202,7 +215,7 @@ async def _async_main(
 
             if isinstance(msg, proto.StartJobRequest):
                 assert job_task is None, "job task already running"
-                job_task = _start_job(args, proc, msg, exit_proc_fut, cch)
+                job_task = _start_job(proc, job_entrypoint_fnc, msg, exit_proc_fut, cch)
 
             if isinstance(msg, proto.ShutdownRequest):
                 if job_task is None:
@@ -236,46 +249,58 @@ async def _async_main(
         await cch.aclose()
 
 
-def main(args: proto.ProcStartArgs) -> None:
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.NOTSET)
+@dataclass
+class ProcStartArgs:
+    initialize_process_fnc: Callable[[JobProcess], Any]
+    job_entrypoint_fnc: Callable[[JobContext], Any]
+    log_cch: socket.socket
+    mp_cch: socket.socket
+    asyncio_debug: bool
+    user_arguments: Any | None = None
 
-    log_cch = utils.aio.duplex_unix._Duplex.open(args.log_cch)
-    log_handler = LogQueueHandler(log_cch)
-    root_logger.addHandler(log_handler)
 
+@dataclass
+class ThreadStartArgs:
+    mp_cch: socket.socket
+    initialize_process_fnc: Callable[[JobProcess], Any]
+    job_entrypoint_fnc: Callable[[JobContext], Any]
+    user_arguments: Any | None
+    asyncio_debug: bool
+    join_fnc: Callable[[], None]
+
+
+def thread_main(
+    args: ThreadStartArgs,
+) -> None:
+    """main function for the job process when using the ThreadedJobRunner"""
+    tid = threading.get_native_id()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.set_debug(args.asyncio_debug)
     loop.slow_callback_duration = 0.1  # 100ms
-    utils.aio.debug.hook_slow_callbacks(2.0)
 
     cch = duplex_unix._Duplex.open(args.mp_cch)
     try:
         init_req = channel.recv_message(cch, proto.IPC_MESSAGES)
-
         assert isinstance(
             init_req, proto.InitializeRequest
         ), "first message must be InitializeRequest"
-
         job_proc = JobProcess(start_arguments=args.user_arguments)
-        logger.debug("initializing process", extra={"pid": job_proc.pid})
+
+        logger.debug("initializing job runner", extra={"tid": tid})
         args.initialize_process_fnc(job_proc)
-        logger.debug("process initialized", extra={"pid": job_proc.pid})
+        logger.debug("job runner initialized", extra={"tid": tid})
         channel.send_message(cch, proto.InitializeResponse())
 
         main_task = loop.create_task(
-            _async_main(args, job_proc, cch.detach()), name="job_proc_main"
+            _async_main(job_proc, args.job_entrypoint_fnc, cch.detach()),
+            name="job_proc_main",
         )
-        while not main_task.done():
-            try:
-                loop.run_until_complete(main_task)
-            except KeyboardInterrupt:
-                # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
-                pass
+        loop.run_until_complete(main_task)
     except duplex_unix.DuplexClosed:
         pass
+    except Exception:
+        logger.exception("error while running job process", extra={"tid": tid})
     finally:
-        cch.close()
-        log_handler.close()
+        args.join_fnc()
         loop.run_until_complete(loop.shutdown_default_executor())

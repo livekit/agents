@@ -10,6 +10,7 @@ from livekit import rtc
 
 from .. import stt, tokenize, tts, utils, vad
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from ..proto import ATTR_AGENT_STATE, AgentState
 from .agent_output import AgentOutput, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
@@ -17,10 +18,18 @@ from .log import logger
 from .plotter import AssistantPlotter
 from .speech_handle import SpeechHandle
 
-WillSynthesizeAssistantReply = Callable[
+BeforeLLMCallback = Callable[
     ["VoiceAssistant", ChatContext],
-    Union[Optional[LLMStream], Awaitable[Optional[LLMStream]]],
+    Union[Optional[LLMStream], Awaitable[Optional[LLMStream]], Literal[False]],
 ]
+
+WillSynthesizeAssistantReply = BeforeLLMCallback
+
+BeforeTTSCallback = Callable[
+    ["VoiceAssistant", Union[str, AsyncIterable[str]]],
+    Union[str, AsyncIterable[str], Awaitable[str]],
+]
+
 
 EventTypes = Literal[
     "user_started_speaking",
@@ -33,7 +42,6 @@ EventTypes = Literal[
     "function_calls_collected",
     "function_calls_finished",
 ]
-
 
 _CallContextVar = contextvars.ContextVar["AssistantCallContext"](
     "voice_assistant_contextvar"
@@ -64,10 +72,19 @@ class AssistantCallContext:
         return self._llm_stream
 
 
-def _default_will_synthesize_assistant_reply(
+def _default_before_llm_cb(
     assistant: VoiceAssistant, chat_ctx: ChatContext
 ) -> LLMStream:
-    return assistant.llm.chat(chat_ctx=chat_ctx, fnc_ctx=assistant.fnc_ctx)
+    return assistant.llm.chat(
+        chat_ctx=chat_ctx,
+        fnc_ctx=assistant.fnc_ctx,
+    )
+
+
+def _default_before_tts_cb(
+    assistant: VoiceAssistant, text: str | AsyncIterable[str]
+) -> str | AsyncIterable[str]:
+    return text
 
 
 @dataclass(frozen=True)
@@ -75,8 +92,10 @@ class _ImplOptions:
     allow_interruptions: bool
     int_speech_duration: float
     int_min_words: int
+    min_endpointing_delay: float
     preemptive_synthesis: bool
-    will_synthesize_assistant_reply: WillSynthesizeAssistantReply
+    before_llm_cb: BeforeLLMCallback
+    before_tts_cb: BeforeTTSCallback
     plotting: bool
     transcription: AssistantTranscriptionOptions
 
@@ -93,7 +112,9 @@ class AssistantTranscriptionOptions:
     sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
     """The tokenizer used to split the speech into sentences.
     This is used to decide when to mark a transcript as final for the agent transcription."""
-    word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer()
+    word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
+        ignore_punctuation=False
+    )
     """The tokenizer used to split the speech into words.
     This is used to simulate the "interim results" of the agent transcription."""
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
@@ -117,11 +138,15 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         allow_interruptions: bool = True,
         interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
+        min_endpointing_delay: float = 0.5,
         preemptive_synthesis: bool = True,
         transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
-        will_synthesize_assistant_reply: WillSynthesizeAssistantReply = _default_will_synthesize_assistant_reply,
+        before_llm_cb: BeforeLLMCallback = _default_before_llm_cb,
+        before_tts_cb: BeforeTTSCallback = _default_before_tts_cb,
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
+        # backward compatibility
+        will_synthesize_assistant_reply: WillSynthesizeAssistantReply | None = None,
     ) -> None:
         """
         Create a new VoiceAssistant.
@@ -137,23 +162,41 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             interrupt_speech_duration: Minimum duration of speech to consider for interruption.
             interrupt_min_words: Minimum number of words to consider for interruption.
                 Defaults to 0 as this may increase the latency depending on the STT.
+            min_endpointing_delay: Delay to wait before considering the user finished speaking.
             preemptive_synthesis: Whether to preemptively synthesize responses.
             transcription: Options for assistant transcription.
-            will_synthesize_assistant_reply: Callback called when the assistant is about to synthesize a reply.
+            before_llm_cb: Callback called when the assistant is about to synthesize a reply.
                 This can be used to customize the reply (e.g: inject context/RAG).
+
+                Returning None will create a default LLM stream. You can also return your own llm
+                stream by calling the llm.chat() method.
+
+                Returning False will cancel the synthesis of the reply.
+            before_tts_cb: Callback called when the assistant is about to
+                synthesize a speech. This can be used to customize text before the speech synthesis.
+                (e.g: editing the pronunciation of a word).
             plotting: Whether to enable plotting for debugging. matplotlib must be installed.
             loop: Event loop to use. Default to asyncio.get_event_loop().
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
+
+        if will_synthesize_assistant_reply is not None:
+            logger.warning(
+                "will_synthesize_assistant_reply is deprecated and will be removed in 1.5.0, use before_llm_cb instead",
+            )
+            before_llm_cb = will_synthesize_assistant_reply
+
         self._opts = _ImplOptions(
             plotting=plotting,
             allow_interruptions=allow_interruptions,
             int_speech_duration=interrupt_speech_duration,
             int_min_words=interrupt_min_words,
+            min_endpointing_delay=min_endpointing_delay,
             preemptive_synthesis=preemptive_synthesis,
             transcription=transcription,
-            will_synthesize_assistant_reply=will_synthesize_assistant_reply,
+            before_llm_cb=before_llm_cb,
+            before_tts_cb=before_tts_cb,
         )
         self._plotter = AssistantPlotter(self._loop)
 
@@ -193,13 +236,17 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._transcribed_text, self._transcribed_interim_text = "", ""
 
         self._deferred_validation = _DeferredReplyValidation(
-            self._validate_reply_if_possible, loop=self._loop
+            self._validate_reply_if_possible,
+            self._opts.min_endpointing_delay,
+            loop=self._loop,
         )
 
         self._speech_q: list[SpeechHandle] = []
         self._speech_q_changed = asyncio.Event()
 
         self._last_end_of_speech_time: float | None = None
+
+        self._update_state_task: asyncio.Task | None = None
 
     @property
     def fnc_ctx(self) -> FunctionContext | None:
@@ -301,6 +348,23 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
         self._add_speech_for_playout(new_handle)
 
+    def _update_state(self, state: AgentState, delay: float = 0.0):
+        """Set the current state of the agent"""
+
+        @utils.log_exceptions(logger=logger)
+        async def _run_task(delay: float) -> None:
+            await asyncio.sleep(delay)
+
+            if self._room.isconnected():
+                await self._room.local_participant.set_attributes(
+                    {ATTR_AGENT_STATE: state}
+                )
+
+        if self._update_state_task is not None:
+            self._update_state_task.cancel()
+
+        self._update_state_task = asyncio.create_task(_run_task(delay))
+
     async def aclose(self) -> None:
         """Close the voice assistant"""
         if not self._started:
@@ -333,6 +397,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("user_started_speaking")
             self.emit("user_started_speaking")
             self._deferred_validation.on_human_start_of_speech(ev)
+            self._update_state("listening")
 
         def _on_vad_updated(ev: vad.VADEvent) -> None:
             if not self._track_published_fut.done():
@@ -393,13 +458,14 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if self._opts.plotting:
             await self._plotter.start()
 
+        self._update_state("initializing")
         audio_source = rtc.AudioSource(self._tts.sample_rate, self._tts.num_channels)
         track = rtc.LocalAudioTrack.create_audio_track("assistant_voice", audio_source)
         self._agent_publication = await self._room.local_participant.publish_track(
             track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         )
 
-        agent_playout = AgentPlayout(source=audio_source)
+        agent_playout = AgentPlayout(audio_source=audio_source)
         self._agent_output = AgentOutput(
             room=self._room,
             agent_playout=agent_playout,
@@ -410,10 +476,12 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         def _on_playout_started() -> None:
             self._plotter.plot_event("agent_started_speaking")
             self.emit("agent_started_speaking")
+            self._update_state("speaking")
 
         def _on_playout_stopped(interrupted: bool) -> None:
             self._plotter.plot_event("agent_stopped_speaking")
             self.emit("agent_stopped_speaking")
+            self._update_state("listening")
 
         agent_playout.on("playout_started", _on_playout_started)
         agent_playout.on("playout_stopped", _on_playout_stopped)
@@ -438,6 +506,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
 
         if self._pending_agent_reply is not None:
             self._pending_agent_reply.interrupt()
+
+        if self._human_input is not None and not self._human_input.speaking:
+            self._update_state("thinking", 0.2)
 
         self._pending_agent_reply = new_handle = SpeechHandle.create_assistant_reply(
             allow_interruptions=self._opts.allow_interruptions,
@@ -475,15 +546,19 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ChatMessage.create(text=handle.user_question, role="user")
         )
 
-        llm_stream = self._opts.will_synthesize_assistant_reply(self, copied_ctx)
+        llm_stream = self._opts.before_llm_cb(self, copied_ctx)
+        if llm_stream is False:
+            return
+
         if asyncio.iscoroutine(llm_stream):
             llm_stream = await llm_stream
 
         # fallback to default impl if no custom/user stream is returned
         if not isinstance(llm_stream, LLMStream):
-            llm_stream = _default_will_synthesize_assistant_reply(
-                self, chat_ctx=copied_ctx
-            )
+            llm_stream = _default_before_llm_cb(self, chat_ctx=copied_ctx)
+
+        if handle.interrupted:
+            return
 
         synthesis_handle = self._synthesize_agent_speech(handle.id, llm_stream)
         handle.initialize(source=llm_stream, synthesis_handle=synthesis_handle)
@@ -509,6 +584,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             await speech_handle.wait_for_initialization()
         except asyncio.CancelledError:
             return
+
+        await self._agent_publication.wait_for_subscription()
 
         synthesis_handle = speech_handle.synthesis_handle
         if synthesis_handle.interrupted:
@@ -628,7 +705,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 chat_ctx.messages.extend(extra_tools_messages)
 
                 answer_llm_stream = self._llm.chat(
-                    chat_ctx=chat_ctx, fnc_ctx=self._fnc_ctx
+                    chat_ctx=chat_ctx,
+                    fnc_ctx=self._fnc_ctx,
                 )
                 answer_synthesis = self._synthesize_agent_speech(
                     speech_handle.id, answer_llm_stream
@@ -680,9 +758,19 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if isinstance(source, LLMStream):
             source = _llm_stream_to_str_iterable(speech_id, source)
 
+        og_source = source
+        transcript_source = source
+        if isinstance(og_source, AsyncIterable):
+            og_source, transcript_source = utils.aio.itertools.tee(og_source, 2)
+
+        tts_source = self._opts.before_tts_cb(self, og_source)
+        if tts_source is None:
+            logger.error("before_tts_cb must return str or AsyncIterable[str]")
+
         return self._agent_output.synthesize(
             speech_id=speech_id,
-            transcript=source,
+            tts_source=tts_source,
+            transcript_source=transcript_source,
             transcription=self._opts.transcription.agent_transcription,
             transcription_speed=self._opts.transcription.agent_transcription_speed,
             sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
@@ -775,20 +863,24 @@ class _DeferredReplyValidation:
 
     # if the STT gives us punctuation, we can try validate the reply faster.
     PUNCTUATION = ".!?"
-    PUNCTUATION_REDUCE_FACTOR = 0.5
+    PUNCTUATION_REDUCE_FACTOR = 0.75
 
-    DEFER_DELAY_END_OF_SPEECH = 0.2
-    DEFER_DELAY_FINAL_TRANSCRIPT = 1.0
     LATE_TRANSCRIPT_TOLERANCE = 1.5  # late compared to end of speech
 
     def __init__(
-        self, validate_fnc: Callable[[], None], loop: asyncio.AbstractEventLoop
+        self,
+        validate_fnc: Callable[[], None],
+        min_endpointing_delay: float,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._validate_fnc = validate_fnc
         self._validating_task: asyncio.Task | None = None
         self._last_final_transcript: str = ""
         self._last_recv_end_of_speech_time: float = 0.0
         self._speaking = False
+
+        self._end_of_speech_delay = min_endpointing_delay
+        self._final_transcript_delay = min_endpointing_delay + 1.0
 
     @property
     def validating(self) -> bool:
@@ -805,9 +897,9 @@ class _DeferredReplyValidation:
             < self.LATE_TRANSCRIPT_TOLERANCE
         )
         delay = (
-            self.DEFER_DELAY_END_OF_SPEECH
+            self._end_of_speech_delay
             if has_recent_end_of_speech
-            else self.DEFER_DELAY_FINAL_TRANSCRIPT
+            else self._final_transcript_delay
         )
         delay = (
             delay * self.PUNCTUATION_REDUCE_FACTOR
@@ -829,7 +921,7 @@ class _DeferredReplyValidation:
 
         if self._last_final_transcript:
             delay = (
-                self.DEFER_DELAY_END_OF_SPEECH * self.PUNCTUATION_REDUCE_FACTOR
+                self._end_of_speech_delay * self.PUNCTUATION_REDUCE_FACTOR
                 if self._end_with_punctuation()
                 else 1.0
             )

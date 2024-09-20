@@ -15,26 +15,34 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, Dict, MutableSet, Union
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Literal, MutableSet, Union
 
 import httpx
-from livekit.agents import llm
+from livekit import rtc
+from livekit.agents import llm, utils
 
 from openai import AsyncAssistantEventHandler, AsyncClient
 from openai.types.beta.threads import Text, TextDelta
 from openai.types.beta.threads.run_create_params import AdditionalMessage
-from openai.types.beta.threads.runs import ToolCall, ToolCallDelta
+from openai.types.beta.threads.runs import (
+    CodeInterpreterToolCall,
+    FileSearchToolCall,
+    FunctionToolCall,
+    ToolCall,
+)
+from openai.types.file_object import FileObject
 
 from ..log import logger
-from ..models import AssistantTools, ChatModels
-from ..utils import build_oai_message
+from ..models import ChatModels
 
 DEFAULT_MODEL = "gpt-4o"
 OPENAI_MESSAGE_ID_KEY = "__openai_message_id__"
 LIVEKIT_MESSAGE_ID_KEY = "__livekit_message_id__"
 OPENAI_MESSAGES_ADDED_KEY = "__openai_messages_added__"
+OPENAI_FILE_ID_KEY = "__openai_file_id__"
 
 
 @dataclass
@@ -56,13 +64,25 @@ class AssistantCreateOptions:
     instructions: str
     model: ChatModels
     temperature: float | None = None
-    tools: list[AssistantTools] = field(default_factory=list)
+    # TODO: when we implement code_interpreter and file_search tools
+    # tool_resources: ToolResources | None = None
+    # tools: list[AssistantTools] = field(default_factory=list)
 
 
 @dataclass
 class AssistantLoadOptions:
     assistant_id: str
-    thread_id: str
+    thread_id: str | None
+
+
+@dataclass
+class OnFileUploadedInfo:
+    type: Literal["image"]
+    original_file: llm.ChatImage
+    openai_file_object: FileObject
+
+
+OnFileUploaded = Callable[[OnFileUploadedInfo], None]
 
 
 class AssistantLLM(llm.LLM):
@@ -73,6 +93,7 @@ class AssistantLLM(llm.LLM):
         client: AsyncClient | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
+        on_file_uploaded: OnFileUploaded | None = None,
     ) -> None:
         test_ctx = llm.ChatContext()
         if not hasattr(test_ctx, "_metadata"):
@@ -94,8 +115,15 @@ class AssistantLLM(llm.LLM):
         )
         self._assistant_opts = assistant_opts
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
+        self._on_file_uploaded = on_file_uploaded
 
-        self._sync_openai_task = asyncio.create_task(self._sync_openai())
+        self._sync_openai_task: asyncio.Task[AssistantLoadOptions] | None = None
+        try:
+            self._sync_openai_task = asyncio.create_task(self._sync_openai())
+        except Exception:
+            logger.error(
+                "failed to create sync openai task. This can happen when instantiating without a running asyncio event loop (such has when running tests)"
+            )
         self._done_futures = list[asyncio.Future[None]]()
 
     async def _sync_openai(self) -> AssistantLoadOptions:
@@ -104,10 +132,16 @@ class AssistantLLM(llm.LLM):
                 "model": self._assistant_opts.create_options.model,
                 "name": self._assistant_opts.create_options.name,
                 "instructions": self._assistant_opts.create_options.instructions,
-                "tools": [
-                    {"type": t} for t in self._assistant_opts.create_options.tools
-                ],
+                # "tools": [
+                #     {"type": t} for t in self._assistant_opts.create_options.tools
+                # ],
+                # "tool_resources": self._assistant_opts.create_options.tool_resources,
             }
+            # TODO when we implement code_interpreter and file_search tools
+            # if self._assistant_opts.create_options.tool_resources:
+            #     kwargs["tool_resources"] = (
+            #         self._assistant_opts.create_options.tool_resources
+            #     )
             if self._assistant_opts.create_options.temperature:
                 kwargs["temperature"] = self._assistant_opts.create_options.temperature
             assistant = await self._client.beta.assistants.create(**kwargs)
@@ -115,6 +149,9 @@ class AssistantLLM(llm.LLM):
             thread = await self._client.beta.threads.create()
             return AssistantLoadOptions(assistant_id=assistant.id, thread_id=thread.id)
         elif self._assistant_opts.load_options:
+            if not self._assistant_opts.load_options.thread_id:
+                thread = await self._client.beta.threads.create()
+                self._assistant_opts.load_options.thread_id = thread.id
             return self._assistant_opts.load_options
 
         raise Exception("One of create_options or load_options must be set")
@@ -136,6 +173,9 @@ class AssistantLLM(llm.LLM):
                 "OpenAI Assistants does not support the 'parallel_tool_calls' parameter"
             )
 
+        if not self._sync_openai_task:
+            self._sync_openai_task = asyncio.create_task(self._sync_openai())
+
         return AssistantLLMStream(
             temperature=temperature,
             assistant_llm=self,
@@ -143,6 +183,7 @@ class AssistantLLM(llm.LLM):
             client=self._client,
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
+            on_file_uploaded=self._on_file_uploaded,
         )
 
 
@@ -150,12 +191,16 @@ class AssistantLLMStream(llm.LLMStream):
     class EventHandler(AsyncAssistantEventHandler):
         def __init__(
             self,
+            llm_stream: AssistantLLMStream,
             output_queue: asyncio.Queue[llm.ChatChunk | Exception | None],
             chat_ctx: llm.ChatContext,
+            fnc_ctx: llm.FunctionContext | None = None,
         ):
             super().__init__()
+            self._llm_stream = llm_stream
             self._chat_ctx = chat_ctx
             self._output_queue = output_queue
+            self._fnc_ctx = fnc_ctx
 
         async def on_text_delta(self, delta: TextDelta, snapshot: Text):
             self._output_queue.put_nowait(
@@ -171,9 +216,36 @@ class AssistantLLMStream(llm.LLMStream):
         async def on_tool_call_created(self, tool_call: ToolCall):
             print(f"\nassistant > {tool_call.type}\n", flush=True)
 
-        async def on_tool_call_delta(self, delta: ToolCallDelta, snapshot: ToolCall):
-            if delta.type == "code_interpreter":
-                pass
+        async def on_tool_call_done(
+            self,
+            tool_call: CodeInterpreterToolCall | FileSearchToolCall | FunctionToolCall,
+        ) -> None:
+            if tool_call.type == "code_interpreter":
+                logger.warning("code interpreter tool call not yet implemented")
+            elif tool_call.type == "file_search":
+                logger.warning("file_search tool call not yet implemented")
+            elif tool_call.type == "function":
+                if not self._fnc_ctx:
+                    logger.error("function tool called without function context")
+                    return
+
+                fnc = llm.FunctionCallInfo(
+                    function_info=self._fnc_ctx.ai_functions[tool_call.function.name],
+                    arguments=json.loads(tool_call.function.arguments),
+                    tool_call_id=tool_call.id,
+                    raw_arguments=tool_call.function.arguments,
+                )
+
+                self._llm_stream._function_calls_info.append(fnc)
+                chunk = llm.ChatChunk(
+                    choices=[
+                        llm.Choice(
+                            delta=llm.ChoiceDelta(role="assistant", tool_calls=[fnc]),
+                            index=0,
+                        )
+                    ]
+                )
+                self._output_queue.put_nowait(chunk)
 
     def __init__(
         self,
@@ -184,11 +256,13 @@ class AssistantLLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
         temperature: float | None,
+        on_file_uploaded: OnFileUploaded | None,
     ) -> None:
         super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._llm = assistant_llm
         self._client = client
         self._temperature = temperature
+        self._on_file_uploaded = on_file_uploaded
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
@@ -250,6 +324,7 @@ class AssistantLLMStream(llm.LLMStream):
                 msg_id = msg._metadata.get(OPENAI_MESSAGE_ID_KEY, {}).get(
                     load_options.thread_id
                 )
+                assert load_options.thread_id
                 if msg_id and msg_id not in openai_addded_messages_set:
                     await self._client.beta.threads.messages.delete(
                         thread_id=load_options.thread_id,
@@ -259,6 +334,37 @@ class AssistantLLMStream(llm.LLMStream):
                         f"Deleted message '{msg_id}' in thread '{load_options.thread_id}'"
                     )
                     openai_addded_messages_set.remove(msg_id)
+
+            # Upload any images in the chat_ctx that have not been uploaded to OpenAI
+            for msg in self._chat_ctx.messages:
+                if msg.role != "user":
+                    continue
+
+                if not isinstance(msg.content, list):
+                    continue
+
+                for cnt in msg.content:
+                    if (
+                        not isinstance(cnt, llm.ChatImage)
+                        or OPENAI_FILE_ID_KEY in cnt._cache
+                    ):
+                        continue
+
+                    if isinstance(cnt.image, str):
+                        continue
+
+                    file_obj = await self._upload_frame(
+                        cnt.image, cnt.inference_width, cnt.inference_height
+                    )
+                    cnt._cache[OPENAI_FILE_ID_KEY] = file_obj.id
+                    if self._on_file_uploaded:
+                        self._on_file_uploaded(
+                            OnFileUploadedInfo(
+                                type="image",
+                                original_file=cnt,
+                                openai_file_object=file_obj,
+                            )
+                        )
 
             # Keep track of the new messages in the chat_ctx that we need to add to OpenAI
             additional_messages: list[AdditionalMessage] = []
@@ -289,15 +395,26 @@ class AssistantLLMStream(llm.LLMStream):
                     lk_msg_id_dict[load_options.thread_id] = msg_id
 
             eh = AssistantLLMStream.EventHandler(
-                self._output_queue, chat_ctx=self._chat_ctx
+                output_queue=self._output_queue,
+                chat_ctx=self._chat_ctx,
+                fnc_ctx=self._fnc_ctx,
+                llm_stream=self,
             )
-            async with self._client.beta.threads.runs.stream(
-                additional_messages=additional_messages,
-                thread_id=load_options.thread_id,
-                assistant_id=load_options.assistant_id,
-                event_handler=eh,
-                temperature=self._temperature,
-            ) as stream:
+            assert load_options.thread_id
+            kwargs: dict[str, Any] = {
+                "additional_messages": additional_messages,
+                "thread_id": load_options.thread_id,
+                "assistant_id": load_options.assistant_id,
+                "event_handler": eh,
+                "temperature": self._temperature,
+            }
+            if self._fnc_ctx:
+                kwargs["tools"] = [
+                    llm._oai_api.build_oai_function_description(f)
+                    for f in self._fnc_ctx.ai_functions.values()
+                ]
+
+            async with self._client.beta.threads.runs.stream(**kwargs) as stream:
                 await stream.until_done()
 
             await self._output_queue.put(None)
@@ -335,8 +452,29 @@ class AssistantLLMStream(llm.LLMStream):
         finally:
             self._done_future.set_result(None)
 
-    async def aclose(self) -> None:
-        pass
+    async def _upload_frame(
+        self,
+        frame: rtc.VideoFrame,
+        inference_width: int | None,
+        inference_height: int | None,
+    ):
+        # inside our internal implementation, we allow to put extra metadata to
+        # each ChatImage (avoid to reencode each time we do a chatcompletion request)
+        opts = utils.images.EncodeOptions()
+        if inference_width and inference_height:
+            opts.resize_options = utils.images.ResizeOptions(
+                width=inference_width,
+                height=inference_height,
+                strategy="center_aspect_fit",
+            )
+
+        encoded_data = utils.images.encode(frame, opts)
+        fileObj = await self._client.files.create(
+            file=("image.jpg", encoded_data),
+            purpose="vision",
+        )
+
+        return fileObj
 
     async def __anext__(self):
         item = await self._output_queue.get()
@@ -347,3 +485,53 @@ class AssistantLLMStream(llm.LLMStream):
             raise item
 
         return item
+
+
+def build_oai_message(msg: llm.ChatMessage, cache_key: Any):
+    oai_msg: dict[str, Any] = {"role": msg.role}
+
+    if msg.name:
+        oai_msg["name"] = msg.name
+
+    # add content if provided
+    if isinstance(msg.content, str):
+        oai_msg["content"] = msg.content
+    elif isinstance(msg.content, list):
+        oai_content: list[dict[str, Any]] = []
+        for cnt in msg.content:
+            if isinstance(cnt, str):
+                oai_content.append({"type": "text", "text": cnt})
+            elif isinstance(cnt, llm.ChatImage):
+                if cnt._cache[OPENAI_FILE_ID_KEY]:
+                    oai_content.append(
+                        {
+                            "type": "image_file",
+                            "image_file": {"file_id": cnt._cache[OPENAI_FILE_ID_KEY]},
+                        }
+                    )
+
+        oai_msg["content"] = oai_content
+
+    # make sure to provide when function has been called inside the context
+    # (+ raw_arguments)
+    if msg.tool_calls is not None:
+        tool_calls: list[dict[str, Any]] = []
+        oai_msg["tool_calls"] = tool_calls
+        for fnc in msg.tool_calls:
+            tool_calls.append(
+                {
+                    "id": fnc.tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": fnc.function_info.name,
+                        "arguments": fnc.raw_arguments,
+                    },
+                }
+            )
+
+    # tool_call_id is set when the message is a response/result to a function call
+    # (content is a string in this case)
+    if msg.tool_call_id:
+        oai_msg["tool_call_id"] = msg.tool_call_id
+
+    return oai_msg

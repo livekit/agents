@@ -1,9 +1,12 @@
 import asyncio
 import logging
 
+from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit.plugins import openai
+
+load_dotenv()
 
 logger = logging.getLogger("openai-tts-demo")
 logger.setLevel(logging.INFO)
@@ -20,9 +23,9 @@ async def entrypoint(job: JobContext):
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
 
     await job.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
-    await job.room.local_participant.publish_track(track, options)
+    publication = await job.room.local_participant.publish_track(track, options)
+    await publication.wait_for_subscription()
 
-    await asyncio.sleep(1)
     logger.info('Saying "Hello!"')
     async for output in tts.synthesize("Hello!"):
         await source.capture_frame(output.frame)

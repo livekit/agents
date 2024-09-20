@@ -1,5 +1,4 @@
 import asyncio
-import functools
 import pathlib
 import signal
 import sys
@@ -15,7 +14,11 @@ from . import proto
 from .log import setup_logging
 
 
-def shared_args(func):
+def run_app(opts: WorkerOptions) -> None:
+    """Run the CLI to interact with the worker"""
+    cli = click.Group()
+
+    @cli.command(help="Start the worker in production mode.")
     @click.option(
         "--log-level",
         default="INFO",
@@ -39,83 +42,6 @@ def shared_args(func):
         envvar="LIVEKIT_API_SECRET",
         help="LiveKit server or Cloud project's API secret",
     )
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-def shared_dev_args(func):
-    @click.option(
-        "--asyncio-debug/--no-asyncio-debug",
-        default=False,
-        help="Enable debugging feature of asyncio",
-    )
-    @click.option(
-        "--watch/--no-watch",
-        default=True,
-        help="Watch for changes in the current directory and plugins in editable mode",
-    )
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-def _run_dev(
-    opts: WorkerOptions,
-    log_level: str,
-    url: str,
-    api_key: str,
-    api_secret: str,
-    asyncio_debug: bool,
-    watch: bool,
-    room: str = "",
-    participant_identity: str = "",
-):
-    opts.ws_url = url or opts.ws_url
-    opts.api_key = api_key or opts.api_key
-    opts.api_secret = api_secret or opts.api_secret
-    args = proto.CliArgs(
-        opts=opts,
-        log_level=log_level,
-        production=False,
-        asyncio_debug=asyncio_debug,
-        watch=watch,
-        drain_timeout=0,
-        room=room,
-        participant_identity=participant_identity,
-    )
-
-    if watch:
-        from .watcher import WatchServer
-
-        setup_logging(log_level, args.production)
-        main_file = pathlib.Path(sys.argv[0]).parent
-
-        async def _run_loop():
-            server = WatchServer(
-                run_worker, main_file, args, loop=asyncio.get_event_loop()
-            )
-            await server.run()
-
-        try:
-            asyncio.run(_run_loop())
-        except KeyboardInterrupt:
-            pass
-    else:
-        run_worker(args)
-
-
-def run_app(opts: WorkerOptions) -> None:
-    """Run the CLI to interact with the worker"""
-
-    cli = click.Group()
-
-    @cli.command(help="Start the worker in production mode.")
-    @shared_args
     @click.option(
         "--drain-timeout",
         default=60,
@@ -130,7 +56,7 @@ def run_app(opts: WorkerOptions) -> None:
         args = proto.CliArgs(
             opts=opts,
             log_level=log_level,
-            production=True,
+            devmode=False,
             asyncio_debug=False,
             watch=False,
             drain_timeout=drain_timeout,
@@ -138,8 +64,39 @@ def run_app(opts: WorkerOptions) -> None:
         run_worker(args)
 
     @cli.command(help="Start the worker in development mode")
-    @shared_args
-    @shared_dev_args
+    @click.option(
+        "--log-level",
+        default="DEBUG",
+        type=click.Choice(
+            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
+        ),
+        help="Set the logging level",
+    )
+    @click.option(
+        "--url",
+        envvar="LIVEKIT_URL",
+        help="LiveKit server or Cloud project's websocket URL",
+    )
+    @click.option(
+        "--api-key",
+        envvar="LIVEKIT_API_KEY",
+        help="LiveKit server or Cloud project's API key",
+    )
+    @click.option(
+        "--api-secret",
+        envvar="LIVEKIT_API_SECRET",
+        help="LiveKit server or Cloud project's API secret",
+    )
+    @click.option(
+        "--asyncio-debug/--no-asyncio-debug",
+        default=False,
+        help="Enable debugging feature of asyncio",
+    )
+    @click.option(
+        "--watch/--no-watch",
+        default=True,
+        help="Watch for changes in the current directory and plugins in editable mode",
+    )
     def dev(
         log_level: str,
         url: str,
@@ -151,8 +108,39 @@ def run_app(opts: WorkerOptions) -> None:
         _run_dev(opts, log_level, url, api_key, api_secret, asyncio_debug, watch)
 
     @cli.command(help="Connect to a specific room")
-    @shared_args
-    @shared_dev_args
+    @click.option(
+        "--log-level",
+        default="DEBUG",
+        type=click.Choice(
+            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
+        ),
+        help="Set the logging level",
+    )
+    @click.option(
+        "--url",
+        envvar="LIVEKIT_URL",
+        help="LiveKit server or Cloud project's websocket URL",
+    )
+    @click.option(
+        "--api-key",
+        envvar="LIVEKIT_API_KEY",
+        help="LiveKit server or Cloud project's API key",
+    )
+    @click.option(
+        "--api-secret",
+        envvar="LIVEKIT_API_SECRET",
+        help="LiveKit server or Cloud project's API secret",
+    )
+    @click.option(
+        "--asyncio-debug/--no-asyncio-debug",
+        default=False,
+        help="Enable debugging feature of asyncio",
+    )
+    @click.option(
+        "--watch/--no-watch",
+        default=True,
+        help="Watch for changes in the current directory and plugins in editable mode",
+    )
     @click.option("--room", help="Room name to connect to", required=True)
     @click.option(
         "--participant-identity", help="Participant identity (JobType.JT_PUBLISHER)"
@@ -179,10 +167,10 @@ def run_app(opts: WorkerOptions) -> None:
             participant_identity,
         )
 
-    @cli.command(help="Download plugin dependency files (i.e. model weights, ...)")
+    @cli.command(help="Download plugin dependency files")
     @click.option(
         "--log-level",
-        default="INFO",
+        default="DEBUG",
         type=click.Choice(
             ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
         ),
@@ -199,14 +187,56 @@ def run_app(opts: WorkerOptions) -> None:
     cli()
 
 
-def run_worker(args: proto.CliArgs) -> None:
-    class Shutdown(SystemExit):
-        pass
+def _run_dev(
+    opts: WorkerOptions,
+    log_level: str,
+    url: str,
+    api_key: str,
+    api_secret: str,
+    asyncio_debug: bool,
+    watch: bool,
+    room: str = "",
+    participant_identity: str = "",
+):
+    opts.ws_url = url or opts.ws_url
+    opts.api_key = api_key or opts.api_key
+    opts.api_secret = api_secret or opts.api_secret
+    args = proto.CliArgs(
+        opts=opts,
+        log_level=log_level,
+        devmode=True,
+        asyncio_debug=asyncio_debug,
+        watch=watch,
+        drain_timeout=0,
+        room=room,
+        participant_identity=participant_identity,
+    )
 
-    setup_logging(args.log_level, args.production)
+    if watch:
+        from .watcher import WatchServer
+
+        setup_logging(log_level, args.devmode)
+        main_file = pathlib.Path(sys.argv[0]).parent
+
+        async def _run_loop():
+            server = WatchServer(
+                run_worker, main_file, args, loop=asyncio.get_event_loop()
+            )
+            await server.run()
+
+        try:
+            asyncio.run(_run_loop())
+        except KeyboardInterrupt:
+            pass
+    else:
+        run_worker(args)
+
+
+def run_worker(args: proto.CliArgs) -> None:
+    setup_logging(args.log_level, args.devmode)
 
     loop = asyncio.get_event_loop()
-    worker = Worker(args.opts, loop=loop)
+    worker = Worker(args.opts, devmode=args.devmode, loop=loop)
 
     loop.set_debug(args.asyncio_debug)
     loop.slow_callback_duration = 0.1  # 100ms
@@ -222,7 +252,7 @@ def run_worker(args: proto.CliArgs) -> None:
     try:
 
         def _signal_handler():
-            raise Shutdown
+            raise KeyboardInterrupt
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _signal_handler)
@@ -249,16 +279,22 @@ def run_worker(args: proto.CliArgs) -> None:
         main_task = loop.create_task(_worker_run(worker), name="agent_runner")
         try:
             loop.run_until_complete(main_task)
-        except (Shutdown, KeyboardInterrupt):
+        except KeyboardInterrupt:
             pass
 
-        if args.production:
-            loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
+        try:
+            if not args.devmode:
+                loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
 
-        loop.run_until_complete(worker.aclose())
+            loop.run_until_complete(worker.aclose())
 
-        if watch_client:
-            loop.run_until_complete(watch_client.aclose())
+            if watch_client:
+                loop.run_until_complete(watch_client.aclose())
+        except KeyboardInterrupt:
+            logger.warning("exiting forcefully")
+            import os
+
+            os._exit(1)  # TODO(theomonnom): add aclose(force=True) in worker
     finally:
         try:
             tasks = asyncio.all_tasks(loop)
