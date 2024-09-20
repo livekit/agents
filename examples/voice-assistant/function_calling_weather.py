@@ -61,10 +61,18 @@ async def entrypoint(ctx: JobContext):
         role="system",
     )
     participant = await ctx.wait_for_participant()
+    opts = openai.beta.AssistantOptions(
+        create_options=openai.beta.AssistantCreateOptions(
+            model="gpt-4o",
+            instructions="Provide the weather for a given location.",
+            name="Weather Assistant",
+        )
+    )
+    ass_llm = openai.beta.AssistantLLM(assistant_opts=opts)
     assistant = VoiceAssistant(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
-        llm=openai.LLM(),
+        llm=ass_llm,
         tts=openai.TTS(),
         fnc_ctx=fnc_ctx,
         chat_ctx=initial_chat_ctx,
