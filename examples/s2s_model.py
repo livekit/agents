@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from typing import Annotated
 
 import aiohttp
@@ -56,13 +57,34 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     model = realtime.RealtimeModel()
-
     assistant = omni_assistant.OmniAssistant(
         model=model,
         chat_ctx=initial_ctx,
         fnc_ctx=fnc_ctx,
     )
     assistant.start(ctx.room)
+
+    fnc_ctx = llm.FunctionContext()
+
+
+    # e.g, parralel sentiment analysis
+
+    @fnc_ctx.ai_callable()
+    async def sentiment(
+        sentiment: Annotated[
+            str, llm.TypeInfo(description="the sentiment of the user (e.g angy, happy, sad)")
+        ],
+    ):
+        print(sentiment)
+
+    session = model.sessions[0]
+    conv = session.create_conversation(label="sentiment-analysis", fnc_ctx=fnc_ctx,
+                                       tool_choice="required")
+
+    #while True:
+    #    await asyncio.sleep(5)
+    #    conv.generate()
+
 
 
 if __name__ == "__main__":

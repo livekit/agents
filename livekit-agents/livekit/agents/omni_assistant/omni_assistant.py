@@ -167,6 +167,7 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
         @self._session.on("generation_canceled")
         def _generation_canceled():
             if self._playing_handle is not None and not self._playing_handle.done():
+                logger.debug("generation_canceled: interrupting current playback")
                 self._playing_handle.interrupt()
 
                 self._session.truncate_content(

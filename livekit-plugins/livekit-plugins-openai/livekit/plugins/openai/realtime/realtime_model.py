@@ -141,13 +141,19 @@ class RealtimeModel:
             base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
         self._api_key = api_key
-        self._session = http_session
+        self._http_session = http_session
+
+        self._rt_sessions = []
 
     def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._session:
-            self._session = utils.http_context.http_session()
+        if not self._http_session:
+            self._http_session = utils.http_context.http_session()
 
-        return self._session
+        return self._http_session
+
+    @property
+    def sessions(self) -> list[RealtimeSession]:
+        return self._rt_sessions
 
     def session(
         self,
@@ -164,7 +170,7 @@ class RealtimeModel:
         tool_choice: api_proto.ToolChoice = "auto",
         subscribe_to_user_audio: bool = True,
     ) -> RealtimeSession:
-        return RealtimeSession(
+        new_session = RealtimeSession(
             chat_ctx=chat_ctx or llm.ChatContext(),
             fnc_ctx=fnc_ctx,
             opts=_ModelOptions(
@@ -184,9 +190,12 @@ class RealtimeModel:
             ),
             http_session=self._ensure_session(),
         )
+        self._rt_sessions.append(new_session)
+        return new_session
 
     async def aclose(self) -> None:
-        pass
+        for session in self._rt_sessions:
+            await session.aclose()
 
 
 class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
@@ -271,7 +280,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
     @fnc_ctx.setter
     def fnc_ctx(self, fnc_ctx: llm.FunctionContext | None) -> None:
         self._default_conversation.fnc_ctx = fnc_ctx
-        self._default_conversation.update_conversation_config()
 
     def truncate_content(self, *, message_id: str, text_chars: int, audio_samples: int):
         self._send_ch.send_nowait(
@@ -635,10 +643,12 @@ class RealtimeConversation(
             for fnc in self._fnc_ctx.ai_functions.values():
                 tools.append(llm._oai_api.build_oai_function_description(fnc))
 
+        print(self._label)
         self._send_ch.send_nowait(
             {
                 "event": "update_conversation_config",
                 "conversation_label": self._label,
+                "label": self._label,
                 "disable_audio": self._config.disable_audio,
                 "max_tokens": self._config.max_tokens,
                 "output_audio_format": "pcm16",
@@ -781,8 +791,10 @@ class RealtimeConversation(
                     tool_call = llm.ChatMessage.create_tool_from_called_function(
                         called_fnc
                     )
-                    self.add_message(message=tool_call, previous_id=msg.id)
-                    self.generate()
+
+                    if called_fnc.result is not None:
+                        self.add_message(message=tool_call, previous_id=msg.id)
+                        self.generate()
 
                 self._fnc_tasks.create_task(_run_fnc_task())
 

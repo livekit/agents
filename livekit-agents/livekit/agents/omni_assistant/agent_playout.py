@@ -120,7 +120,7 @@ class AgentPlayout:
                 handle._tr_fwd.push_audio(frame)
 
                 for f in bstream.write(frame.data.tobytes()):
-                    handle._pushed_duration += f.samples_per_channel/ f.sample_rate
+                    handle._pushed_duration += f.samples_per_channel / f.sample_rate
                     await self._source.capture_frame(f)
 
             for f in bstream.flush():
@@ -137,10 +137,9 @@ class AgentPlayout:
                 [capture_task, handle._int_fut],
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            await read_text_task
         finally:
             await utils.aio.gracefully_cancel(capture_task)
-            await utils.aio.gracefully_cancel(read_text_task)
+
 
             handle._total_played_time = (
                 handle._pushed_duration - self._source.queued_duration
@@ -148,6 +147,8 @@ class AgentPlayout:
 
             if handle.interrupted or capture_task.exception():
                 self._source.clear_queue()  # make sure to remove any queued frames
+
+            await utils.aio.gracefully_cancel(read_text_task)
 
             if not first_frame:
                 if not handle.interrupted:
