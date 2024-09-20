@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from . import beta
+from . import beta, realtime
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
 from .models import TTSModels, TTSVoices, WhisperModels
@@ -34,6 +34,7 @@ __all__ = [
     "create_embeddings",
     "EmbeddingData",
     "VoiceAssistant",
+    "realtime",
     "__version__",
 ]
 

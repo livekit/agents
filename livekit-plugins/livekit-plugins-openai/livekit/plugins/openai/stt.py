@@ -67,11 +67,6 @@ class STT(stt.STT):
             model=model,
         )
 
-        # throw an error on our end
-        api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if api_key is None:
-            raise ValueError("OpenAI API key is required")
-
         self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,

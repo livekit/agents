@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 from livekit import rtc
 
@@ -35,10 +35,19 @@ class ChatImage:
 
 
 @dataclass
+class ChatAudio:
+    frame: rtc.AudioFrame | list[rtc.AudioFrame]
+
+
+ChatContent = Union[str, ChatImage, ChatAudio]
+
+
+@dataclass
 class ChatMessage:
     role: ChatRole
+    id: str | None = None  # used by the OAI realtime API
     name: str | None = None
-    content: str | list[str | ChatImage] | None = None
+    content: ChatContent | list[ChatContent] | None = None
     tool_calls: list[function_context.FunctionCallInfo] | None = None
     tool_call_id: str | None = None
     tool_exception: Exception | None = None
