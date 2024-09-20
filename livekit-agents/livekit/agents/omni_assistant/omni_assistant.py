@@ -222,7 +222,7 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
                 samples_per_channel=2400,
             )
 
-            async for ev in audio_stream
+            async for ev in audio_stream:
                 for frame in bstream.write(ev.frame.data.tobytes()):
                     self._input_audio_ch.send_nowait(frame)
 
