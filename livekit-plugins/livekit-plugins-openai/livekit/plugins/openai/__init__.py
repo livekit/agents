@@ -20,7 +20,6 @@ from .models import TTSModels, TTSVoices, WhisperModels
 from .stt import STT
 from .tts import TTS
 from .version import __version__
-from .voice_assistant import VoiceAssistant
 
 __all__ = [
     "STT",
@@ -33,7 +32,6 @@ __all__ = [
     "TTSVoices",
     "create_embeddings",
     "EmbeddingData",
-    "VoiceAssistant",
     "realtime",
     "__version__",
 ]

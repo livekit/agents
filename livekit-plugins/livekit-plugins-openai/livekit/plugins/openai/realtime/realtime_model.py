@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import base64
 import aiohttp
@@ -215,6 +216,20 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
         self._default_conversation.update_conversation_config()
         self._http_session = http_session
 
+        # forward all events from the default conv
+        self._default_conversation.on(
+            "add_message", functools.partial(self.emit, "add_message")
+        )
+        self._default_conversation.on(
+            "message_added", functools.partial(self.emit, "message_added")
+        )
+        self._default_conversation.on(
+            "generation_finished", functools.partial(self.emit, "generation_finished")
+        )
+        self._default_conversation.on(
+            "generation_canceled", functools.partial(self.emit, "generation_canceled")
+        )
+
         self._session_id = "not-connected"
         self._pending_messages = dict[str, PendingMessage]()
 
@@ -255,6 +270,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
     @fnc_ctx.setter
     def fnc_ctx(self, fnc_ctx: llm.FunctionContext | None) -> None:
         self._default_conversation.fnc_ctx = fnc_ctx
+        self._default_conversation.update_conversation_config()
 
     def truncate_content(self, *, message_id: str, text_chars: int, audio_samples: int):
         self._send_ch.send_nowait(
@@ -376,6 +392,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
 
                 try:
                     data = msg.json()
+                    import copy
+
+                    test = copy.deepcopy(data)
+                    # truncate data for print
+                    if "data" in test:
+                        test["data"] = test["data"][:100]
+                    print(test)
                     event: api_proto.ServerEventType = data["event"]
 
                     if event == "start_session":
@@ -397,7 +420,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
                     elif event == "generation_finished":
                         self._handle_generation_finished(data)
                     elif event == "generation_canceled":
-                        self._handle_generation_finished(data)
+                        self._handle_generation_canceled(data)
 
                 except Exception:
                     logger.exception(
@@ -525,7 +548,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
 
     def _handle_message_added(self, data: api_proto.ServerEvent.MessageAdded):
         conv = self._conversations[data["conversation_label"]]
-        pending_msg = self._pending_messages.pop(data["id"])
+        pending_msg = self._pending_messages.pop(data["id"], None)
+        if pending_msg is None:
+            return
 
         assert isinstance(pending_msg.text_stream, utils.aio.Chan)
         assert isinstance(pending_msg.audio_stream, utils.aio.Chan)
@@ -579,6 +604,8 @@ class RealtimeConversation(
         self._fnc_ctx = fnc_ctx
         self._config = config
         self._send_ch = send_ch
+
+        self._fnc_tasks = utils.aio.TaskSet()
 
     def update_conversation_config(
         self,
@@ -660,42 +687,35 @@ class RealtimeConversation(
     def add_message(
         self,
         *,
-        message: llm.ChatMessage | list[llm.ChatMessage],
+        message: llm.ChatMessage,
         previous_id: str | None = None,
     ) -> None:
-        if isinstance(message, llm.ChatMessage):
-            message = [message]
+        oai_content: list[api_proto.MessageContent] = []
 
-        oai_messages: list[api_proto.Message] = []
-        for msg in message:
-            oai_content: list[api_proto.MessageContent] = []
+        if isinstance(message.content, str):
+            oai_content.append({"type": "text", "text": message.content})
+        elif isinstance(message.content, llm.ChatAudio):
+            frames = message.content.frame
+            if isinstance(frames, rtc.AudioFrame):
+                frames = [frames]
 
-            if isinstance(msg.content, str):
-                oai_content.append({"type": "text", "text": msg.content})
-            elif isinstance(msg.content, llm.ChatAudio):
-                frames = msg.content.frame
-                if isinstance(frames, rtc.AudioFrame):
-                    frames = [frames]
+            frame = utils.merge_frames(frames)
+            b64_data = base64.b64encode(frame.data).decode("utf-8")
+            oai_content.append({"type": "audio", "audio": b64_data})
 
-                frame = utils.merge_frames(frames)
-                b64_data = base64.b64encode(frame.data).decode("utf-8")
-                oai_content.append({"type": "audio", "audio": b64_data})
-
-            oai_messages.append(
-                {
-                    "id": msg.id or "",
-                    "role": msg.role,
-                    "tool_call_id": msg.tool_call_id or "",
-                    "content": oai_content,
-                }
-            )
+        oai_msg: api_proto.Message = {
+            "id": message.id or utils.shortuuid(),
+            "role": message.role,
+            "tool_call_id": message.tool_call_id or "",
+            "content": oai_content,
+        }
 
         self._send_ch.send_nowait(
             {
                 "event": "add_message",
                 "previous_id": previous_id or "",
                 "conversation_label": self._label,
-                "message": oai_messages,
+                "message": oai_msg,
             }
         )
 
@@ -743,14 +763,34 @@ class RealtimeConversation(
                     )
                     continue
 
-                lk_msg.tool_calls.append(
-                    _oai_api.create_ai_function_info(
-                        self._fnc_ctx,
-                        tool_call.tool_call_id,
-                        tool_call.name,
-                        tool_call.arguments,
-                    )
+                fnc_call_info = _oai_api.create_ai_function_info(
+                    self._fnc_ctx,
+                    tool_call.tool_call_id,
+                    tool_call.name,
+                    tool_call.arguments,
                 )
+
+                lk_msg.tool_calls.append(fnc_call_info)
+
+                @utils.log_exceptions(logger=logger)
+                async def _run_fnc_task():
+                    logger.debug(
+                        "executing ai function",
+                        extra={
+                            "function": fnc_call_info.function_info.name,
+                        },
+                    )
+
+                    called_fnc = fnc_call_info.execute()
+                    await called_fnc.task
+
+                    tool_call = llm.ChatMessage.create_tool_from_called_function(
+                        called_fnc
+                    )
+                    self.add_message(message=tool_call, previous_id=msg.id)
+                    self.generate()
+
+                self._fnc_tasks.create_task(_run_fnc_task())
 
         self._chat_ctx.messages.insert(idx, lk_msg)
         self.emit("message_added", lk_msg)

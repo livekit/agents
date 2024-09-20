@@ -77,7 +77,7 @@ class ClientEvent:
         event: Literal["add_message"]
         previous_id: NotRequired[str]
         conversation_label: NotRequired[str]
-        message: list[Message]
+        message: Message
 
     class DeleteMessage(TypedDict):
         event: Literal["delete_message"]

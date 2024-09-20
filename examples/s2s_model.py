@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import aiohttp
 import logging
 
 from dotenv import load_dotenv
@@ -10,9 +11,10 @@ from livekit.agents import (
     WorkerType,
     cli,
     llm,
+    omni_assistant,
 )
 from typing import Annotated
-from livekit.plugins import openai
+from livekit.plugins.openai import realtime
 
 load_dotenv()
 
@@ -20,24 +22,44 @@ logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
 
 
-
 async def entrypoint(ctx: JobContext):
     logger.info("starting entrypoint")
-    
+
+    initial_ctx = llm.ChatContext().append(
+        role="system",
+        text=("You are a helpful assistant who will perform tasks as requested"),
+    )
+
     fnc_ctx = llm.FunctionContext()
 
-    @fnc_ctx.ai_callable(description="Turn on/off the lights in a room")
-    async def toggle_light(
-        room: Annotated[str, llm.TypeInfo(description="The specific room")],
-        status: bool,
+    @fnc_ctx.ai_callable()
+    async def get_weather(
+        location: Annotated[
+            str, llm.TypeInfo(description="The location to get the weather for")
+        ],
     ):
-        print(f"Turned the lights in the {room} {'on' if status else 'off'}")
-        return f"Turned the lights in the {room} {'on' if status else 'off'}"
+        """Called when the user asks about the weather. This function will return the weather for the given location."""
+        logger.info(f"getting weather for {location}")
+        url = f"https://wttr.in/{location}?format=%C+%t"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                print(response)
+                if response.status == 200:
+                    weather_data = await response.text()
+                    # response from the function call is returned to the LLM
+                    return f"The weather in {location} is {weather_data}."
+                else:
+                    raise Exception(
+                        "Failed to get weather data, status code: {response.status}"
+                    )
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    assistant = openai.VoiceAssistant(
-        system_message="You are an artist that loves to sing",
+    model = realtime.RealtimeModel()
+
+    assistant = omni_assistant.OmniAssistant(
+        model=model,
+        chat_ctx=initial_ctx,
         fnc_ctx=fnc_ctx,
     )
     assistant.start(ctx.room)
