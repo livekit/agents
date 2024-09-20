@@ -72,7 +72,7 @@ class ClientEvent:
         temperature: float  # [0.6, 1.2]
         max_tokens: int  # [1, 4096]
         disable_audio: bool
-        conversation_label: NotRequired[str]
+        label: NotRequired[str]
 
     class AddMessage(TypedDict):
         event: Literal["add_message"]

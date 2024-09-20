@@ -89,9 +89,6 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
         # audio output
         self._playing_handle: agent_playout.PlayoutHandle | None = None
 
-        # tools
-        self._fnc_tasks: set[asyncio.Task] = set()
-
         self._linked_participant: rtc.RemoteParticipant | None = None
         self._started, self._closed = False, False
 
@@ -167,7 +164,6 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
         @self._session.on("generation_canceled")
         def _generation_canceled():
             if self._playing_handle is not None and not self._playing_handle.done():
-                logger.debug("generation_canceled: interrupting current playback")
                 self._playing_handle.interrupt()
 
                 self._session.truncate_content(
@@ -193,19 +189,8 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
         )
         await self._agent_publication.wait_for_subscription()
 
-        @utils.log_exceptions(logger=logger)
-        async def send_task():
-            async for frame in self._input_audio_ch:
-                self._session.add_user_audio(frame)
-
-        tasks = [
-            asyncio.create_task(send_task()),
-        ]
-
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
+        async for frame in self._input_audio_ch:
+            self._session.add_user_audio(frame)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if self._linked_participant is None:
@@ -237,7 +222,7 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
                 samples_per_channel=2400,
             )
 
-            async for ev in audio_stream:
+            async for ev in audio_stream
                 for frame in bstream.write(ev.frame.data.tobytes()):
                     self._input_audio_ch.send_nowait(frame)
 

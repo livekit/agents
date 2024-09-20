@@ -270,6 +270,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
         )
 
     @property
+    def default_conversation(self) -> RealtimeConversation:
+        return self._default_conversation
+
+    @property
     def chat_ctx(self) -> llm.ChatContext:
         return self._default_conversation.chat_ctx
 
@@ -643,7 +647,6 @@ class RealtimeConversation(
             for fnc in self._fnc_ctx.ai_functions.values():
                 tools.append(llm._oai_api.build_oai_function_description(fnc))
 
-        print(self._label)
         self._send_ch.send_nowait(
             {
                 "event": "update_conversation_config",
