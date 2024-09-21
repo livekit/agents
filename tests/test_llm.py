@@ -89,7 +89,7 @@ def test_hashable_typeinfo():
 
 
 LLMS: list[llm.LLM | Callable[[], llm.LLM]] = [
-    # openai.LLM(),
+    openai.LLM(),
     lambda: openai.beta.AssistantLLM(
         assistant_opts=openai.beta.AssistantOptions(
             create_options=openai.beta.AssistantCreateOptions(
