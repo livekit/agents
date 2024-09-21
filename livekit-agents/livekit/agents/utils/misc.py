@@ -23,7 +23,6 @@ def merge_frames(buffer: AudioBuffer) -> rtc.AudioFrame:
         sample_rate = buffer[0].sample_rate
         num_channels = buffer[0].num_channels
         samples_per_channel = 0
-        data = b""
         for frame in buffer:
             if frame.sample_rate != sample_rate:
                 raise ValueError("sample rate mismatch")
@@ -31,11 +30,11 @@ def merge_frames(buffer: AudioBuffer) -> rtc.AudioFrame:
             if frame.num_channels != num_channels:
                 raise ValueError("channel count mismatch")
 
-            data += frame.data
             samples_per_channel += frame.samples_per_channel
 
+        data_pieces = [frame.data for frame in buffer]
         return rtc.AudioFrame(
-            data=data,
+            data=b"".join(data_pieces),
             sample_rate=sample_rate,
             num_channels=num_channels,
             samples_per_channel=samples_per_channel,
