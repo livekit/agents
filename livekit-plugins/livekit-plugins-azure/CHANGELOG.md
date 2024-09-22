@@ -1,5 +1,11 @@
 # livekit-plugins-azure
 
+## 0.3.2
+
+### Patch Changes
+
+- avoid returning tiny frames from TTS - [#747](https://github.com/livekit/agents/pull/747) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.3.1
 
 ### Patch Changes

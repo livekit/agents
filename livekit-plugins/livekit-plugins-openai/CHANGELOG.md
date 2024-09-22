@@ -1,5 +1,13 @@
 # livekit-plugins-openai
 
+## 0.8.4
+
+### Patch Changes
+
+- avoid returning tiny frames from TTS - [#747](https://github.com/livekit/agents/pull/747) ([@theomonnom](https://github.com/theomonnom))
+
+- Fixing Assistant API Vision Capabilities - [#771](https://github.com/livekit/agents/pull/771) ([@keepingitneil](https://github.com/keepingitneil))
+
 ## 0.8.3
 
 ### Patch Changes
