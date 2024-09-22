@@ -156,56 +156,52 @@ class ChunkedStream(tts.ChunkedStream):
             format=Format.FORMAT_WAV,
             speed=1
         )
-
-        try:
-            url = "https://api.play.ht/api/v2/tts/stream"
-            headers = {
-                "accept": ACCEPT_HEADER[self._opts.encoding],
-                "content-type": "application/json",
-                "AUTHORIZATION": self._opts.api_key,
-                "X-USER-ID": self._opts.user_id
-            }
-            json_data = {
-                "text": "Hello, How are you?",
-                "output_format": self._opts.en,
-                "voice": "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
-            }
-            async with self._session.post(url=url, headers=headers, json=json_data) as resp:
-                if not resp.content_type.startswith("audio/"):
-                    content = await resp.text()
-                    logger.error("playHT returned non-audio data: %s", content)
-                    return
-                
-                encoding = _encoding_from_format(self._opts.encoding)
-                if encoding == "mp3":
-                    async for bytes_data, _ in resp.content.iter_chunks():
-                        for frame in self._mp3_decoder.decode_chunk(bytes_data):
-                            self._event_ch.send_nowait(
-                                tts.SynthesizedAudio(
-                                    request_id=request_id,
-                                    segment_id=segment_id,
-                                    frame=frame,
-                                )
-                            )
-                else:
-                    async for bytes_data, _ in resp.content.iter_chunks():
-                        for frame in stream.write(bytes_data):
-                            self._event_ch.send_nowait(
-                                tts.SynthesizedAudio(
-                                    request_id=request_id,
-                                    segment_id=segment_id,
-                                    frame=frame,
-                                )
-                            )
-
-                    for frame in stream.flush():
+        url = "https://api.play.ht/api/v2/tts/stream"
+        headers = {
+            "accept": ACCEPT_HEADER[self._opts.encoding],
+            "content-type": "application/json",
+            "AUTHORIZATION": self._opts.api_key,
+            "X-USER-ID": self._opts.user_id
+        }
+        json_data = {
+            "text": "Hello, How are you?",
+            "output_format": self._opts.en,
+            "voice": "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
+        }
+        async with self._session.post(url=url, headers=headers, json=json_data) as resp:
+            if not resp.content_type.startswith("audio/"):
+                content = await resp.text()
+                logger.error("playHT returned non-audio data: %s", content)
+                return
+            
+            encoding = _encoding_from_format(self._opts.encoding)
+            if encoding == "mp3":
+                async for bytes_data, _ in resp.content.iter_chunks():
+                    for frame in self._mp3_decoder.decode_chunk(bytes_data):
                         self._event_ch.send_nowait(
                             tts.SynthesizedAudio(
-                                request_id=request_id, segment_id=segment_id, frame=frame
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
                             )
                         )
-        except Exception as e:
-            print(e)
+            else:
+                async for bytes_data, _ in resp.content.iter_chunks():
+                    for frame in stream.write(bytes_data):
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
+                            )
+                        )
+
+                for frame in stream.flush():
+                    self._event_ch.send_nowait(
+                        tts.SynthesizedAudio(
+                            request_id=request_id, segment_id=segment_id, frame=frame
+                        )
+                    )
 
 
 def _dict_to_voices_list(data: dict[str, Any]):
