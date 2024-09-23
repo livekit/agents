@@ -73,7 +73,7 @@ class AssistantCallContext:
 
 
 def _default_before_llm_cb(
-    assistant: VoiceAssistant, chat_ctx: ChatContext, inference_id: str
+    assistant: VoiceAssistant, chat_ctx: ChatContext, inference_id: Optional[str]
 ) -> LLMStream:
     return assistant.llm.chat(
         chat_ctx=chat_ctx,
@@ -551,7 +551,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ChatMessage.create(text=handle.user_question, role="user")
         )
 
-        llm_stream = self._opts.before_llm_cb(self, copied_ctx, inference_id=handle.id)
+        llm_stream = self._opts.before_llm_cb(self, copied_ctx, handle.id)
         if llm_stream is False:
             return
 
