@@ -98,13 +98,15 @@ class ChatMessage:
         if tool_calls is not None:
             tool_calls = tool_calls.copy()
 
-        return ChatMessage(
+        copied_msg = ChatMessage(
             role=self.role,
             name=self.name,
             content=content,
             tool_calls=tool_calls,
             tool_call_id=self.tool_call_id,
         )
+        copied_msg._metadata = self._metadata
+        return copied_msg
 
 
 @dataclass
@@ -119,4 +121,6 @@ class ChatContext:
         return self
 
     def copy(self) -> ChatContext:
-        return ChatContext(messages=[m.copy() for m in self.messages])
+        copied_chat_ctx = ChatContext(messages=[m.copy() for m in self.messages])
+        copied_chat_ctx._metadata = self._metadata
+        return copied_chat_ctx
