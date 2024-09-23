@@ -82,6 +82,7 @@ jobs:
                       ./livekit-plugins/livekit-plugins-cartesia \
                       ./livekit-plugins/livekit-plugins-azure \
                       ./livekit-plugins/livekit-plugins-anthropic
+          python -c 'from livekit.plugins import nltk; nltk.NltkPlugin().download_files();'
 
       - name: Run tests
         shell: bash
