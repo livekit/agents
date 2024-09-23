@@ -77,7 +77,7 @@ class LLM(llm.LLM):
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,
-                    max_keepalive_connections=100,
+                    max_keepalive_connections=200,
                     keepalive_expiry=120,
                 ),
             ),
