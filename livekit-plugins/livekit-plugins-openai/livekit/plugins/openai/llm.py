@@ -73,7 +73,7 @@ class LLM(llm.LLM):
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
-                timeout=httpx.Timeout(10, connect=10),
+                timeout=httpx.Timeout(timeout=30, connect=10, read=5, pool=5),
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,
