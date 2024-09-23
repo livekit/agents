@@ -388,6 +388,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        inference_id: str | None = None,
     ) -> "LLMStream":
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
