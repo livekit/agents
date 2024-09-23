@@ -70,7 +70,7 @@ jobs:
       - name: Install packages
         shell: bash
         run: |
-          pip3 install pytest pytest-asyncio pytest-timeout pytest-xdist './livekit-agents[codecs]' psutil
+          pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
           pip3 install -r ./tests/test-requirements.txt
           pip3 install ./livekit-agents \
                       ./livekit-plugins/livekit-plugins-openai \
@@ -82,7 +82,6 @@ jobs:
                       ./livekit-plugins/livekit-plugins-cartesia \
                       ./livekit-plugins/livekit-plugins-azure \
                       ./livekit-plugins/livekit-plugins-anthropic
-          python -c 'from livekit.plugins import nltk; nltk.NltkPlugin().download_files();'
 
       - name: Run tests
         shell: bash
@@ -101,4 +100,4 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: google.json
         run: |
           echo $GOOGLE_CREDENTIALS_JSON > google.json
-          pytest --asyncio-mode=auto --timeout=60 -n 8 .
+          pytest --asyncio-mode=auto --timeout=60 .
