@@ -105,11 +105,11 @@ class AssistantLLM(llm.LLM):
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
-                timeout=5,
+                timeout=httpx.Timeout(10, connect=10),
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,
-                    max_keepalive_connections=200,
+                    max_keepalive_connections=100,
                     keepalive_expiry=120,
                 ),
             ),
