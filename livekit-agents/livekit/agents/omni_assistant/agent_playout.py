@@ -140,7 +140,6 @@ class AgentPlayout:
         finally:
             await utils.aio.gracefully_cancel(capture_task)
 
-
             handle._total_played_time = (
                 handle._pushed_duration - self._source.queued_duration
             )

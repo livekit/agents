@@ -15,115 +15,50 @@ from livekit.agents.llm import _oai_api
 from . import api_proto
 from .log import logger
 
-ConversationEventTypes = Literal[
+
+EventTypes = Literal[
+    "start_session",
+    "error",
+    "vad_speech_started",
+    "vad_speech_stopped",
+    "input_transcribed",
     "add_message",
     "message_added",
     "generation_finished",
     "generation_canceled",
 ]
 
-EventTypes = Union[
-    Literal[
-        "start_session",
-        "error",
-        "vad_speech_started",
-        "vad_speech_stopped",
-        "input_transcribed",
-    ],
-    ConversationEventTypes,
-]
-
-
-@dataclass
-class VadConfig:
-    threshold: float
-    prefix_padding_ms: float
-    silence_duration_ms: float
-
-
-@dataclass
-class StartSessionEvent:
-    session_id: str
-    model: str
-    system_fingerprint: str
-
-
-@dataclass
-class PendingToolCall:
-    name: str
-    """name of the function"""
-    arguments: str
-    """accumulated arguments"""
-    tool_call_id: str
-    """id of the tool call"""
-
-
-@dataclass
-class PendingMessage:
-    previous_id: str
-    """id of the previous message, usefull for ordering"""
-    id: str
-    """id of the message"""
-    role: api_proto.Role
-    """role of the message"""
-    text: str
-    """accumulated text content"""
-    audio: list[rtc.AudioFrame]
-    """accumulated audio content"""
-    text_stream: AsyncIterable[str]
-    """stream of text content"""
-    audio_stream: AsyncIterable[rtc.AudioFrame]
-    """stream of audio content"""
-    tool_calls: list[PendingToolCall]
-    """pending tool calls"""
-
-
-@dataclass
-class _ConvConfig:
-    voice: api_proto.Voices
-    temperature: float
-    subscribe_to_user_audio: bool
-    max_tokens: int
-    disable_audio: bool
-    tool_choice: api_proto.ToolChoice
-
 
 @dataclass
 class _ModelOptions:
-    base_url: str | None
-    transcribe_input: bool
+    modalities: list[api_proto.Modality]
+    instructions: str | None
+    voice: api_proto.Voice
+    input_audio_format: api_proto.AudioFormat
+    output_audio_format: api_proto.AudioFormat
+    input_audio_transcription: api_proto.InputAudioTranscription | None
     turn_detection: api_proto.TurnDetectionType
-    vad: VadConfig | None
+    temparature: float
+    max_output_tokens: int
     api_key: str
-    conversation_config: _ConvConfig
-
-
-class _ConversationProtocol(Protocol):
-    def update_conversation_config(
-        self,
-        *,
-        voice: api_proto.Voices | None = None,
-        subscribe_to_user_audio: bool | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        disable_audio: bool | None = None,
-        tool_choice: api_proto.ToolChoice | None = None,
-    ) -> None: ...
-
-    @property
-    def chat_ctx(self) -> llm.ChatContext: ...
-
-    @property
-    def fnc_ctx(self) -> llm.FunctionContext | None: ...
-
-    @fnc_ctx.setter
-    def fnc_ctx(self, fnc_ctx: llm.FunctionContext | None) -> None: ...
+    base_url: str
 
 
 class RealtimeModel:
     def __init__(
         self,
         *,
+        modalities: list[api_proto.Modality] = ["text", "audio"],
+        instructions: str | None = None,
+        voice: api_proto.Voice = "alloy",
+        input_audio_format: api_proto.AudioFormat = "pcm16",
+        output_audio_format: api_proto.AudioFormat = "pcm16",
+        input_audio_transcription: api_proto.InputAudioTranscription = {
+            "model": "whisper-1"
+        },
+        turn_detection: api_proto.TurnDetectionType = {"type": "server_vad"},
+        temparature: float = 0.6,
+        max_output_tokens: int = 2048,
         api_key: str | None = None,
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -140,9 +75,21 @@ class RealtimeModel:
         if not base_url:
             base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
-        self._api_key = api_key
-        self._http_session = http_session
+        self._default_opts = _ModelOptions(
+            modalities=modalities,
+            instructions=instructions,
+            voice=voice,
+            input_audio_format=input_audio_format,
+            output_audio_format=output_audio_format,
+            input_audio_transcription=input_audio_transcription,
+            turn_detection=turn_detection,
+            temparature=temparature,
+            max_output_tokens=max_output_tokens,
+            api_key=api_key,
+            base_url=base_url,
+        )
 
+        self._http_session = http_session
         self._rt_sessions = []
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -160,34 +107,39 @@ class RealtimeModel:
         *,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
-        voice: api_proto.Voices = "alloy",
-        turn_detection: api_proto.TurnDetectionType = "server_vad",
-        transcribe_input: bool = True,
-        vad: VadConfig | None = None,
-        max_tokens: int = 2048,
-        temperature: float = 0.6,
-        disable_audio: bool = False,
-        tool_choice: api_proto.ToolChoice = "auto",
-        subscribe_to_user_audio: bool = True,
+        modalities: list[api_proto.Modality] | None = None,
+        instructions: str | None = None,
+        voice: api_proto.Voice | None = None,
+        input_audio_format: api_proto.AudioFormat | None = None,
+        output_audio_format: api_proto.AudioFormat | None = None,
+        input_audio_transcription: api_proto.InputAudioTranscription | None = None,
+        turn_detection: api_proto.TurnDetectionType | None = None,
+        temparature: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> RealtimeSession:
+        opts = _ModelOptions(
+            modalities=modalities or self._default_opts.modalities,
+            instructions=instructions or self._default_opts.instructions,
+            voice=voice or self._default_opts.voice,
+            input_audio_format=input_audio_format
+            or self._default_opts.input_audio_format,
+            output_audio_format=output_audio_format
+            or self._default_opts.output_audio_format,
+            input_audio_transcription=(
+                input_audio_transcription
+                or self._default_opts.input_audio_transcription
+            ),
+            turn_detection=turn_detection or self._default_opts.turn_detection,
+            temparature=temparature or self._default_opts.temparature,
+            max_output_tokens=max_output_tokens or self._default_opts.max_output_tokens,
+            api_key=self._default_opts.api_key,
+            base_url=self._default_opts.base_url,
+        )
+
         new_session = RealtimeSession(
             chat_ctx=chat_ctx or llm.ChatContext(),
             fnc_ctx=fnc_ctx,
-            opts=_ModelOptions(
-                api_key=self._api_key,
-                transcribe_input=transcribe_input,
-                base_url=self._base_url,
-                vad=vad,
-                turn_detection=turn_detection,
-                conversation_config=_ConvConfig(
-                    voice=voice,
-                    temperature=temperature,
-                    subscribe_to_user_audio=subscribe_to_user_audio,
-                    max_tokens=max_tokens,
-                    disable_audio=disable_audio,
-                    tool_choice=tool_choice,
-                ),
-            ),
+            opts=opts,
             http_session=self._ensure_session(),
         )
         self._rt_sessions.append(new_session)
@@ -198,7 +150,161 @@ class RealtimeModel:
             await session.aclose()
 
 
-class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
+class RealtimeSession(utils.EventEmitter[EventTypes]):
+    class InputAudioBuffer:
+        def __init__(self, sess: RealtimeSession) -> None:
+            self._sess = sess
+
+        def append(self, frame: rtc.AudioFrame) -> None:
+            self._sess._queue_msg(
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(frame.data).decode("utf-8"),
+                }
+            )
+
+        def clear(self) -> None:
+            self._sess._queue_msg({"type": "input_audio_buffer.clear"})
+
+        def commit(self) -> None:
+            self._sess._queue_msg({"type": "input_audio_buffer.commit"})
+
+    class ConvsersationItem:
+        def __init__(self, sess: RealtimeSession) -> None:
+            self._sess = sess
+
+        def create(self, message: llm.ChatMessage) -> None:
+            message_content = message.content
+            if not isinstance(message_content, list):
+                message_content = [message.content]
+
+            event: api_proto.ClientEvent.ConversationItemCreate | None = None
+            if message.role == "user":
+                user_contents: list[
+                    api_proto.InputTextContent | api_proto.InputAudioContent
+                ] = []
+                for cnt in message_content:
+                    if isinstance(cnt, str):
+                        user_contents.append(
+                            {
+                                "type": "input_text",
+                                "text": cnt,
+                            }
+                        )
+                    elif isinstance(cnt, llm.ChatAudio):
+                        user_contents.append(
+                            {
+                                "type": "input_audio",
+                                "audio": base64.b64encode(
+                                    utils.merge_frames(cnt.frame).data
+                                ).decode("utf-8"),
+                            }
+                        )
+
+                event = {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": user_contents,
+                    },
+                }
+
+            elif message.role == "assistant":
+                assistant_contents: list[api_proto.TextContent] = []
+                for cnt in message_content:
+                    if isinstance(cnt, str):
+                        assistant_contents.append(
+                            {
+                                "type": "text",
+                                "text": cnt,
+                            }
+                        )
+                    elif isinstance(cnt, llm.ChatAudio):
+                        logger.warning(
+                            "audio content in assistant message is not supported"
+                        )
+
+                event = {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": assistant_contents,
+                    },
+                }
+            elif message.role == "system":
+                system_contents: list[api_proto.InputTextContent] = []
+                for cnt in message_content:
+                    if isinstance(cnt, str):
+                        system_contents.append(
+                            {
+                                "type": "input_text",
+                                "text": cnt,
+                            }
+                        )
+                    elif isinstance(cnt, llm.ChatAudio):
+                        logger.warning(
+                            "audio content in system message is not supported"
+                        )
+
+            tool_call_id = message.tool_call_id
+            if tool_call_id:
+                assert isinstance(message.content, str)
+                event = {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "function_call_output",
+                        "call_id": tool_call_id,
+                        "output": message.content,
+                    },
+                }
+
+            if event is None:
+                logger.warning(
+                    "chat message is not supported inside the realtime API %s",
+                    message,
+                    extra=self._sess.logging_extra(),
+                )
+                return
+
+            self._sess._queue_msg(event)
+
+        def truncate(
+            self, *, item_id: str, content_index: int, audio_end_ms: int
+        ) -> None:
+            self._sess._queue_msg(
+                {
+                    "type": "conversation.item.truncate",
+                    "item_id": item_id,
+                    "content_index": content_index,
+                    "audio_end_ms": audio_end_ms,
+                }
+            )
+
+        def delete(self, *, item_id: str) -> None:
+            self._sess._queue_msg(
+                {"type": "conversation.item.delete", "item_id": item_id}
+            )
+
+    class Conversation:
+        def __init__(self, sess: RealtimeSession) -> None:
+            self._sess = sess
+
+        @property
+        def item(self) -> RealtimeSession.ConvsersationItem:
+            return RealtimeSession.ConvsersationItem(self._sess)
+
+    class Response:
+        def __init__(self, sess: RealtimeSession) -> None:
+            self._sess = sess
+
+        def create(self) -> None:
+            self._sess._queue_msg({"type": "response.create"})
+
+        def cancel(self) -> None:
+            self._sess._queue_msg({"type": "response.cancel"})
+
     def __init__(
         self,
         *,
@@ -212,36 +318,15 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
             self._main_task(), name="openai-realtime-session"
         )
 
+        self._chat_ctx = chat_ctx
+        self._fnc_ctx = fnc_ctx
+
         self._opts = opts
         self._send_ch = utils.aio.Chan[api_proto.ClientEvents]()
-        self._default_conversation = RealtimeConversation(
-            "default",
-            self._opts.conversation_config,
-            chat_ctx,
-            fnc_ctx,
-            self._send_ch,
-        )
-        self._conversations = dict[str, RealtimeConversation]()
-        self._conversations["default"] = self._default_conversation
-        self._default_conversation.update_conversation_config()
         self._http_session = http_session
 
-        # forward all events from the default conv
-        self._default_conversation.on(
-            "add_message", functools.partial(self.emit, "add_message")
-        )
-        self._default_conversation.on(
-            "message_added", functools.partial(self.emit, "message_added")
-        )
-        self._default_conversation.on(
-            "generation_finished", functools.partial(self.emit, "generation_finished")
-        )
-        self._default_conversation.on(
-            "generation_canceled", functools.partial(self.emit, "generation_canceled")
-        )
-
         self._session_id = "not-connected"
-        self._pending_messages = dict[str, PendingMessage]()
+        self.session_update()  # initial session init
 
     async def aclose(self) -> None:
         if self._send_ch.closed:
@@ -250,125 +335,101 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
         self._send_ch.close()
         await self._main_atask
 
-    def update_conversation_config(
-        self,
-        *,
-        voice: api_proto.Voices | None = None,
-        subscribe_to_user_audio: bool | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        disable_audio: bool | None = None,
-        tool_choice: api_proto.ToolChoice | None = None,
-    ) -> None:
-        self._default_conversation.update_conversation_config(
-            voice=voice,
-            subscribe_to_user_audio=subscribe_to_user_audio,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            disable_audio=disable_audio,
-            tool_choice=tool_choice,
-        )
-
-    @property
-    def default_conversation(self) -> RealtimeConversation:
-        return self._default_conversation
-
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._default_conversation.chat_ctx
+        return self._chat_ctx
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
-        return self._default_conversation.fnc_ctx
+        return self._fnc_ctx
 
     @fnc_ctx.setter
     def fnc_ctx(self, fnc_ctx: llm.FunctionContext | None) -> None:
-        self._default_conversation.fnc_ctx = fnc_ctx
+        self._fnc_ctx = fnc_ctx
 
-    def truncate_content(self, *, message_id: str, text_chars: int, audio_samples: int):
-        self._send_ch.send_nowait(
-            {
-                "event": "truncate_content",
-                "message_id": message_id,
-                "index": 0,  # unused for now
-                "text_chars": text_chars,
-                "audio_samples": audio_samples,
-            }
-        )
+    @property
+    def default_conversation(self) -> Conversation:
+        return RealtimeSession.Conversation(self)
 
-    def add_user_audio(self, frame: rtc.AudioFrame) -> None:
-        self._send_ch.send_nowait(
-            {
-                "event": "add_user_audio",
-                "data": base64.b64encode(frame.data).decode("utf-8"),
-            }
-        )
+    @property
+    def input_audio_buffer(self) -> InputAudioBuffer:
+        return RealtimeSession.InputAudioBuffer(self)
 
-    def commit_user_audio(self) -> None:
-        self._send_ch.send_nowait({"event": "commit_user_audio"})
+    @property
+    def response(self) -> Response:
+        return RealtimeSession.Response(self)
 
-    def create_conversation(
+    def session_update(
         self,
         *,
-        label: str,
-        chat_ctx: llm.ChatContext | None = None,
-        fnc_ctx: llm.FunctionContext | None = None,
-        voice: api_proto.Voices = "alloy",
-        max_tokens: int = 2048,
-        temperature: float = 0.6,
-        disable_audio: bool = False,
-        subscribe_to_user_audio: bool = True,
-        tool_choice: api_proto.ToolChoice = "auto",
-    ) -> RealtimeConversation:
-        if label in self._conversations:
-            raise ValueError(f"conversation with label '{label}' already exists")
+        modalities: list[api_proto.Modality] | None = None,
+        instructions: str | None = None,
+        voice: api_proto.Voice | None = None,
+        input_audio_format: api_proto.AudioFormat | None = None,
+        output_audio_format: api_proto.AudioFormat | None = None,
+        input_audio_transcription: api_proto.InputAudioTranscription | None = None,
+        turn_detection: api_proto.TurnDetectionType | None = None,
+        tool_choice: api_proto.ToolChoice | None = None,
+        temparature: float | None = None,
+        max_output_tokens: int | None = None,
+    ) -> None:
+        self._opts = _ModelOptions(
+            modalities=modalities or self._opts.modalities,
+            instructions=instructions or self._opts.instructions,
+            voice=voice or self._opts.voice,
+            input_audio_format=input_audio_format or self._opts.input_audio_format,
+            output_audio_format=output_audio_format or self._opts.output_audio_format,
+            input_audio_transcription=(
+                input_audio_transcription or self._opts.input_audio_transcription
+            ),
+            turn_detection=turn_detection or self._opts.turn_detection,
+            temparature=temparature or self._opts.temparature,
+            max_output_tokens=max_output_tokens or self._opts.max_output_tokens,
+            api_key=self._opts.api_key,
+            base_url=self._opts.base_url,
+        )
 
-        self._send_ch.send_nowait(
+        tools = []
+        if self._fnc_ctx is not None:
+            for fnc in self._fnc_ctx.ai_functions.values():
+                tools.append(llm._oai_api.build_oai_function_description(fnc))
+
+        self._queue_msg(
             {
-                "event": "create_conversation",
-                "label": label,
+                "type": "session.update",
+                "session": {
+                    "modalities": self._opts.modalities,
+                    "instructions": self._opts.instructions,
+                    "voice": self._opts.voice,
+                    "input_audio_format": self._opts.input_audio_format,
+                    "output_audio_format": self._opts.output_audio_format,
+                    "input_audio_transcription": self._opts.input_audio_transcription,
+                    "turn_detection": self._opts.turn_detection,
+                    "tools": tools,
+                    "tool_choice": tool_choice,
+                    "temperature": self._opts.temparature,
+                    "max_output_tokens": self._opts.max_output_tokens,
+                },
             }
         )
 
-        conv_cfg = _ConvConfig(
-            voice=voice,
-            temperature=temperature,
-            subscribe_to_user_audio=subscribe_to_user_audio,
-            max_tokens=max_tokens,
-            disable_audio=disable_audio,
-            tool_choice=tool_choice,
-        )
-
-        conv = RealtimeConversation(
-            label,
-            conv_cfg,
-            chat_ctx or llm.ChatContext(),
-            fnc_ctx,
-            self._send_ch,
-        )
-        conv.update_conversation_config()
-        self._conversations[label] = conv
-        return conv
+    def _queue_msg(self, msg: api_proto.ClientEvents) -> None:
+        self._send_ch.send_nowait(msg)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         try:
-            headers = {"Authorization": "Bearer " + self._opts.api_key}
+            headers = {
+                "Authorization": "Bearer " + self._opts.api_key,
+                "OpenAI-Beta": "realtime=v1",
+            }
             ws_conn = await self._http_session.ws_connect(
-                api_proto.API_URL,  # TODO(theomonnom): Use exposed base_url
+                api_proto.API_URL,
                 headers=headers,
             )
         except Exception:
             logger.exception("failed to connect to OpenAI API S2S")
             return
-
-        initial_session_cfg: api_proto.ClientEvent.UpdateSessionConfig = {
-            "event": "update_session_config",
-            "turn_detection": self._opts.turn_detection,
-            "input_audio_format": "pcm16",
-            "transcribe_input": True,
-        }
-        await ws_conn.send_json(initial_session_cfg)
 
         closing = False
 
@@ -405,28 +466,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
 
                 try:
                     data = msg.json()
+                    print(data)
                     event: api_proto.ServerEventType = data["event"]
 
-                    if event == "start_session":
-                        self._handle_start_session(data)
+                    if event == "session.created":
+                        self._handle_session_created(data)
                     elif event == "error":
                         self._handle_error(data)
-                    elif event == "vad_speech_started":
-                        self._handle_vad_speech_started(data)
-                    elif event == "vad_speech_stopped":
-                        self._handle_vad_speech_stopped(data)
-                    elif event == "input_transcribed":
-                        self._handle_input_transcribed(data)
-                    elif event == "add_message":
-                        self._handle_add_message(data)
-                    elif event == "add_content":
-                        self._handle_add_content(data)
-                    elif event == "message_added":
-                        self._handle_message_added(data)
-                    elif event == "generation_finished":
-                        self._handle_generation_finished(data)
-                    elif event == "generation_canceled":
-                        self._handle_generation_canceled(data)
 
                 except Exception:
                     logger.exception(
@@ -444,391 +490,17 @@ class RealtimeSession(utils.EventEmitter[EventTypes], _ConversationProtocol):
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
-    def _handle_start_session(self, data: api_proto.ServerEvent.StartSession) -> None:
-        logger.debug(
-            "session started",
-            extra={
-                "session_id": data["session_id"],
-                "model": data["model"],
-                "system_fingerprint": data["system_fingerprint"],
-            },
-        )
-        self._session_id = data["session_id"]
-        self.emit(
-            "start_session",
-            StartSessionEvent(
-                session_id=data["session_id"],
-                model=data["model"],
-                system_fingerprint=data["system_fingerprint"],
-            ),
-        )
+    def _handle_session_created(
+        self, session_created: api_proto.ServerEvent.SessionCreated
+    ):
+        self._session_id = session_created["session"]["id"]
 
-    def _handle_error(self, data: api_proto.ServerEvent.Error) -> None:
+    def _handle_error(self, error: api_proto.ServerEvent.Error):
         logger.error(
-            "error from the OpenAI API",
-            extra={"message": data["message"], **self.logging_extra()},
+            "OpenAI S2S error %s",
+            error,
+            extra=self.logging_extra(),
         )
-        self.emit("error", data["message"])
-
-    def _handle_vad_speech_started(
-        self, data: api_proto.ServerEvent.VadSpeechStarted
-    ) -> None:
-        self.emit("vad_speech_started")
-
-    def _handle_vad_speech_stopped(
-        self, data: api_proto.ServerEvent.VadSpeechStopped
-    ) -> None:
-        self.emit("vad_speech_stopped")
-
-    def _handle_input_transcribed(self, data: api_proto.ServerEvent.InputTranscribed):
-        self.emit("input_transcribed", transcript=data["transcript"])
-
-    def _handle_add_message(self, data: api_proto.ServerEvent.AddMessage):
-        conv = self._conversations[data["conversation_label"]]
-        previous_id = data["previous_id"]
-        message = data["message"]
-        id = message["id"]  # type: ignore
-        role = message["role"]
-        content = message["content"]
-
-        if previous_id in self._pending_messages:
-            logger.warning(
-                "received message with pending previous_id %s, discarding",
-                previous_id,
-            )
-            return
-
-        tool_calls = []
-        for cnt in content:
-            if cnt["type"] == "tool_call":
-                tool_calls.append(
-                    PendingToolCall(
-                        name=cnt["name"],
-                        arguments="",
-                        tool_call_id=cnt["tool_call_id"],
-                    )
-                )
-
-        msg = PendingMessage(
-            previous_id=previous_id,
-            id=id,
-            role=role,
-            text="",
-            audio=[],
-            tool_calls=tool_calls,
-            text_stream=utils.aio.Chan[str](),
-            audio_stream=utils.aio.Chan[rtc.AudioFrame](),
-        )
-        self._pending_messages[id] = msg
-        conv._handle_add_message(msg)
-
-    def _handle_add_content(self, data: api_proto.ServerEvent.AddContent):
-        msg = self._pending_messages.get(data["message_id"])
-        if msg is None:
-            logger.warning(
-                "received content for unknown message %s, discarding",
-                data["message_id"],
-            )
-            return
-
-        assert isinstance(msg.text_stream, utils.aio.Chan)
-        assert isinstance(msg.audio_stream, utils.aio.Chan)
-
-        if data["type"] == "text":
-            msg.text += data["data"]
-            msg.text_stream.send_nowait(data["data"])
-        elif data["type"] == "audio":
-            pcm_data = base64.b64decode(data["data"])
-            frame = rtc.AudioFrame(
-                pcm_data,
-                api_proto.SAMPLE_RATE,
-                api_proto.NUM_CHANNELS,
-                len(pcm_data) // 2,
-            )
-
-            msg.audio.append(frame)
-            msg.audio_stream.send_nowait(frame)
-        elif data["type"] == "tool_call":
-            tool_call = msg.tool_calls[-1]
-            tool_call.arguments += data["data"]
-
-    def _handle_message_added(self, data: api_proto.ServerEvent.MessageAdded):
-        conv = self._conversations[data["conversation_label"]]
-        pending_msg = self._pending_messages.pop(data["id"], None)
-        if pending_msg is None:
-            return
-
-        assert isinstance(pending_msg.text_stream, utils.aio.Chan)
-        assert isinstance(pending_msg.audio_stream, utils.aio.Chan)
-
-        pending_msg.text_stream.close()
-        pending_msg.audio_stream.close()
-
-        conv._handle_message_added(pending_msg)
-
-    def _handle_generation_finished(
-        self, data: api_proto.ServerEvent.GenerationFinished
-    ):
-        if data["reason"] not in ("stop", "interrupt"):
-            logger.warning(
-                "generation finished with reason %s",
-                extra={
-                    "conversation_label": data["conversation_label"],
-                    "reason": data["reason"],
-                    "message_ids": data["message_ids"],
-                    **self.logging_extra(),
-                },
-            )
-
-        conv = self._conversations[data["conversation_label"]]
-        conv._handle_generation_finished(data)
-
-    def _handle_generation_canceled(
-        self, data: api_proto.ServerEvent.GenerationCanceled
-    ):
-        conv = self._conversations[data["conversation_label"]]
-        conv._handle_generation_canceled(data)
 
     def logging_extra(self) -> dict:
         return {"session_id": self._session_id}
-
-
-class RealtimeConversation(
-    utils.EventEmitter[ConversationEventTypes], _ConversationProtocol
-):
-    def __init__(
-        self,
-        label: str,
-        config: _ConvConfig,
-        chat_ctx: llm.ChatContext,
-        fnc_ctx: llm.FunctionContext | None,
-        send_ch: utils.aio.Chan[api_proto.ClientEvents],
-    ) -> None:
-        super().__init__()
-        self._label = label
-        self._chat_ctx = chat_ctx
-        self._fnc_ctx = fnc_ctx
-        self._config = config
-        self._send_ch = send_ch
-
-        self._fnc_tasks = utils.aio.TaskSet()
-
-    def update_conversation_config(
-        self,
-        *,
-        voice: api_proto.Voices | None = None,
-        subscribe_to_user_audio: bool | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        disable_audio: bool | None = None,
-        tool_choice: api_proto.ToolChoice | None = None,
-    ) -> None:
-        self._config.voice = voice if voice is not None else self._config.voice
-        self._config.subscribe_to_user_audio = (
-            subscribe_to_user_audio
-            if subscribe_to_user_audio is not None
-            else self._config.subscribe_to_user_audio
-        )
-        self._config.temperature = (
-            temperature if temperature is not None else self._config.temperature
-        )
-        self._config.max_tokens = (
-            max_tokens if max_tokens is not None else self._config.max_tokens
-        )
-        self._config.disable_audio = (
-            disable_audio if disable_audio is not None else self._config.disable_audio
-        )
-        self._config.tool_choice = (
-            tool_choice if tool_choice is not None else self._config.tool_choice
-        )
-
-        tools = []
-        if self._fnc_ctx is not None:
-            for fnc in self._fnc_ctx.ai_functions.values():
-                tools.append(llm._oai_api.build_oai_function_description(fnc))
-
-        self._send_ch.send_nowait(
-            {
-                "event": "update_conversation_config",
-                "conversation_label": self._label,
-                "label": self._label,
-                "disable_audio": self._config.disable_audio,
-                "max_tokens": self._config.max_tokens,
-                "output_audio_format": "pcm16",
-                "subscribe_to_user_audio": self._config.subscribe_to_user_audio,
-                "system_message": _find_first_system_message(self._chat_ctx) or "",
-                "temperature": self._config.temperature,
-                "voice": self._config.voice,
-                "tools": tools,
-                "tool_choice": self._config.tool_choice,
-            }
-        )
-
-    def delete(self) -> None:
-        if self._label == "default":
-            raise ValueError("cannot delete the default conversation")
-
-        self._send_ch.send_nowait(
-            {
-                "event": "delete_conversation",
-                "label": self._label,
-            }
-        )
-
-    def generate(self) -> None:
-        self._send_ch.send_nowait(
-            {
-                "event": "generate",
-                "conversation_label": self._label,
-            }
-        )
-
-    def cancel_generation(self) -> None:
-        self._send_ch.send_nowait(
-            {
-                "event": "cancel_generation",
-                "conversation_label": self._label,
-            }
-        )
-
-    def add_message(
-        self,
-        *,
-        message: llm.ChatMessage,
-        previous_id: str | None = None,
-    ) -> None:
-        oai_content: list[api_proto.MessageContent] = []
-
-        if isinstance(message.content, str):
-            oai_content.append({"type": "text", "text": message.content})
-        elif isinstance(message.content, llm.ChatAudio):
-            frames = message.content.frame
-            if isinstance(frames, rtc.AudioFrame):
-                frames = [frames]
-
-            frame = utils.merge_frames(frames)
-            b64_data = base64.b64encode(frame.data).decode("utf-8")
-            oai_content.append({"type": "audio", "audio": b64_data})
-
-        oai_msg: api_proto.Message = {
-            "id": message.id or utils.shortuuid(),
-            "role": message.role,
-            "tool_call_id": message.tool_call_id or "",
-            "content": oai_content,
-        }
-
-        self._send_ch.send_nowait(
-            {
-                "event": "add_message",
-                "previous_id": previous_id or "",
-                "conversation_label": self._label,
-                "message": oai_msg,
-            }
-        )
-
-    def delete_message(self, *, message_id: str) -> None:
-        self._send_ch.send_nowait(
-            {
-                "event": "delete_message",
-                "id": message_id,
-                "conversation_label": self._label,
-            }
-        )
-
-    def _handle_add_message(self, msg: PendingMessage):
-        self.emit("add_message", msg)
-
-    def _handle_message_added(self, msg: PendingMessage):
-        idx = len(self._chat_ctx.messages)
-        for i, lk_msg in enumerate(self._chat_ctx.messages):
-            if lk_msg.id == msg.previous_id:
-                idx = i + 1
-                break
-
-        lk_msg = llm.ChatMessage(id=msg.id, role=msg.role)
-        lk_msg.content = []
-
-        if msg.text:
-            lk_msg.content.append(msg.text)
-
-        if msg.audio:
-            lk_msg.content.append(llm.ChatAudio(frame=msg.audio))
-
-        if msg.tool_calls:
-            lk_msg.tool_calls = []
-
-            for tool_call in msg.tool_calls:
-                if (
-                    self._fnc_ctx is None
-                    or tool_call.name not in self._fnc_ctx.ai_functions
-                ):
-                    # TODO(theomonnom): this could happens in a bad timing after updating the
-                    # conversation config. (we should be able to recover from this bad timing)
-                    logger.warning(
-                        "received tool call for unknown function %s, discarding",
-                        tool_call.name,
-                    )
-                    continue
-
-                fnc_call_info = _oai_api.create_ai_function_info(
-                    self._fnc_ctx,
-                    tool_call.tool_call_id,
-                    tool_call.name,
-                    tool_call.arguments,
-                )
-
-                lk_msg.tool_calls.append(fnc_call_info)
-
-                @utils.log_exceptions(logger=logger)
-                async def _run_fnc_task():
-                    logger.debug(
-                        "executing ai function",
-                        extra={
-                            "function": fnc_call_info.function_info.name,
-                        },
-                    )
-
-                    called_fnc = fnc_call_info.execute()
-                    await called_fnc.task
-
-                    tool_call = llm.ChatMessage.create_tool_from_called_function(
-                        called_fnc
-                    )
-
-                    if called_fnc.result is not None:
-                        self.add_message(message=tool_call, previous_id=msg.id)
-                        self.generate()
-
-                self._fnc_tasks.create_task(_run_fnc_task())
-
-        self._chat_ctx.messages.insert(idx, lk_msg)
-        self.emit("message_added", lk_msg)
-
-    def _handle_generation_finished(
-        self, data: api_proto.ServerEvent.GenerationFinished
-    ):
-        self.emit("generation_finished", data["reason"])
-
-    def _handle_generation_canceled(
-        self, data: api_proto.ServerEvent.GenerationCanceled
-    ):
-        self.emit("generation_canceled")
-
-    @property
-    def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx
-
-    @property
-    def fnc_ctx(self) -> llm.FunctionContext | None:
-        return self._fnc_ctx
-
-    @fnc_ctx.setter
-    def fnc_ctx(self, fnc_ctx: llm.FunctionContext | None) -> None:
-        self._fnc_ctx = fnc_ctx
-
-
-def _find_first_system_message(chat_ctx: llm.ChatContext) -> str | None:
-    for msg in chat_ctx.messages:
-        if msg.role == "system":
-            assert isinstance(msg.content, str)
-            return msg.content

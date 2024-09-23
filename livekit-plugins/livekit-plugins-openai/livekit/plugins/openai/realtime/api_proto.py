@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import Any, Literal, Union
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -13,15 +13,24 @@ IN_FRAME_SIZE = 2400  # 100ms
 OUT_FRAME_SIZE = 1200  # 50ms
 
 
-TurnDetectionType = Literal["disabled", "server_vad"]
-Voices = Literal["alloy", "echo", "shimmer"]
+Voice = Literal["alloy", "echo", "shimmer"]
 ToolChoice = Literal["auto", "none", "required"]
 Role = Literal["system", "assistant", "user", "tool"]
 GenerationFinishedReason = Literal["stop", "max_tokens", "content_filter", "interrupt"]
+AudioFormat = Literal["pcm16", "g711-ulaw", "g711-alaw"]
+InputTranscriptionModel = Literal["whisper-1"]
+Modality = Literal["text", "audio"]
+
+TODO = Any
 
 
 class TextContent(TypedDict):
     type: Literal["text"]
+    text: str
+
+
+class InputTextContent(TypedDict):
+    type: Literal["input_text"]
     text: str
 
 
@@ -30,200 +39,500 @@ class AudioContent(TypedDict):
     audio: str  # b64
 
 
-class ToolCallContent(TypedDict):
-    type: Literal["tool_call"]
+class InputAudioContent(TypedDict):
+    type: Literal["input_audio"]
+    audio: str  # b64
+
+
+Content = Union[InputTextContent, TextContent, AudioContent, InputAudioContent]
+
+
+class InputAudioTranscription(TypedDict):
+    model: InputTranscriptionModel
+
+
+class ServerVad(TypedDict):
+    type: Literal["server_vad"]
+    threshold: NotRequired[float]
+    prefix_padding_ms: NotRequired[float]
+    silence_duration_ms: NotRequired[float]
+
+
+TurnDetectionType = Union[ServerVad, Literal["none"]]
+
+
+class FunctionTool(TypedDict):
+    type: Literal["function"]
     name: str
-    arguments: str  # json
-    tool_call_id: str
+    description: NotRequired[str | None]
+    parameters: dict
 
 
-MessageContent = Union[TextContent, AudioContent, ToolCallContent]
+class SystemItem(TypedDict):
+    id: str
+    object: Literal["realtime.item"]
+    previous_item_id: NotRequired[str | None]
+    type: Literal["message"]
+    role: Literal["system"]
+    content: list[InputTextContent]
 
 
-class Message(TypedDict):
-    id: NotRequired[str]
-    role: Role
-    tool_call_id: NotRequired[str]
-    content: list[MessageContent]
+class UserItem(TypedDict):
+    id: str
+    object: Literal["realtime.item"]
+    previous_item_id: NotRequired[str | None]
+    type: Literal["message"]
+    role: Literal["user"]
+    content: list[InputTextContent | InputAudioContent]
 
 
-class VadConfig(TypedDict, total=False):
-    threshold: float
-    prefix_padding_ms: float
-    silence_duration_ms: float
+class AssistantItem(TypedDict):
+    id: str
+    object: Literal["realtime.item"]
+    previous_item_id: NotRequired[str | None]
+    type: Literal["message"]
+    role: Literal["assistant"]
+    content: list[TextContent | AudioContent]
+
+
+class FunctionCallItem(TypedDict):
+    id: str
+    object: Literal["realtime.item"]
+    previous_item_id: NotRequired[str | None]
+    type: Literal["function_call"]
+    call_id: str
+    name: str
+    arguments: str
+
+
+class FunctionCallOutputItem(TypedDict):
+    id: str
+    object: Literal["realtime.item"]
+    previous_item_id: NotRequired[str | None]
+    type: Literal["function_call_output"]
+    call_id: str
+    output: str
+
+
+class IncompleteStatusDetails(TypedDict):
+    type: Literal["incomplete"]
+    reason: Literal["interrupted", "max_output_tokens", "content_filter"]
+
+
+class Error(TypedDict):
+    code: str
+    message: str
+
+
+class FailedStatusDetails(TypedDict):
+    type: Literal["failed"]
+    error: NotRequired[Error | None]
+
+
+class Usage(TypedDict):
+    total_tokens: int
+    input_tokens: int
+    output_tokens: int
+
+
+class Resource:
+    class Session(TypedDict):
+        id: str
+        object: Literal["realtime.session"]
+        model: str
+        modalities: list[Literal["text", "audio"]]
+        instructions: NotRequired[str | None]
+        voice: Voice
+        input_audio_format: AudioFormat
+        output_audio_format: AudioFormat
+        input_audio_transcription: NotRequired[InputAudioTranscription | None]
+        turn_detection: TurnDetectionType
+        tools: NotRequired[list[FunctionTool]]
+        tool_choice: NotRequired[ToolChoice]
+        temperature: NotRequired[float]
+        max_output_tokens: NotRequired[int]
+
+    class Conversation(TypedDict):
+        id: str
+        object: Literal["realtime.conversation"]
+
+    Item = Union[SystemItem, UserItem, FunctionCallItem, FunctionCallOutputItem]
+
+    class Response(TypedDict):
+        id: str
+        object: Literal["realtime.response"]
+        status: Literal["in_progress", "completed", "incomplete", "cancelled", "failed"]
+        output: list[Resource.Item]
+        usage: NotRequired[Usage | None]
 
 
 class ClientEvent:
-    class UpdateSessionConfig(TypedDict):
-        event: Literal["update_session_config"]
+    class GenerationData(TypedDict, total=False):
+        modalities: list[Literal["text", "audio"]]
+        instructions: str | None
+        voice: Voice
+        input_audio_format: AudioFormat
+        output_audio_format: AudioFormat
+        input_audio_transcription: InputAudioTranscription | None
         turn_detection: TurnDetectionType
-        input_audio_format: Literal["pcm16", "g711-ulaw", "g711-alaw"]
-        transcribe_input: bool
-        vad: NotRequired[VadConfig]
+        tools: list[FunctionTool]
+        tool_choice: ToolChoice | None
+        temperature: float
+        max_output_tokens: int
 
-    class UpdateConversationConfig(TypedDict):
-        event: Literal["update_conversation_config"]
-        system_message: str
-        voice: Voices
-        subscribe_to_user_audio: bool
-        output_audio_format: Literal["pcm16", "g711-ulaw", "g711-alaw"]
-        tools: NotRequired[list]
-        tool_choice: NotRequired[ToolChoice]
-        temperature: float  # [0.6, 1.2]
-        max_tokens: int  # [1, 4096]
-        disable_audio: bool
-        label: NotRequired[str]
+    class SessionUpdate(TypedDict):
+        event_id: NotRequired[str]
+        type: Literal["session.update"]
+        session: ClientEvent.GenerationData
 
-    class AddMessage(TypedDict):
-        event: Literal["add_message"]
-        previous_id: NotRequired[str]
-        conversation_label: NotRequired[str]
-        message: Message
+    class InputAudioBufferAppend(TypedDict):
+        event_id: NotRequired[str]
+        type: Literal["input_audio_buffer.append"]
+        audio: str  # b64
 
-    class DeleteMessage(TypedDict):
-        event: Literal["delete_message"]
-        id: str
-        conversation_label: NotRequired[str]
+    class InputAudioBufferCommit(TypedDict):
+        event_id: NotRequired[str]
+        type: Literal["input_audio_buffer.commit"]
 
-    class AddUserAudio(TypedDict):
-        event: Literal["add_user_audio"]
-        data: str  # b64
+    class InputAudioBufferClear(TypedDict):
+        event_id: NotRequired[str]
+        type: Literal["input_audio_buffer.clear"]
 
-    class CommitUserAudio(TypedDict):
-        event: Literal["commit_user_audio"]
+    class UserItemCreate(TypedDict):
+        type: Literal["message"]
+        role: Literal["user"]
+        content: list[InputTextContent | InputAudioContent]
 
-    class Generate(TypedDict):
-        event: Literal["generate"]
-        conversation_label: NotRequired[str]
+    class AssistantItemCreate(TypedDict):
+        type: Literal["message"]
+        role: Literal["assistant"]
+        content: list[TextContent]
 
-    class CancelGeneration(TypedDict):
-        event: Literal["cancel_generation"]
-        conversation_label: NotRequired[str]
+    class SystemItemCreate(TypedDict):
+        type: Literal["message"]
+        role: Literal["system"]
+        content: list[InputTextContent]
 
-    class CreateConversation(TypedDict):
-        event: Literal["create_conversation"]
-        label: str
+    class FunctionCallOutputItemCreate(TypedDict):
+        type: Literal["function_call_output"]
+        call_id: str
+        output: str
 
-    class DeleteConversation(TypedDict):
-        event: Literal["delete_conversation"]
-        label: str
+    ConversationItemCreateContent = Union[
+        UserItemCreate,
+        AssistantItemCreate,
+        SystemItemCreate,
+        FunctionCallOutputItemCreate,
+    ]
 
-    class TruncateContent(TypedDict):
-        event: Literal["truncate_content"]
-        message_id: str
-        index: int  # TODO(theomonnom): this is ignore?
-        text_chars: int
-        audio_samples: int
+    class ConversationItemCreate(TypedDict):
+        event_id: NotRequired[str]
+        type: Literal["conversation.item.create"]
+        item: ClientEvent.ConversationItemCreateContent
+
+    class ConversationItemTruncate(TypedDict):
+        event_id: NotRequired[str]
+        type: Literal["conversation.item.truncate"]
+        item_id: str
+        content_index: int
+        audio_end_ms: int
+
+    class ConversationItemDelete(TypedDict):
+        event_id: NotRequired[str]
+        type: Literal["conversation.item.delete"]
+        item_id: str
+
+    class ResponseCreate(TypedDict):
+        event_id: NotRequired[str]
+        type: Literal["response.create"]
+        response: NotRequired[ClientEvent.GenerationData]
+
+    class ResponseCancel(TypedDict):
+        event_id: NotRequired[str]
+        type: Literal["response.cancel"]
 
 
 class ServerEvent:
-    class StartSession(TypedDict):
-        event: Literal["start_session"]
-        session_id: str
-        model: str
-        system_fingerprint: str
+    class ErrorContent(TypedDict):
+        type: str
+        code: NotRequired[str]
+        message: str
+        param: NotRequired[str]
+        event_id: NotRequired[str]
 
     class Error(TypedDict):
-        event: Literal["error"]
-        message: str
+        event_id: str
+        type: Literal["error"]
+        error: ServerEvent.ErrorContent
 
-    class AddMessage(TypedDict):
-        event: Literal["add_message"]
-        previous_id: str
-        conversation_label: str
-        message: Message
+    class SessionCreated(TypedDict):
+        event_id: str
+        type: Literal["session.created"]
+        session: Resource.Session
 
-    class AddContent(TypedDict):
-        event: Literal["add_content"]
-        type: Literal["text", "audio", "tool_call"]
-        message_id: str
-        data: str
+    class SessionUpdated(TypedDict):
+        event_id: str
+        type: Literal["session.updated"]
+        session: Resource.Session
 
-    class MessageAdded(TypedDict):
-        event: Literal["message_added"]
-        id: str
-        previous_id: str
-        conversation_label: str
-        content: list[MessageContent]
+    class ConversationCreated(TypedDict):
+        event_id: str
+        type: Literal["conversation.created"]
+        conversation: Resource.Conversation
 
-    class GenerationFinished(TypedDict):
-        event: Literal["generation_finished"]
-        reason: GenerationFinishedReason
-        conversation_label: str
-        message_ids: list[str]
-
-    class GenerationCanceled(TypedDict):
-        event: Literal["generation_canceled"]
-        conversation_label: str
-
-    class VadSpeechStarted(TypedDict):
-        event: Literal["vad_speech_started"]
-        sample_index: int
+    class InputAudioBufferCommitted(TypedDict):
+        event_id: str
+        type: Literal["input_audio_buffer.committed"]
         item_id: str
 
-    class VadSpeechStopped(TypedDict):
-        event: Literal["vad_speech_stopped"]
-        sample_index: int
-        item_id: str
+    class InputAudioBufferCleared(TypedDict):
+        event_id: str
+        type: Literal["input_audio_buffer.cleared"]
 
-    class InputTranscribed(TypedDict):
-        type: Literal["input_transcribed"]
+    class InputAudioBufferSpeechStarted(TypedDict):
+        event_id: str
+        type: Literal["input_audio_buffer.speech_started"]
         item_id: str
+        audio_start_ms: int
+
+    class InputAudioBufferSpeechStopped(TypedDict):
+        event_id: str
+        type: Literal["input_audio_buffer.speech_stopped"]
+        item_id: str
+        audio_end_ms: int
+
+    class ConversationItemCreated(TypedDict):
+        event_id: str
+        type: Literal["conversation.item.created"]
+        item: Resource.Item
+
+    class ConversationItemInputAudioTranscriptionCompleted(TypedDict):
+        event_id: str
+        type: Literal["conversation.item.input_audio_transcription.completed"]
+        item_id: str
+        content_index: int
         transcript: str
 
+    class InputAudioTranscriptionError(TypedDict):
+        type: str
+        code: NotRequired[str]
+        message: str
+        param: NotRequired[str]
 
-ClientEventType = Literal[
-    "update_session_config",
-    "add_item",
-    "delete_item",
-    "add_user_audio",
-    "commit_pending_audio",
-    "client_turn_finished",
-    "client_interrupted",
-    "generate",
-    "create_conversation",
-    "delete_conversation",
-    "subscribe_to_user_audio",
-    "unsubscribe_from_user_audio",
-    "truncate_content",
-]
+    class ConversationItemInputAudioTranscriptionFailed(TypedDict):
+        event_id: str
+        type: Literal["conversation.item.input_audio_transcription.failed"]
+        item_id: str
+        content_index: int
+        error: ServerEvent.InputAudioTranscriptionError
 
-ServerEventType = Literal[
-    "start_session",
-    "error",
-    "add_message",
-    "add_content",
-    "message_added",
-    "generation_finished",
-    "generation_canceled",
-    "vad_speech_started",
-    "vad_speech_stopped",
-    "input_transcribed",
-]
+    class ConversationItemTruncated(TypedDict):
+        event_id: str
+        type: Literal["conversation.item.truncated"]
+        item_id: str
+        content_index: int
+        audio_end_ms: int
+
+    class ConversationItemDeleted(TypedDict):
+        event_id: str
+        type: Literal["conversation.item.deleted"]
+        item_id: str
+
+    class ResponseCreated(TypedDict):
+        event_id: str
+        type: Literal["response.created"]
+        response: Resource.Response
+
+    class ResponseDone(TypedDict):
+        event_id: str
+        type: Literal["response.done"]
+        response: Resource.Response
+
+    class ResponseOutputAdded(TypedDict):
+        event_id: str
+        type: Literal["response.output.added"]
+        response_id: str
+        output_index: int
+        item: Resource.Item
+
+    class ResponseOutputDone(TypedDict):
+        event_id: str
+        type: Literal["response.output.done"]
+        response_id: str
+        output_index: int
+        item: Resource.Item
+
+    class ResponseContentAdded(TypedDict):
+        event_id: str
+        type: Literal["response.content.added"]
+        response_id: str
+        output_index: int
+        content_index: int
+        part: TODO
+
+    class ResponseContentDone(TypedDict):
+        event_id: str
+        type: Literal["response.content.done"]
+        response_id: str
+        output_index: int
+        content_index: int
+        part: TODO
+
+    class ResponseTextDeltaAdded(TypedDict):
+        event_id: str
+        type: Literal["response.text.delta"]
+        response_id: str
+        output_index: int
+        content_index: int
+        delta: str
+
+    class ResponseTextDone(TypedDict):
+        event_id: str
+        type: Literal["response.text.done"]
+        response_id: str
+        output_index: int
+        content_index: int
+        text: str
+
+    class ResponseAudioTranscriptDelta(TypedDict):
+        event_id: str
+        type: Literal["response.audio_transcript.delta"]
+        response_id: str
+        output_index: int
+        content_index: int
+        delta: str
+
+    class ResponseAudioTranscriptDone(TypedDict):
+        event_id: str
+        type: Literal["response.audio_transcript.done"]
+        response_id: str
+        output_index: int
+        content_index: int
+        transcript: str
+
+    class ResponseAudioDelta(TypedDict):
+        event_id: str
+        type: Literal["response.audio.delta"]
+        response_id: str
+        output_index: int
+        content_index: int
+        delta: str  # b64
+
+    class ResponseAudioDone(TypedDict):
+        event_id: str
+        type: Literal["response.audio.done"]
+        response_id: str
+        output_index: int
+        content_index: int
+
+    class ResponseFunctionCallArgumentsDelta(TypedDict):
+        event_id: str
+        type: Literal["response.function_call_arguments.delta"]
+        response_id: str
+        output_index: int
+        delta: str
+
+    class ResponseFunctionCallArgumentsDone(TypedDict):
+        event_id: str
+        type: Literal["response.function_call_arguments.done"]
+        response_id: str
+        output_index: int
+        arguments: str
+
+    class RateLimitsData(TypedDict):
+        name: Literal["requests", "tokens", "input_tokens", "output_tokens"]
+        limit: int
+        remaining: int
+        reset_seconds: float
+
+    class RateLimitsUpdated:
+        event_id: str
+        type: Literal["rate_limits.updated"]
+        limits: list[ServerEvent.RateLimitsData]
+
 
 ClientEvents = Union[
-    ClientEvent.UpdateSessionConfig,
-    ClientEvent.UpdateConversationConfig,
-    ClientEvent.AddMessage,
-    ClientEvent.DeleteMessage,
-    ClientEvent.AddUserAudio,
-    ClientEvent.CommitUserAudio,
-    ClientEvent.Generate,
-    ClientEvent.CancelGeneration,
-    ClientEvent.CreateConversation,
-    ClientEvent.DeleteConversation,
-    ClientEvent.TruncateContent,
+    ClientEvent.SessionUpdate,
+    ClientEvent.InputAudioBufferAppend,
+    ClientEvent.InputAudioBufferCommit,
+    ClientEvent.InputAudioBufferClear,
+    ClientEvent.ConversationItemCreate,
+    ClientEvent.ConversationItemTruncate,
+    ClientEvent.ConversationItemDelete,
+    ClientEvent.ResponseCreate,
+    ClientEvent.ResponseCancel,
 ]
 
 ServerEvents = Union[
-    ServerEvent.StartSession,
     ServerEvent.Error,
-    ServerEvent.AddMessage,
-    ServerEvent.AddContent,
-    ServerEvent.MessageAdded,
-    ServerEvent.GenerationFinished,
-    ServerEvent.GenerationCanceled,
-    ServerEvent.VadSpeechStarted,
-    ServerEvent.VadSpeechStopped,
-    ServerEvent.InputTranscribed,
+    ServerEvent.SessionCreated,
+    ServerEvent.SessionUpdated,
+    ServerEvent.ConversationCreated,
+    ServerEvent.InputAudioBufferCommitted,
+    ServerEvent.InputAudioBufferCleared,
+    ServerEvent.InputAudioBufferSpeechStarted,
+    ServerEvent.InputAudioBufferSpeechStopped,
+    ServerEvent.ConversationItemCreated,
+    ServerEvent.ConversationItemInputAudioTranscriptionCompleted,
+    ServerEvent.ConversationItemInputAudioTranscriptionFailed,
+    ServerEvent.ConversationItemTruncated,
+    ServerEvent.ConversationItemDeleted,
+    ServerEvent.ResponseCreated,
+    ServerEvent.ResponseDone,
+    ServerEvent.ResponseOutputAdded,
+    ServerEvent.ResponseOutputDone,
+    ServerEvent.ResponseContentAdded,
+    ServerEvent.ResponseContentDone,
+    ServerEvent.ResponseTextDeltaAdded,
+    ServerEvent.ResponseTextDone,
+    ServerEvent.ResponseAudioTranscriptDelta,
+    ServerEvent.ResponseAudioTranscriptDone,
+    ServerEvent.ResponseAudioDelta,
+    ServerEvent.ResponseAudioDone,
+    ServerEvent.ResponseFunctionCallArgumentsDelta,
+    ServerEvent.ResponseFunctionCallArgumentsDone,
+    ServerEvent.RateLimitsUpdated,
+]
+
+ClientEventType = Literal[
+    "session.update",
+    "input_audio_buffer.append",
+    "input_audio_buffer.commit",
+    "input_audio_buffer.clear",
+    "conversation.item.create",
+    "conversation.item.truncate",
+    "conversation.item.delete",
+    "response.create",
+    "response.cancel",
+]
+
+ServerEventType = Literal[
+    "error",
+    "session.created",
+    "session.updated",
+    "conversation.created",
+    "input_audio_buffer.committed",
+    "input_audio_buffer.cleared",
+    "input_audio_buffer.speech_started",
+    "input_audio_buffer.speech_stopped",
+    "conversation.item.created",
+    "conversation.item.input_audio_transcription.completed",
+    "conversation.item.input_audio_transcription.failed",
+    "conversation.item.truncated",
+    "conversation.item.deleted",
+    "response.created",
+    "response.done",
+    "response.output.added",
+    "response.output.done",
+    "response.content.added",
+    "response.content.done",
+    "response.text.delta",
+    "response.text.done",
+    "response.audio_transcript.delta",
+    "response.audio_transcript.done",
+    "response.audio.delta",
+    "response.audio.done",
+    "response.function_call_arguments.delta",
+    "response.function_call_arguments.done",
+    "rate_limits.updated",
 ]
