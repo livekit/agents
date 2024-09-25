@@ -640,6 +640,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             )
 
             _commit_user_question_if_needed()
+            
+            if speech_handle.interrupted:
+                break
 
         _commit_user_question_if_needed()
 
