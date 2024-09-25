@@ -11,10 +11,6 @@ from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 from ..log import logger
 from . import agent_playout
 
-SAMPLE_RATE = 24000
-NUM_CHANNELS = 1
-
-
 EventTypes = Literal[
     "user_started_speaking",
     "user_stopped_speaking",
@@ -134,17 +130,8 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
 
         from livekit.plugins.openai import realtime
 
-        @self._session.on("input_transcribed")
-        def _input_transcribed(transcript: str):
-            self._stt_forwarder.update(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language="en", text=transcript)],
-                )
-            )
-
-        @self._session.on("add_message")
-        def _add_message(message: realtime.PendingMessage):
+        @self._session.on("response_content_added")
+        def _on_content_added(message: realtime.RealtimeContent):
             tr_fwd = transcription.TTSSegmentsForwarder(
                 room=self._room,
                 participant=self._room.local_participant,
@@ -155,28 +142,50 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
             )
 
             self._playing_handle = self._agent_playout.play(
-                message_id=message.id,
+                item_id=message.item_id,
+                content_index=message.content_index,
                 transcription_fwd=tr_fwd,
                 text_stream=message.text_stream,
                 audio_stream=message.audio_stream,
             )
 
-        @self._session.on("generation_canceled")
-        def _generation_canceled():
+        @self._session.on("input_speech_committed")
+        def _input_speech_committed():
+            self._stt_forwarder.update(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language="", text="")],
+                )
+            )
+
+        @self._session.on("input_speech_transcription_completed")
+        def _input_speech_transcription_completed(
+            ev: realtime.InputTranscriptionCompleted,
+        ):
+            self._stt_forwarder.update(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language="", text=ev.transcript)],
+                )
+            )
+
+        @self._session.on("input_speech_started")
+        def _input_speech_started():
             if self._playing_handle is not None and not self._playing_handle.done():
+                print("interrupting")
                 self._playing_handle.interrupt()
 
-                self._session.truncate_content(
-                    message_id=self._playing_handle.message_id,
-                    text_chars=self._playing_handle.text_chars,
-                    audio_samples=self._playing_handle.audio_samples,
+                self._session.default_conversation.item.truncate(
+                    item_id=self._playing_handle.item_id,
+                    content_index=self._playing_handle.content_index,
+                    audio_end_ms=int(self._playing_handle.audio_samples / 24000 * 1000),
                 )
 
                 self._playing_handle = None
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        self._audio_source = rtc.AudioSource(SAMPLE_RATE, NUM_CHANNELS)
+        self._audio_source = rtc.AudioSource(24000, 1)
         self._agent_playout = agent_playout.AgentPlayout(
             audio_source=self._audio_source
         )
@@ -187,10 +196,17 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
         self._agent_publication = await self._room.local_participant.publish_track(
             track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         )
+
         await self._agent_publication.wait_for_subscription()
 
+        bstream = utils.audio.AudioByteStream(
+            24000,
+            1,
+            samples_per_channel=2400,
+        )
         async for frame in self._input_audio_ch:
-            self._session.add_user_audio(frame)
+            for f in bstream.write(frame.data.tobytes()):
+                self._session.input_audio_buffer.append(f)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if self._linked_participant is None:
@@ -208,23 +224,16 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
 
         self._subscribe_to_microphone()
 
+    async def _micro_task(self, track: rtc.LocalAudioTrack) -> None:
+        stream_24khz = rtc.AudioStream(track, sample_rate=24000, num_channels=1)
+        async for ev in stream_24khz:
+            self._input_audio_ch.send_nowait(ev.frame)
+
     def _subscribe_to_microphone(self, *args, **kwargs) -> None:
         """Subscribe to the participant microphone if found"""
 
         if self._linked_participant is None:
             return
-
-        @utils.log_exceptions(logger=logger)
-        async def _read_audio_stream_task(audio_stream: rtc.AudioStream):
-            bstream = utils.audio.AudioByteStream(
-                SAMPLE_RATE,
-                NUM_CHANNELS,
-                samples_per_channel=2400,
-            )
-
-            async for ev in audio_stream:
-                for frame in bstream.write(ev.frame.data.tobytes()):
-                    self._input_audio_ch.send_nowait(frame)
 
         for publication in self._linked_participant.track_publications.values():
             if publication.source != rtc.TrackSource.SOURCE_MICROPHONE:
@@ -248,13 +257,7 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
                     self._read_micro_atask.cancel()
 
                 self._read_micro_atask = asyncio.create_task(
-                    _read_audio_stream_task(
-                        rtc.AudioStream(
-                            self._subscribed_track,  # type: ignore
-                            sample_rate=SAMPLE_RATE,
-                            num_channels=NUM_CHANNELS,
-                        )
-                    )
+                    self._micro_task(self._subscribed_track)  # type: ignore
                 )
                 break
 

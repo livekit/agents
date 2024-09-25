@@ -1,21 +1,25 @@
 from . import api_proto
 from .realtime_model import (
-    PendingMessage,
-    PendingToolCall,
-    RealtimeConversation,
+    InputTranscriptionCompleted,
+    InputTranscriptionFailed,
+    RealtimeContent,
+    RealtimeOutput,
+    RealtimeResponse,
+    RealtimeToolCall,
     RealtimeModel,
     RealtimeSession,
-    StartSessionEvent,
-    VadConfig,
 )
 
 __all__ = [
-    "RealtimeConversation",
+    "InputTranscriptionCompleted",
+    "InputTranscriptionFailed",
+    "RealtimeContent",
+    "RealtimeOutput",
+    "RealtimeResponse",
+    "RealtimeToolCall",
     "RealtimeSession",
     "RealtimeModel",
     "PendingMessage",
     "PendingToolCall",
-    "StartSessionEvent",
-    "VadConfig",
     "api_proto",
 ]

@@ -64,30 +64,6 @@ async def entrypoint(ctx: JobContext):
     )
     assistant.start(ctx.room)
 
-    fnc_ctx = llm.FunctionContext()
-
-    # e.g, parralel sentiment analysis
-
-    @fnc_ctx.ai_callable()
-    async def sentiment(
-        sentiment: Annotated[
-            str,
-            llm.TypeInfo(
-                description="the sentiment of the user based on his speech (be explicit)"
-            ),
-        ],
-    ):
-        print(sentiment)
-
-    session = model.sessions[0]
-    conv = session.create_conversation(
-        label="sentiment-analysis", fnc_ctx=fnc_ctx, tool_choice="required"
-    )
-
-    # while True:
-    #    await asyncio.sleep(5)
-    #    conv.generate()
-
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, worker_type=WorkerType.ROOM))

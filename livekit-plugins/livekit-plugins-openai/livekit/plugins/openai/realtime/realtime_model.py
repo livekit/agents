@@ -6,6 +6,7 @@ import functools
 import os
 from dataclasses import dataclass
 from typing import AsyncIterable, Literal, Protocol, Union
+from typing_extensions import TypedDict
 
 import aiohttp
 from livekit import rtc
@@ -19,14 +20,98 @@ from .log import logger
 EventTypes = Literal[
     "start_session",
     "error",
-    "vad_speech_started",
-    "vad_speech_stopped",
-    "input_transcribed",
-    "add_message",
-    "message_added",
-    "generation_finished",
-    "generation_canceled",
+    "input_speech_started",
+    "input_speech_stopped",
+    "input_speech_committed",
+    "input_speech_transcription_completed",
+    "input_speech_transcription_failed",
+    "response_created",
+    "response_output_added",  # message & assistant
+    "response_content_added",  # message type (audio/text)
+    "response_content_done",
+    "response_output_done",
+    "response_done",
 ]
+
+
+@dataclass
+class InputTranscriptionCompleted:
+    item_id: str
+    """id of the item"""
+    transcript: str
+    """transcript of the input audio"""
+
+
+@dataclass
+class InputTranscriptionFailed:
+    item_id: str
+    """id of the item"""
+    message: str
+    """error message"""
+
+
+@dataclass
+class RealtimeResponse:
+    id: str
+    """id of the message"""
+    status: api_proto.ResponseStatus
+    """status of the response"""
+    output: list[RealtimeOutput]
+    """list of outputs"""
+    done_fut: asyncio.Future[None]
+    """future that will be set when the response is completed"""
+
+
+@dataclass
+class RealtimeOutput:
+    response_id: str
+    """id of the response"""
+    item_id: str
+    """id of the item"""
+    output_index: int
+    """index of the output"""
+    role: api_proto.Role
+    """role of the message"""
+    type: Literal["message", "function_call"]
+    """type of the output"""
+    content: list[RealtimeContent]
+    """list of content"""
+    done_fut: asyncio.Future[None]
+    """future that will be set when the output is completed"""
+
+
+@dataclass
+class RealtimeToolCall:
+    name: str
+    """name of the function"""
+    arguments: str
+    """accumulated arguments"""
+    tool_call_id: str
+    """id of the tool call"""
+
+
+# TODO(theomonnom): add the content type directly inside RealtimeContent?
+# text/audio/transcript?
+@dataclass
+class RealtimeContent:
+    response_id: str
+    """id of the response"""
+    item_id: str
+    """id of the item"""
+    output_index: int
+    """index of the output"""
+    content_index: int
+    """index of the content"""
+    text: str
+    """accumulated text content"""
+    audio: list[rtc.AudioFrame]
+    """accumulated audio content"""
+    text_stream: AsyncIterable[str]
+    """stream of text content"""
+    audio_stream: AsyncIterable[rtc.AudioFrame]
+    """stream of audio content"""
+    tool_calls: list[RealtimeToolCall]
+    """pending tool calls"""
 
 
 @dataclass
@@ -44,6 +129,12 @@ class _ModelOptions:
     base_url: str
 
 
+class _ContentPtr(TypedDict):
+    response_id: str
+    output_index: int
+    content_index: int
+
+
 class RealtimeModel:
     def __init__(
         self,
@@ -57,11 +148,12 @@ class RealtimeModel:
             "model": "whisper-1"
         },
         turn_detection: api_proto.TurnDetectionType = {"type": "server_vad"},
-        temparature: float = 0.6,
+        temparature: float = 0.8,
         max_output_tokens: int = 2048,
         api_key: str | None = None,
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__()
 
@@ -89,6 +181,7 @@ class RealtimeModel:
             base_url=base_url,
         )
 
+        self._loop = loop or asyncio.get_event_loop()
         self._http_session = http_session
         self._rt_sessions = []
 
@@ -141,6 +234,7 @@ class RealtimeModel:
             fnc_ctx=fnc_ctx,
             opts=opts,
             http_session=self._ensure_session(),
+            loop=self._loop,
         )
         self._rt_sessions.append(new_session)
         return new_session
@@ -169,11 +263,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         def commit(self) -> None:
             self._sess._queue_msg({"type": "input_audio_buffer.commit"})
 
-    class ConvsersationItem:
+    class ConversationItem:
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess
 
-        def create(self, message: llm.ChatMessage) -> None:
+        def create(
+            self, message: llm.ChatMessage, previous_item_id: str | None = None
+        ) -> None:
             message_content = message.content
             if not isinstance(message_content, list):
                 message_content = [message.content]
@@ -203,6 +299,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
                 event = {
                     "type": "conversation.item.create",
+                    "previous_item_id": previous_item_id,
                     "item": {
                         "type": "message",
                         "role": "user",
@@ -227,6 +324,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
                 event = {
                     "type": "conversation.item.create",
+                    "previous_item_id": previous_item_id,
                     "item": {
                         "type": "message",
                         "role": "assistant",
@@ -253,6 +351,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 assert isinstance(message.content, str)
                 event = {
                     "type": "conversation.item.create",
+                    "previous_item_id": previous_item_id,
                     "item": {
                         "type": "function_call_output",
                         "call_id": tool_call_id,
@@ -284,7 +383,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         def delete(self, *, item_id: str) -> None:
             self._sess._queue_msg(
-                {"type": "conversation.item.delete", "item_id": item_id}
+                {
+                    "type": "conversation.item.delete",
+                    "item_id": item_id,
+                }
             )
 
     class Conversation:
@@ -292,8 +394,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self._sess = sess
 
         @property
-        def item(self) -> RealtimeSession.ConvsersationItem:
-            return RealtimeSession.ConvsersationItem(self._sess)
+        def item(self) -> RealtimeSession.ConversationItem:
+            return RealtimeSession.ConversationItem(self._sess)
 
     class Response:
         def __init__(self, sess: RealtimeSession) -> None:
@@ -312,6 +414,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         http_session: aiohttp.ClientSession,
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
+        loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
         self._main_atask = asyncio.create_task(
@@ -320,13 +423,18 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         self._chat_ctx = chat_ctx
         self._fnc_ctx = fnc_ctx
+        self._loop = loop
 
         self._opts = opts
         self._send_ch = utils.aio.Chan[api_proto.ClientEvents]()
         self._http_session = http_session
 
+        self._pending_responses: dict[str, RealtimeResponse] = {}
+
         self._session_id = "not-connected"
         self.session_update()  # initial session init
+
+        self._fnc_tasks = utils.aio.TaskSet()
 
     async def aclose(self) -> None:
         if self._send_ch.closed:
@@ -392,7 +500,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         tools = []
         if self._fnc_ctx is not None:
             for fnc in self._fnc_ctx.ai_functions.values():
-                tools.append(llm._oai_api.build_oai_function_description(fnc))
+                # the realtime API is using internally-tagged polymorphism.
+                # build_oai_function_description was built for the ChatCompletion API
+                function_data = llm._oai_api.build_oai_function_description(fnc)[
+                    "function"
+                ]
+                function_data["type"] = "function"
+                tools.append(function_data)
 
         self._queue_msg(
             {
@@ -408,7 +522,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     "tools": tools,
                     "tool_choice": tool_choice,
                     "temperature": self._opts.temparature,
-                    "max_output_tokens": self._opts.max_output_tokens,
+                    "max_response_output_tokens": self._opts.max_output_tokens,
                 },
             }
         )
@@ -466,13 +580,48 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
                 try:
                     data = msg.json()
-                    print(data)
-                    event: api_proto.ServerEventType = data["event"]
+                    event: api_proto.ServerEventType = data["type"]
 
                     if event == "session.created":
                         self._handle_session_created(data)
                     elif event == "error":
                         self._handle_error(data)
+                    elif event == "input_audio_buffer.speech_started":
+                        self._handle_input_audio_buffer_speech_started(data)
+                    elif event == "input_audio_buffer.speech_stopped":
+                        self._handle_input_audio_buffer_speech_stopped(data)
+                    elif event == "input_audio_buffer.committed":
+                        self._handle_input_audio_buffer_speech_committed(data)
+                    elif (
+                        event == "conversation.item.input_audio_transcription.completed"
+                    ):
+                        self._handle_conversation_item_input_audio_transcription_completed(
+                            data
+                        )
+                    elif event == "conversation.item.input_audio_transcription.failed":
+                        self._handle_conversation_item_input_audio_transcription_failed(
+                            data
+                        )
+                    elif event == "response.created":
+                        self._handle_response_created(data)
+                    elif event == "response.output_item.added":
+                        self._handle_response_output_item_added(data)
+                    elif event == "response.content_part.added":
+                        self._handle_response_content_part_added(data)
+                    elif event == "response.audio.delta":
+                        self._handle_response_audio_delta(data)
+                    elif event == "response.audio_transcript.delta":
+                        self._handle_response_audio_transcript_delta(data)
+                    elif event == "response.audio.done":
+                        self._handle_response_audio_done(data)
+                    elif event == "response.audio_transcript.done":
+                        self._handle_response_audio_transcript_done(data)
+                    elif event == "response.content_part.done":
+                        self._handle_response_content_part_done(data)
+                    elif event == "response.output_item.done":
+                        self._handle_response_output_item_done(data)
+                    elif event == "response.done":
+                        self._handle_response_done(data)
 
                 except Exception:
                     logger.exception(
@@ -501,6 +650,228 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             error,
             extra=self.logging_extra(),
         )
+
+    def _handle_input_audio_buffer_speech_started(
+        self, speech_started: api_proto.ServerEvent.InputAudioBufferSpeechStarted
+    ):
+        self.emit("input_speech_started")
+
+    def _handle_input_audio_buffer_speech_stopped(
+        self, speech_stopped: api_proto.ServerEvent.InputAudioBufferSpeechStopped
+    ):
+        self.emit("input_speech_stopped")
+
+    def _handle_input_audio_buffer_speech_committed(
+        self, speech_committed: api_proto.ServerEvent.InputAudioBufferCommitted
+    ):
+        self.emit("input_speech_committed")
+
+    def _handle_conversation_item_input_audio_transcription_completed(
+        self,
+        transcription_completed: api_proto.ServerEvent.ConversationItemInputAudioTranscriptionCompleted,
+    ):
+        transcript = transcription_completed["transcript"]
+        self.emit(
+            "input_speech_transcription_completed",
+            InputTranscriptionCompleted(
+                item_id=transcription_completed["item_id"],
+                transcript=transcript,
+            ),
+        )
+
+    def _handle_conversation_item_input_audio_transcription_failed(
+        self,
+        transcription_failed: api_proto.ServerEvent.ConversationItemInputAudioTranscriptionFailed,
+    ):
+        error = transcription_failed["error"]
+        logger.error(
+            "OAI S2S failed to transcribe input audio: %s",
+            error["message"],
+            extra=self.logging_extra(),
+        )
+        self.emit(
+            "input_speech_transcription_failed",
+            InputTranscriptionFailed(
+                item_id=transcription_failed["item_id"],
+                message=error["message"],
+            ),
+        )
+
+    def _handle_response_created(
+        self, response_created: api_proto.ServerEvent.ResponseCreated
+    ):
+        response = response_created["response"]
+        done_fut = self._loop.create_future()
+        new_response = RealtimeResponse(
+            id=response["id"],
+            status=response["status"],
+            output=[],
+            done_fut=done_fut,
+        )
+        self._pending_responses[new_response.id] = new_response
+        self.emit("response_created", new_response)
+
+    def _handle_response_output_item_added(
+        self, response_output_added: api_proto.ServerEvent.ResponseOutputItemAdded
+    ):
+        response_id = response_output_added["response_id"]
+        response = self._pending_responses[response_id]
+        done_fut = self._loop.create_future()
+        item_data = response_output_added["item"]
+
+        assert item_data["type"] in ("message", "function_call")
+
+        new_output = RealtimeOutput(
+            response_id=response_id,
+            item_id=item_data["id"],
+            output_index=response_output_added["output_index"],
+            type=item_data["type"],
+            role=item_data.get(
+                "role", "assistant"
+            ),  # function_call doesn't have a role field, defaulting it to assistant
+            content=[],
+            done_fut=done_fut,
+        )
+        response.output.append(new_output)
+        self.emit("response_output_added", new_output)
+
+    def _handle_response_content_part_added(
+        self, response_content_added: api_proto.ServerEvent.ResponseContentPartAdded
+    ):
+        response_id = response_content_added["response_id"]
+        response = self._pending_responses[response_id]
+        output_index = response_content_added["output_index"]
+        output = response.output[output_index]
+
+        text_ch = utils.aio.Chan[str]()
+        audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+
+        new_content = RealtimeContent(
+            response_id=response_id,
+            item_id=response_content_added["item_id"],
+            output_index=output_index,
+            content_index=response_content_added["content_index"],
+            text="",
+            audio=[],
+            text_stream=text_ch,
+            audio_stream=audio_ch,
+            tool_calls=[],
+        )
+        output.content.append(new_content)
+        self.emit("response_content_added", new_content)
+
+    def _handle_response_audio_delta(
+        self, response_audio_delta: api_proto.ServerEvent.ResponseAudioDelta
+    ):
+        content = self._get_content(response_audio_delta)
+        data = base64.b64decode(response_audio_delta["delta"])
+        audio = rtc.AudioFrame(
+            data=data,
+            sample_rate=api_proto.SAMPLE_RATE,
+            num_channels=api_proto.NUM_CHANNELS,
+            samples_per_channel=len(data) // 2,
+        )
+        content.audio.append(audio)
+
+        assert isinstance(content.audio_stream, utils.aio.Chan)
+        content.audio_stream.send_nowait(audio)
+
+    def _handle_response_audio_transcript_delta(
+        self,
+        response_audio_transcript_delta: api_proto.ServerEvent.ResponseAudioTranscriptDelta,
+    ):
+        content = self._get_content(response_audio_transcript_delta)
+        transcript = response_audio_transcript_delta["delta"]
+        content.text += transcript
+
+        assert isinstance(content.text_stream, utils.aio.Chan)
+        content.text_stream.send_nowait(transcript)
+
+    def _handle_response_audio_done(
+        self, response_audio_done: api_proto.ServerEvent.ResponseAudioDone
+    ):
+        content = self._get_content(response_audio_done)
+        assert isinstance(content.audio_stream, utils.aio.Chan)
+        content.audio_stream.close()
+
+    def _handle_response_audio_transcript_done(
+        self,
+        response_audio_transcript_done: api_proto.ServerEvent.ResponseAudioTranscriptDone,
+    ):
+        content = self._get_content(response_audio_transcript_done)
+        assert isinstance(content.text_stream, utils.aio.Chan)
+        content.text_stream.close()
+
+    def _handle_response_content_part_done(
+        self, response_content_done: api_proto.ServerEvent.ResponseContentPartDone
+    ):
+        content = self._get_content(response_content_done)
+        self.emit("response_content_done", content)
+
+    def _handle_response_output_item_done(
+        self, response_output_done: api_proto.ServerEvent.ResponseOutputItemDone
+    ):
+        response_id = response_output_done["response_id"]
+        response = self._pending_responses[response_id]
+        output_index = response_output_done["output_index"]
+        output = response.output[output_index]
+
+        if output.type == "function_call":
+            if self._fnc_ctx is None:
+                logger.error(
+                    "function call received but no fnc_ctx is available",
+                    extra=self.logging_extra(),
+                )
+                return
+
+            # parse the arguments and call the function inside the fnc_ctx
+            item = response_output_done["item"]
+            assert item["type"] == "function_call"
+
+            fnc_call_info = _oai_api.create_ai_function_info(
+                self._fnc_ctx,
+                item["call_id"],
+                item["name"],
+                item["arguments"],
+            )
+
+            self._fnc_tasks.create_task(
+                self._run_fnc_task(fnc_call_info, output.item_id)
+            )
+
+        output.done_fut.set_result(None)
+        self.emit("response_output_done", output)
+
+    def _handle_response_done(self, response_done: api_proto.ServerEvent.ResponseDone):
+        response_data = response_done["response"]
+        response_id = response_data["id"]
+        response = self._pending_responses[response_id]
+        response.done_fut.set_result(None)
+        self.emit("response_done", response)
+
+    def _get_content(self, ptr: _ContentPtr) -> RealtimeContent:
+        response = self._pending_responses[ptr["response_id"]]
+        output = response.output[ptr["output_index"]]
+        content = output.content[ptr["content_index"]]
+        return content
+
+    @utils.log_exceptions(logger=logger)
+    async def _run_fnc_task(self, fnc_call_info: llm.FunctionCallInfo, item_id: str):
+        logger.debug(
+            "executing ai function",
+            extra={
+                "function": fnc_call_info.function_info.name,
+            },
+        )
+
+        called_fnc = fnc_call_info.execute()
+        await called_fnc.task
+
+        tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
+
+        if called_fnc.result is not None:
+            self.default_conversation.item.create(tool_call, item_id)
+            self.response.create()
 
     def logging_extra(self) -> dict:
         return {"session_id": self._session_id}

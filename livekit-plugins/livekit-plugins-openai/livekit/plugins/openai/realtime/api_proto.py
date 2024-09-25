@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Union
+from typing import Literal, Union
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -20,8 +20,9 @@ GenerationFinishedReason = Literal["stop", "max_tokens", "content_filter", "inte
 AudioFormat = Literal["pcm16", "g711-ulaw", "g711-alaw"]
 InputTranscriptionModel = Literal["whisper-1"]
 Modality = Literal["text", "audio"]
-
-TODO = Any
+ResponseStatus = Literal[
+    "in_progress", "completed", "incomplete", "cancelled", "failed"
+]
 
 
 class TextContent(TypedDict):
@@ -47,7 +48,14 @@ class InputAudioContent(TypedDict):
 Content = Union[InputTextContent, TextContent, AudioContent, InputAudioContent]
 
 
+class ContentPart(TypedDict):
+    type: Literal["text", "audio"]
+    audio: NotRequired[str]  # b64
+    transcript: NotRequired[str]
+
+
 class InputAudioTranscription(TypedDict):
+    # enabled: bool # on their docs but not in the actual API
     model: InputTranscriptionModel
 
 
@@ -71,7 +79,6 @@ class FunctionTool(TypedDict):
 class SystemItem(TypedDict):
     id: str
     object: Literal["realtime.item"]
-    previous_item_id: NotRequired[str | None]
     type: Literal["message"]
     role: Literal["system"]
     content: list[InputTextContent]
@@ -80,7 +87,6 @@ class SystemItem(TypedDict):
 class UserItem(TypedDict):
     id: str
     object: Literal["realtime.item"]
-    previous_item_id: NotRequired[str | None]
     type: Literal["message"]
     role: Literal["user"]
     content: list[InputTextContent | InputAudioContent]
@@ -89,7 +95,6 @@ class UserItem(TypedDict):
 class AssistantItem(TypedDict):
     id: str
     object: Literal["realtime.item"]
-    previous_item_id: NotRequired[str | None]
     type: Literal["message"]
     role: Literal["assistant"]
     content: list[TextContent | AudioContent]
@@ -98,7 +103,6 @@ class AssistantItem(TypedDict):
 class FunctionCallItem(TypedDict):
     id: str
     object: Literal["realtime.item"]
-    previous_item_id: NotRequired[str | None]
     type: Literal["function_call"]
     call_id: str
     name: str
@@ -108,7 +112,6 @@ class FunctionCallItem(TypedDict):
 class FunctionCallOutputItem(TypedDict):
     id: str
     object: Literal["realtime.item"]
-    previous_item_id: NotRequired[str | None]
     type: Literal["function_call_output"]
     call_id: str
     output: str
@@ -150,7 +153,7 @@ class Resource:
         tools: NotRequired[list[FunctionTool]]
         tool_choice: NotRequired[ToolChoice]
         temperature: NotRequired[float]
-        max_output_tokens: NotRequired[int]
+        max_response_output_tokens: NotRequired[int]
 
     class Conversation(TypedDict):
         id: str
@@ -161,7 +164,7 @@ class Resource:
     class Response(TypedDict):
         id: str
         object: Literal["realtime.response"]
-        status: Literal["in_progress", "completed", "incomplete", "cancelled", "failed"]
+        status: ResponseStatus
         output: list[Resource.Item]
         usage: NotRequired[Usage | None]
 
@@ -178,7 +181,7 @@ class ClientEvent:
         tools: list[FunctionTool]
         tool_choice: ToolChoice | None
         temperature: float
-        max_output_tokens: int
+        max_response_output_tokens: int | None
 
     class SessionUpdate(TypedDict):
         event_id: NotRequired[str]
@@ -228,6 +231,7 @@ class ClientEvent:
     class ConversationItemCreate(TypedDict):
         event_id: NotRequired[str]
         type: Literal["conversation.item.create"]
+        previous_item_id: NotRequired[str | None]
         item: ClientEvent.ConversationItemCreateContent
 
     class ConversationItemTruncate(TypedDict):
@@ -348,35 +352,36 @@ class ServerEvent:
         type: Literal["response.done"]
         response: Resource.Response
 
-    class ResponseOutputAdded(TypedDict):
+    class ResponseOutputItemAdded(TypedDict):
         event_id: str
-        type: Literal["response.output.added"]
+        type: Literal["response.output_item.added"]
         response_id: str
         output_index: int
         item: Resource.Item
 
-    class ResponseOutputDone(TypedDict):
+    class ResponseOutputItemDone(TypedDict):
         event_id: str
         type: Literal["response.output.done"]
         response_id: str
         output_index: int
         item: Resource.Item
 
-    class ResponseContentAdded(TypedDict):
+    class ResponseContentPartAdded(TypedDict):
         event_id: str
-        type: Literal["response.content.added"]
+        type: Literal["response.content_part.added"]
+        item_id: str
         response_id: str
         output_index: int
         content_index: int
-        part: TODO
+        part: ContentPart
 
-    class ResponseContentDone(TypedDict):
+    class ResponseContentPartDone(TypedDict):
         event_id: str
         type: Literal["response.content.done"]
         response_id: str
         output_index: int
         content_index: int
-        part: TODO
+        part: ContentPart
 
     class ResponseTextDeltaAdded(TypedDict):
         event_id: str
@@ -479,10 +484,10 @@ ServerEvents = Union[
     ServerEvent.ConversationItemDeleted,
     ServerEvent.ResponseCreated,
     ServerEvent.ResponseDone,
-    ServerEvent.ResponseOutputAdded,
-    ServerEvent.ResponseOutputDone,
-    ServerEvent.ResponseContentAdded,
-    ServerEvent.ResponseContentDone,
+    ServerEvent.ResponseOutputItemAdded,
+    ServerEvent.ResponseOutputItemDone,
+    ServerEvent.ResponseContentPartAdded,
+    ServerEvent.ResponseContentPartDone,
     ServerEvent.ResponseTextDeltaAdded,
     ServerEvent.ResponseTextDone,
     ServerEvent.ResponseAudioTranscriptDelta,
@@ -522,10 +527,10 @@ ServerEventType = Literal[
     "conversation.item.deleted",
     "response.created",
     "response.done",
-    "response.output.added",
-    "response.output.done",
-    "response.content.added",
-    "response.content.done",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.content_part.added",
+    "response.content_part.done",
     "response.text.delta",
     "response.text.done",
     "response.audio_transcript.delta",
