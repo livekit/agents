@@ -642,7 +642,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             _commit_user_question_if_needed()
             
             if speech_handle.interrupted:
-                logger.warning(f"speech interrupted, quit loop")
                 break
 
         _commit_user_question_if_needed()
