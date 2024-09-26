@@ -44,7 +44,6 @@ async def _playout_task(
 
 async def _respond_to_user(
     stt_stream: stt.SpeechStream,
-    stt_forwarder: transcription.STTSegmentsForwarder,
     tts: tts.TTS,
     agent_audio_source: rtc.AudioSource,
     local_llm: llm.LLM,
@@ -99,7 +98,7 @@ async def _llm_stream_to_str_iterable(stream: llm.LLMStream) -> AsyncIterable[st
 
 
 async def entrypoint(ctx: JobContext):
-    logger.info("starting trigger-word agent example")
+    logger.info("starting trigger-phrase agent example")
 
     vad = silero.VAD.load(
         min_speech_duration=0.01,
@@ -137,13 +136,9 @@ async def entrypoint(ctx: JobContext):
 
     async def subscribe_track(participant: rtc.RemoteParticipant, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        stt_forwarder = transcription.STTSegmentsForwarder(
-            room=ctx.room, participant=participant, track=track
-        )
         asyncio.create_task(
             _respond_to_user(
                 stt_stream=stt_stream,
-                stt_forwarder=stt_forwarder,
                 tts=tts,
                 agent_audio_source=agent_audio_source,
                 local_llm=local_llm,
