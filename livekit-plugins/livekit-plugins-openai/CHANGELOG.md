@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.8.5
+
+### Patch Changes
+
+- Fix function for OpenAI Assistants - [#784](https://github.com/livekit/agents/pull/784) ([@keepingitneil](https://github.com/keepingitneil))
+
 ## 0.8.4
 
 ### Patch Changes
