@@ -1,4 +1,3 @@
-
 import os
 import pathlib
 
@@ -7,9 +6,7 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(
-    os.path.join(here, "livekit", "plugins", "playht", "version.py"), "r"
-) as f:
+with open(os.path.join(here, "livekit", "plugins", "playht", "version.py"), "r") as f:
     exec(f.read(), about)
 
 
@@ -34,7 +31,12 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=["livekit-agents[codecs]>=0.8.0.dev0", "pyht", "aiohttp", "livekit"],
+    install_requires=[
+        "livekit-agents[codecs]>=0.8.0",
+        "pyht",
+        "aiohttp",
+        "livekit",
+    ],
     package_data={"livekit.plugins.playht": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",

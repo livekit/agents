@@ -1,4 +1,3 @@
-
 from .models import TTSEngines
 from .tts import DEFAULT_VOICE, TTS, Voice
 from .version import __version__
@@ -20,5 +19,6 @@ class PlayHTPlugin(Plugin):
 
     def download_files(self) -> None:
         self.download_files(self)
+
 
 Plugin.register_plugin(PlayHTPlugin())
