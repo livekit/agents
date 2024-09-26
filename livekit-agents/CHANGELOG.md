@@ -1,5 +1,13 @@
 # livekit-agents
 
+## 0.9.1
+
+### Patch Changes
+
+- fix VoiceAssisstant being stuck when interrupting before user speech is committed - [#790](https://github.com/livekit/agents/pull/790) ([@coderlxn](https://github.com/coderlxn))
+
+- Fix function for OpenAI Assistants - [#784](https://github.com/livekit/agents/pull/784) ([@keepingitneil](https://github.com/keepingitneil))
+
 ## 0.9.0
 
 ### Minor Changes
