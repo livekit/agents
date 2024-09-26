@@ -1,6 +1,6 @@
 # Trigger Phrase Initiated Agent
 
-This example demonstrated an agent that only responds to the user queries if the user provided trigger phrase is validated in the beginning of a speech.
+This example demonstrates an agent that only responds to the user queries if the user provided trigger phrase is validated in the beginning of a speech.
 
 The trigger phrase can be edited by changing this line:
 
