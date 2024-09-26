@@ -1,18 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-import base64
-import dataclasses
-import json
 import os
-import io
 from dataclasses import dataclass
 from typing import Any, List, Literal
-from pyht import Client, TTSOptions, Format
 
 import aiohttp
-from livekit.agents import tts, utils, tokenize
-from livekit import rtc
+
+from livekit.agents import tts, utils
 
 from .log import logger
 from .models import TTSEncoding, TTSEngines
@@ -21,7 +15,7 @@ _Encoding = Literal["mp3", "pcm"]
 
 
 def _sample_rate_from_format(output_format: TTSEncoding) -> int:
-    split = output_format.split("_") 
+    split = output_format.split("_")
     return int(split[1])
 
 
@@ -44,7 +38,7 @@ class Voice:
 DEFAULT_VOICE = Voice(
     id="s3://peregrine-voices/mel22/manifest.json",
     name="Will",
-    voice_engine="PlayHT2.0"
+    voice_engine="PlayHT2.0",
 )
 
 ACCEPT_HEADER = {
@@ -52,14 +46,16 @@ ACCEPT_HEADER = {
     "wav": "audio/wav",
     "ogg": "audio/ogg",
     "flac": "audio/flac",
-    "mulaw": "audio/basic"  # commonly used for mulaw
+    "mulaw": "audio/basic",  # commonly used for mulaw
 }
 
-API_BASE_URL_V1 = "https://api.play.ht/api/v2"
+API_BASE_URL_V2 = "https://api.play.ht/api/v2"
 AUTHORIZATION_HEADER = "AUTHORIZATION"
 USERID_HEADER = "X-USER-ID"
-PLAYHT_TTS_SAMPLE_RATE = 24000
+PLAYHT_TTS_SAMPLE_RATE = 48000
 PLAYHT_TTS_CHANNELS = 1
+
+_TTSEncoding = Literal["mp3", "wav", "ogg", "flac", "mulaw"]
 
 
 @dataclass
@@ -69,21 +65,19 @@ class _TTSOptions:
     voice: Voice
     base_url: str
     sample_rate: int
-    encoding: TTSEncoding
-
-
+    encoding: _TTSEncoding
 
 
 class TTS(tts.TTS):
     def __init__(
-            self,
-            *,
-            voice: Voice = DEFAULT_VOICE,
-            api_key: str | None = None,
-            user_id: str | None = None,
-            base_url: str | None = None,
-            encoding: Literal["mp3", "wav", "ogg", "flac", "mulaw"] | None = "wav",
-            http_session: aiohttp.ClientSession | None = None,
+        self,
+        *,
+        voice: Voice = DEFAULT_VOICE,
+        api_key: str | None = None,
+        user_id: str | None = None,
+        base_url: str | None = None,
+        encoding: _TTSEncoding | None = "wav",
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -104,9 +98,9 @@ class TTS(tts.TTS):
             voice=voice,
             user_id=user_id,
             api_key=api_key,
-            base_url=base_url or API_BASE_URL_V1,
-            sample_rate=self.sample_rate,
-            encoding=encoding
+            base_url=base_url or API_BASE_URL_V2,
+            sample_rate=PLAYHT_TTS_SAMPLE_RATE,
+            encoding=encoding,
         )
         self._session = http_session
 
@@ -118,12 +112,12 @@ class TTS(tts.TTS):
 
     async def list_voices(self) -> List[Voice]:
         async with self._ensure_session().get(
-                f"{self._opts.base_url}/voices",
-                headers={
-                    "accept": "application/json",
-                    AUTHORIZATION_HEADER: self._opts.api_key,
-                    USERID_HEADER: self._opts.user_id
-                },
+            f"{self._opts.base_url}/voices",
+            headers={
+                "accept": "application/json",
+                AUTHORIZATION_HEADER: self._opts.api_key,
+                USERID_HEADER: self._opts.user_id,
+            },
         ) as resp:
             return _dict_to_voices_list(await resp.json())
 
@@ -135,7 +129,7 @@ class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
     def __init__(
-            self, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
+        self, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
     ) -> None:
         super().__init__()
         self._text, self._opts, self._session = text, opts, session
@@ -148,32 +142,24 @@ class ChunkedStream(tts.ChunkedStream):
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
-        parent_path = os.path.dirname(os.path.abspath(__file__))
-        client = Client(self._opts.user_id, self._opts.api_key)
-        options = TTSOptions(
-            voice=self._opts.voice.id,
-            sample_rate=PLAYHT_TTS_SAMPLE_RATE,
-            format=Format.FORMAT_WAV,
-            speed=1
-        )
-        url = "https://api.play.ht/api/v2/tts/stream"
+        url = f"{API_BASE_URL_V2}/tts/stream"
         headers = {
             "accept": ACCEPT_HEADER[self._opts.encoding],
             "content-type": "application/json",
-            "AUTHORIZATION": self._opts.api_key,
-            "X-USER-ID": self._opts.user_id
+            AUTHORIZATION_HEADER: self._opts.api_key,
+            USERID_HEADER: self._opts.user_id,
         }
         json_data = {
-            "text": "Hello, How are you?",
-            "output_format": self._opts.en,
-            "voice": "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
+            "text": self._text,
+            "output_format": self._opts.encoding,
+            "voice": self._opts.voice.id,
         }
         async with self._session.post(url=url, headers=headers, json=json_data) as resp:
             if not resp.content_type.startswith("audio/"):
                 content = await resp.text()
                 logger.error("playHT returned non-audio data: %s", content)
                 return
-            
+
             encoding = _encoding_from_format(self._opts.encoding)
             if encoding == "mp3":
                 async for bytes_data, _ in resp.content.iter_chunks():
@@ -209,10 +195,7 @@ def _dict_to_voices_list(data: dict[str, Any]):
     for voice in data["text"]:
         voices.append(
             Voice(
-                id=voice["id"],
-                name=voice["name"],
-                voice_engine=voice["voice_engine"]
+                id=voice["id"], name=voice["name"], voice_engine=voice["voice_engine"]
             )
         )
     return voices
-

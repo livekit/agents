@@ -31,6 +31,8 @@ class _TTSOptions:
     speech_region: str | None = None
     # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts
     voice: str | None = None
+    # for using custom voices (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-speech-synthesis?tabs=browserjs%2Cterminal&pivots=programming-language-python#use-a-custom-endpoint)
+    endpoint_id: str | None = None
 
 
 class TTS(tts.TTS):
@@ -40,6 +42,7 @@ class TTS(tts.TTS):
         speech_key: str | None = None,
         speech_region: str | None = None,
         voice: str | None = None,
+        endpoint_id: str | None = None,
     ) -> None:
         """
         Create a new instance of Azure TTS.
@@ -65,7 +68,10 @@ class TTS(tts.TTS):
             raise ValueError("AZURE_SPEECH_REGION must be set")
 
         self._opts = _TTSOptions(
-            speech_key=speech_key, speech_region=speech_region, voice=voice
+            speech_key=speech_key,
+            speech_region=speech_region,
+            voice=voice,
+            endpoint_id=endpoint_id,
         )
 
     def synthesize(self, text: str) -> "ChunkedStream":
@@ -94,9 +100,12 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             result = await asyncio.to_thread(_synthesize)
             if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
-                raise ValueError(
-                    f"failed to synthesize audio: {result.reason} {result.cancellation_details}"
-                )
+                if result.cancellation_details:
+                    raise ValueError(
+                        f"failed to synthesize audio: {result.reason}: {result.cancellation_details.reason} ({result.cancellation_details.error_details})"
+                    )
+                else:
+                    raise ValueError(f"failed to synthesize audio: {result.reason}")
         finally:
 
             def _cleanup() -> None:
@@ -156,6 +165,8 @@ def _create_speech_synthesizer(
     stream_config = speechsdk.audio.AudioOutputConfig(stream=stream)
     if config.voice is not None:
         speech_config.speech_synthesis_voice_name = config.voice
+        if config.endpoint_id is not None:
+            speech_config.endpoint_id = config.endpoint_id
 
     return speechsdk.SpeechSynthesizer(
         speech_config=speech_config, audio_config=stream_config
