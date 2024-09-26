@@ -11,6 +11,13 @@ from ..utils import aio, misc
 
 
 @dataclass
+class SynthesizedAlignment:
+    chars: list[str]
+    start_times: list[float]
+    durations: list[float]
+
+
+@dataclass
 class SynthesizedAudio:
     request_id: str
     """Request ID (one segment could be made up of multiple requests)"""
@@ -20,11 +27,14 @@ class SynthesizedAudio:
     """Synthesized audio frame"""
     delta_text: str = ""
     """Current segment of the synthesized audio"""
+    alignment: SynthesizedAlignment | None = None
+    """Characters alignment of the synthesized audio"""
 
 
 @dataclass
 class TTSCapabilities:
     streaming: bool
+    alignment: bool
 
 
 class TTS(ABC):
