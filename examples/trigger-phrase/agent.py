@@ -25,8 +25,8 @@ word_tokenizer_without_punctuation: tokenize.WordTokenizer = (
     tokenize.basic.WordTokenizer(ignore_punctuation=True)
 )
 
-trigger_phrase = "Hi Bob!"
-trigger_phrase_words = word_tokenizer_without_punctuation.tokenize(text=trigger_phrase)
+TRIGGER_PHRASE = "Hi Bob!"
+trigger_phrase_words = word_tokenizer_without_punctuation.tokenize(text=TRIGGER_PHRASE)
 
 
 async def _playout_task(
@@ -104,7 +104,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     stt_local = stt.StreamAdapter(
-        stt=deepgram.STT(keywords=[(trigger_phrase, 3.5)]), vad=vad
+        stt=deepgram.STT(keywords=[(TRIGGER_PHRASE, 3.5)]), vad=vad
     )
     stt_stream = stt_local.stream()
 
@@ -125,7 +125,7 @@ async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
         role="system",
         text=(
-            f"You are {trigger_phrase}, a voice assistant created by LiveKit. Your interface with users will be voice. "
+            f"You are a voice assistant created by LiveKit. Your interface with users will be voice. "
             "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
         ),
     )
