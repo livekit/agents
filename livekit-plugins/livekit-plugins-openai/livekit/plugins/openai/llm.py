@@ -353,7 +353,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_telnyx(
         *,
-        model: str | TelnyxChatModels = "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        model: str | TelnyxChatModels = "meta-llama/Meta-Llama-3.1-70B-Instruct",
         api_key: str | None = None,
         base_url: str | None = "https://api.telnyx.com/v2/ai",
         client: openai.AsyncClient | None = None,
