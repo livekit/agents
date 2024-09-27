@@ -7,7 +7,7 @@ from typing import Any, AsyncIterable, Awaitable, Optional, Union
 from livekit import rtc
 
 from .. import llm, utils
-from .. import stf as speech_to_face
+from .. import stv as speech_to_video
 from .. import tts as text_to_speech
 from ..transcription import AssistantTranscriptionOptions, TTSSegmentsForwarder
 from .agent_playout import AgentPlayout, PlayoutHandle
@@ -25,7 +25,7 @@ class SynthesisHandle:
         agent_playout: AgentPlayout,
         transcription_fwd: TTSSegmentsForwarder,
         tts: text_to_speech.TTS,
-        stf: Optional[speech_to_face.STF],
+        stv: Optional[speech_to_video.STV],
     ) -> None:
         (
             self._speech_id,
@@ -33,20 +33,20 @@ class SynthesisHandle:
             self._agent_playout,
             self._tr_fwd,
             self._tts,
-            self._stf,
+            self._stv,
         ) = (
             speech_id,
             tts_source,
             agent_playout,
             transcription_fwd,
             tts,
-            stf,
+            stv,
         )
         self._play_handle: PlayoutHandle | None = None
         self._interrupt_fut = asyncio.Future[None]()
 
         self._audio_buf_ch = utils.aio.Chan[rtc.AudioFrame]()
-        self._video_buf_ch = utils.aio.Chan[rtc.VideoFrameEvent]() if stf else None
+        self._video_buf_ch = utils.aio.Chan[rtc.VideoFrameEvent]() if stv else None
 
     @property
     def speech_id(self) -> str:
@@ -105,7 +105,7 @@ class AgentOutput:
         agent_playout: AgentPlayout,
         llm: llm.LLM,
         tts: text_to_speech.TTS,
-        stf: Optional[speech_to_face.STF],
+        stv: Optional[speech_to_video.STV],
         transcription: AssistantTranscriptionOptions,
     ) -> None:
         (
@@ -113,14 +113,14 @@ class AgentOutput:
             self._agent_playout,
             self._llm,
             self._tts,
-            self._stf,
+            self._stv,
             self._transcription,
         ) = (
             room,
             agent_playout,
             llm,
             tts,
-            stf,
+            stv,
             transcription,
         )
         self._tasks = set[asyncio.Task[Any]]()
@@ -165,7 +165,7 @@ class AgentOutput:
             agent_playout=self._agent_playout,
             transcription_fwd=transcription_fwd,
             tts=self._tts,
-            stf=self._stf,
+            stv=self._stv,
         )
 
         task = asyncio.create_task(self._synthesize_task(handle))
@@ -236,7 +236,7 @@ async def _stream_synthesis_task(tts_source: AsyncIterable[str], handle: Synthes
     """synthesize speech and face from streamed text"""
     tts_source, transcript_source = utils.aio.itertools.tee(tts_source, 2)
     tts_stream = handle._tts.stream()
-    stf_stream = handle._stf.speech_stream() if handle._stf else None
+    stv_stream = handle._stv.speech_stream() if handle._stv else None
 
     @utils.log_exceptions(logger=logger)
     async def _read_synthesized_audio_task():
@@ -254,8 +254,8 @@ async def _stream_synthesis_task(tts_source: AsyncIterable[str], handle: Synthes
                     },
                 )
 
-            if stf_stream:
-                stf_stream.push_audio(audio)
+            if stv_stream:
+                stv_stream.push_audio(audio)
 
             if not handle._tr_fwd.closed:
                 handle._tr_fwd.push_audio(audio.frame) # TODO: add alignment
@@ -281,11 +281,11 @@ async def _stream_synthesis_task(tts_source: AsyncIterable[str], handle: Synthes
     async def _read_synthesized_video_task():
         start_time = time.time()
         first_frame = True
-        async for ev in stf_stream:
+        async for ev in stv_stream:
             if first_frame:
                 first_frame = False
                 logger.debug(
-                    "first STF frame",
+                    "first STV frame",
                     extra={
                         "speech_id": handle.speech_id,
                         "elapsed": round(time.time() - start_time, 3),
@@ -303,15 +303,15 @@ async def _stream_synthesis_task(tts_source: AsyncIterable[str], handle: Synthes
                     asyncio.create_task(_read_synthesized_audio_task()),
                     asyncio.create_task(_read_transcript_task()),
                 ]
-                if stf_stream:
+                if stv_stream:
                     tasks.append(asyncio.create_task(_read_synthesized_video_task()))
 
             tts_stream.push_text(seg)
-            # TODO: support stf from text
+            # TODO: support stv from text
 
         tts_stream.end_input()
-        if stf_stream:
-            stf_stream.end_input()
+        if stv_stream:
+            stv_stream.end_input()
 
         if tasks:
             await asyncio.gather(*tasks)
@@ -321,5 +321,5 @@ async def _stream_synthesis_task(tts_source: AsyncIterable[str], handle: Synthes
             await utils.aio.gracefully_cancel(task)
 
         await tts_stream.aclose()
-        if stf_stream:
-            await stf_stream.aclose()
+        if stv_stream:
+            await stv_stream.aclose()

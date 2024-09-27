@@ -11,7 +11,7 @@ from ..utils import aio
 from ..tts import SynthesizedAudio
 
 
-class STF(ABC):
+class STV(ABC):
     def __init__(
         self, *, width: int, height: int, frame_rate: int
     ) -> None:

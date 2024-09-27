@@ -5,7 +5,7 @@ from typing import AsyncIterable, Literal, Optional
 
 from livekit import rtc
 
-from .. import stf as speech_to_face
+from .. import stv as speech_to_video
 from .. import transcription, utils
 from .log import logger
 
@@ -70,19 +70,19 @@ class PlayoutHandle:
 class AgentPlayout(utils.EventEmitter[EventTypes]):
     """
     Owns the agent output sources and handles the synchronization of the transcript / audio / video playout.
-    Generates idle face animation when the agent is not speaking [if a STF is provided].
+    Generates idle video when the agent is not speaking [if a STV is provided].
     """
     def __init__(
         self,
         *,
         audio_source: rtc.AudioSource,
         video_source: Optional[rtc.VideoSource] = None,
-        stf: Optional[speech_to_face.STF] = None,
+        stv: Optional[speech_to_video.STV] = None,
     ) -> None:
         super().__init__()
         self._audio_source = audio_source
         self._video_source = video_source
-        self._stf = stf
+        self._stv = stv
         self._target_volume = 1.0
 
         self._closed = False
@@ -91,7 +91,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         self._playout_atask: asyncio.Task[None] | None = None
         self._idle_face_atask: asyncio.Task[None] | None = None
 
-        if self._stf is not None:
+        if self._stv is not None:
             assert self._video_source is not None
             self._idle_face_atask = asyncio.create_task(self._idle_face_task())
 
@@ -112,7 +112,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         """
         Send idle face frames to the VideoSource when the agent is not speaking.
         """
-        idle_face_stream: AsyncIterable[rtc.VideoFrameEvent] = self._stf.idle_stream()
+        idle_face_stream: AsyncIterable[rtc.VideoFrameEvent] = self._stv.idle_stream()
 
         try:
             while True:
