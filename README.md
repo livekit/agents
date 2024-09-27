@@ -91,6 +91,7 @@ from livekit.plugins.openai.llm import LLM
 - OctoAI: `LLM.with_octo(api_key="", model="")`
 - Ollama: `LLM.with_ollama(base_url="http://localhost:11434/v1", model="")`
 - Perplexity: `LLM.with_perplexity(api_key="", model="")`
+- Telnyx: `LLM.with_telnyx(api_key="", model="")`
 - TogetherAI: `LLM.with_together(api_key="", model="")`
 
 ### Anthropic Claude
