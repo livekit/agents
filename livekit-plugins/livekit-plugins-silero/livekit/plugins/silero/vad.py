@@ -76,6 +76,7 @@ class VAD(agents.vad.VAD):
             logger.warning(
                 "padding_duration is deprecated and will be removed in 1.5.0, use prefix_padding_duration instead",
             )
+            prefix_padding_duration = padding_duration
 
         session = onnx_model.new_inference_session(force_cpu)
         opts = _VADOptions(
