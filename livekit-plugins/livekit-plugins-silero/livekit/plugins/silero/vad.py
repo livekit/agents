@@ -34,7 +34,7 @@ SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
 class _VADOptions:
     min_speech_duration: float
     min_silence_duration: float
-    padding_duration: float
+    prefix_padding_duration: float
     max_buffered_speech: float
     activation_threshold: float
     sample_rate: int
@@ -47,11 +47,13 @@ class VAD(agents.vad.VAD):
         *,
         min_speech_duration: float = 0.05,
         min_silence_duration: float = 0.25,
-        padding_duration: float = 0.1,
+        prefix_padding_duration: float = 0.1,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
         sample_rate: int = 16000,
         force_cpu: bool = True,
+        # deprecated
+        padding_duration: float | None = None,
     ) -> "VAD":
         """
         Initialize the Silero VAD.
@@ -61,7 +63,7 @@ class VAD(agents.vad.VAD):
         Args:
             min_speech_duration: minimum duration of speech to start a new speech chunk
             min_silence_duration: In the end of each speech, wait min_silence_duration before ending the speech
-            padding_duration: pad the chunks with this duration on both sides
+            prefix_padding_duration: duration of padding to add to the beginning of each speech chunk
             max_buffered_speech: maximum duration of speech to keep in the buffer (in seconds)
             activation_threshold: threshold to consider a frame as speech
             sample_rate: sample rate for the inference (only 8KHz and 16KHz are supported)
@@ -70,11 +72,17 @@ class VAD(agents.vad.VAD):
         if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
 
+        if padding_duration is not None:
+            logger.warning(
+                "padding_duration is deprecated and will be removed in 1.5.0, use prefix_padding_duration instead",
+            )
+            prefix_padding_duration = padding_duration
+
         session = onnx_model.new_inference_session(force_cpu)
         opts = _VADOptions(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,
-            padding_duration=padding_duration,
+            prefix_padding_duration=prefix_padding_duration,
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
             sample_rate=sample_rate,
@@ -145,7 +153,8 @@ class VADStream(agents.vad.VADStream):
             if frame.sample_rate != 8000 and frame.sample_rate % 16000 != 0:
                 logger.error("only 8KHz and 16KHz*X sample rates are supported")
                 continue
-            elif og_window_data is None:
+
+            if og_window_data is None:
                 # alloc the og buffers now that we know the pushed sample rate
                 og_sample_rate = frame.sample_rate
 
@@ -154,7 +163,7 @@ class VADStream(agents.vad.VADStream):
                     * og_sample_rate
                 )
                 og_padding_size_samples = int(
-                    self._opts.padding_duration * og_sample_rate
+                    self._opts.prefix_padding_duration * og_sample_rate
                 )
                 og_window_data = np.empty(og_window_size_samples, dtype=np.int16)
                 og_needed_samples = og_window_size_samples
@@ -162,10 +171,11 @@ class VADStream(agents.vad.VADStream):
 
                 speech_buffer = np.empty(
                     int(self._opts.max_buffered_speech * og_sample_rate)
-                    + int(self._opts.padding_duration * og_sample_rate) * 2,
+                    + int(self._opts.prefix_padding_duration * og_sample_rate),
                     dtype=np.int16,
                 )
-            elif og_sample_rate != frame.sample_rate:
+
+            if og_sample_rate != frame.sample_rate:
                 logger.error("a frame with another sample rate was already pushed")
                 continue
 
@@ -227,6 +237,7 @@ class VADStream(agents.vad.VADStream):
 
                 def _copy_inference_window():
                     nonlocal speech_buffer_index
+
                     available_space = len(speech_buffer) - speech_buffer_index
                     to_copy = min(og_window_size_samples, available_space)
                     if to_copy <= 0:
@@ -311,7 +322,7 @@ class VADStream(agents.vad.VADStream):
                     if (
                         pub_speaking
                         and silence_threshold_duration
-                        >= self._opts.min_silence_duration + self._opts.padding_duration
+                        >= self._opts.min_silence_duration
                     ):
                         pub_speaking = False
                         pub_speech_duration = 0.0
