@@ -120,6 +120,8 @@ class AssistantTranscriptionOptions:
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
     """A function that takes a string (word) as input and returns a list of strings,
     representing the hyphenated parts of the word."""
+    use_tts_alignment: bool = False
+    """Whether to use the TTS alignment to align the agent transcription with the TTS audio."""
 
 
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
@@ -761,19 +763,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if isinstance(source, LLMStream):
             source = _llm_stream_to_str_iterable(speech_id, source)
 
-        og_source = source
-        transcript_source = source
-        if isinstance(og_source, AsyncIterable):
-            og_source, transcript_source = utils.aio.itertools.tee(og_source, 2)
-
-        tts_source = self._opts.before_tts_cb(self, og_source)
+        tts_source = self._opts.before_tts_cb(self, source)
         if tts_source is None:
             logger.error("before_tts_cb must return str or AsyncIterable[str]")
 
         return self._agent_output.synthesize(
             speech_id=speech_id,
             tts_source=tts_source,
-            transcript_source=transcript_source,
             transcription=self._opts.transcription.agent_transcription,
             transcription_speed=self._opts.transcription.agent_transcription_speed,
             sentence_tokenizer=self._opts.transcription.sentence_tokenizer,

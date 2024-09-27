@@ -9,6 +9,7 @@ from livekit import rtc
 from .. import llm, tokenize, utils
 from .. import transcription as agent_transcription
 from .. import tts as text_to_speech
+from .. import ttv as transcription_to_video
 from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
 
@@ -21,22 +22,22 @@ class SynthesisHandle:
         *,
         speech_id: str,
         tts_source: SpeechSource,
-        transcript_source: SpeechSource,
         agent_playout: AgentPlayout,
         tts: text_to_speech.TTS,
+        ttv: transcription_to_video.TTV,
         transcription_fwd: agent_transcription.TTSSegmentsForwarder,
     ) -> None:
         (
             self._tts_source,
-            self._transcript_source,
             self._agent_playout,
             self._tts,
+            self._ttv,
             self._tr_fwd,
         ) = (
             tts_source,
-            transcript_source,
             agent_playout,
             tts,
+            ttv,
             transcription_fwd,
         )
         self._buf_ch = utils.aio.Chan[rtc.AudioFrame]()
@@ -98,12 +99,14 @@ class AgentOutput:
         agent_playout: AgentPlayout,
         llm: llm.LLM,
         tts: text_to_speech.TTS,
+        ttv: transcription_to_video.TTV,
     ) -> None:
-        self._room, self._agent_playout, self._llm, self._tts = (
+        self._room, self._agent_playout, self._llm, self._tts, self._ttv = (
             room,
             agent_playout,
             llm,
             tts,
+            ttv,
         )
         self._tasks = set[asyncio.Task[Any]]()
 
@@ -122,13 +125,15 @@ class AgentOutput:
         *,
         speech_id: str,
         tts_source: SpeechSource,
-        transcript_source: SpeechSource,
         transcription: bool,
         transcription_speed: float,
         sentence_tokenizer: tokenize.SentenceTokenizer,
         word_tokenizer: tokenize.WordTokenizer,
         hyphenate_word: Callable[[str], list[str]],
     ) -> SynthesisHandle:
+        """
+        Fills _buf_ch with audio frames and _tr_fwd with transcription segments.
+        """
         def _before_forward(
             fwd: agent_transcription.TTSSegmentsForwarder,
             transcription: rtc.Transcription,
@@ -138,6 +143,7 @@ class AgentOutput:
 
             return transcription
 
+        # TODO: alignment
         transcription_fwd = agent_transcription.TTSSegmentsForwarder(
             room=self._room,
             participant=self._room.local_participant,
@@ -150,9 +156,9 @@ class AgentOutput:
 
         handle = SynthesisHandle(
             tts_source=tts_source,
-            transcript_source=transcript_source,
             agent_playout=self._agent_playout,
             tts=self._tts,
+            ttv=self._ttv,
             transcription_fwd=transcription_fwd,
             speech_id=speech_id,
         )
@@ -166,15 +172,14 @@ class AgentOutput:
     async def _synthesize_task(self, handle: SynthesisHandle) -> None:
         """Synthesize speech from the source"""
         tts_source = handle._tts_source
-        transcript_source = handle._transcript_source
 
         if isinstance(tts_source, Awaitable):
             tts_source = await tts_source
-            co = _str_synthesis_task(tts_source, transcript_source, handle)
+            co = _str_synthesis_task(tts_source, handle)
         elif isinstance(tts_source, str):
-            co = _str_synthesis_task(tts_source, transcript_source, handle)
+            co = _str_synthesis_task(tts_source, handle)
         else:
-            co = _stream_synthesis_task(tts_source, transcript_source, handle)
+            co = _stream_synthesis_task(tts_source, handle)
 
         synth = asyncio.create_task(co)
         synth.add_done_callback(lambda _: handle._buf_ch.close())
@@ -187,12 +192,10 @@ class AgentOutput:
 
 
 @utils.log_exceptions(logger=logger)
-async def _str_synthesis_task(
-    tts_text: str, transcript: str, handle: SynthesisHandle
-) -> None:
+async def _str_synthesis_task(tts_text: str, handle: SynthesisHandle) -> None:
     """synthesize speech from a string"""
     if not handle.tts_forwarder.closed:
-        handle.tts_forwarder.push_text(transcript)
+        handle.tts_forwarder.push_text(tts_text)
         handle.tts_forwarder.mark_text_segment_end()
 
     start_time = time.time()
@@ -223,12 +226,18 @@ async def _str_synthesis_task(
 
 
 @utils.log_exceptions(logger=logger)
-async def _stream_synthesis_task(
-    tts_source: AsyncIterable[str],
-    transcript_source: AsyncIterable[str],
-    handle: SynthesisHandle,
-) -> None:
+async def _stream_synthesis_task(tts_source: AsyncIterable[str], handle: SynthesisHandle) -> None:
     """synthesize speech from streamed text"""
+
+    # otherwise, stream the text to the TTS
+    tts_stream = handle._tts.stream()
+    read_tts_atask: asyncio.Task | None = None
+    read_transcript_atask: asyncio.Task | None = None
+
+    if isinstance(tts_source, AsyncIterable):
+        tts_source, transcript_source = utils.aio.itertools.tee(tts_source, 2)
+    else:
+        transcript_source = tts_source
 
     @utils.log_exceptions(logger=logger)
     async def _read_generated_audio_task():
@@ -247,7 +256,7 @@ async def _stream_synthesis_task(
                 )
 
             if not handle._tr_fwd.closed:
-                handle._tr_fwd.push_audio(audio.frame)
+                handle._tr_fwd.push_audio(audio.frame, audio.alignment)
 
             handle._buf_ch.send_nowait(audio.frame)
 
@@ -262,11 +271,6 @@ async def _stream_synthesis_task(
 
         if not handle.tts_forwarder.closed:
             handle.tts_forwarder.mark_text_segment_end()
-
-    # otherwise, stream the text to the TTS
-    tts_stream = handle._tts.stream()
-    read_tts_atask: asyncio.Task | None = None
-    read_transcript_atask: asyncio.Task | None = None
 
     try:
         async for seg in tts_source:

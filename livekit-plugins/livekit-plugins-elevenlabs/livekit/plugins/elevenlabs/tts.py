@@ -194,7 +194,7 @@ class ChunkedStream(tts.ChunkedStream):
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
             json=data,
         ) as resp:
-            # TODO: fix this to return alignment too
+            # TODO: fix this to return alignment too. don't forget to merge_frames
             if not resp.content_type.startswith("audio/"):
                 content = await resp.text()
                 logger.error("11labs returned non-audio data: %s", content)
@@ -408,15 +408,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
             b64data = base64.b64decode(data["audio"])
             if encoding == "mp3":
-                for frame in self._mp3_decoder.decode_chunk(b64data):
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id,
-                            segment_id=segment_id,
-                            frame=frame,
-                            alignment=alignment,
-                        )
+                chunk_frame = utils.merge_frames(self._mp3_decoder.decode_chunk(b64data))
+                self._event_ch.send_nowait(
+                    tts.SynthesizedAudio(
+                        request_id=request_id,
+                        segment_id=segment_id,
+                        frame=chunk_frame,
+                        alignment=alignment,
                     )
+                )
             else:
                 chunk_frame = rtc.AudioFrame(
                     data=b64data,

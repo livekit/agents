@@ -61,9 +61,10 @@ class PlayoutHandle:
 
 
 class AgentPlayout(utils.EventEmitter[EventTypes]):
-    def __init__(self, *, audio_source: rtc.AudioSource) -> None:
+    def __init__(self, *, audio_source: rtc.AudioSource, video_source: rtc.VideoSource) -> None:
         super().__init__()
         self._audio_source = audio_source
+        self._video_source = video_source
         self._target_volume = 1.0
         self._playout_atask: asyncio.Task[None] | None = None
         self._closed = False
