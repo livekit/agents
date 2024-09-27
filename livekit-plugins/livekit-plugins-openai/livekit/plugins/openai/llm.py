@@ -35,6 +35,7 @@ from .models import (
     OctoChatModels,
     PerplexityChatModels,
     TogetherChatModels,
+    TelnyxChatModels
 )
 from .utils import AsyncAzureADTokenProvider, build_oai_message
 
@@ -339,6 +340,37 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("TOGETHER_API_KEY")
         if api_key is None:
             raise ValueError("TogetherAI API key is required")
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+        )
+
+    @staticmethod
+    def with_telnyx(
+        *,
+        model: str | TelnyxChatModels = "meta-llama/Meta-Llama-3.1-70B-Instruct",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.telnyx.com/v2/ai",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+        temperature: float | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of Telnyx LLM.
+
+        ``api_key`` must be set to your Telnyx API key, either using the argument or by setting
+        the ``TELNYX_API_KEY`` environmental variable.
+        """
+
+        # shim for not using OPENAI_API_KEY
+        api_key = api_key or os.environ.get("TELNYX_API_KEY")
+        if api_key is None:
+            raise ValueError("Telnyx API key is required")
 
         return LLM(
             model=model,
