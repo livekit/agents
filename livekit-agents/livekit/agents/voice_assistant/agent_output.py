@@ -7,9 +7,9 @@ from typing import Any, AsyncIterable, Awaitable, Callable, Union
 from livekit import rtc
 
 from .. import llm, tokenize, utils
+from .. import stf as speech_to_face
 from .. import transcription as agent_transcription
 from .. import tts as text_to_speech
-from .. import ttv as transcription_to_video
 from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
 
@@ -24,20 +24,20 @@ class SynthesisHandle:
         tts_source: SpeechSource,
         agent_playout: AgentPlayout,
         tts: text_to_speech.TTS,
-        ttv: transcription_to_video.TTV,
+        stf: speech_to_face.TTV,
         transcription_fwd: agent_transcription.TTSSegmentsForwarder,
     ) -> None:
         (
             self._tts_source,
             self._agent_playout,
             self._tts,
-            self._ttv,
+            self._stf,
             self._tr_fwd,
         ) = (
             tts_source,
             agent_playout,
             tts,
-            ttv,
+            stf,
             transcription_fwd,
         )
         self._buf_ch = utils.aio.Chan[rtc.AudioFrame]()
@@ -99,14 +99,14 @@ class AgentOutput:
         agent_playout: AgentPlayout,
         llm: llm.LLM,
         tts: text_to_speech.TTS,
-        ttv: transcription_to_video.TTV,
+        stf: transcription_to_video.TTV,
     ) -> None:
-        self._room, self._agent_playout, self._llm, self._tts, self._ttv = (
+        self._room, self._agent_playout, self._llm, self._tts, self._stf = (
             room,
             agent_playout,
             llm,
             tts,
-            ttv,
+            stf,
         )
         self._tasks = set[asyncio.Task[Any]]()
 
@@ -158,7 +158,7 @@ class AgentOutput:
             tts_source=tts_source,
             agent_playout=self._agent_playout,
             tts=self._tts,
-            ttv=self._ttv,
+            stf=self._stf,
             transcription_fwd=transcription_fwd,
             speech_id=speech_id,
         )

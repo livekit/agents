@@ -617,7 +617,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 speech_handle.allow_interruptions
                 and not is_using_tools
                 and (
-                    play_handle.time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
+                    play_handle.audio_time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
                     and not join_fut.done()
                 )
             ):
