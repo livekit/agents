@@ -473,6 +473,8 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             agent_playout=agent_playout,
             llm=self._llm,
             tts=self._tts,
+            stf=self._stf,
+            transcription=self._opts.transcription,
         )
 
         def _on_playout_started() -> None:
@@ -770,11 +772,6 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         return self._agent_output.synthesize(
             speech_id=speech_id,
             tts_source=tts_source,
-            transcription=self._opts.transcription.agent_transcription,
-            transcription_speed=self._opts.transcription.agent_transcription_speed,
-            sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
-            word_tokenizer=self._opts.transcription.word_tokenizer,
-            hyphenate_word=self._opts.transcription.hyphenate_word,
         )
 
     def _validate_reply_if_possible(self) -> None:

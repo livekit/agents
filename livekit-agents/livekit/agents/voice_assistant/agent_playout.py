@@ -112,17 +112,20 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         """
         Send idle face frames to the VideoSource when the agent is not speaking.
         """
-        idle_face_stream: AsyncIterable[rtc.VideoFrame] = self._stf.idle_stream()
+        idle_face_stream: AsyncIterable[rtc.VideoFrameEvent] = self._stf.idle_stream()
 
         try:
             while True:
-                if not self._speaking:
-                    async for frame in idle_face_stream:
-                        if self._speaking:
-                            break
-                        self._video_source.capture_frame(frame)
-                else:
+                if self._speaking:
                     await asyncio.sleep(0.1)  # Short sleep to avoid busy waiting
+                    continue
+
+                async for ev in idle_face_stream:
+                    if self._speaking:
+                        break
+                    # We don't use timestamp here because there's no actual start time to follow
+                    # So we rely on the idle streamer to send frames at the right pace
+                    self._video_source.capture_frame(ev.frame)
         finally:
             await idle_face_stream.aclose()
 
