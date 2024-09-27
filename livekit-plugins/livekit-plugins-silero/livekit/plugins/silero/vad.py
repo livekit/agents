@@ -63,7 +63,7 @@ class VAD(agents.vad.VAD):
         Args:
             min_speech_duration: minimum duration of speech to start a new speech chunk
             min_silence_duration: In the end of each speech, wait min_silence_duration before ending the speech
-            padding_duration: pad the chunks with this duration on both sides
+            prefix_padding_duration: duration of padding to add to the beginning of each speech chunk
             max_buffered_speech: maximum duration of speech to keep in the buffer (in seconds)
             activation_threshold: threshold to consider a frame as speech
             sample_rate: sample rate for the inference (only 8KHz and 16KHz are supported)
