@@ -9,12 +9,12 @@ from livekit.agents import (
     JobContext,
     WorkerOptions,
     cli,
+    llm,
     stt,
     tokenize,
     tts,
-    llm,
 )
-from livekit.plugins import deepgram, openai, silero, elevenlabs
+from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 load_dotenv()
 
@@ -62,7 +62,6 @@ async def _respond_to_user(
 
     async for ev in stt_stream:
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-
             new_transcribed_text_words = word_tokenizer_without_punctuation.tokenize(
                 text=ev.alternatives[0].text
             )
@@ -120,7 +119,7 @@ async def entrypoint(ctx: JobContext):
     )
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
-    publication = await ctx.room.local_participant.publish_track(agent_track, options)
+    await ctx.room.local_participant.publish_track(agent_track, options)
 
     # setup LLM
     initial_ctx = llm.ChatContext().append(
