@@ -112,7 +112,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         stt: stt.STT,
         llm: LLM,
         tts: tts.TTS,
-        stv: stv.STV,
+        stv: stv.STV | None = None,
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,

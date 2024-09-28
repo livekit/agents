@@ -202,6 +202,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             nonlocal first_audio_frame, start_time
 
             async for frame in handle._audio_playout_source:
+                logger.debug(f"audio frame: {len(frame.data)}")
                 if first_audio_frame:
 
                     handle._tr_fwd.segment_playout_started()
@@ -215,7 +216,16 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                     start_time = asyncio.get_event_loop().time()
 
                 handle._audio_pushed_duration += frame.samples_per_channel / frame.sample_rate
-                await self._audio_source.capture_frame(frame)
+                for retry in range(3):
+                    try:
+                        await self._audio_source.capture_frame(frame)
+                        break
+                    except Exception as e:
+                        if retry == 2:
+                            logger.error(f"Failed to capture audio frame after 3 attempts: {e}")
+                        else:
+                            logger.warning(f"Error capturing audio frame (attempt {retry + 1}): {e}")
+                            await asyncio.sleep(0.01)  # Short delay before retrying
 
             await self._audio_source.wait_for_playout()
             logger.debug("audio playout finished")

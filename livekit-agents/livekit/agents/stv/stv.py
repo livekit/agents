@@ -44,6 +44,9 @@ class STV(ABC):
 
 
 class IdleStream(ABC):
+    async def aclose(self) -> None:
+        pass
+
     def __aiter__(self) -> AsyncIterator[rtc.VideoFrame]:
         return self
 
