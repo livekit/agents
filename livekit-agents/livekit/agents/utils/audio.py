@@ -47,13 +47,6 @@ def combine_frames(buffer: AudioBuffer) -> rtc.AudioFrame:
         2
         >>> combined_frame.samples_per_channel
         2
-
-    Notes:
-        - If a single `rtc.AudioFrame` is provided, it is returned as-is.
-        - The function assumes that all frames are in the correct order for concatenation.
-        - It is important that all frames have the same `sample_rate` and `num_channels` to
-          ensure consistency in the combined audio data.
-
     """
     if not isinstance(buffer, list):
         return buffer
