@@ -42,6 +42,19 @@ class SpeechHandle:
         add_to_chat_ctx: bool,
         user_question: str,
     ) -> SpeechHandle:
+        """
+        Creates a SpeechHandle for an assistant message that is in response to something a human has said,
+        represented by `user_question` (though it may not be literally a question). Downstream callers should
+        use this instance's `id` as an inference identifier to connect LLM calls with chat messages.
+
+        Args:
+            allow_interruptions: Whether to allow interruptions during speech playback.
+            add_to_chat_ctx: Whether to add the speech to the chat context.
+            user_question: The user's utterance that led to this speech handle being created.
+
+        Returns:
+            SpeechHandle: The created instance.
+        """
         return SpeechHandle(
             id=utils.shortuuid(),
             allow_interruptions=allow_interruptions,
@@ -55,9 +68,24 @@ class SpeechHandle:
         *,
         allow_interruptions: bool,
         add_to_chat_ctx: bool,
+        inference_id: str | None = None,
     ) -> SpeechHandle:
+        """
+        Creates a SpeechHandle for an assistant message that is not in response to something the user says,
+        for example the opening message for an agent or an out-of-band interrupt. Because the LLM inference
+        happened before this instance was created
+
+        Args:
+            allow_interruptions: Whether to allow interruptions during speech playback.
+            add_to_chat_ctx: Whether to add the speech to the chat context.
+            inference_id: Optional ID provided by callers to connect speech chat message to inference requests.
+                          If not provided, a random ID will be generated.
+
+        Returns:
+            SpeechHandle: The created instance.
+        """
         return SpeechHandle(
-            id=utils.shortuuid(),
+            id=inference_id or utils.shortuuid(),
             allow_interruptions=allow_interruptions,
             add_to_chat_ctx=add_to_chat_ctx,
             is_reply=False,

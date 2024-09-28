@@ -85,6 +85,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        inference_id: str | None = None,
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature

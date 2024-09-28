@@ -167,6 +167,7 @@ class AssistantLLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
+        inference_id: str | None = None,
     ):
         if n is not None:
             logger.warning("OpenAI Assistants does not support the 'n' parameter")
