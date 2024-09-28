@@ -7,7 +7,7 @@ from typing import AsyncIterator, Union
 
 from livekit import rtc
 
-from ..utils import aio, misc
+from ..utils import aio, audio
 
 
 @dataclass
@@ -71,7 +71,7 @@ class ChunkedStream(ABC):
         frames = []
         async for ev in self:
             frames.append(ev.frame)
-        return misc.merge_frames(frames)
+        return audio.merge_frames(frames)
 
     @abstractmethod
     async def _main_task(self) -> None: ...
