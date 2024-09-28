@@ -1,3 +1,3 @@
-from .multimodal_agent import  AssistantTranscriptionOptions, MultimodalAgent
+from .multimodal_agent import  AgentTranscriptionOptions, MultimodalAgent
 
-__all__ = ["MultimodalAgent", "AssistantTranscriptionOptions"]
+__all__ = ["MultimodalAgent", "AgentTranscriptionOptions"]
