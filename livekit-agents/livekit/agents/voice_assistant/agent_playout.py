@@ -83,6 +83,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         self._audio_source = audio_source
         self._video_source = video_source
         self._stv = stv
+
         self._target_volume = 1.0
 
         self._closed = False
@@ -113,6 +114,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         Send idle video frames to the VideoSource when the agent is not speaking.
         """
         idle_video_stream: AsyncIterable[rtc.VideoFrame] = self._stv.idle_stream()
+        assert 1 < self._stv.fps < 120
 
         try:
             while True:
@@ -120,13 +122,21 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                     await asyncio.sleep(0.1)  # Short sleep to avoid busy waiting
                     continue
 
+                last_render_time = asyncio.get_event_loop().time()
                 async for frame in idle_video_stream:
                     if self._speaking:
                         break
-                    # We don't use VideoFrameEvent with timestamp_us here
-                    # because there's no actual start time to count from (last speach generation?)
-                    # So we rely on the idle streamer to send frames at the right pace
+
+                    current_time = asyncio.get_event_loop().time()
+                    time_since_last_frame = current_time - last_render_time
+                    target_frame_duration = 1 / self._stv.fps
+
+                    if time_since_last_frame < target_frame_duration:
+                        await asyncio.sleep(target_frame_duration - time_since_last_frame)
+
+                    frame = self._stv.render_frame(frame)
                     self._video_source.capture_frame(frame)
+                    last_render_time = asyncio.get_event_loop().time()
         finally:
             await idle_video_stream.aclose()
 
@@ -183,21 +193,25 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 },
             )
 
-        first_frame = True
+        first_audio_frame = True
+        first_video_frame = True
         start_time = None
 
         @utils.log_exceptions(logger=logger)
         async def _audio_capture_task():
-            nonlocal first_frame, start_time
+            nonlocal first_audio_frame, start_time
+
             async for frame in handle._audio_playout_source:
-                if first_frame:
+                if first_audio_frame:
+
                     handle._tr_fwd.segment_playout_started()
                     logger.debug(
-                        "started playing the first frame",
+                        "started playing the first audio frame",
                         extra={"speech_id": handle.speech_id},
                     )
                     self.emit("playout_started")
-                    first_frame = False
+                    first_audio_frame = False
+
                     start_time = asyncio.get_event_loop().time()
 
                 handle._audio_pushed_duration += frame.samples_per_channel / frame.sample_rate
@@ -208,21 +222,30 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
 
         @utils.log_exceptions(logger=logger)
         async def _video_capture_task():
-            nonlocal start_time
+            nonlocal start_time, first_video_frame
             while start_time is None:
                 await asyncio.sleep(0.01)
 
             async for event in handle._video_playout_source:
+                if first_video_frame:
+                    logger.debug(
+                        "started playing the first video frame",
+                        extra={"speech_id": handle.speech_id},
+                    )
+                    first_video_frame = False
+                    self._speaking = True
+
+
                 target_time = start_time + event.timestamp_us / 1000
                 wait_time = target_time - asyncio.get_event_loop().time()
                 if wait_time > 0:
                     await asyncio.sleep(wait_time - VIDEO_CAPTURE_LATENCY)
 
-                self._video_source.capture_frame(event.frame)
+                frame = self._stv.render_frame(event.frame)
+                self._video_source.capture_frame(frame)
 
             logger.debug("video playout finished")
 
-        self._speaking = True
         tasks = [asyncio.create_task(_audio_capture_task())]
         if handle._video_playout_source and self._video_source:
             tasks.append(asyncio.create_task(_video_capture_task()))
@@ -244,7 +267,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             if handle.interrupted or tasks[0].exception():
                 self._audio_source.clear_queue()  # make sure to remove any queued frames
 
-            if not first_frame:
+            if not first_audio_frame:
                 if not handle.interrupted:
                     handle._tr_fwd.segment_playout_finished()
 

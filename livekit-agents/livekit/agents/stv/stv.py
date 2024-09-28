@@ -2,22 +2,21 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import AsyncIterator, Union
 
 from livekit import rtc
 
-from ..utils import aio
 from ..tts import SynthesizedAudio
+from ..utils import aio
 
 
 class STV(ABC):
     def __init__(
-        self, *, width: int, height: int, frame_rate: int = 24
+        self, *, width: int, height: int, fps: int = 30
     ) -> None:
         self._width = width
         self._height = height
-        self._frame_rate = frame_rate
+        self._fps = fps
 
     @property
     def width(self) -> int:
@@ -28,8 +27,14 @@ class STV(ABC):
         return self._height
 
     @property
-    def frame_rate(self) -> int:
-        return self._frame_rate
+    def fps(self) -> int:
+        return self._fps
+
+    def render_frame(self, frame: rtc.VideoFrame) -> rtc.VideoFrame:
+        """
+        Render a frame for the video stream. This is a perfect place to add your background or effects
+        """
+        return frame
 
     @abstractmethod
     def idle_stream(self) -> IdleStream: ...
@@ -52,7 +57,7 @@ class SpeechStream(ABC):
         pass
 
     def __init__(self):
-        self._input_ch = aio.Chan[Union[SynthesizedAudio, SpeechStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[Union[SynthesizedAudio, self._FlushSentinel]]()
         self._event_ch = aio.Chan[rtc.VideoFrameEvent]()
         self._task = asyncio.create_task(self._main_task(), name="STV._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
