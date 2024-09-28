@@ -186,8 +186,13 @@ class AgentOutput:
         else:
             co = _stream_synthesis_task(tts_source, handle)
 
+        def _on_done(_):
+            handle._audio_buf_ch.close()
+            if handle._video_buf_ch:
+                handle._video_buf_ch.close()
+
         synth = asyncio.create_task(co)
-        synth.add_done_callback(lambda _: handle._audio_buf_ch.close())
+        synth.add_done_callback(_on_done)
         try:
             _ = await asyncio.wait(
                 [synth, handle._interrupt_fut], return_when=asyncio.FIRST_COMPLETED
@@ -256,12 +261,12 @@ async def _stream_synthesis_task(tts_source: AsyncIterable[str], handle: Synthes
 
             if stv_stream:
                 stv_stream.push_audio(audio)
-
             if not handle._tr_fwd.closed:
                 handle._tr_fwd.push_audio(audio.frame) # TODO: add alignment
-
             handle._audio_buf_ch.send_nowait(audio.frame)
 
+        if stv_stream:
+            stv_stream.end_input()
         if handle._tr_fwd and not handle._tr_fwd.closed:
             handle._tr_fwd.mark_audio_segment_end()
 

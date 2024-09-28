@@ -11,6 +11,7 @@ from .log import logger
 
 EventTypes = Literal["playout_started", "playout_stopped"]
 
+# just a random small number so far
 VIDEO_CAPTURE_LATENCY = 0.001
 
 class PlayoutHandle:
@@ -35,7 +36,6 @@ class PlayoutHandle:
         self._speech_id = speech_id
 
         self._audio_pushed_duration = 0.0
-
         self._total_played_time: float | None = None  # set when the playout is done
 
     @property
@@ -124,7 +124,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                     if self._speaking:
                         break
                     # We don't use VideoFrameEvent with timestamp_us here
-                    # because there's no actual start time to follow
+                    # because there's no actual start time to count from (last speach generation?)
                     # So we rely on the idle streamer to send frames at the right pace
                     self._video_source.capture_frame(frame)
         finally:
@@ -138,6 +138,10 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
 
         if self._playout_atask is not None:
             await self._playout_atask
+
+        if self._idle_video_atask is not None:
+            await utils.aio.gracefully_cancel(self._idle_video_atask)
+            await self._idle_video_atask
 
     def play(
         self,
@@ -200,6 +204,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 await self._audio_source.capture_frame(frame)
 
             await self._audio_source.wait_for_playout()
+            logger.debug("audio playout finished")
 
         @utils.log_exceptions(logger=logger)
         async def _video_capture_task():
@@ -208,12 +213,14 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 await asyncio.sleep(0.01)
 
             async for event in handle._video_playout_source:
-                target_time = start_time + event.timestamp_us / 1_000
+                target_time = start_time + event.timestamp_us / 1000
                 wait_time = target_time - asyncio.get_event_loop().time()
                 if wait_time > 0:
                     await asyncio.sleep(wait_time - VIDEO_CAPTURE_LATENCY)
 
                 self._video_source.capture_frame(event.frame)
+
+            logger.debug("video playout finished")
 
         self._speaking = True
         tasks = [asyncio.create_task(_audio_capture_task())]
@@ -221,7 +228,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             tasks.append(asyncio.create_task(_video_capture_task()))
 
         try:
-            _ = await asyncio.wait(
+            await asyncio.wait(
                 [asyncio.gather(*tasks), handle._int_fut],
                 return_when=asyncio.FIRST_COMPLETED,
             )

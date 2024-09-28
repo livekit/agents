@@ -4,7 +4,7 @@ import random
 
 from dotenv import load_dotenv
 from livekit import rtc
-from livekit.agents import JobContext, WorkerOptions, cli, llm, stv
+from livekit.agents import JobContext, WorkerOptions, cli, llm, stv, utils
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import elevenlabs, openai, silero
 from PIL import Image, ImageDraw, ImageFont
@@ -12,13 +12,15 @@ from PIL import Image, ImageDraw, ImageFont
 # Load environment variables
 load_dotenv()
 
+logger = logging.getLogger("livekit.examples.speech-to-video")
+
 WIDTH = 360
 HEIGHT = 360
 
 
 class IdleStream(stv.IdleStream):
     async def __anext__(self) -> rtc.VideoFrame:
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
         # Create a new random color
         r, g, b = [random.randint(0, 255) for _ in range(3)]
         color = bytes([r, g, b, 255])
@@ -30,13 +32,17 @@ class IdleStream(stv.IdleStream):
 
 
 class SpeechStream(stv.SpeechStream):
+    @utils.log_exceptions(logger=logger)
     async def _main_task(self):
         font = ImageFont.load_default().font_variant(size=120)
         start_time = 0
         async for audio_chunk in self._input_ch:
-            logging.debug(f"audio_chunk: {audio_chunk}")
+            if isinstance(audio_chunk, self._FlushSentinel):
+                return
+
             if not audio_chunk.alignment:
                 continue
+
             aligned_chars = zip(
                 audio_chunk.alignment.chars, 
                 audio_chunk.alignment.start_times, 
@@ -54,7 +60,7 @@ class SpeechStream(stv.SpeechStream):
                     position = ((WIDTH - text_width) / 2, (HEIGHT - text_height) / 2)
                     draw.text(position, char, font=font, fill='black')
                 except Exception as e:
-                    logging.error(f"Error drawing text: {e}")
+                    logger.error(f"Error drawing text: {e}")
                 
                 # Create and send video frame event
                 start_time += duration
