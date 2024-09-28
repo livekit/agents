@@ -295,7 +295,7 @@ class VADStream(agents.vad.VADStream):
                     )
 
                 def _reset_write_cursor():
-                    nonlocal speech_buffer_index
+                    nonlocal speech_buffer_index, speech_buffer_max_reached
                     assert speech_buffer is not None
 
                     if speech_buffer_index <= pub_prefix_padding_samples:
@@ -308,6 +308,7 @@ class VADStream(agents.vad.VADStream):
 
                     speech_buffer[:pub_prefix_padding_samples] = padding_data
                     speech_buffer_index = pub_prefix_padding_samples
+                    speech_buffer_max_reached = False
 
                 def _copy_speech_buffer() -> rtc.AudioFrame:
                     # copy the data from speech_buffer
