@@ -446,11 +446,24 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._update_state("initializing")
         audio_source = rtc.AudioSource(self._tts.sample_rate, self._tts.num_channels)
         track = rtc.LocalAudioTrack.create_audio_track("assistant_voice", audio_source)
-        self._agent_publication = await self._room.local_participant.publish_track(
+        self._agent_audio_publication = await self._room.local_participant.publish_track(
             track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         )
 
-        agent_playout = AgentPlayout(audio_source=audio_source)
+        if self._stv:
+            video_source = rtc.VideoSource(self._stv.width, self._stv.height)
+            track = rtc.LocalVideoTrack.create_video_track("assistant_video", video_source)
+            self._agent_video_publication = await self._room.local_participant.publish_track(
+                track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+            )
+        else:
+            video_source = None
+
+        agent_playout = AgentPlayout(
+            audio_source=audio_source,
+            video_source=video_source,
+            stv=self._stv,
+        )
         self._agent_output = AgentOutput(
             room=self._room,
             agent_playout=agent_playout,
@@ -572,7 +585,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         except asyncio.CancelledError:
             return
 
-        await self._agent_publication.wait_for_subscription()
+        await self._agent_audio_publication.wait_for_subscription()
+        if self._stv:
+            await self._agent_video_publication.wait_for_subscription()
 
         synthesis_handle = speech_handle.synthesis_handle
         if synthesis_handle.interrupted:

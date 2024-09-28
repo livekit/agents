@@ -401,10 +401,10 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         encoding = _encoding_from_format(self._opts.encoding)
         if data.get("audio"):
-            alignment = tts.SynthesizedAlignment(
-                chars=data["normalized_alignment"]["chars"],
-                start_times=data["normalized_alignment"]["char_start_times_ms"],
-                durations=data["normalized_alignment"]["chars_durations_ms"],
+            alignment = data.get("normalizedAlignment") and tts.SynthesizedAlignment(
+                chars=data["normalizedAlignment"]["chars"],
+                start_times=data["normalizedAlignment"]["charStartTimesMs"],
+                durations=data["normalizedAlignment"]["charDurationsMs"],
             )
             b64data = base64.b64decode(data["audio"])
             if encoding == "mp3":

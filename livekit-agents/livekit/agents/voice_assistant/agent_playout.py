@@ -11,7 +11,7 @@ from .log import logger
 
 EventTypes = Literal["playout_started", "playout_stopped"]
 
-VIDEO_CAPTURE_LATENCY = 0.01
+VIDEO_CAPTURE_LATENCY = 0.001
 
 class PlayoutHandle:
     """
@@ -89,11 +89,11 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         self._speaking = False
 
         self._playout_atask: asyncio.Task[None] | None = None
-        self._idle_face_atask: asyncio.Task[None] | None = None
+        self._idle_video_atask: asyncio.Task[None] | None = None
 
         if self._stv is not None:
             assert self._video_source is not None
-            self._idle_face_atask = asyncio.create_task(self._idle_face_task())
+            self._idle_video_atask = asyncio.create_task(self._idle_video_task())
 
     @property
     def target_volume(self) -> float:
@@ -108,11 +108,11 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         return self._target_volume
 
     @utils.log_exceptions(logger=logger)
-    async def _idle_face_task(self) -> None:
+    async def _idle_video_task(self) -> None:
         """
-        Send idle face frames to the VideoSource when the agent is not speaking.
+        Send idle video frames to the VideoSource when the agent is not speaking.
         """
-        idle_face_stream: AsyncIterable[rtc.VideoFrameEvent] = self._stv.idle_stream()
+        idle_video_stream: AsyncIterable[rtc.VideoFrame] = self._stv.idle_stream()
 
         try:
             while True:
@@ -120,14 +120,15 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                     await asyncio.sleep(0.1)  # Short sleep to avoid busy waiting
                     continue
 
-                async for ev in idle_face_stream:
+                async for frame in idle_video_stream:
                     if self._speaking:
                         break
-                    # We don't use timestamp here because there's no actual start time to follow
+                    # We don't use VideoFrameEvent with timestamp_us here
+                    # because there's no actual start time to follow
                     # So we rely on the idle streamer to send frames at the right pace
-                    self._video_source.capture_frame(ev.frame)
+                    self._video_source.capture_frame(frame)
         finally:
-            await idle_face_stream.aclose()
+            await idle_video_stream.aclose()
 
     async def aclose(self) -> None:
         if self._closed:
@@ -151,7 +152,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         handle = PlayoutHandle(
             speech_id=speech_id,
             audio_source=self._audio_source,
-            video_source=self._video_source,
             transcription_fwd=transcription_fwd,
             audio_playout_source=audio_playout_source,
             video_playout_source=video_playout_source,
@@ -208,7 +208,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 await asyncio.sleep(0.01)
 
             async for event in handle._video_playout_source:
-                target_time = start_time + event.timestamp_us / 1_000_000
+                target_time = start_time + event.timestamp_us / 1_000
                 wait_time = target_time - asyncio.get_event_loop().time()
                 if wait_time > 0:
                     await asyncio.sleep(wait_time - VIDEO_CAPTURE_LATENCY)

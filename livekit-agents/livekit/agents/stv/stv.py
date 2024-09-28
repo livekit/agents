@@ -13,7 +13,7 @@ from ..tts import SynthesizedAudio
 
 class STV(ABC):
     def __init__(
-        self, *, width: int, height: int, frame_rate: int
+        self, *, width: int, height: int, frame_rate: int = 24
     ) -> None:
         self._width = width
         self._height = height
@@ -32,19 +32,27 @@ class STV(ABC):
         return self._frame_rate
 
     @abstractmethod
-    def idle_stream(self) -> SynthesizeStream: ...
+    def idle_stream(self) -> IdleStream: ...
 
     @abstractmethod
-    def speech_stream(self) -> SynthesizeStream: ...
+    def speech_stream(self) -> SpeechStream: ...
+
+
+class IdleStream(ABC):
+    def __aiter__(self) -> AsyncIterator[rtc.VideoFrame]:
+        return self
+
+    @abstractmethod
+    async def __anext__(self) -> rtc.VideoFrame: ...
 
 
 # TODO: add generation from text for the tts models that doesn't support alignment
-class SynthesizeStream(ABC):
+class SpeechStream(ABC):
     class _FlushSentinel:
         pass
 
     def __init__(self):
-        self._input_ch = aio.Chan[Union[SynthesizedAudio, SynthesizeStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[Union[SynthesizedAudio, SpeechStream._FlushSentinel]]()
         self._event_ch = aio.Chan[rtc.VideoFrameEvent]()
         self._task = asyncio.create_task(self._main_task(), name="STV._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())

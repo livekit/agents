@@ -292,7 +292,7 @@ async def _stream_synthesis_task(tts_source: AsyncIterable[str], handle: Synthes
                         "streamed": True,
                     },
                 )
-            handle._video_buf_ch.send_nowait(ev.frame)
+            handle._video_buf_ch.send_nowait(ev)
 
     tasks: list[asyncio.Task] = []
     try:
@@ -310,9 +310,6 @@ async def _stream_synthesis_task(tts_source: AsyncIterable[str], handle: Synthes
             # TODO: support stv from text
 
         tts_stream.end_input()
-        if stv_stream:
-            stv_stream.end_input()
-
         if tasks:
             await asyncio.gather(*tasks)
 

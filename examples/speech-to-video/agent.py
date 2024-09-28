@@ -1,9 +1,6 @@
 import asyncio
 import logging
-import os
 import random
-import string
-import sys
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -32,16 +29,49 @@ class IdleStream(stv.IdleStream):
         return rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, argb_frame)
 
 
-class SpeechStream(stv.SynthesizeStream):
-    def _main_task(self):
-        pass
+class SpeechStream(stv.SpeechStream):
+    async def _main_task(self):
+        font = ImageFont.load_default().font_variant(size=120)
+        start_time = 0
+        async for audio_chunk in self._input_ch:
+            logging.debug(f"audio_chunk: {audio_chunk}")
+            if not audio_chunk.alignment:
+                continue
+            aligned_chars = zip(
+                audio_chunk.alignment.chars, 
+                audio_chunk.alignment.start_times, 
+                audio_chunk.alignment.durations
+            )
+            for char, _, duration in aligned_chars:
+                try:
+                    # Create a white image
+                    image = Image.new('RGBA', (WIDTH, HEIGHT), color='white')
+                    draw = ImageDraw.Draw(image)
+                
+                    # Draw the character
+                    bbox = draw.textbbox((0, 0), char, font=font)
+                    text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
+                    position = ((WIDTH - text_width) / 2, (HEIGHT - text_height) / 2)
+                    draw.text(position, char, font=font, fill='black')
+                except Exception as e:
+                    logging.error(f"Error drawing text: {e}")
+                
+                # Create and send video frame event
+                start_time += duration
+                self._event_ch.send_nowait(
+                    rtc.VideoFrameEvent(
+                        frame=rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, image.tobytes()),
+                        timestamp_us=start_time,
+                        rotation=rtc.VideoRotation.VIDEO_ROTATION_0,
+                    )
+                )
 
 
 class SimpleSpeechToVideo(stv.STV):
     def idle_stream(self) -> stv.IdleStream:
         return IdleStream()
 
-    def stream(self) -> stv.SynthesizeStream:
+    def speech_stream(self) -> stv.SpeechStream:
         return SpeechStream()
 
 
@@ -64,9 +94,16 @@ async def entrypoint(ctx: JobContext):
 
     # Start the voice assistant with the LiveKit room
     assistant.start(ctx.room)
+    await asyncio.sleep(8)
 
     # Greets the user with an initial message
-    # await assistant.say("Hey there! Look, I have a face now!", allow_interruptions=True)
+    async def greeting_generator():
+        yield "Hey there! "
+        yield "Look, "
+        yield "I can draw "
+        yield "letters!"
+
+    await assistant.say(greeting_generator(), allow_interruptions=True)
 
 
 if __name__ == "__main__":
