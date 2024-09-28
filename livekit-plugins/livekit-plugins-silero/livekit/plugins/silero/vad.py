@@ -176,6 +176,7 @@ class VADStream(agents.vad.VADStream):
         pub_speech_duration = 0.0
         pub_silence_duration = 0.0
         pub_current_sample = 0
+        pub_timestamp = 0.0
 
         pub_sample_rate = 0
         pub_prefix_padding_samples = 0  # size in samples of padding data
@@ -254,11 +255,13 @@ class VADStream(agents.vad.VADStream):
                     self._executor, self._model, inference_f32_data
                 )
                 p = self._exp_filter.apply(exp=1.0, sample=p)
-                pub_current_sample += self._model.window_size_samples
 
                 window_duration = (
                     self._model.window_size_samples / self._opts.sample_rate
                 )
+
+                pub_current_sample += self._model.window_size_samples
+                pub_timestamp += window_duration
 
                 resampling_ratio = pub_sample_rate / self._model.sample_rate
                 to_copy = (
@@ -331,6 +334,7 @@ class VADStream(agents.vad.VADStream):
                     agents.vad.VADEvent(
                         type=agents.vad.VADEventType.INFERENCE_DONE,
                         samples_index=pub_current_sample,
+                        timestamp=pub_timestamp,
                         silence_duration=pub_silence_duration,
                         speech_duration=pub_speech_duration,
                         probability=p,
@@ -361,6 +365,7 @@ class VADStream(agents.vad.VADStream):
                                 agents.vad.VADEvent(
                                     type=agents.vad.VADEventType.START_OF_SPEECH,
                                     samples_index=pub_current_sample,
+                                    pub_timestamp=pub_timestamp,
                                     silence_duration=pub_silence_duration,
                                     speech_duration=pub_speech_duration,
                                     frames=[_copy_speech_buffer()],
@@ -387,6 +392,7 @@ class VADStream(agents.vad.VADStream):
                             agents.vad.VADEvent(
                                 type=agents.vad.VADEventType.END_OF_SPEECH,
                                 samples_index=pub_current_sample,
+                                pub_timestamp=pub_timestamp,
                                 silence_duration=pub_silence_duration,
                                 speech_duration=pub_speech_duration,
                                 frames=[_copy_speech_buffer()],
