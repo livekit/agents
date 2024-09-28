@@ -19,6 +19,7 @@ import time
 import math
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import onnxruntime  # type: ignore
@@ -42,6 +43,12 @@ class _VADOptions:
 
 
 class VAD(agents.vad.VAD):
+    """
+    Silero Voice Activity Detection (VAD) class.
+
+    This class provides functionality to detect speech segments within audio data using the Silero VAD model.
+    """
+
     @classmethod
     def load(
         cls,
@@ -51,24 +58,52 @@ class VAD(agents.vad.VAD):
         prefix_padding_duration: float = 0.1,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
-        sample_rate: int = 16000,
+        sample_rate: Literal[8000, 16000] = 16000,
         force_cpu: bool = True,
         # deprecated
         padding_duration: float | None = None,
     ) -> "VAD":
         """
-        Initialize the Silero VAD.
+        Load and initialize the Silero VAD model.
 
-        When options are not provided, sane defaults are used.
+        This method loads the ONNX model and prepares it for inference. When options are not provided,
+        sane defaults are used.
+
+        **Note:**
+            This method is blocking and may take time to load the model into memory.
+            It is recommended to call this method inside your prewarm mechanism.
+
+        **Example:**
+
+            ```python
+            def prewarm(proc: JobProcess):
+                proc.userdata["vad"] = silero.VAD.load()
+
+
+            async def entrypoint(ctx: JobContext):
+                vad = (ctx.proc.userdata["vad"],)
+                # your agent logic...
+
+
+            if __name__ == "__main__":
+                cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+            ```
 
         Args:
-            min_speech_duration: minimum duration of speech to start a new speech chunk
-            min_silence_duration: In the end of each speech, wait min_silence_duration before ending the speech
-            prefix_padding_duration: duration of padding to add to the beginning of each speech chunk
-            max_buffered_speech: maximum duration of speech to keep in the buffer (in seconds)
-            activation_threshold: threshold to consider a frame as speech
-            sample_rate: sample rate for the inference (only 8KHz and 16KHz are supported)
-            force_cpu: force to use CPU for inference
+            min_speech_duration (float): Minimum duration of speech to start a new speech chunk.
+            min_silence_duration (float): At the end of each speech, wait this duration before ending the speech.
+            prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
+            max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
+            activation_threshold (float): Threshold to consider a frame as speech.
+            sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
+            force_cpu (bool): Force the use of CPU for inference.
+            padding_duration (float | None): **Deprecated**. Use `prefix_padding_duration` instead.
+
+        Returns:
+            VAD: An instance of the VAD class ready for streaming.
+
+        Raises:
+            ValueError: If an unsupported sample rate is provided.
         """
         if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
@@ -101,6 +136,12 @@ class VAD(agents.vad.VAD):
         self._opts = opts
 
     def stream(self) -> "VADStream":
+        """
+        Create a new VADStream for processing audio data.
+
+        Returns:
+            VADStream: A stream object for processing audio input and detecting speech.
+        """
         return VADStream(
             self._opts,
             onnx_model.OnnxModel(
@@ -124,7 +165,6 @@ class VADStream(agents.vad.VADStream):
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self):
         inference_f32_data = np.empty(self._model.window_size_samples, dtype=np.float32)
-        input_window_samples: int = 0
 
         # a copy is exposed to the user in END_OF_SPEECH
         speech_buffer: np.ndarray | None = None
@@ -214,21 +254,11 @@ class VADStream(agents.vad.VADStream):
                     self._executor, self._model, inference_f32_data
                 )
                 p = self._exp_filter.apply(exp=1.0, sample=p)
-                inference_duration = time.perf_counter() - start_time
                 pub_current_sample += self._model.window_size_samples
 
                 window_duration = (
                     self._model.window_size_samples / self._opts.sample_rate
                 )
-                self._extra_inference_time = max(
-                    0.0,
-                    self._extra_inference_time + inference_duration - window_duration,
-                )
-                if inference_duration > SLOW_INFERENCE_THRESHOLD:
-                    logger.warning(
-                        "inference is slower than realtime",
-                        extra={"delay": self._extra_inference_time},
-                    )
 
                 resampling_ratio = pub_sample_rate / self._model.sample_rate
                 to_copy = (
@@ -251,6 +281,17 @@ class VADStream(agents.vad.VADStream):
                     speech_buffer_max_reached = True
                     logger.warning(
                         "max_buffered_speech reached, ignoring further data for the current speech input"
+                    )
+
+                inference_duration = time.perf_counter() - start_time
+                self._extra_inference_time = max(
+                    0.0,
+                    self._extra_inference_time + inference_duration - window_duration,
+                )
+                if inference_duration > SLOW_INFERENCE_THRESHOLD:
+                    logger.warning(
+                        "inference is slower than realtime",
+                        extra={"delay": self._extra_inference_time},
                     )
 
                 def _reset_write_cursor():
@@ -293,6 +334,14 @@ class VADStream(agents.vad.VADStream):
                         speech_duration=pub_speech_duration,
                         probability=p,
                         inference_duration=inference_duration,
+                        frames=[
+                            rtc.AudioFrame(
+                                data=input_frame.data[:to_copy_int].tobytes(),
+                                sample_rate=pub_sample_rate,
+                                num_channels=1,
+                                samples_per_channel=to_copy_int,
+                            )
+                        ],
                         speaking=pub_speaking,
                     )
                 )
@@ -345,3 +394,32 @@ class VADStream(agents.vad.VADStream):
                         )
 
                         _reset_write_cursor()
+
+                # remove the frames that were used for inference from the input and inference frames
+                input_frames = []
+                inference_frames = []
+
+                # add the remaining data
+                if to_copy_int < len(input_frame.data):
+                    data = input_frame.data[to_copy_int:].tobytes()
+                    input_frames.append(
+                        rtc.AudioFrame(
+                            data=data,
+                            sample_rate=pub_sample_rate,
+                            num_channels=1,
+                            samples_per_channel=len(data) // 2,
+                        )
+                    )
+
+                if self._model.window_size_samples < len(inference_frame.data):
+                    data = inference_frame.data[
+                        self._model.window_size_samples :
+                    ].tobytes()
+                    inference_frames.append(
+                        rtc.AudioFrame(
+                            data=data,
+                            sample_rate=pub_sample_rate,
+                            num_channels=1,
+                            samples_per_channel=len(data) // 2,
+                        )
+                    )

@@ -35,7 +35,7 @@ from .models import (
     OctoChatModels,
     PerplexityChatModels,
     TogetherChatModels,
-    TelnyxChatModels
+    TelnyxChatModels,
 )
 from .utils import AsyncAzureADTokenProvider, build_oai_message
 
