@@ -34,8 +34,8 @@ from .models import (
     GroqChatModels,
     OctoChatModels,
     PerplexityChatModels,
+    TelnyxChatModels,
     TogetherChatModels,
-    TelnyxChatModels
 )
 from .utils import AsyncAzureADTokenProvider, build_oai_message
 
