@@ -19,14 +19,14 @@ from .plotter import AssistantPlotter
 from .speech_handle import SpeechHandle
 
 BeforeLLMCallback = Callable[
-    ["VoiceAssistant", ChatContext],
+    ["VoicePipelineAgent", ChatContext],
     Union[Optional[LLMStream], Awaitable[Optional[LLMStream]], Literal[False]],
 ]
 
 WillSynthesizeAssistantReply = BeforeLLMCallback
 
 BeforeTTSCallback = Callable[
-    ["VoiceAssistant", Union[str, AsyncIterable[str]]],
+    ["VoicePipelineAgent", Union[str, AsyncIterable[str]]],
     Union[str, AsyncIterable[str], Awaitable[str]],
 ]
 
@@ -43,23 +43,23 @@ EventTypes = Literal[
     "function_calls_finished",
 ]
 
-_CallContextVar = contextvars.ContextVar["AssistantCallContext"](
+_CallContextVar = contextvars.ContextVar["AgentCallContext"](
     "voice_assistant_contextvar"
 )
 
 
-class AssistantCallContext:
-    def __init__(self, assistant: "VoiceAssistant", llm_stream: LLMStream) -> None:
+class AgentCallContext:
+    def __init__(self, assistant: "VoicePipelineAgent", llm_stream: LLMStream) -> None:
         self._assistant = assistant
         self._metadata = dict[str, Any]()
         self._llm_stream = llm_stream
 
     @staticmethod
-    def get_current() -> "AssistantCallContext":
+    def get_current() -> "AgentCallContext":
         return _CallContextVar.get()
 
     @property
-    def assistant(self) -> "VoiceAssistant":
+    def agent(self) -> "VoicePipelineAgent":
         return self._assistant
 
     def store_metadata(self, key: str, value: Any) -> None:
@@ -73,16 +73,16 @@ class AssistantCallContext:
 
 
 def _default_before_llm_cb(
-    assistant: VoiceAssistant, chat_ctx: ChatContext
+    agent: VoicePipelineAgent, chat_ctx: ChatContext
 ) -> LLMStream:
-    return assistant.llm.chat(
+    return agent.llm.chat(
         chat_ctx=chat_ctx,
-        fnc_ctx=assistant.fnc_ctx,
+        fnc_ctx=agent.fnc_ctx,
     )
 
 
 def _default_before_tts_cb(
-    assistant: VoiceAssistant, text: str | AsyncIterable[str]
+    agent: VoicePipelineAgent, text: str | AsyncIterable[str]
 ) -> str | AsyncIterable[str]:
     return text
 
@@ -97,11 +97,11 @@ class _ImplOptions:
     before_llm_cb: BeforeLLMCallback
     before_tts_cb: BeforeTTSCallback
     plotting: bool
-    transcription: AssistantTranscriptionOptions
+    transcription: AgentTranscriptionOptions
 
 
 @dataclass(frozen=True)
-class AssistantTranscriptionOptions:
+class AgentTranscriptionOptions:
     user_transcription: bool = True
     """Whether to forward the user transcription to the client"""
     agent_transcription: bool = True
@@ -122,7 +122,7 @@ class AssistantTranscriptionOptions:
     representing the hyphenated parts of the word."""
 
 
-class VoiceAssistant(utils.EventEmitter[EventTypes]):
+class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     MIN_TIME_PLAYED_FOR_COMMIT = 1.5
     """Minimum time played for the user speech to be committed to the chat context"""
 
@@ -140,7 +140,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         interrupt_min_words: int = 0,
         min_endpointing_delay: float = 0.5,
         preemptive_synthesis: bool = True,
-        transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
+        transcription: AgentTranscriptionOptions = AgentTranscriptionOptions(),
         before_llm_cb: BeforeLLMCallback = _default_before_llm_cb,
         before_tts_cb: BeforeTTSCallback = _default_before_tts_cb,
         plotting: bool = False,
@@ -149,7 +149,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply | None = None,
     ) -> None:
         """
-        Create a new VoiceAssistant.
+        Create a new VoicePipelineAgent.
 
         Args:
             vad: Voice Activity Detection (VAD) instance.
@@ -660,7 +660,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             ), "user speech should have been committed before using tools"
 
             # execute functions
-            call_ctx = AssistantCallContext(self, speech_handle.source)
+            call_ctx = AgentCallContext(self, speech_handle.source)
             tk = _CallContextVar.set(call_ctx)
             self.emit("function_calls_collected", speech_handle.source.function_calls)
             called_fncs_info = speech_handle.source.function_calls

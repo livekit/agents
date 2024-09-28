@@ -20,7 +20,7 @@ EventTypes = Literal[
 
 
 @dataclass(frozen=True)
-class AssistantTranscriptionOptions:
+class AgentTranscriptionOptions:
     user_transcription: bool = True
     """Whether to forward the user transcription to the client"""
     agent_transcription: bool = True
@@ -46,10 +46,10 @@ class S2SModel(Protocol): ...
 
 @dataclass(frozen=True)
 class _ImplOptions:
-    transcription: AssistantTranscriptionOptions
+    transcription: AgentTranscriptionOptions
 
 
-class OmniAssistant(utils.EventEmitter[EventTypes]):
+class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
@@ -57,7 +57,7 @@ class OmniAssistant(utils.EventEmitter[EventTypes]):
         vad: vad.VAD | None = None,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
-        transcription: AssistantTranscriptionOptions = AssistantTranscriptionOptions(),
+        transcription: AgentTranscriptionOptions = AgentTranscriptionOptions(),
         loop: asyncio.AbstractEventLoop | None = None,
     ):
         super().__init__()
