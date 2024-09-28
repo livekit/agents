@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import ctypes
+from typing import List, Union
 
 from livekit import rtc
 
 from ..log import logger
-from typing import List, Union
 
 AudioBuffer = Union[List[rtc.AudioFrame], rtc.AudioFrame]
 
@@ -84,12 +84,12 @@ def combine_frames(buffer: AudioBuffer) -> rtc.AudioFrame:
     data = bytearray(total_data_length)
     offset = 0
     for frame in buffer:
-        frame_data = frame.data
+        frame_data = frame.data.cast("b")
         data[offset : offset + len(frame_data)] = frame_data
         offset += len(frame_data)
 
     return rtc.AudioFrame(
-        data=bytes(data),
+        data=data,
         sample_rate=sample_rate,
         num_channels=num_channels,
         samples_per_channel=total_samples_per_channel,

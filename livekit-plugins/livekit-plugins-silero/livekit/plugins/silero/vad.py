@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations
+from __future__ import annotations, print_function
 
 import asyncio
-import time
 import math
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Literal
@@ -195,7 +195,7 @@ class VADStream(agents.vad.VADStream):
             if not isinstance(input_frame, rtc.AudioFrame):
                 continue  # ignore flush sentinel for now
 
-            if not pub_sample_rate or not speech_buffer:
+            if not pub_sample_rate or speech_buffer is None:
                 pub_sample_rate = input_frame.sample_rate
 
                 # alloc the buffers now that we know the input sample rate
@@ -365,13 +365,14 @@ class VADStream(agents.vad.VADStream):
                                 agents.vad.VADEvent(
                                     type=agents.vad.VADEventType.START_OF_SPEECH,
                                     samples_index=pub_current_sample,
-                                    pub_timestamp=pub_timestamp,
+                                    timestamp=pub_timestamp,
                                     silence_duration=pub_silence_duration,
                                     speech_duration=pub_speech_duration,
                                     frames=[_copy_speech_buffer()],
                                     speaking=True,
                                 )
                             )
+
                 else:
                     silence_threshold_duration += window_duration
                     speech_threshold_duration = 0.0
@@ -392,7 +393,7 @@ class VADStream(agents.vad.VADStream):
                             agents.vad.VADEvent(
                                 type=agents.vad.VADEventType.END_OF_SPEECH,
                                 samples_index=pub_current_sample,
-                                pub_timestamp=pub_timestamp,
+                                timestamp=pub_timestamp,
                                 silence_duration=pub_silence_duration,
                                 speech_duration=pub_speech_duration,
                                 frames=[_copy_speech_buffer()],
@@ -407,7 +408,7 @@ class VADStream(agents.vad.VADStream):
                 inference_frames = []
 
                 # add the remaining data
-                if to_copy_int < len(input_frame.data):
+                if len(input_frame.data) - to_copy_int > 0:
                     data = input_frame.data[to_copy_int:].tobytes()
                     input_frames.append(
                         rtc.AudioFrame(
@@ -418,14 +419,14 @@ class VADStream(agents.vad.VADStream):
                         )
                     )
 
-                if self._model.window_size_samples < len(inference_frame.data):
+                if len(inference_frame.data) - self._model.window_size_samples > 0:
                     data = inference_frame.data[
                         self._model.window_size_samples :
                     ].tobytes()
                     inference_frames.append(
                         rtc.AudioFrame(
                             data=data,
-                            sample_rate=pub_sample_rate,
+                            sample_rate=self._opts.sample_rate,
                             num_channels=1,
                             samples_per_channel=len(data) // 2,
                         )

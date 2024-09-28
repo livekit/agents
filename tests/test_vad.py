@@ -21,6 +21,9 @@ async def test_chunks_vad() -> None:
 
     start_of_speech_i = 0
     end_of_speech_i = 0
+
+    inference_frames = []
+
     async for ev in stream:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             with open(
@@ -29,6 +32,9 @@ async def test_chunks_vad() -> None:
                 f.write(utils.make_wav_file(ev.frames))
 
             start_of_speech_i += 1
+
+        if ev.type == vad.VADEventType.INFERENCE_DONE:
+            inference_frames.extend(ev.frames)
 
         if ev.type == vad.VADEventType.END_OF_SPEECH:
             with open(
@@ -40,6 +46,9 @@ async def test_chunks_vad() -> None:
 
     assert start_of_speech_i > 0, "no start of speech detected"
     assert start_of_speech_i == end_of_speech_i, "start and end of speech mismatch"
+
+    with open("test_vad.inference_frames.wav", "wb") as f:
+        f.write(utils.make_wav_file(inference_frames))
 
 
 async def test_file_vad():
