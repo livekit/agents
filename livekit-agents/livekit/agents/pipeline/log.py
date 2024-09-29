@@ -1,3 +1,3 @@
 import logging
 
-logger = logging.getLogger("livekit.agents.voice_assistant")
+logger = logging.getLogger("livekit.agents.pipeline")

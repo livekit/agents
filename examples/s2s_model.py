@@ -13,7 +13,7 @@ from livekit.agents import (
     WorkerType,
     cli,
     llm,
-    omni_assistant,
+    multimodal
 )
 from livekit.plugins.openai import realtime
 
@@ -57,7 +57,7 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     model = realtime.RealtimeModel()
-    assistant = omni_assistant.OmniAssistant(
+    assistant = multimodal.MultimodalAgent(
         model=model,
         chat_ctx=initial_ctx,
         fnc_ctx=fnc_ctx,
