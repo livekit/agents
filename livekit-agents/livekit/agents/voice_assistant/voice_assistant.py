@@ -456,6 +456,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             self._agent_video_publication = await self._room.local_participant.publish_track(
                 track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
             )
+            await self._agent_video_publication.wait_for_subscription()
         else:
             video_source = None
 
