@@ -116,6 +116,7 @@ class TTS(tts.TTS):
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
+                alignment=True,
             ),
             sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
@@ -193,6 +194,7 @@ class ChunkedStream(tts.ChunkedStream):
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
             json=data,
         ) as resp:
+            # TODO: fix this to return alignment too. don't forget to merge_frames
             if not resp.content_type.startswith("audio/"):
                 content = await resp.text()
                 logger.error("11labs returned non-audio data: %s", content)
@@ -399,16 +401,28 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         encoding = _encoding_from_format(self._opts.encoding)
         if data.get("audio"):
+            alignment = data.get("normalizedAlignment") and tts.SynthesizedAlignment(
+                chars=data["normalizedAlignment"]["chars"],
+                start_times=data["normalizedAlignment"]["charStartTimesMs"],
+                durations=data["normalizedAlignment"]["charDurationsMs"],
+            )
             b64data = base64.b64decode(data["audio"])
             if encoding == "mp3":
+                first_frame = True
                 for frame in self._mp3_decoder.decode_chunk(b64data):
                     self._event_ch.send_nowait(
                         tts.SynthesizedAudio(
                             request_id=request_id,
                             segment_id=segment_id,
                             frame=frame,
+                            alignment=alignment,
                         )
                     )
+                    # alignment is sent for the whole big b64data chunk,
+                    # and here we send it only with the first event
+                    if first_frame:
+                        first_frame = False
+                        alignment = tts.SynthesizedAlignment(chars=[], start_times=[], durations=[])
             else:
                 chunk_frame = rtc.AudioFrame(
                     data=b64data,
@@ -421,6 +435,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         request_id=request_id,
                         segment_id=segment_id,
                         frame=chunk_frame,
+                        alignment=alignment,
                     )
                 )
         elif data.get("error"):
@@ -454,6 +469,7 @@ def _synthesize_url(opts: _TTSOptions) -> str:
     output_format = opts.encoding
     latency = opts.streaming_latency
     return (
+        # f"{base_url}/text-to-speech/{voice_id}/stream/with-timestamps?"  # TODO: fix this to return alignment too
         f"{base_url}/text-to-speech/{voice_id}/stream?"
         f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}"
     )

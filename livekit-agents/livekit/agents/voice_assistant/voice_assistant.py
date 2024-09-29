@@ -8,9 +8,10 @@ from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, U
 
 from livekit import rtc
 
-from .. import stt, tokenize, tts, utils, vad
+from .. import stt, stv, tokenize, tts, utils, vad
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
 from ..proto import ATTR_AGENT_STATE, AgentState
+from ..transcription import AssistantTranscriptionOptions
 from .agent_output import AgentOutput, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
@@ -100,28 +101,6 @@ class _ImplOptions:
     transcription: AssistantTranscriptionOptions
 
 
-@dataclass(frozen=True)
-class AssistantTranscriptionOptions:
-    user_transcription: bool = True
-    """Whether to forward the user transcription to the client"""
-    agent_transcription: bool = True
-    """Whether to forward the agent transcription to the client"""
-    agent_transcription_speed: float = 1.0
-    """The speed at which the agent's speech transcription is forwarded to the client.
-    We try to mimic the agent's speech speed by adjusting the transcription speed."""
-    sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
-    """The tokenizer used to split the speech into sentences.
-    This is used to decide when to mark a transcript as final for the agent transcription."""
-    word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
-        ignore_punctuation=False
-    )
-    """The tokenizer used to split the speech into words.
-    This is used to simulate the "interim results" of the agent transcription."""
-    hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
-    """A function that takes a string (word) as input and returns a list of strings,
-    representing the hyphenated parts of the word."""
-
-
 class VoiceAssistant(utils.EventEmitter[EventTypes]):
     MIN_TIME_PLAYED_FOR_COMMIT = 1.5
     """Minimum time played for the user speech to be committed to the chat context"""
@@ -133,6 +112,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         stt: stt.STT,
         llm: LLM,
         tts: tts.TTS,
+        stv: stv.STV | None = None,
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
@@ -156,6 +136,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
             stt: Speech-to-Text (STT) instance.
             llm: Large Language Model (LLM) instance.
             tts: Text-to-Speech (TTS) instance.
+            stv: Speech-to-Video (STV) instance.
             chat_ctx: Chat context for the assistant.
             fnc_ctx: Function context for the assistant.
             allow_interruptions: Whether to allow the user to interrupt the assistant.
@@ -218,7 +199,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 vad=vad,
             )
 
-        self._stt, self._vad, self._llm, self._tts = stt, vad, llm, tts
+        self._stt, self._stv, self._vad, self._llm, self._tts = stt, stv, vad, llm, tts
         self._chat_ctx = chat_ctx or ChatContext()
         self._fnc_ctx = fnc_ctx
         self._started, self._closed = False, False
@@ -271,6 +252,10 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
     @property
     def stt(self) -> stt.STT:
         return self._stt
+
+    @property
+    def stv(self) -> stv.STV:
+        return self._stv
 
     @property
     def vad(self) -> vad.VAD:
@@ -461,16 +446,32 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         self._update_state("initializing")
         audio_source = rtc.AudioSource(self._tts.sample_rate, self._tts.num_channels)
         track = rtc.LocalAudioTrack.create_audio_track("assistant_voice", audio_source)
-        self._agent_publication = await self._room.local_participant.publish_track(
+        self._agent_audio_publication = await self._room.local_participant.publish_track(
             track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         )
 
-        agent_playout = AgentPlayout(audio_source=audio_source)
+        if self._stv:
+            video_source = rtc.VideoSource(self._stv.width, self._stv.height)
+            track = rtc.LocalVideoTrack.create_video_track("assistant_video", video_source)
+            self._agent_video_publication = await self._room.local_participant.publish_track(
+                track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+            )
+            await self._agent_video_publication.wait_for_subscription()
+        else:
+            video_source = None
+
+        agent_playout = AgentPlayout(
+            audio_source=audio_source,
+            video_source=video_source,
+            stv=self._stv,
+        )
         self._agent_output = AgentOutput(
             room=self._room,
             agent_playout=agent_playout,
             llm=self._llm,
             tts=self._tts,
+            stv=self._stv,
+            transcription=self._opts.transcription,
         )
 
         def _on_playout_started() -> None:
@@ -585,7 +586,9 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         except asyncio.CancelledError:
             return
 
-        await self._agent_publication.wait_for_subscription()
+        await self._agent_audio_publication.wait_for_subscription()
+        if self._stv:
+            await self._agent_video_publication.wait_for_subscription()
 
         synthesis_handle = speech_handle.synthesis_handle
         if synthesis_handle.interrupted:
@@ -615,7 +618,7 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
                 speech_handle.allow_interruptions
                 and not is_using_tools
                 and (
-                    play_handle.time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
+                    play_handle.audio_time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
                     and not join_fut.done()
                 )
             ):
@@ -761,24 +764,13 @@ class VoiceAssistant(utils.EventEmitter[EventTypes]):
         if isinstance(source, LLMStream):
             source = _llm_stream_to_str_iterable(speech_id, source)
 
-        og_source = source
-        transcript_source = source
-        if isinstance(og_source, AsyncIterable):
-            og_source, transcript_source = utils.aio.itertools.tee(og_source, 2)
-
-        tts_source = self._opts.before_tts_cb(self, og_source)
+        tts_source = self._opts.before_tts_cb(self, source)
         if tts_source is None:
             logger.error("before_tts_cb must return str or AsyncIterable[str]")
 
         return self._agent_output.synthesize(
             speech_id=speech_id,
             tts_source=tts_source,
-            transcript_source=transcript_source,
-            transcription=self._opts.transcription.agent_transcription,
-            transcription_speed=self._opts.transcription.agent_transcription_speed,
-            sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
-            word_tokenizer=self._opts.transcription.word_tokenizer,
-            hyphenate_word=self._opts.transcription.hyphenate_word,
         )
 
     def _validate_reply_if_possible(self) -> None:
