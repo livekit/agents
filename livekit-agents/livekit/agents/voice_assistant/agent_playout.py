@@ -202,7 +202,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             nonlocal first_audio_frame, start_time
 
             async for frame in handle._audio_playout_source:
-                logger.debug(f"audio frame: {len(frame.data)}")
                 if first_audio_frame:
 
                     handle._tr_fwd.segment_playout_started()

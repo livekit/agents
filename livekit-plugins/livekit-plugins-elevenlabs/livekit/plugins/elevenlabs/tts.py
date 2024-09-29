@@ -408,15 +408,21 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
             b64data = base64.b64decode(data["audio"])
             if encoding == "mp3":
-                chunk_frame = utils.merge_frames(self._mp3_decoder.decode_chunk(b64data))
-                self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(
-                        request_id=request_id,
-                        segment_id=segment_id,
-                        frame=chunk_frame,
-                        alignment=alignment,
+                first_frame = True
+                for frame in self._mp3_decoder.decode_chunk(b64data):
+                    self._event_ch.send_nowait(
+                        tts.SynthesizedAudio(
+                            request_id=request_id,
+                            segment_id=segment_id,
+                            frame=frame,
+                            alignment=alignment,
+                        )
                     )
-                )
+                    # alignment is sent for the whole big b64data chunk,
+                    # and here we send it only with the first event
+                    if first_frame:
+                        first_frame = False
+                        alignment = tts.SynthesizedAlignment(chars=[], start_times=[], durations=[])
             else:
                 chunk_frame = rtc.AudioFrame(
                     data=b64data,

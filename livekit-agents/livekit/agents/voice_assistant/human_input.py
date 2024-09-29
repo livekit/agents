@@ -133,6 +133,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
                 elif ev.type == voice_activity_detection.VADEventType.END_OF_SPEECH:
                     self._speaking = False
                     self.emit("end_of_speech", ev)
+                    logger.debug("VAD detected end of speech")
 
         async def _stt_stream_co() -> None:
             async for ev in stt_stream:
