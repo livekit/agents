@@ -2,4 +2,4 @@
 "livekit-plugins-openai": patch
 ---
 
-Fixing Assistant API Vision Capabilities
+Add Telnyx integration for LLM

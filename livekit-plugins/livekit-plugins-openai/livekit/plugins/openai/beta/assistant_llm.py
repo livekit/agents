@@ -27,6 +27,7 @@ from livekit.agents import llm, utils
 from openai import AsyncAssistantEventHandler, AsyncClient
 from openai.types.beta.threads import Text, TextDelta
 from openai.types.beta.threads.run_create_params import AdditionalMessage
+from openai.types.beta.threads.run_submit_tool_outputs_params import ToolOutput
 from openai.types.beta.threads.runs import (
     CodeInterpreterToolCall,
     FileSearchToolCall,
@@ -104,7 +105,7 @@ class AssistantLLM(llm.LLM):
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
-                timeout=5.0,
+                timeout=httpx.Timeout(timeout=30, connect=10, read=5, pool=5),
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,
@@ -116,6 +117,8 @@ class AssistantLLM(llm.LLM):
         self._assistant_opts = assistant_opts
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
         self._on_file_uploaded = on_file_uploaded
+        self._tool_call_run_id_lookup = dict[str, str]()
+        self._submitted_tool_calls = set[str]()
 
         self._sync_openai_task: asyncio.Task[AssistantLoadOptions] | None = None
         try:
@@ -186,17 +189,46 @@ class AssistantLLM(llm.LLM):
             on_file_uploaded=self._on_file_uploaded,
         )
 
+    async def _register_tool_call(self, tool_call_id: str, run_id: str) -> None:
+        self._tool_call_run_id_lookup[tool_call_id] = run_id
+
+    async def _submit_tool_call_result(self, tool_call_id: str, result: str) -> None:
+        if tool_call_id in self._submitted_tool_calls:
+            return
+        logger.debug(f"submitting tool call {tool_call_id} result")
+        run_id = self._tool_call_run_id_lookup.get(tool_call_id)
+        if not run_id:
+            logger.error(f"tool call {tool_call_id} not found")
+            return
+
+        if not self._sync_openai_task:
+            logger.error("sync_openai_task not set")
+            return
+
+        thread_id = (await self._sync_openai_task).thread_id
+        if not thread_id:
+            logger.error("thread_id not set")
+            return
+        tool_output = ToolOutput(output=result, tool_call_id=tool_call_id)
+        await self._client.beta.threads.runs.submit_tool_outputs_and_poll(
+            tool_outputs=[tool_output], run_id=run_id, thread_id=thread_id
+        )
+        self._submitted_tool_calls.add(tool_call_id)
+        logger.debug(f"submitted tool call {tool_call_id} result")
+
 
 class AssistantLLMStream(llm.LLMStream):
     class EventHandler(AsyncAssistantEventHandler):
         def __init__(
             self,
+            llm: AssistantLLM,
             llm_stream: AssistantLLMStream,
             output_queue: asyncio.Queue[llm.ChatChunk | Exception | None],
             chat_ctx: llm.ChatContext,
             fnc_ctx: llm.FunctionContext | None = None,
         ):
             super().__init__()
+            self._llm = llm
             self._llm_stream = llm_stream
             self._chat_ctx = chat_ctx
             self._output_queue = output_queue
@@ -214,7 +246,10 @@ class AssistantLLMStream(llm.LLMStream):
             )
 
         async def on_tool_call_created(self, tool_call: ToolCall):
-            print(f"\nassistant > {tool_call.type}\n", flush=True)
+            if not self.current_run:
+                logger.error("tool call created without run")
+                return
+            await self._llm._register_tool_call(tool_call.id, self.current_run.id)
 
         async def on_tool_call_done(
             self,
@@ -296,6 +331,21 @@ class AssistantLLMStream(llm.LLMStream):
             await asyncio.gather(*self._llm._done_futures)
             self._llm._done_futures.clear()
             self._llm._done_futures.append(self._done_future)
+
+            # OpenAI required submitting tool call outputs manually. We iterate
+            # tool outputs in the chat_ctx (from previous runs) and submit them
+            # before continuing.
+            for msg in self._chat_ctx.messages:
+                if msg.role == "tool":
+                    if not msg.tool_call_id:
+                        logger.error("tool message without tool_call_id")
+                        continue
+                    if not isinstance(msg.content, str):
+                        logger.error("tool message content is not str")
+                        continue
+                    await self._llm._submit_tool_call_result(
+                        msg.tool_call_id, msg.content
+                    )
 
             # At the chat_ctx level, create a map of thread_id to message_ids
             # This is used to keep track of which messages have been added to the thread
@@ -383,7 +433,7 @@ class AssistantLLMStream(llm.LLMStream):
                 lk_msg_id_dict = msg._metadata[LIVEKIT_MESSAGE_ID_KEY]
 
                 if load_options.thread_id not in oai_msg_id_dict:
-                    converted_msg = build_oai_message(msg, id(self._llm))
+                    converted_msg = build_oai_message(msg)
                     converted_msg["private_message_id"] = msg_id
                     additional_messages.append(
                         AdditionalMessage(
@@ -395,6 +445,7 @@ class AssistantLLMStream(llm.LLMStream):
                     lk_msg_id_dict[load_options.thread_id] = msg_id
 
             eh = AssistantLLMStream.EventHandler(
+                llm=self._llm,
                 output_queue=self._output_queue,
                 chat_ctx=self._chat_ctx,
                 fnc_ctx=self._fnc_ctx,
@@ -420,7 +471,7 @@ class AssistantLLMStream(llm.LLMStream):
             await self._output_queue.put(None)
 
             # Populate the openai_message_id for the messages we added to OpenAI. Note, we do this after
-            # sending None to close the iterator so that we it is done in parellel with any users of
+            # sending None to close the iterator so that it is done in parellel with any users of
             # the stream. However, the next stream will not start until this is done.
             lk_to_oai_lookup = dict[str, str]()
             messages = await self._client.beta.threads.messages.list(
@@ -434,19 +485,21 @@ class AssistantLLMStream(llm.LLMStream):
                     )
 
             for msg in self._chat_ctx.messages:
+                if msg.role != "user":
+                    continue
                 oai_msg_id_dict = msg._metadata.get(OPENAI_MESSAGE_ID_KEY)
                 lk_msg_id_dict = msg._metadata.get(LIVEKIT_MESSAGE_ID_KEY)
-                if not oai_msg_id_dict or not lk_msg_id_dict:
+                if oai_msg_id_dict is None or lk_msg_id_dict is None:
                     continue
 
                 lk_msg_id = lk_msg_id_dict.get(load_options.thread_id)
                 if lk_msg_id and lk_msg_id in lk_to_oai_lookup:
-                    oai_msg_id_dict[load_options.thread_id] = lk_to_oai_lookup[
-                        lk_msg_id
-                    ]
-                    openai_addded_messages_set.add(lk_to_oai_lookup[lk_msg_id])
+                    oai_msg_id = lk_to_oai_lookup[lk_msg_id]
+                    oai_msg_id_dict[load_options.thread_id] = oai_msg_id
+                    openai_addded_messages_set.add(oai_msg_id)
                     # We don't need the LiveKit message id anymore
                     lk_msg_id_dict.pop(load_options.thread_id)
+
         except Exception as e:
             await self._output_queue.put(e)
         finally:
@@ -487,7 +540,7 @@ class AssistantLLMStream(llm.LLMStream):
         return item
 
 
-def build_oai_message(msg: llm.ChatMessage, cache_key: Any):
+def build_oai_message(msg: llm.ChatMessage):
     oai_msg: dict[str, Any] = {"role": msg.role}
 
     if msg.name:

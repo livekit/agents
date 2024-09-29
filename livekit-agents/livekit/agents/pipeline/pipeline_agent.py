@@ -641,6 +641,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             _commit_user_question_if_needed()
 
+            if speech_handle.interrupted:
+                break
+
         _commit_user_question_if_needed()
 
         collected_text = speech_handle.synthesis_handle.tts_forwarder.played_text

@@ -37,6 +37,11 @@ AssistantTools = Literal["code_interpreter", "file_search", "function"]
 
 # adapters for OpenAI-compatible LLMs
 
+TelnyxChatModels = Literal[
+    "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "meta-llama/Meta-Llama-3.1-70B-Instruct",
+]
+
 CerebrasChatModels = Literal[
     "llama3.1-8b",
     "llama3.1-70b",
