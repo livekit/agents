@@ -477,7 +477,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         output_audio_format: api_proto.AudioFormat | None = None,
         input_audio_transcription: api_proto.InputAudioTranscription | None = None,
         turn_detection: api_proto.TurnDetectionType | None = None,
-        tool_choice: api_proto.ToolChoice | None = None,
+        tool_choice: api_proto.ToolChoice = "auto",
         temparature: float | None = None,
         max_output_tokens: int | None = None,
     ) -> None:
