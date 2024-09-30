@@ -140,6 +140,7 @@ class STT(stt.STT):
             "detect_language": config.detect_language,
             "smart_format": config.smart_format,
             "keywords": self._opts.keywords,
+            "profanity_filter": config.profanity_filter,
         }
         if config.language:
             recognize_config["language"] = config.language
