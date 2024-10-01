@@ -55,7 +55,7 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    model = realtime.RealtimeModel()
+    model = realtime.RealtimeModel(instructions="You are a helpful assistant")
     assistant = multimodal.MultimodalAgent(
         model=model,
         chat_ctx=initial_ctx,
