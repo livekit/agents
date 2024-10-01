@@ -14,7 +14,6 @@ from livekit.agents import (
     llm,
     multimodal,
 )
-from livekit.plugins.openai import realtime
 from livekit.plugins import openai
 
 load_dotenv()
@@ -25,11 +24,6 @@ logger.setLevel(logging.INFO)
 
 async def entrypoint(ctx: JobContext):
     logger.info("starting entrypoint")
-
-    initial_ctx = llm.ChatContext().append(
-        role="system",
-        text=("You are a helpful assistant who will perform tasks as requested"),
-    )
 
     fnc_ctx = llm.FunctionContext()
 

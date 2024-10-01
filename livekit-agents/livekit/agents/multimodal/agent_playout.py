@@ -125,6 +125,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 samples_per_channel=samples_per_channel,
             )
 
+            logger.debug("starting playout")
             async for frame in audio_stream:
                 if first_frame:
                     handle._tr_fwd.segment_playout_started()
@@ -144,6 +145,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             handle._tr_fwd.mark_audio_segment_end()
 
             await self._source.wait_for_playout()
+            logger.debug("playout done", extra={"duration": handle._pushed_duration})
 
         read_text_task = asyncio.create_task(_play_text_stream())
         capture_task = asyncio.create_task(_capture_task())
@@ -155,6 +157,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             )
         finally:
             await utils.aio.gracefully_cancel(capture_task)
+            print("playout task cancelled")
 
             handle._total_played_time = (
                 handle._pushed_duration - self._source.queued_duration
