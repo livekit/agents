@@ -10,6 +10,8 @@ from .realtime_model import (
     RealtimeToolCall,
     ServerVadOptions,
     InputTranscriptionOptions,
+    DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+    DEFAULT_SERVER_VAD_OPTIONS,
 )
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     "ServerVadOptions",
     "InputTranscriptionOptions",
     "api_proto",
+    "DEFAULT_INPUT_AUDIO_TRANSCRIPTION",
+    "DEFAULT_SERVER_VAD_OPTIONS",
 ]
