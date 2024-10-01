@@ -395,7 +395,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         )
 
         def _on_start_of_speech(ev: vad.VADEvent) -> None:
-            print("User started speaking")
             self._plotter.plot_event("user_started_speaking")
             self.emit("user_started_speaking")
             self._deferred_validation.on_human_start_of_speech(ev)
@@ -422,7 +421,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 self._interrupt_if_possible()
 
         def _on_end_of_speech(ev: vad.VADEvent) -> None:
-            print("User stopped speaking")
             self._plotter.plot_event("user_stopped_speaking")
             self.emit("user_stopped_speaking")
             self._deferred_validation.on_human_end_of_speech(ev)
