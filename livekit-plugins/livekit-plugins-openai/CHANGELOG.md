@@ -1,5 +1,15 @@
 # livekit-plugins-openai
 
+## 0.10.0
+
+### Minor Changes
+
+- OpenAI Realtime API support - [#814](https://github.com/livekit/agents/pull/814) ([@theomonnom](https://github.com/theomonnom))
+
+### Patch Changes
+
+- Add Telnyx integration for LLM - [#803](https://github.com/livekit/agents/pull/803) ([@jamestwhedbee](https://github.com/jamestwhedbee))
+
 ## 0.8.5
 
 ### Patch Changes

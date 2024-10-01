@@ -1,5 +1,17 @@
 # livekit-agents
 
+## 0.10.0
+
+### Minor Changes
+
+- OpenAI Realtime API support - [#814](https://github.com/livekit/agents/pull/814) ([@theomonnom](https://github.com/theomonnom))
+
+### Patch Changes
+
+- bump livekit to v0.17.2 - [#815](https://github.com/livekit/agents/pull/815) ([@theomonnom](https://github.com/theomonnom))
+
+- silero: support any sample rate - [#805](https://github.com/livekit/agents/pull/805) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.9.1
 
 ### Patch Changes
