@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterable
+from typing import AsyncIterable, Literal
 
 from livekit import rtc
 from livekit.agents import transcription, utils
 
 from ..log import logger
+
+EventTypes = Literal["playout_started", "playout_stopped"]
 
 
 class PlayoutHandle:
@@ -65,7 +67,7 @@ class PlayoutHandle:
         self._interrupted = True
 
 
-class AgentPlayout:
+class AgentPlayout(utils.EventEmitter[EventTypes]):
     def __init__(self, *, audio_source: rtc.AudioSource) -> None:
         self._source = audio_source
         self._playout_atask: asyncio.Task[None] | None = None
@@ -125,6 +127,7 @@ class AgentPlayout:
             async for frame in audio_stream:
                 if first_frame:
                     handle._tr_fwd.segment_playout_started()
+                    self.emit("playout_started")
                     first_frame = False
 
                 handle._tr_fwd.push_audio(frame)
@@ -161,8 +164,11 @@ class AgentPlayout:
 
             await utils.aio.gracefully_cancel(read_text_task)
 
-            if not first_frame and not handle.interrupted:
-                handle._tr_fwd.segment_playout_finished()
+            if not first_frame:
+                if not handle.interrupted:
+                    handle._tr_fwd.segment_playout_finished()
+
+                self.emit("playout_stopped", handle.interrupted)
 
             handle._done_fut.set_result(None)
             await handle._tr_fwd.aclose()

@@ -8,6 +8,8 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 
+from .._constants import ATTRIBUTE_AGENT_STATE
+from .._types import AgentState
 from ..log import logger
 from . import agent_playout
 
@@ -86,6 +88,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         self._linked_participant: rtc.RemoteParticipant | None = None
         self._started, self._closed = False, False
+
+        self._update_state_task: asyncio.Task | None = None
 
     @property
     def vad(self) -> vad.VAD | None:
@@ -170,10 +174,11 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         @self._session.on("input_speech_started")
         def _input_speech_started():
+            self._update_state("listening")
             if self._playing_handle is not None and not self._playing_handle.done():
                 self._playing_handle.interrupt()
 
-                self._session.default_conversation.item.truncate(
+                self._session.conversation.item.truncate(
                     item_id=self._playing_handle.item_id,
                     content_index=self._playing_handle.content_index,
                     audio_end_ms=int(self._playing_handle.audio_samples / 24000 * 1000),
@@ -181,12 +186,41 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
                 self._playing_handle = None
 
+    def _update_state(self, state: AgentState, delay: float = 0.0):
+        """Set the current state of the agent"""
+
+        @utils.log_exceptions(logger=logger)
+        async def _run_task(delay: float) -> None:
+            await asyncio.sleep(delay)
+
+            if self._room.isconnected():
+                await self._room.local_participant.set_attributes(
+                    {ATTRIBUTE_AGENT_STATE: state}
+                )
+
+        if self._update_state_task is not None:
+            self._update_state_task.cancel()
+
+        self._update_state_task = asyncio.create_task(_run_task(delay))
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        self._update_state("initializing")
         self._audio_source = rtc.AudioSource(24000, 1)
         self._agent_playout = agent_playout.AgentPlayout(
             audio_source=self._audio_source
         )
+
+        def _on_playout_started() -> None:
+            self.emit("agent_started_speaking")
+            self._update_state("speaking")
+
+        def _on_playout_stopped(interrupted: bool) -> None:
+            self.emit("agent_stopped_speaking")
+            self._update_state("listening")
+
+        self._agent_playout.on("playout_started", _on_playout_started)
+        self._agent_playout.on("playout_stopped", _on_playout_stopped)
 
         track = rtc.LocalAudioTrack.create_audio_track(
             "assistant_voice", self._audio_source

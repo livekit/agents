@@ -745,10 +745,11 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     ):
         response = response_created["response"]
         done_fut = self._loop.create_future()
+        status_details = response.get("status_details")
         new_response = RealtimeResponse(
             id=response["id"],
             status=response["status"],
-            status_details=response.get("status_details"),
+            status_details=status_details,
             output=[],
             done_fut=done_fut,
         )
