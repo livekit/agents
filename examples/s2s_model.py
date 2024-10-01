@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import asyncio
 from typing import Annotated
 
 import aiohttp
@@ -13,7 +12,7 @@ from livekit.agents import (
     WorkerType,
     cli,
     llm,
-    multimodal
+    multimodal,
 )
 from livekit.plugins.openai import realtime
 

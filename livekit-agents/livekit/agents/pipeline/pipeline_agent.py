@@ -9,8 +9,9 @@ from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, U
 from livekit import rtc
 
 from .. import stt, tokenize, tts, utils, vad
+from .._constants import ATTRIBUTE_AGENT_STATE
+from .._types import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
-from ..proto import ATTR_AGENT_STATE, AgentState
 from .agent_output import AgentOutput, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
@@ -357,7 +358,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             if self._room.isconnected():
                 await self._room.local_participant.set_attributes(
-                    {ATTR_AGENT_STATE: state}
+                    {ATTRIBUTE_AGENT_STATE: state}
                 )
 
         if self._update_state_task is not None:

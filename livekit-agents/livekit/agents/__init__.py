@@ -15,19 +15,21 @@
 from . import (
     ipc,
     llm,
+    multimodal,
+    pipeline,
     stt,
     tokenize,
     transcription,
     tts,
     utils,
     vad,
-    pipeline,
-    multimodal,
     voice_assistant,
 )
+from ._constants import ATTRIBUTE_AGENT_STATE
+from ._exceptions import AssignmentTimeoutError
+from ._types import AgentState
 from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequest
 from .plugin import Plugin
-from .proto import ATTR_AGENT_STATE, AgentState
 from .version import __version__
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
 
@@ -43,7 +45,6 @@ __all__ = [
     "JobExecutorType",
     "AutoSubscribe",
     "AgentState",
-    "ATTR_AGENT_STATE",
     "Plugin",
     "ipc",
     "stt",
@@ -56,4 +57,7 @@ __all__ = [
     "pipeline",
     "multimodal",
     "voice_assistant",
+    "AssignmentTimeoutError",
+    "ATTRIBUTE_AGENT_STATE",
+    "AgentState",
 ]

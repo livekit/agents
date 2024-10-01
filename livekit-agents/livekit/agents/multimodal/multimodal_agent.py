@@ -61,7 +61,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         loop: asyncio.AbstractEventLoop | None = None,
     ):
         super().__init__()
-
         self._loop = loop or asyncio.get_event_loop()
 
         from livekit.plugins.openai import realtime
@@ -172,7 +171,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         @self._session.on("input_speech_started")
         def _input_speech_started():
             if self._playing_handle is not None and not self._playing_handle.done():
-                print("interrupting")
                 self._playing_handle.interrupt()
 
                 self._session.default_conversation.item.truncate(

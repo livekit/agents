@@ -2,20 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import functools
 import os
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal, Protocol, Union
-from typing_extensions import TypedDict
+from typing import AsyncIterable, Literal
+from urllib.parse import urlencode, urljoin
 
 import aiohttp
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm import _oai_api
+from typing_extensions import TypedDict
 
 from . import api_proto
 from .log import logger
-
 
 EventTypes = Literal[
     "start_session",
@@ -115,15 +114,29 @@ class RealtimeContent:
 
 
 @dataclass
+class ServerVadOptions:
+    threshold: float
+    prefix_padding_ms: int
+    silence_duration_ms: int
+
+
+@dataclass
+class InputTranscriptionOptions:
+    model: api_proto.InputTranscriptionModel | str
+
+
+@dataclass
 class _ModelOptions:
+    model: str
     modalities: list[api_proto.Modality]
-    instructions: str | None
+    instructions: str
     voice: api_proto.Voice
     input_audio_format: api_proto.AudioFormat
     output_audio_format: api_proto.AudioFormat
-    input_audio_transcription: api_proto.InputAudioTranscription | None
-    turn_detection: api_proto.TurnDetectionType
-    temparature: float
+    input_audio_transcription: InputTranscriptionOptions
+    turn_detection: ServerVadOptions
+    tool_choice: api_proto.ToolChoice
+    temperature: float
     max_output_tokens: int
     api_key: str
     base_url: str
@@ -135,20 +148,28 @@ class _ContentPtr(TypedDict):
     content_index: int
 
 
+DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
+    threshold=0.5,
+    prefix_padding_ms=300,
+    silence_duration_ms=500,
+)
+DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
+
+
 class RealtimeModel:
     def __init__(
         self,
         *,
+        instructions: str = "",
         modalities: list[api_proto.Modality] = ["text", "audio"],
-        instructions: str | None = None,
+        model: str = "gpt-4o-realtime-preview-2024-10-01",
         voice: api_proto.Voice = "alloy",
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
-        input_audio_transcription: api_proto.InputAudioTranscription = {
-            "model": "whisper-1"
-        },
-        turn_detection: api_proto.TurnDetectionType = {"type": "server_vad"},
-        temparature: float = 0.8,
+        input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        tool_choice: api_proto.ToolChoice = "auto",
+        temperature: float = 0.8,
         max_output_tokens: int = 2048,
         api_key: str | None = None,
         base_url: str | None = None,
@@ -168,6 +189,7 @@ class RealtimeModel:
             base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
         self._default_opts = _ModelOptions(
+            model=model,
             modalities=modalities,
             instructions=instructions,
             voice=voice,
@@ -175,7 +197,8 @@ class RealtimeModel:
             output_audio_format=output_audio_format,
             input_audio_transcription=input_audio_transcription,
             turn_detection=turn_detection,
-            temparature=temparature,
+            temperature=temperature,
+            tool_choice=tool_choice,
             max_output_tokens=max_output_tokens,
             api_key=api_key,
             base_url=base_url,
@@ -205,12 +228,14 @@ class RealtimeModel:
         voice: api_proto.Voice | None = None,
         input_audio_format: api_proto.AudioFormat | None = None,
         output_audio_format: api_proto.AudioFormat | None = None,
-        input_audio_transcription: api_proto.InputAudioTranscription | None = None,
-        turn_detection: api_proto.TurnDetectionType | None = None,
-        temparature: float | None = None,
+        tool_choice: api_proto.ToolChoice | None = None,
+        input_audio_transcription: InputTranscriptionOptions | None = None,
+        turn_detection: ServerVadOptions | None = None,
+        temperature: float | None = None,
         max_output_tokens: int | None = None,
     ) -> RealtimeSession:
         opts = _ModelOptions(
+            model=self._default_opts.model,
             modalities=modalities or self._default_opts.modalities,
             instructions=instructions or self._default_opts.instructions,
             voice=voice or self._default_opts.voice,
@@ -222,8 +247,9 @@ class RealtimeModel:
                 input_audio_transcription
                 or self._default_opts.input_audio_transcription
             ),
+            tool_choice=tool_choice or self._default_opts.tool_choice,
             turn_detection=turn_detection or self._default_opts.turn_detection,
-            temparature=temparature or self._default_opts.temparature,
+            temperature=temperature or self._default_opts.temperature,
             max_output_tokens=max_output_tokens or self._default_opts.max_output_tokens,
             api_key=self._default_opts.api_key,
             base_url=self._default_opts.base_url,
@@ -456,7 +482,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._fnc_ctx = fnc_ctx
 
     @property
-    def default_conversation(self) -> Conversation:
+    def conversation(self) -> Conversation:
         return RealtimeSession.Conversation(self)
 
     @property
@@ -475,13 +501,14 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         voice: api_proto.Voice | None = None,
         input_audio_format: api_proto.AudioFormat | None = None,
         output_audio_format: api_proto.AudioFormat | None = None,
-        input_audio_transcription: api_proto.InputAudioTranscription | None = None,
-        turn_detection: api_proto.TurnDetectionType | None = None,
+        input_audio_transcription: InputTranscriptionOptions | None = None,
+        turn_detection: ServerVadOptions | None = None,
         tool_choice: api_proto.ToolChoice | None = None,
-        temparature: float | None = None,
+        temperature: float | None = None,
         max_output_tokens: int | None = None,
     ) -> None:
         self._opts = _ModelOptions(
+            model=self._opts.model,
             modalities=modalities or self._opts.modalities,
             instructions=instructions or self._opts.instructions,
             voice=voice or self._opts.voice,
@@ -490,8 +517,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             input_audio_transcription=(
                 input_audio_transcription or self._opts.input_audio_transcription
             ),
+            tool_choice=tool_choice or self._opts.tool_choice,
             turn_detection=turn_detection or self._opts.turn_detection,
-            temparature=temparature or self._opts.temparature,
+            temperature=temperature or self._opts.temperature,
             max_output_tokens=max_output_tokens or self._opts.max_output_tokens,
             api_key=self._opts.api_key,
             base_url=self._opts.base_url,
@@ -508,6 +536,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 function_data["type"] = "function"
                 tools.append(function_data)
 
+        server_vad_opts: api_proto.ServerVad = {
+            "type": "server_vad",
+            "threshold": self._opts.turn_detection.threshold,
+            "prefix_padding_ms": self._opts.turn_detection.prefix_padding_ms,
+            "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
+        }
+
         self._queue_msg(
             {
                 "type": "session.update",
@@ -517,11 +552,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     "voice": self._opts.voice,
                     "input_audio_format": self._opts.input_audio_format,
                     "output_audio_format": self._opts.output_audio_format,
-                    "input_audio_transcription": self._opts.input_audio_transcription,
-                    "turn_detection": self._opts.turn_detection,
+                    "input_audio_transcription": {
+                        "model": self._opts.input_audio_transcription.model,
+                    },
+                    "turn_detection": server_vad_opts,
                     "tools": tools,
-                    "tool_choice": tool_choice,
-                    "temperature": self._opts.temparature,
+                    "tool_choice": self._opts.tool_choice,
+                    "temperature": self._opts.temperature,
                     "max_response_output_tokens": self._opts.max_output_tokens,
                 },
             }
@@ -533,12 +570,16 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         try:
+            params = {"model": self._opts.model}
+            base_url = self._opts.base_url.rstrip("/")
+            url = urljoin(base_url + "/", "realtime") + f"?{urlencode(params)}"
             headers = {
                 "Authorization": "Bearer " + self._opts.api_key,
                 "OpenAI-Beta": "realtime=v1",
             }
+
             ws_conn = await self._http_session.ws_connect(
-                api_proto.API_URL,
+                url,
                 headers=headers,
             )
         except Exception:
@@ -870,7 +911,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
 
         if called_fnc.result is not None:
-            self.default_conversation.item.create(tool_call, item_id)
+            self.conversation.item.create(tool_call, item_id)
             self.response.create()
 
     def logging_extra(self) -> dict:

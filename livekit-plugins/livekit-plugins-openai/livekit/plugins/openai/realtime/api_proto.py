@@ -4,8 +4,6 @@ from typing import Literal, Union
 
 from typing_extensions import NotRequired, TypedDict
 
-API_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
-
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 
@@ -13,8 +11,13 @@ IN_FRAME_SIZE = 2400  # 100ms
 OUT_FRAME_SIZE = 1200  # 50ms
 
 
+class FunctionToolChoice(TypedDict):
+    type: Literal["function"]
+    name: str
+
+
 Voice = Literal["alloy", "echo", "shimmer"]
-ToolChoice = Literal["auto", "none", "required"]
+ToolChoice = Union[Literal["auto", "none", "required"], FunctionToolChoice]
 Role = Literal["system", "assistant", "user", "tool"]
 GenerationFinishedReason = Literal["stop", "max_tokens", "content_filter", "interrupt"]
 AudioFormat = Literal["pcm16", "g711-ulaw", "g711-alaw"]
@@ -55,18 +58,14 @@ class ContentPart(TypedDict):
 
 
 class InputAudioTranscription(TypedDict):
-    # enabled: bool # on their docs but not in the actual API
-    model: InputTranscriptionModel
+    model: InputTranscriptionModel | str
 
 
 class ServerVad(TypedDict):
     type: Literal["server_vad"]
     threshold: NotRequired[float]
-    prefix_padding_ms: NotRequired[float]
-    silence_duration_ms: NotRequired[float]
-
-
-TurnDetectionType = Union[ServerVad, Literal["none"]]
+    prefix_padding_ms: NotRequired[int]
+    silence_duration_ms: NotRequired[int]
 
 
 class FunctionTool(TypedDict):
@@ -142,18 +141,19 @@ class Resource:
     class Session(TypedDict):
         id: str
         object: Literal["realtime.session"]
+        expires_at: int
         model: str
         modalities: list[Literal["text", "audio"]]
-        instructions: NotRequired[str | None]
+        instructions: str
         voice: Voice
         input_audio_format: AudioFormat
         output_audio_format: AudioFormat
-        input_audio_transcription: NotRequired[InputAudioTranscription | None]
-        turn_detection: TurnDetectionType
-        tools: NotRequired[list[FunctionTool]]
-        tool_choice: NotRequired[ToolChoice]
-        temperature: NotRequired[float]
-        max_response_output_tokens: NotRequired[int]
+        input_audio_transcription: InputAudioTranscription | None
+        turn_detection: ServerVad | None
+        tools: list[FunctionTool]
+        tool_choice: ToolChoice
+        temperature: float
+        max_response_output_tokens: int | Literal["inf"]
 
     class Conversation(TypedDict):
         id: str
@@ -170,23 +170,23 @@ class Resource:
 
 
 class ClientEvent:
-    class GenerationData(TypedDict, total=False):
+    class SessionUpdateData(TypedDict):
         modalities: list[Literal["text", "audio"]]
-        instructions: str | None
+        instructions: str
         voice: Voice
         input_audio_format: AudioFormat
         output_audio_format: AudioFormat
         input_audio_transcription: InputAudioTranscription | None
-        turn_detection: TurnDetectionType
+        turn_detection: ServerVad | None
         tools: list[FunctionTool]
-        tool_choice: ToolChoice | None
+        tool_choice: ToolChoice
         temperature: float
-        max_response_output_tokens: int | None
+        max_response_output_tokens: int | Literal["inf"]
 
     class SessionUpdate(TypedDict):
         event_id: NotRequired[str]
         type: Literal["session.update"]
-        session: ClientEvent.GenerationData
+        session: ClientEvent.SessionUpdateData
 
     class InputAudioBufferAppend(TypedDict):
         event_id: NotRequired[str]
@@ -246,10 +246,20 @@ class ClientEvent:
         type: Literal["conversation.item.delete"]
         item_id: str
 
+    class ResponseCreateData(TypedDict, total=False):
+        modalities: list[Literal["text", "audio"]]
+        instructions: str
+        voice: Voice
+        output_audio_format: AudioFormat
+        tools: list[FunctionTool]
+        tool_choice: ToolChoice
+        temperature: float
+        max_output_tokens: int | Literal["inf"]
+
     class ResponseCreate(TypedDict):
         event_id: NotRequired[str]
         type: Literal["response.create"]
-        response: NotRequired[ClientEvent.GenerationData]
+        response: NotRequired[ClientEvent.ResponseCreateData]
 
     class ResponseCancel(TypedDict):
         event_id: NotRequired[str]

@@ -3,11 +3,11 @@ from .realtime_model import (
     InputTranscriptionCompleted,
     InputTranscriptionFailed,
     RealtimeContent,
+    RealtimeModel,
     RealtimeOutput,
     RealtimeResponse,
-    RealtimeToolCall,
-    RealtimeModel,
     RealtimeSession,
+    RealtimeToolCall,
 )
 
 __all__ = [
