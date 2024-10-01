@@ -1,5 +1,11 @@
 # livekit-plugins-silero
 
+## 0.7.1
+
+### Patch Changes
+
+- Fix CI x LFS issue for silero plugin - [#818](https://github.com/livekit/agents/pull/818) ([@keepingitneil](https://github.com/keepingitneil))
+
 ## 0.7.0
 
 ### Minor Changes
