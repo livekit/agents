@@ -139,7 +139,7 @@ class _ModelOptions:
     turn_detection: ServerVadOptions
     tool_choice: api_proto.ToolChoice
     temperature: float
-    max_output_tokens: int | Literal["inf"]
+    max_response_output_tokens: int | Literal["inf"]
     api_key: str
     base_url: str
 
@@ -172,7 +172,7 @@ class RealtimeModel:
         turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
-        max_output_tokens: int | Literal["inf"] = "inf",
+        max_response_output_tokens: int | Literal["inf"] = "inf",
         api_key: str | None = None,
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -201,7 +201,7 @@ class RealtimeModel:
             turn_detection=turn_detection,
             temperature=temperature,
             tool_choice=tool_choice,
-            max_output_tokens=max_output_tokens,
+            max_response_output_tokens=max_response_output_tokens,
             api_key=api_key,
             base_url=base_url,
         )
@@ -234,7 +234,7 @@ class RealtimeModel:
         input_audio_transcription: InputTranscriptionOptions | None = None,
         turn_detection: ServerVadOptions | None = None,
         temperature: float | None = None,
-        max_output_tokens: int | Literal["inf"] | None = None,
+        max_response_output_tokens: int | Literal["inf"] | None = None,
     ) -> RealtimeSession:
         opts = _ModelOptions(
             model=self._default_opts.model,
@@ -252,7 +252,8 @@ class RealtimeModel:
             tool_choice=tool_choice or self._default_opts.tool_choice,
             turn_detection=turn_detection or self._default_opts.turn_detection,
             temperature=temperature or self._default_opts.temperature,
-            max_output_tokens=max_output_tokens or self._default_opts.max_output_tokens,
+            max_response_output_tokens=max_response_output_tokens
+            or self._default_opts.max_response_output_tokens,
             api_key=self._default_opts.api_key,
             base_url=self._default_opts.base_url,
         )
@@ -507,7 +508,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         turn_detection: ServerVadOptions | None = None,
         tool_choice: api_proto.ToolChoice | None = None,
         temperature: float | None = None,
-        max_output_tokens: int | Literal["inf"] | None = None,
+        max_response_output_tokens: int | Literal["inf"] | None = None,
     ) -> None:
         self._opts = _ModelOptions(
             model=self._opts.model,
@@ -522,7 +523,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             tool_choice=tool_choice or self._opts.tool_choice,
             turn_detection=turn_detection or self._opts.turn_detection,
             temperature=temperature or self._opts.temperature,
-            max_output_tokens=max_output_tokens or self._opts.max_output_tokens,
+            max_response_output_tokens=max_response_output_tokens
+            or self._opts.max_response_output_tokens,
             api_key=self._opts.api_key,
             base_url=self._opts.base_url,
         )
@@ -561,7 +563,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     "tools": tools,
                     "tool_choice": self._opts.tool_choice,
                     "temperature": self._opts.temperature,
-                    "max_response_output_tokens": self._opts.max_output_tokens,
+                    "max_response_output_tokens": self._opts.max_response_output_tokens,
                 },
             }
         )
