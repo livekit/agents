@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import dataclasses
 import io
-import os
 import wave
 from dataclasses import dataclass
 
@@ -66,11 +65,6 @@ class STT(stt.STT):
             detect_language=detect_language,
             model=model,
         )
-
-        # throw an error on our end
-        api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if api_key is None:
-            raise ValueError("OpenAI API key is required")
 
         self._client = client or openai.AsyncClient(
             api_key=api_key,

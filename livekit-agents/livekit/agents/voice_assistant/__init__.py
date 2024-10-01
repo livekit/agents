@@ -1,11 +1,11 @@
-from .voice_assistant import (
-    AssistantCallContext,
-    AssistantTranscriptionOptions,
-    VoiceAssistant,
-)
+from ..pipeline import AgentCallContext, AgentTranscriptionOptions, VoicePipelineAgent
+
+AssistantTranscriptionOptions = AgentTranscriptionOptions
+AssistantCallContext = AgentCallContext
+VoiceAssistant = VoicePipelineAgent
 
 __all__ = [
-    "VoiceAssistant",
-    "AssistantCallContext",
     "AssistantTranscriptionOptions",
+    "AssistantCallContext",
+    "VoiceAssistant",
 ]

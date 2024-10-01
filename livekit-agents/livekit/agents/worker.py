@@ -35,7 +35,7 @@ from livekit import api
 from livekit.protocol import agent, models
 
 from . import http_server, ipc, utils
-from .exceptions import AssignmentTimeoutError
+from ._exceptions import AssignmentTimeoutError
 from .job import (
     JobAcceptArguments,
     JobContext,
