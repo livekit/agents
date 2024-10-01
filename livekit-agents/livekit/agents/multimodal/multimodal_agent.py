@@ -216,7 +216,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             self._update_state("speaking")
 
         def _on_playout_stopped(interrupted: bool) -> None:
-            print("Playout stopped")
             self.emit("agent_stopped_speaking")
             self._update_state("listening")
 

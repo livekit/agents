@@ -38,7 +38,6 @@ async def entrypoint(ctx: JobContext):
         url = f"https://wttr.in/{location}?format=%C+%t"
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
-                print(response)
                 if response.status == 200:
                     weather_data = await response.text()
                     # response from the function call is returned to the LLM
