@@ -139,7 +139,7 @@ class _ModelOptions:
     turn_detection: ServerVadOptions
     tool_choice: api_proto.ToolChoice
     temperature: float
-    max_output_tokens: int
+    max_output_tokens: int | Literal["inf"]
     api_key: str
     base_url: str
 
@@ -172,7 +172,7 @@ class RealtimeModel:
         turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
-        max_output_tokens: int = 2048,
+        max_output_tokens: int | Literal["inf"] = "inf",
         api_key: str | None = None,
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -234,7 +234,7 @@ class RealtimeModel:
         input_audio_transcription: InputTranscriptionOptions | None = None,
         turn_detection: ServerVadOptions | None = None,
         temperature: float | None = None,
-        max_output_tokens: int | None = None,
+        max_output_tokens: int | Literal["inf"] | None = None,
     ) -> RealtimeSession:
         opts = _ModelOptions(
             model=self._default_opts.model,
@@ -507,7 +507,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         turn_detection: ServerVadOptions | None = None,
         tool_choice: api_proto.ToolChoice | None = None,
         temperature: float | None = None,
-        max_output_tokens: int | None = None,
+        max_output_tokens: int | Literal["inf"] | None = None,
     ) -> None:
         self._opts = _ModelOptions(
             model=self._opts.model,
