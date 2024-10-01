@@ -900,6 +900,30 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         response.status = response_data["status"]
         response.status_details = response_data.get("status_details")
+
+        if response.status == "failed":
+            assert response.status_details is not None
+
+            error = response.status_details.get("error")
+            code: str | None = None
+            message: str | None = None
+            if error is not None:
+                code = error.get("code")
+                message = error.get("message")
+
+            logger.error(
+                "response generation failed",
+                extra={"code": code, "error": message, **self.logging_extra()},
+            )
+        elif response.status == "incomplete":
+            assert response.status_details is not None
+            reason = response.status_details.get("reason")
+
+            logger.warning(
+                "response generation incomplete",
+                extra={"reason": reason, **self.logging_extra()},
+            )
+
         self.emit("response_done", response)
 
     def _get_content(self, ptr: _ContentPtr) -> RealtimeContent:
