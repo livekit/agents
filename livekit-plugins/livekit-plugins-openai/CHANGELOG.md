@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.10.1
+
+### Patch Changes
+
+- oai-realtime: log response errors - [#819](https://github.com/livekit/agents/pull/819) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.10.0
 
 ### Minor Changes
