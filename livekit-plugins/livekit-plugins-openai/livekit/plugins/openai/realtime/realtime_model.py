@@ -207,8 +207,8 @@ class RealtimeModel:
         )
 
         self._loop = loop or asyncio.get_event_loop()
+        self._rt_sessions: list[RealtimeSession] = []
         self._http_session = http_session
-        self._rt_sessions = []
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._http_session:
@@ -300,6 +300,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self, message: llm.ChatMessage, previous_item_id: str | None = None
         ) -> None:
             message_content = message.content
+            if message_content is None:
+                return
+
             if not isinstance(message_content, list):
                 message_content = [message.content]
 
@@ -377,14 +380,14 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
             tool_call_id = message.tool_call_id
             if tool_call_id:
-                assert isinstance(message.content, str)
+                assert isinstance(message_content, str)
                 event = {
                     "type": "conversation.item.create",
                     "previous_item_id": previous_item_id,
                     "item": {
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": message.content,
+                        "output": message_content,
                     },
                 }
 
