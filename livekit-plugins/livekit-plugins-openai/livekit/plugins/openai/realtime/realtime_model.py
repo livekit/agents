@@ -55,6 +55,8 @@ class RealtimeResponse:
     """id of the message"""
     status: api_proto.ResponseStatus
     """status of the response"""
+    status_details: api_proto.ResponseStatusDetails | None
+    """details of the status (only with "incomplete, cancelled and failed")"""
     output: list[RealtimeOutput]
     """list of outputs"""
     done_fut: asyncio.Future[None]
@@ -746,6 +748,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         new_response = RealtimeResponse(
             id=response["id"],
             status=response["status"],
+            status_details=response.get("status_details"),
             output=[],
             done_fut=done_fut,
         )

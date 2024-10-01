@@ -116,9 +116,14 @@ class FunctionCallOutputItem(TypedDict):
     output: str
 
 
+class CancelledStatusDetails(TypedDict):
+    type: Literal["cancelled"]
+    reason: Literal["turn_detected", "client_cancelled"]
+
+
 class IncompleteStatusDetails(TypedDict):
     type: Literal["incomplete"]
-    reason: Literal["interrupted", "max_output_tokens", "content_filter"]
+    reason: Literal["max_output_tokens", "content_filter"]
 
 
 class Error(TypedDict):
@@ -129,6 +134,11 @@ class Error(TypedDict):
 class FailedStatusDetails(TypedDict):
     type: Literal["failed"]
     error: NotRequired[Error | None]
+
+
+ResponseStatusDetails = Union[
+    CancelledStatusDetails, IncompleteStatusDetails, FailedStatusDetails
+]
 
 
 class Usage(TypedDict):
@@ -165,6 +175,7 @@ class Resource:
         id: str
         object: Literal["realtime.response"]
         status: ResponseStatus
+        status_details: NotRequired[ResponseStatusDetails | None]
         output: list[Resource.Item]
         usage: NotRequired[Usage | None]
 
