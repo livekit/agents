@@ -126,10 +126,10 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 self._link_participant(participant.identity)
                 break
 
-        self._main_atask = asyncio.create_task(self._main_task())
         self._session = self._model.session(
             chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx
         )
+        self._main_atask = asyncio.create_task(self._main_task())
 
         from livekit.plugins.openai import realtime
 

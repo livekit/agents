@@ -892,6 +892,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         response_id = response_data["id"]
         response = self._pending_responses[response_id]
         response.done_fut.set_result(None)
+
+        response.status = response_data["status"]
+        response.status_details = response_data.get("status_details")
         self.emit("response_done", response)
 
     def _get_content(self, ptr: _ContentPtr) -> RealtimeContent:

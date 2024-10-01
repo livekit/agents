@@ -15,6 +15,7 @@ from livekit.agents import (
     multimodal,
 )
 from livekit.plugins.openai import realtime
+from livekit.plugins import openai
 
 load_dotenv()
 
@@ -55,11 +56,15 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    model = realtime.RealtimeModel(instructions="You are a helpful assistant")
     assistant = multimodal.MultimodalAgent(
-        model=model,
-        chat_ctx=initial_ctx,
-        fnc_ctx=fnc_ctx,
+        model=openai.realtime.RealtimeModel(
+            voice="alloy",
+            temperature=0.8,
+            instructions="You are a helpful assistant",
+            turn_detection=openai.realtime.ServerVadOptions(
+                threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
+            ),
+        )
     )
     assistant.start(ctx.room)
 

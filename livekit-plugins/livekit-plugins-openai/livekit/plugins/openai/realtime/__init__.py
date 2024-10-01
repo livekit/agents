@@ -8,6 +8,8 @@ from .realtime_model import (
     RealtimeResponse,
     RealtimeSession,
     RealtimeToolCall,
+    ServerVadOptions,
+    InputTranscriptionOptions,
 )
 
 __all__ = [
@@ -19,7 +21,7 @@ __all__ = [
     "RealtimeToolCall",
     "RealtimeSession",
     "RealtimeModel",
-    "PendingMessage",
-    "PendingToolCall",
+    "ServerVadOptions",
+    "InputTranscriptionOptions",
     "api_proto",
 ]
