@@ -4,8 +4,8 @@ import asyncio
 import contextlib
 import json
 import pathlib
-import socket
 import threading
+import socket
 import urllib.parse
 import urllib.request
 from importlib.metadata import Distribution, PackageNotFoundError
@@ -67,7 +67,6 @@ def worker_runner_wrapper(
     worker_runner: Callable[[proto.CliArgs], Any],
     init_cch: socket.socket,
 ) -> None:
-    first_run = True
     init_cch.send(b"1")
     while True:
         first_run = init_cch.recv(1)
