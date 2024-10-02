@@ -4,8 +4,8 @@ import asyncio
 import contextlib
 import json
 import pathlib
-import threading
 import socket
+import threading
 import urllib.parse
 import urllib.request
 from importlib.metadata import Distribution, PackageNotFoundError
@@ -61,7 +61,12 @@ def _find_watchable_paths(main_file: pathlib.Path) -> list[pathlib.Path]:
 
     return paths
 
-def worker_runner_wrapper(args: proto.CliArgs, worker_runner: Callable[[proto.CliArgs], Any], init_cch: socket.socket) -> None:
+
+def worker_runner_wrapper(
+    args: proto.CliArgs,
+    worker_runner: Callable[[proto.CliArgs], Any],
+    init_cch: socket.socket,
+) -> None:
     first_run = True
     init_cch.send(b"1")
     while True:
@@ -92,7 +97,6 @@ class WatchServer:
         self._count = 0
         self._init_ipc_thread_handle = threading.Thread(target=self._init_ipc_thread)
         self._init_ipc_thread_handle.start()
-
 
     async def run(self) -> None:
         watch_paths = _find_watchable_paths(self._main_file)
