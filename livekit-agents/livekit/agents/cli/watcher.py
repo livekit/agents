@@ -162,7 +162,6 @@ class WatchClient:
         self._loop = loop or asyncio.get_event_loop()
         self._worker = worker
         self._mp_cch = mp_cch
-        self.reloaded_count_future = asyncio.Future[int]()
 
     def start(self) -> None:
         self._main_task = self._loop.create_task(self._run())
