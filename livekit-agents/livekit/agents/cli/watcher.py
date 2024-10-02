@@ -70,8 +70,6 @@ def worker_runner_wrapper(args: proto.CliArgs, worker_runner: Callable[[proto.Cl
         if first_run == b"0":
             args.room = ""
         break
-    print("NEIL worker_runner_wrapper", os.environ.get("NEIL"))
-    os.environ["NEIL"] = "1"
     worker_runner(args)
 
 
