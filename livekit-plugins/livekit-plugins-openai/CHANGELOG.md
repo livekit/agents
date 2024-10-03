@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.10.2
+
+### Patch Changes
+
+- oai-realtime: fix function calls - [#826](https://github.com/livekit/agents/pull/826) ([@KillianLucas](https://github.com/KillianLucas))
+
 ## 0.10.1
 
 ### Patch Changes
