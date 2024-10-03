@@ -5,7 +5,7 @@ This example demonstrates an agent that only responds to the user queries if the
 The trigger phrase can be edited by changing this line:
 
 ```
-trigger_phrase = "Hi Bob!"
+TRIGGER_PHRASE = "Hi Bob!"
 ```
 
 The example uses Deepgram's STT, OpenAI's LLM, and ElevenLabs' TTS, but can be switched to other plugins as well.
