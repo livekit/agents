@@ -57,7 +57,7 @@ async def entrypoint(ctx: JobContext):
             turn_detection=openai.realtime.ServerVadOptions(
                 threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
             ),
-        )
+        ),
         fnc_ctx=fnc_ctx,
     )
     assistant.start(ctx.room)
