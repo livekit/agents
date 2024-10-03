@@ -234,7 +234,7 @@ async def test_optional_args(llm_factory: Callable[[], llm.LLM]):
     fnc_ctx = FncCtx()
 
     stream = await _request_fnc_call(
-        input_llm, "Can you update_user_info with name = Theo", fnc_ctx
+        input_llm, "Using a tool call update the user info to name Theo", fnc_ctx
     )
 
     calls = stream.execute_functions()
