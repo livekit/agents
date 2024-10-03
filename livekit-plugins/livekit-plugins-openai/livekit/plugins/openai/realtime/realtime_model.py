@@ -303,14 +303,14 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             if message_content is None:
                 return
 
-            if not isinstance(message_content, list):
-                message_content = [message.content]
-
             event: api_proto.ClientEvent.ConversationItemCreate | None = None
             if message.role == "user":
                 user_contents: list[
                     api_proto.InputTextContent | api_proto.InputAudioContent
                 ] = []
+                if not isinstance(message_content, list):
+                    message_content = [message.content]
+
                 for cnt in message_content:
                     if isinstance(cnt, str):
                         user_contents.append(
@@ -341,6 +341,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
             elif message.role == "assistant":
                 assistant_contents: list[api_proto.TextContent] = []
+                if not isinstance(message_content, list):
+                    message_content = [message.content]
+
                 for cnt in message_content:
                     if isinstance(cnt, str):
                         assistant_contents.append(
@@ -365,6 +368,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 }
             elif message.role == "system":
                 system_contents: list[api_proto.InputTextContent] = []
+                if not isinstance(message_content, list):
+                    message_content = [message.content]
+
                 for cnt in message_content:
                     if isinstance(cnt, str):
                         system_contents.append(
