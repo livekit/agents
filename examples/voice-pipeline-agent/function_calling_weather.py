@@ -11,7 +11,7 @@ from livekit.agents import (
     cli,
     llm,
 )
-from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
@@ -61,7 +61,7 @@ async def entrypoint(ctx: JobContext):
         role="system",
     )
     participant = await ctx.wait_for_participant()
-    assistant = VoiceAssistant(
+    agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
         llm=openai.LLM(),
@@ -70,8 +70,8 @@ async def entrypoint(ctx: JobContext):
         chat_ctx=initial_chat_ctx,
     )
     # Start the assistant. This will automatically publish a microphone track and listen to the participant.
-    assistant.start(ctx.room, participant)
-    await assistant.say(
+    agent.start(ctx.room, participant)
+    await agent.say(
         "Hello from the weather station. Would you like to know the weather? If so, tell me your location."
     )
 

@@ -5,7 +5,7 @@ from aiofile import async_open as open
 from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
-from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
@@ -22,24 +22,24 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    assistant = VoiceAssistant(
+    agent = VoicePipelineAgent(
         vad=silero.VAD.load(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
     )
-    assistant.start(ctx.room)
+    agent.start(ctx.room)
 
     # listen to incoming chat messages, only required if you'd like the agent to
     # answer incoming messages from Chat
     chat = rtc.ChatManager(ctx.room)
 
     async def answer_from_text(txt: str):
-        chat_ctx = assistant.chat_ctx.copy()
+        chat_ctx = agent.chat_ctx.copy()
         chat_ctx.append(role="user", text=txt)
-        stream = assistant.llm.chat(chat_ctx=chat_ctx)
-        await assistant.say(stream)
+        stream = agent.llm.chat(chat_ctx=chat_ctx)
+        await agent.say(stream)
 
     @chat.on("message_received")
     def on_chat_received(msg: rtc.ChatMessage):
@@ -48,7 +48,7 @@ async def entrypoint(ctx: JobContext):
 
     log_queue = asyncio.Queue()
 
-    @assistant.on("user_speech_committed")
+    @agent.on("user_speech_committed")
     def on_user_speech_committed(msg: llm.ChatMessage):
         # convert string lists to strings, drop images
         if isinstance(msg.content, list):
@@ -57,7 +57,7 @@ async def entrypoint(ctx: JobContext):
             )
         log_queue.put_nowait(f"[{datetime.now()}] USER:\n{msg.content}\n\n")
 
-    @assistant.on("agent_speech_committed")
+    @agent.on("agent_speech_committed")
     def on_agent_speech_committed(msg: llm.ChatMessage):
         log_queue.put_nowait(f"[{datetime.now()}] AGENT:\n{msg.content}\n\n")
 
@@ -77,7 +77,7 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(finish_queue)
 
-    await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
+    await agent.say("Hey, how can I help you today?", allow_interruptions=True)
 
 
 if __name__ == "__main__":
