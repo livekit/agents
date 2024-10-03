@@ -11,7 +11,7 @@ from livekit.agents import (
     cli,
     llm,
 )
-from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
@@ -43,7 +43,7 @@ async def entrypoint(ctx: JobContext):
         # use a model optimized for telephony
         dg_model = "nova-2-phonecall"
 
-    assistant = VoiceAssistant(
+    agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model=dg_model),
         llm=openai.LLM(),
@@ -51,24 +51,24 @@ async def entrypoint(ctx: JobContext):
         chat_ctx=initial_ctx,
     )
 
-    assistant.start(ctx.room, participant)
+    agent.start(ctx.room, participant)
 
     # listen to incoming chat messages, only required if you'd like the agent to
     # answer incoming messages from Chat
     chat = rtc.ChatManager(ctx.room)
 
     async def answer_from_text(txt: str):
-        chat_ctx = assistant.chat_ctx.copy()
+        chat_ctx = agent.chat_ctx.copy()
         chat_ctx.append(role="user", text=txt)
-        stream = assistant.llm.chat(chat_ctx=chat_ctx)
-        await assistant.say(stream)
+        stream = agent.llm.chat(chat_ctx=chat_ctx)
+        await agent.say(stream)
 
     @chat.on("message_received")
     def on_chat_received(msg: rtc.ChatMessage):
         if msg.message:
             asyncio.create_task(answer_from_text(msg.message))
 
-    await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
+    await agent.say("Hey, how can I help you today?", allow_interruptions=True)
 
 
 if __name__ == "__main__":

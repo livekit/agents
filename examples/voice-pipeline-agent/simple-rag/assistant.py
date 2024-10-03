@@ -1,7 +1,7 @@
 import pickle
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
-from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, rag, silero
 
 annoy_index = rag.annoy.AnnoyIndex.load("vdb_data")  # see build_data.py
@@ -12,7 +12,9 @@ with open("my_data.pkl", "rb") as f:
 
 
 async def entrypoint(ctx: JobContext):
-    async def _enrich_with_rag(assistant: VoiceAssistant, chat_ctx: llm.ChatContext):
+    async def _enrich_with_rag(
+        assistant: VoicePipelineAgent, chat_ctx: llm.ChatContext
+    ):
         # locate the last user message and use it to query the RAG model
         # to get the most relevant paragraph
         # then provide that as additional context to the LLM
@@ -40,7 +42,7 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    assistant = VoiceAssistant(
+    assistant = VoicePipelineAgent(
         chat_ctx=initial_ctx,
         vad=silero.VAD.load(),
         stt=deepgram.STT(),

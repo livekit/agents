@@ -4,7 +4,7 @@ from typing import AsyncIterable
 
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm, tokenize
-from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 load_dotenv()
@@ -21,7 +21,7 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    def _before_tts_cb(assistant: VoiceAssistant, text: str | AsyncIterable[str]):
+    def _before_tts_cb(agent: VoicePipelineAgent, text: str | AsyncIterable[str]):
         # The TTS is incorrectly pronouncing "LiveKit", so we'll replace it with a phonetic
         # spelling
         return tokenize.utils.replace_words(
@@ -32,7 +32,7 @@ async def entrypoint(ctx: JobContext):
     # recognized with the STT
     deepgram_stt = deepgram.STT(keywords=[("LiveKit", 3.5)])
 
-    assistant = VoiceAssistant(
+    agent = VoicePipelineAgent(
         vad=silero.VAD.load(),
         stt=deepgram_stt,
         llm=openai.LLM(),
@@ -40,9 +40,9 @@ async def entrypoint(ctx: JobContext):
         chat_ctx=initial_ctx,
         before_tts_cb=_before_tts_cb,
     )
-    assistant.start(ctx.room)
+    agent.start(ctx.room)
 
-    await assistant.say("Hey, LiveKit is awesome!", allow_interruptions=True)
+    await agent.say("Hey, LiveKit is awesome!", allow_interruptions=True)
 
 
 if __name__ == "__main__":
