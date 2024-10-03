@@ -303,81 +303,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             if message_content is None:
                 return
 
-            if not isinstance(message_content, list):
-                message_content = [message.content]
-
-            event: api_proto.ClientEvent.ConversationItemCreate | None = None
-            if message.role == "user":
-                user_contents: list[
-                    api_proto.InputTextContent | api_proto.InputAudioContent
-                ] = []
-                for cnt in message_content:
-                    if isinstance(cnt, str):
-                        user_contents.append(
-                            {
-                                "type": "input_text",
-                                "text": cnt,
-                            }
-                        )
-                    elif isinstance(cnt, llm.ChatAudio):
-                        user_contents.append(
-                            {
-                                "type": "input_audio",
-                                "audio": base64.b64encode(
-                                    utils.merge_frames(cnt.frame).data
-                                ).decode("utf-8"),
-                            }
-                        )
-
-                event = {
-                    "type": "conversation.item.create",
-                    "previous_item_id": previous_item_id,
-                    "item": {
-                        "type": "message",
-                        "role": "user",
-                        "content": user_contents,
-                    },
-                }
-
-            elif message.role == "assistant":
-                assistant_contents: list[api_proto.TextContent] = []
-                for cnt in message_content:
-                    if isinstance(cnt, str):
-                        assistant_contents.append(
-                            {
-                                "type": "text",
-                                "text": cnt,
-                            }
-                        )
-                    elif isinstance(cnt, llm.ChatAudio):
-                        logger.warning(
-                            "audio content in assistant message is not supported"
-                        )
-
-                event = {
-                    "type": "conversation.item.create",
-                    "previous_item_id": previous_item_id,
-                    "item": {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": assistant_contents,
-                    },
-                }
-            elif message.role == "system":
-                system_contents: list[api_proto.InputTextContent] = []
-                for cnt in message_content:
-                    if isinstance(cnt, str):
-                        system_contents.append(
-                            {
-                                "type": "input_text",
-                                "text": cnt,
-                            }
-                        )
-                    elif isinstance(cnt, llm.ChatAudio):
-                        logger.warning(
-                            "audio content in system message is not supported"
-                        )
-
             tool_call_id = message.tool_call_id
             if tool_call_id:
                 assert isinstance(message_content, str)
@@ -390,6 +315,81 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                         "output": message_content,
                     },
                 }
+            else:
+                if not isinstance(message_content, list):
+                    message_content = [message.content]
+
+                event: api_proto.ClientEvent.ConversationItemCreate | None = None
+                if message.role == "user":
+                    user_contents: list[
+                        api_proto.InputTextContent | api_proto.InputAudioContent
+                    ] = []
+                    for cnt in message_content:
+                        if isinstance(cnt, str):
+                            user_contents.append(
+                                {
+                                    "type": "input_text",
+                                    "text": cnt,
+                                }
+                            )
+                        elif isinstance(cnt, llm.ChatAudio):
+                            user_contents.append(
+                                {
+                                    "type": "input_audio",
+                                    "audio": base64.b64encode(
+                                        utils.merge_frames(cnt.frame).data
+                                    ).decode("utf-8"),
+                                }
+                            )
+
+                    event = {
+                        "type": "conversation.item.create",
+                        "previous_item_id": previous_item_id,
+                        "item": {
+                            "type": "message",
+                            "role": "user",
+                            "content": user_contents,
+                        },
+                    }
+
+                elif message.role == "assistant":
+                    assistant_contents: list[api_proto.TextContent] = []
+                    for cnt in message_content:
+                        if isinstance(cnt, str):
+                            assistant_contents.append(
+                                {
+                                    "type": "text",
+                                    "text": cnt,
+                                }
+                            )
+                        elif isinstance(cnt, llm.ChatAudio):
+                            logger.warning(
+                                "audio content in assistant message is not supported"
+                            )
+
+                    event = {
+                        "type": "conversation.item.create",
+                        "previous_item_id": previous_item_id,
+                        "item": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": assistant_contents,
+                        },
+                    }
+                elif message.role == "system":
+                    system_contents: list[api_proto.InputTextContent] = []
+                    for cnt in message_content:
+                        if isinstance(cnt, str):
+                            system_contents.append(
+                                {
+                                    "type": "input_text",
+                                    "text": cnt,
+                                }
+                            )
+                        elif isinstance(cnt, llm.ChatAudio):
+                            logger.warning(
+                                "audio content in system message is not supported"
+                            )
 
             if event is None:
                 logger.warning(
