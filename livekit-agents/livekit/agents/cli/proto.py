@@ -23,6 +23,9 @@ class CliArgs:
     room: str = ""
     participant_identity: str = ""
 
+    # amount of time this worker has been reloaded
+    reload_count: int = 0
+
     # pipe used for the communication between the watch server and the watch client
     # when reload/dev mode is enabled
     mp_cch: socket.socket | None = None

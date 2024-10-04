@@ -62,20 +62,6 @@ def _find_watchable_paths(main_file: pathlib.Path) -> list[pathlib.Path]:
     return paths
 
 
-def worker_runner_wrapper(
-    args: proto.CliArgs,
-    worker_runner: Callable[[proto.CliArgs], Any],
-    init_cch: socket.socket,
-) -> None:
-    init_cch.send(b"1")
-    while True:
-        first_run = init_cch.recv(1)
-        if first_run == b"0":
-            args.room = ""
-        break
-    worker_runner(args)
-
-
 class WatchServer:
     def __init__(
         self,
@@ -85,7 +71,6 @@ class WatchServer:
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._mp_pch, cli_args.mp_cch = socket.socketpair()
-        self._init_pch, self._init_cch = socket.socketpair()
         self._cli_args = cli_args
         self._worker_runner = worker_runner
         self._main_file = main_file
@@ -93,9 +78,6 @@ class WatchServer:
 
         self._recv_jobs_fut = asyncio.Future[None]()
         self._reloading_jobs = False
-        self._count = 0
-        self._init_ipc_thread_handle = threading.Thread(target=self._init_ipc_thread)
-        self._init_ipc_thread_handle.start()
 
     async def run(self) -> None:
         watch_paths = _find_watchable_paths(self._main_file)
@@ -103,24 +85,23 @@ class WatchServer:
             logger.log(DEV_LEVEL, f"Watching {pth}")
 
         self._pch = await utils.aio.duplex_unix._AsyncDuplex.open(self._mp_pch)
-
         read_ipc_task = self._loop.create_task(self._read_ipc_task())
 
         try:
             await watchfiles.arun_process(
                 *watch_paths,
-                target=worker_runner_wrapper,
-                args=(self._cli_args, self._worker_runner, self._init_cch),
+                target=self._worker_runner,
+                args=(self._cli_args,),
                 watch_filter=watchfiles.filters.PythonFilter(),
                 callback=self._on_reload,
             )
         finally:
-            self._init_cch.close()
             await utils.aio.gracefully_cancel(read_ipc_task)
             await self._pch.aclose()
 
     async def _on_reload(self, _: Set[watchfiles.main.FileChange]) -> None:
-        self._count += 1
+        self._cli_args.reload_count += 1
+
         if self._reloading_jobs:
             return
 
@@ -131,12 +112,6 @@ class WatchServer:
         with contextlib.suppress(asyncio.TimeoutError):
             # wait max 1.5s to get the active jobs
             await asyncio.wait_for(self._recv_jobs_fut, timeout=1.5)
-
-    def _init_ipc_thread(self) -> None:
-        while True:
-            self._init_pch.recv(1)
-            resp = b"1" if self._count == 0 else b"0"
-            self._init_pch.send(resp)
 
     @utils.log_exceptions(logger=logger)
     async def _read_ipc_task(self) -> None:
