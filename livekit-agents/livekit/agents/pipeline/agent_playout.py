@@ -147,7 +147,8 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 handle._pushed_duration += frame.samples_per_channel / frame.sample_rate
                 await self._audio_source.capture_frame(frame)
 
-            await self._audio_source.wait_for_playout()
+            if self._audio_source.queued_duration > 0:
+                await self._audio_source.wait_for_playout()
 
         capture_task = asyncio.create_task(_capture_task())
         try:
