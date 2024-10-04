@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import json
 import pathlib
-import threading
 import socket
 import urllib.parse
 import urllib.request
