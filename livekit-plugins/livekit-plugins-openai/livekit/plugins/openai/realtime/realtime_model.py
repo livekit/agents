@@ -429,10 +429,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 }
             else:
                 if not isinstance(message_content, list):
-                    if message.content:
-                        message_content = [message.content]
-                    else:
-                        message_content = []
+                    message_content = [message_content]
 
                 if message.role == "user":
                     user_contents: list[
@@ -667,7 +664,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
         }
 
-        session_data = {
+        session_data: api_proto.ClientEvent.SessionUpdateData = {
             "modalities": self._opts.modalities,
             "instructions": self._opts.instructions,
             "voice": self._opts.voice,
