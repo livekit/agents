@@ -80,7 +80,7 @@ Documentation on the framework and how to use it can be found [here](https://doc
 - Voice agent that performs a RAG-based lookup [[code](https://github.com/livekit/agents/tree/main/examples/voice-pipeline-agent/simple-rag)]
 - Video agent that publishes a stream of RGB frames [[code](https://github.com/livekit/agents/tree/main/examples/simple-color)]
 - Transcription agent that generates text captions from a user's speech [[code](https://github.com/livekit/agents/tree/main/examples/speech-to-text)]
-- A chat agent you can text who will respond back with genereated speech [[code](https://github.com/livekit/agents/tree/main/examples/text-to-speech)]
+- A chat agent you can text who will respond back with generated speech [[code](https://github.com/livekit/agents/tree/main/examples/text-to-speech)]
 - Localhost multi-agent conference call [[code](https://github.com/dsa/multi-agent-meeting)]
 - Moderation agent that uses Hive to detect spam/abusive video [[code](https://github.com/dsa/livekit-agents/tree/main/hive-moderation-agent)]
 
