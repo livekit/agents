@@ -112,6 +112,9 @@ class AudioByteStream:
         Use this method when you have no more data to push and want to ensure
         that all buffered audio data has been processed.
         """
+        if len(self._buf) == 0:
+            return []
+
         if len(self._buf) % (2 * self._num_channels) != 0:
             logger.warning("AudioByteStream: incomplete frame during flush, dropping")
             return []
