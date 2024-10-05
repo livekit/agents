@@ -144,7 +144,7 @@ class _ModelOptions:
     tool_choice: api_proto.ToolChoice
     temperature: float
     max_response_output_tokens: int | Literal["inf"]
-    api_key: str
+    api_key: str | None
     base_url: str
     provider: RealtimeAPIProvider
     query_params: dict[str, str]
@@ -415,6 +415,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 return
 
             tool_call_id = message.tool_call_id
+            event: api_proto.ClientEvent.ConversationItemCreate | None = None
             if tool_call_id:
                 assert isinstance(message_content, str)
                 event = {
@@ -428,9 +429,11 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 }
             else:
                 if not isinstance(message_content, list):
-                    message_content = [message.content]
+                    if message.content:
+                        message_content = [message.content]
+                    else:
+                        message_content = []
 
-                event: api_proto.ClientEvent.ConversationItemCreate | None = None
                 if message.role == "user":
                     user_contents: list[
                         api_proto.InputTextContent | api_proto.InputAudioContent
