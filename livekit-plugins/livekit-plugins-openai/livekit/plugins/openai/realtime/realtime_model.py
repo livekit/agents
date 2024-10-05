@@ -677,6 +677,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             "tools": tools,
             "tool_choice": self._opts.tool_choice,
             "temperature": self._opts.temperature,
+            "max_response_output_tokens": None,
         }
 
         # microsoft doesn't support inf for max_response_output_tokens
@@ -907,10 +908,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         done_fut = self._loop.create_future()
         item_data = response_output_added["item"]
 
-        item_type = item_data["type"]
-        # function_call doesn't have a role field, defaulting it to assistant
-        item_role = item_data.get("role") or "assistant"
+        item_type: Literal["message", "function_call"] = item_data["type"]
         assert item_type in ("message", "function_call")
+        # function_call doesn't have a role field, defaulting it to assistant
+        item_role: api_proto.Role = item_data.get("role") or "assistant"
 
         new_output = RealtimeOutput(
             response_id=response_id,
@@ -1046,9 +1047,11 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             error = response.status_details.get("error")
             code: str | None = None
             message: str | None = None
-            if isinstance(error, api_proto.Error):
-                code = error.get("code")
-                message = error.get("message")
+            if error is not None:
+                if isinstance(error.get("code"), str):
+                    code = error["code"]
+                if isinstance(error.get("message"), str):
+                    message = error["message"]
 
             logger.error(
                 "response generation failed",
