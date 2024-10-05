@@ -707,8 +707,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 # 2. API key set as `api_key` header (also accepts query string)
                 if self._opts.entra_token:
                     headers["Authorization"] = f"Bearer {self._opts.entra_token}"
-                else:
+                elif self._opts.api_key:
                     headers["api-key"] = self._opts.api_key
+                else:
+                    raise ValueError(
+                        "Either Entra token or API key is required for Microsoft API"
+                    )
             else:
                 headers["Authorization"] = f"Bearer {self._opts.api_key}"
                 headers["OpenAI-Beta"] = "realtime=v1"
