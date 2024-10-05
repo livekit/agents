@@ -908,10 +908,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         done_fut = self._loop.create_future()
         item_data = response_output_added["item"]
 
-        item_type: Literal["message", "function_call"] = item_data["type"]
+        item_type: Literal["message", "function_call"] = item_data["type"]  # type: ignore
         assert item_type in ("message", "function_call")
         # function_call doesn't have a role field, defaulting it to assistant
-        item_role: api_proto.Role = item_data.get("role") or "assistant"
+        item_role: api_proto.Role = item_data.get("role") or "assistant"  # type: ignore
 
         new_output = RealtimeOutput(
             response_id=response_id,
@@ -1048,10 +1048,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             code: str | None = None
             message: str | None = None
             if error is not None:
-                if isinstance(error.get("code"), str):
-                    code = error["code"]
-                if isinstance(error.get("message"), str):
-                    message = error["message"]
+                code = error.get("code")  # type: ignore
+                message = error.get("message")  # type: ignore
 
             logger.error(
                 "response generation failed",

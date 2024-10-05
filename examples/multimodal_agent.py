@@ -50,6 +50,22 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()
 
+    # to use Microsoft Azure, uncomment the following lines
+    # agent = multimodal.MultimodalAgent(
+    #     model=openai.realtime.RealtimeModel.with_azure(
+    #         base_url="wss://<endpoint>.openai.azure.com/",
+    #         api_key="<api-key>",
+    #         azure_deployment="<model-deployment>",
+    #         voice="alloy",
+    #         temperature=0.8,
+    #         instructions="You are a helpful assistant",
+    #         turn_detection=openai.realtime.ServerVadOptions(
+    #             threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
+    #         ),
+    #     ),
+    #     fnc_ctx=fnc_ctx,
+    # )
+
     agent = multimodal.MultimodalAgent(
         model=openai.realtime.RealtimeModel(
             voice="alloy",
