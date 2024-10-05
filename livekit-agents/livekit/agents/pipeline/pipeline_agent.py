@@ -800,7 +800,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 continue
 
             if not speech.allow_interruptions:
-                return  # we shouldn't validate this speech to avoid stacking replies
+                continue  # we shouldn't validate this speech to avoid stacking replies
 
             speech.interrupt()
 
