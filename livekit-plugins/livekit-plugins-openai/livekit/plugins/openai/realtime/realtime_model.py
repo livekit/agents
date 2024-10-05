@@ -907,16 +907,17 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         done_fut = self._loop.create_future()
         item_data = response_output_added["item"]
 
-        assert item_data["type"] in ("message", "function_call")
+        item_type = item_data["type"]
+        # function_call doesn't have a role field, defaulting it to assistant
+        item_role = item_data.get("role") or "assistant"
+        assert item_type in ("message", "function_call")
 
         new_output = RealtimeOutput(
             response_id=response_id,
             item_id=item_data["id"],
             output_index=response_output_added["output_index"],
-            type=item_data["type"],
-            role=item_data.get(
-                "role", "assistant"
-            ),  # function_call doesn't have a role field, defaulting it to assistant
+            type=item_type,
+            role=item_role,
             content=[],
             done_fut=done_fut,
         )
@@ -1045,7 +1046,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             error = response.status_details.get("error")
             code: str | None = None
             message: str | None = None
-            if error is not None:
+            if isinstance(error, api_proto.Error):
                 code = error.get("code")
                 message = error.get("message")
 
