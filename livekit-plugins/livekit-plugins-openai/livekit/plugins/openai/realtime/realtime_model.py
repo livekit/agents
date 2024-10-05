@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import AsyncIterable, Literal
 from urllib.parse import urlencode, urljoin
@@ -127,6 +128,9 @@ class InputTranscriptionOptions:
     model: api_proto.InputTranscriptionModel | str
 
 
+RealtimeAPIProvider = Literal["openai", "microsoft"]
+
+
 @dataclass
 class _ModelOptions:
     model: str
@@ -142,6 +146,9 @@ class _ModelOptions:
     max_response_output_tokens: int | Literal["inf"]
     api_key: str
     base_url: str
+    provider: RealtimeAPIProvider
+    query_params: dict[str, str]
+    entra_token: str | None = None
 
 
 class _ContentPtr(TypedDict):
@@ -159,6 +166,75 @@ DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
 class RealtimeModel:
+    @classmethod
+    def with_azure(
+        cls,
+        *,
+        base_url: str,
+        azure_deployment: str,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        entra_token: str | None = None,
+        instructions: str = "",
+        modalities: list[api_proto.Modality] = ["text", "audio"],
+        voice: api_proto.Voice = "alloy",
+        input_audio_format: api_proto.AudioFormat = "pcm16",
+        output_audio_format: api_proto.AudioFormat = "pcm16",
+        input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        tool_choice: api_proto.ToolChoice = "auto",
+        temperature: float = 0.8,
+        max_response_output_tokens: int | Literal["inf"] = "inf",
+        http_session: aiohttp.ClientSession | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ):
+        """
+        Create a RealtimeModel instance configured for Azure OpenAI.
+
+        Args:
+            base_url (str): The base URL for the Azure OpenAI endpoint. (e.g., "https://my-endpoint.openai.azure.com/")
+            azure_deployment (str): The name of the Azure deployment to use. (e.g., "gpt-4o-realtime-preview")
+            api_version (str, optional): The API version to use. Defaults to "2024-10-01-preview".
+            api_key (str, optional): The API key for Azure OpenAI.
+            entra_token (str, optional): The Entra token for authentication. entra_token could be used instead of api_key for authentication.
+            instructions (str, optional): Instructions for the model.
+            modalities (list[api_proto.Modality], optional): Modalities to use, e.g., ["text", "audio"]. Defaults to ["text", "audio"].
+            voice (api_proto.Voice, optional): The voice to use for audio output.
+            input_audio_format (api_proto.AudioFormat, optional): Format of input audio. Defaults to "pcm16".
+            output_audio_format (api_proto.AudioFormat, optional): Format of output audio. Defaults to "pcm16".
+            input_audio_transcription (InputTranscriptionOptions, optional): Options for input audio transcription.
+            turn_detection (ServerVadOptions, optional): Options for server-side voice activity detection.
+            tool_choice (api_proto.ToolChoice, optional): Tool choice strategy. Defaults to "auto".
+            temperature (float, optional): Sampling temperature for the model. Defaults to 0.8.
+            max_response_output_tokens (int or Literal["inf"], optional): Maximum tokens for the response output. Defaults to "inf".
+            http_session (aiohttp.ClientSession, optional): HTTP session to use for requests.
+            loop (asyncio.AbstractEventLoop, optional): Event loop to use.
+
+        Returns:
+            RealtimeModel: An instance of RealtimeModel configured for Azure OpenAI.
+        """
+        url = urljoin(base_url, "openai")
+        return cls(
+            instructions=instructions,
+            modalities=modalities,
+            model=azure_deployment,
+            voice=voice,
+            input_audio_format=input_audio_format,
+            output_audio_format=output_audio_format,
+            input_audio_transcription=input_audio_transcription,
+            turn_detection=turn_detection,
+            tool_choice=tool_choice,
+            temperature=temperature,
+            max_response_output_tokens=max_response_output_tokens,
+            api_key=api_key,
+            base_url=url,
+            http_session=http_session,
+            loop=loop,
+            provider="microsoft",
+            api_version=api_version,
+            entra_token=entra_token,
+        )
+
     def __init__(
         self,
         *,
@@ -177,18 +253,50 @@ class RealtimeModel:
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
+        provider: RealtimeAPIProvider = "openai",
+        api_version: str | None = None,
+        entra_token: str | None = None,
     ) -> None:
+        """
+        Initialize a RealtimeModel instance.
+
+        Args:
+            instructions (str, optional): Instructions for the model.
+            modalities (list[api_proto.Modality], optional): Modalities to use, e.g., ["text", "audio"]. Defaults to ["text", "audio"].
+            model (str, optional): The model to use. Defaults to "gpt-4o-realtime-preview-2024-10-01".
+            voice (api_proto.Voice, optional): Voice to use for audio output. Defaults to "alloy".
+            input_audio_format (api_proto.AudioFormat, optional): Format of input audio. Defaults to "pcm16".
+            output_audio_format (api_proto.AudioFormat, optional): Format of output audio. Defaults to "pcm16".
+            input_audio_transcription (InputTranscriptionOptions, optional): Options for input audio transcription.
+            turn_detection (ServerVadOptions, optional): Options for server-side voice activity detection.
+            tool_choice (api_proto.ToolChoice, optional): Tool choice strategy. Defaults to "auto".
+            temperature (float, optional): Sampling temperature for the model. Defaults to 0.8.
+            max_response_output_tokens (int or Literal["inf"], optional): Maximum tokens for the response output. Defaults to "inf".
+            api_key (str, optional): API key for authentication.
+            base_url (str, optional): Base URL for the API endpoint.
+            http_session (aiohttp.ClientSession, optional): HTTP session to use for requests.
+            loop (asyncio.AbstractEventLoop, optional): Event loop to use.
+            provider (RealtimeAPIProvider, optional): API provider, e.g., "openai" or "microsoft". Defaults to "openai".
+        """
         super().__init__()
 
         self._base_url = base_url
+
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if api_key is None:
+        if api_key is None and provider == "openai":
             raise ValueError(
                 "OpenAI API key is required, either using the argument or by setting the OPENAI_API_KEY environmental variable"
             )
 
         if not base_url:
             base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+        query_params = {}
+        if provider == "microsoft":
+            query_params["api-version"] = api_version or "2024-10-01-preview"
+            query_params["deployment"] = model
+        else:
+            query_params["model"] = model
 
         self._default_opts = _ModelOptions(
             model=model,
@@ -204,6 +312,9 @@ class RealtimeModel:
             max_response_output_tokens=max_response_output_tokens,
             api_key=api_key,
             base_url=base_url,
+            provider=provider,
+            query_params=query_params,
+            entra_token=entra_token,
         )
 
         self._loop = loop or asyncio.get_event_loop()
@@ -236,27 +347,27 @@ class RealtimeModel:
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
     ) -> RealtimeSession:
-        opts = _ModelOptions(
-            model=self._default_opts.model,
-            modalities=modalities or self._default_opts.modalities,
-            instructions=instructions or self._default_opts.instructions,
-            voice=voice or self._default_opts.voice,
-            input_audio_format=input_audio_format
-            or self._default_opts.input_audio_format,
-            output_audio_format=output_audio_format
-            or self._default_opts.output_audio_format,
-            input_audio_transcription=(
-                input_audio_transcription
-                or self._default_opts.input_audio_transcription
-            ),
-            tool_choice=tool_choice or self._default_opts.tool_choice,
-            turn_detection=turn_detection or self._default_opts.turn_detection,
-            temperature=temperature or self._default_opts.temperature,
-            max_response_output_tokens=max_response_output_tokens
-            or self._default_opts.max_response_output_tokens,
-            api_key=self._default_opts.api_key,
-            base_url=self._default_opts.base_url,
-        )
+        opts = deepcopy(self._default_opts)
+        if modalities is not None:
+            opts.modalities = modalities
+        if instructions is not None:
+            opts.instructions = instructions
+        if voice is not None:
+            opts.voice = voice
+        if input_audio_format is not None:
+            opts.input_audio_format = input_audio_format
+        if output_audio_format is not None:
+            opts.output_audio_format = output_audio_format
+        if tool_choice is not None:
+            opts.tool_choice = tool_choice
+        if input_audio_transcription is not None:
+            opts.input_audio_transcription
+        if turn_detection is not None:
+            opts.turn_detection = turn_detection
+        if temperature is not None:
+            opts.temperature = temperature
+        if max_response_output_tokens is not None:
+            opts.max_response_output_tokens = max_response_output_tokens
 
         new_session = RealtimeSession(
             chat_ctx=chat_ctx or llm.ChatContext(),
@@ -513,24 +624,27 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
     ) -> None:
-        self._opts = _ModelOptions(
-            model=self._opts.model,
-            modalities=modalities or self._opts.modalities,
-            instructions=instructions or self._opts.instructions,
-            voice=voice or self._opts.voice,
-            input_audio_format=input_audio_format or self._opts.input_audio_format,
-            output_audio_format=output_audio_format or self._opts.output_audio_format,
-            input_audio_transcription=(
-                input_audio_transcription or self._opts.input_audio_transcription
-            ),
-            tool_choice=tool_choice or self._opts.tool_choice,
-            turn_detection=turn_detection or self._opts.turn_detection,
-            temperature=temperature or self._opts.temperature,
-            max_response_output_tokens=max_response_output_tokens
-            or self._opts.max_response_output_tokens,
-            api_key=self._opts.api_key,
-            base_url=self._opts.base_url,
-        )
+        self._opts = deepcopy(self._opts)
+        if modalities is not None:
+            self._opts.modalities = modalities
+        if instructions is not None:
+            self._opts.instructions = instructions
+        if voice is not None:
+            self._opts.voice = voice
+        if input_audio_format is not None:
+            self._opts.input_audio_format = input_audio_format
+        if output_audio_format is not None:
+            self._opts.output_audio_format = output_audio_format
+        if input_audio_transcription is not None:
+            self._opts.input_audio_transcription = input_audio_transcription
+        if turn_detection is not None:
+            self._opts.turn_detection = turn_detection
+        if tool_choice is not None:
+            self._opts.tool_choice = tool_choice
+        if temperature is not None:
+            self._opts.temperature = temperature
+        if max_response_output_tokens is not None:
+            self._opts.max_response_output_tokens = max_response_output_tokens
 
         tools = []
         if self._fnc_ctx is not None:
@@ -550,24 +664,33 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
         }
 
+        session_data = {
+            "modalities": self._opts.modalities,
+            "instructions": self._opts.instructions,
+            "voice": self._opts.voice,
+            "input_audio_format": self._opts.input_audio_format,
+            "output_audio_format": self._opts.output_audio_format,
+            "input_audio_transcription": {
+                "model": self._opts.input_audio_transcription.model,
+            },
+            "turn_detection": server_vad_opts,
+            "tools": tools,
+            "tool_choice": self._opts.tool_choice,
+            "temperature": self._opts.temperature,
+        }
+
+        # microsoft doesn't support inf for max_response_output_tokens
+        if self._opts.provider != "microsoft" or isinstance(
+            self._opts.max_response_output_tokens, int
+        ):
+            session_data["max_response_output_tokens"] = (
+                self._opts.max_response_output_tokens
+            )
+
         self._queue_msg(
             {
                 "type": "session.update",
-                "session": {
-                    "modalities": self._opts.modalities,
-                    "instructions": self._opts.instructions,
-                    "voice": self._opts.voice,
-                    "input_audio_format": self._opts.input_audio_format,
-                    "output_audio_format": self._opts.output_audio_format,
-                    "input_audio_transcription": {
-                        "model": self._opts.input_audio_transcription.model,
-                    },
-                    "turn_detection": server_vad_opts,
-                    "tools": tools,
-                    "tool_choice": self._opts.tool_choice,
-                    "temperature": self._opts.temperature,
-                    "max_response_output_tokens": self._opts.max_response_output_tokens,
-                },
+                "session": session_data,
             }
         )
 
@@ -577,13 +700,24 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         try:
-            params = {"model": self._opts.model}
-            base_url = self._opts.base_url.rstrip("/")
-            url = urljoin(base_url + "/", "realtime") + f"?{urlencode(params)}"
-            headers = {
-                "Authorization": "Bearer " + self._opts.api_key,
-                "OpenAI-Beta": "realtime=v1",
-            }
+            headers = {"User-Agent": "LiveKit Agents"}
+            if self._opts.provider == "microsoft":
+                # Microsoft API has two ways of authentication
+                # 1. Entra token set as `Bearer` token
+                # 2. API key set as `api_key` header (also accepts query string)
+                if self._opts.entra_token:
+                    headers["Authorization"] = f"Bearer {self._opts.entra_token}"
+                else:
+                    headers["api-key"] = self._opts.api_key
+            else:
+                headers["Authorization"] = f"Bearer {self._opts.api_key}"
+                headers["OpenAI-Beta"] = "realtime=v1"
+            url = (
+                urljoin(self._opts.base_url + "/", "realtime")
+                + f"?{urlencode(self._opts.query_params)}"
+            )
+            if url.startswith("http"):
+                url = url.replace("http", "ws", 1)
 
             ws_conn = await self._http_session.ws_connect(
                 url,
