@@ -504,10 +504,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """Synthesize the agent reply to the user question, also make sure only one reply
         is synthesized/played at a time"""
 
-        if (
-            self._pending_agent_reply is not None
-            and self._pending_agent_reply.allow_interruptions
-        ):
+        if self._pending_agent_reply is not None:
+            if not self._pending_agent_reply.allow_interruptions:
+                logger.debug(
+                    "ignoring reply synthesis since interruptions are not allowed"
+                )
+                return
+
             self._pending_agent_reply.interrupt()
 
         if self._human_input is not None and not self._human_input.speaking:
