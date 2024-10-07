@@ -435,7 +435,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             ) + new_transcript
 
             if self._opts.preemptive_synthesis:
-                self._synthesize_agent_reply()
+                if not self._synthesize_agent_reply():
+                    return
 
             self._deferred_validation.on_human_final_transcript(new_transcript)
 
@@ -500,7 +501,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             self._speech_q_changed.clear()
 
-    def _synthesize_agent_reply(self) -> None:
+    def _synthesize_agent_reply(self) -> bool:
         """Synthesize the agent reply to the user question, also make sure only one reply
         is synthesized/played at a time"""
 
@@ -509,7 +510,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 logger.debug(
                     "ignoring reply synthesis since interruptions are not allowed"
                 )
-                return
+                return False
 
             self._pending_agent_reply.interrupt()
 
@@ -525,6 +526,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._agent_reply_task = asyncio.create_task(
             self._synthesize_answer_task(self._agent_reply_task, new_handle)
         )
+
+        return True
 
     @utils.log_exceptions(logger=logger)
     async def _synthesize_answer_task(
@@ -794,7 +797,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if self._opts.preemptive_synthesis or not self._transcribed_text:
                 return
 
-            self._synthesize_agent_reply()  # this will populate self._pending_agent_reply
+            if not self._synthesize_agent_reply():
+                return
 
         assert self._pending_agent_reply is not None
 
