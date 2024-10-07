@@ -20,8 +20,6 @@ jobs:
         with:
           python-version: '3.12'  # Specify the Python version you want to use
 
-
-
       - name: Create and activate virtual environment
         run: |
           python -m venv venv
@@ -49,7 +47,8 @@ jobs:
         run: |
           source venv/bin/activate
           SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
-          python -m pip install requests && python $SITE_PACKAGES/livekit-rtc/rust-sdks/download_ffi.py --output $SITE_PACKAGES/livekit/rtc/resources
+          curl https://github.com/livekit/rust-sdks/blob/main/download_ffi.py > download_ffi.py
+          python -m pip install requests && download_ffi.py --output $SITE_PACKAGES/livekit/rtc/resources
 
       - name: Build Docs
         run: |
