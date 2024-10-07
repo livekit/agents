@@ -106,5 +106,7 @@ class STT(stt.STT):
 
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(text=resp.text, language=language or "")],
+            alternatives=[
+                stt.SpeechData(text=resp.text or "", language=language or "")
+            ],
         )
