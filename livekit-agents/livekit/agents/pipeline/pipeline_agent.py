@@ -431,6 +431,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         def _on_final_transcript(ev: stt.SpeechEvent) -> None:
             new_transcript = ev.alternatives[0].text
+            if not new_transcript:
+                return
+
             self._transcribed_text += (
                 " " if self._transcribed_text else ""
             ) + new_transcript

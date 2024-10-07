@@ -70,6 +70,11 @@ class StreamAdapterWrapper(SpeechStream):
                         buffer=merged_frames, *self._args, **self._kwargs
                     )
 
+                    if len(t_event.alternatives) == 0:
+                        continue
+                    elif not t_event.alternatives[0].text:
+                        continue
+
                     self._event_ch.send_nowait(
                         SpeechEvent(
                             type=SpeechEventType.FINAL_TRANSCRIPT,
