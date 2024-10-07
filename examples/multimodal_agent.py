@@ -49,6 +49,10 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
+    print("waiting for participant")
+    await ctx.wait_for_participant()
+    
+    print("participant joined, starting agent")
     assistant = multimodal.MultimodalAgent(
         model=openai.realtime.RealtimeModel(
             voice="alloy",
