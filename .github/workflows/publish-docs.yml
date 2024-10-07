@@ -19,7 +19,17 @@ jobs:
         run: python -m pip install pdoc3 setuptools
 
       - name: Install package
-        run: python -m pip install ./livekit-agents ./livekit-plugins/*
+        run: |
+          python -m pip install ./livekit-agents \
+                                ./livekit-plugins/livekit-plugins-anthropic \
+                                ./livekit-plugins/livekit-plugins-azure \
+                                ./livekit-plugins/livekit-plugins-browser \
+                                ./livekit-plugins/livekit-plugins-cartesia \
+                                ./livekit-plugins/livekit-plugins-deepgram \
+                                ./livekit-plugins/livekit-plugins-elevenlabs \
+                                ./livekit-plugins/livekit-plugins-google \
+                                ./livekit-plugins/livekit-plugins-nltk \
+                                ./livekit-plugins/livekit-plugins-openai
 
       - name: Build Docs
         run: python -m pdoc livekit.* --output-dir docs
