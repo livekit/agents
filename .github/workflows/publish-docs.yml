@@ -6,13 +6,10 @@
 # separate terms of service, privacy policy, and support
 # documentation.
 
-name: Release and publish
+name: Publish docs
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches:
-      - neil/docs
 
 jobs:
   docs:
