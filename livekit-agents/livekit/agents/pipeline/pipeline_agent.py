@@ -398,7 +398,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("user_started_speaking")
             self.emit("user_started_speaking")
             self._deferred_validation.on_human_start_of_speech(ev)
-            self._update_state("listening")
 
         def _on_vad_updated(ev: vad.VADEvent) -> None:
             if not self._track_published_fut.done():
@@ -505,7 +504,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """Synthesize the agent reply to the user question, also make sure only one reply
         is synthesized/played at a time"""
 
-        if self._pending_agent_reply is not None:
+        if (
+            self._pending_agent_reply is not None
+            and self._pending_agent_reply.allow_interruptions
+        ):
             self._pending_agent_reply.interrupt()
 
         if self._human_input is not None and not self._human_input.speaking:
@@ -799,10 +801,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if not speech.is_reply:
                 continue
 
-            if not speech.allow_interruptions:
-                return  # we shouldn't validate this speech to avoid stacking replies
-
-            speech.interrupt()
+            if speech.allow_interruptions:
+                speech.interrupt()
 
         logger.debug(
             "validated agent reply",
