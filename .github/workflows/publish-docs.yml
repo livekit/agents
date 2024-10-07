@@ -16,7 +16,7 @@ jobs:
           lfs: true
 
       - name: Install pybind11
-        run: sudo apt-get install -y pybind11-dev libwayland-dev xkbcommon
+        run: sudo apt-get install -y pybind11-dev libwayland-dev libxkbcommon-x11-0 
 
       - name: Install pdoc
         run: python -m pip install pdoc3 setuptools
