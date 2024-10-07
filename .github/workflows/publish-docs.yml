@@ -10,6 +10,9 @@ name: Release and publish
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - neil/docs
 
 jobs:
   docs:
