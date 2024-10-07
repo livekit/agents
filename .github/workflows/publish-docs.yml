@@ -46,7 +46,7 @@ jobs:
       - name: Build Docs
         run: |
           source venv/bin/activate
-          python -m pdoc --http livekit.* --output-dir docs
+          python -m pdoc --html livekit --output-dir docs
 
       - name: S3 Upload
         run: |
