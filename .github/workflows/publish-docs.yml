@@ -48,7 +48,8 @@ jobs:
           source venv/bin/activate
           SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
           curl https://github.com/livekit/rust-sdks/blob/main/download_ffi.py > download_ffi.py
-          python -m pip install requests && download_ffi.py --output $SITE_PACKAGES/livekit/rtc/resources
+          ls
+          python -m pip install requests && python download_ffi.py --output $SITE_PACKAGES/livekit/rtc/resources
 
       - name: Build Docs
         run: |
