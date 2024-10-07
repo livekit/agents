@@ -27,11 +27,6 @@ jobs:
           python -m venv venv
           source venv/bin/activate
 
-      - name: Download ffi
-        run: |
-          source venv/bin/activate
-          python -m pip install requests && python livekit-rtc/rust-sdks/download_ffi.py --output $(python -m site --user-site)/livekit/rtc/resources
-
       - name: Install pdoc and other dependencies
         run: |
           source venv/bin/activate
@@ -49,6 +44,11 @@ jobs:
                                 ./livekit-plugins/livekit-plugins-google \
                                 ./livekit-plugins/livekit-plugins-nltk \
                                 ./livekit-plugins/livekit-plugins-openai
+
+      - name: Download ffi
+        run: |
+          source venv/bin/activate
+          python -m pip install requests && python $(python -m site --user-site)/livekit-rtc/rust-sdks/download_ffi.py --output $(python -m site --user-site)/livekit/rtc/resources
 
       - name: Build Docs
         run: |
