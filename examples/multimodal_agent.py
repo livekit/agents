@@ -44,12 +44,30 @@ async def entrypoint(ctx: JobContext):
                     return f"The weather in {location} is {weather_data}."
                 else:
                     raise Exception(
-                        "Failed to get weather data, status code: {response.status}"
+                        f"Failed to get weather data, status code: {response.status}"
                     )
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+    participant = await ctx.wait_for_participant()
 
-    assistant = multimodal.MultimodalAgent(
+    # to use Microsoft Azure, uncomment the following lines
+    # agent = multimodal.MultimodalAgent(
+    #     model=openai.realtime.RealtimeModel.with_azure(
+    #         azure_deployment="<model-deployment>",
+    #         azure_endpoint="wss://<endpoint>.openai.azure.com/", # or AZURE_OPENAI_ENDPOINT
+    #         api_key="<api-key>", # or AZURE_OPENAI_API_KEY
+    #         api_version="2024-10-01-preview", # or OPENAI_API_VERSION
+    #         voice="alloy",
+    #         temperature=0.8,
+    #         instructions="You are a helpful assistant",
+    #         turn_detection=openai.realtime.ServerVadOptions(
+    #             threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
+    #         ),
+    #     ),
+    #     fnc_ctx=fnc_ctx,
+    # )
+
+    agent = multimodal.MultimodalAgent(
         model=openai.realtime.RealtimeModel(
             voice="alloy",
             temperature=0.8,
@@ -60,7 +78,7 @@ async def entrypoint(ctx: JobContext):
         ),
         fnc_ctx=fnc_ctx,
     )
-    assistant.start(ctx.room)
+    agent.start(ctx.room, participant)
 
 
 if __name__ == "__main__":

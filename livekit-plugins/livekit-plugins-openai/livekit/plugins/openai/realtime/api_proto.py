@@ -192,7 +192,8 @@ class ClientEvent:
         tools: list[FunctionTool]
         tool_choice: ToolChoice
         temperature: float
-        max_response_output_tokens: int | Literal["inf"]
+        # microsoft does not support inf, but accepts None
+        max_response_output_tokens: int | Literal["inf"] | None
 
     class SessionUpdate(TypedDict):
         event_id: NotRequired[str]

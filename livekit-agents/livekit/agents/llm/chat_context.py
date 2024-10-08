@@ -89,7 +89,7 @@ class ChatMessage:
         if len(images) == 0:
             return ChatMessage(role=role, content=text)
         else:
-            content: list[str | ChatImage] = []
+            content: list[ChatContent] = []
             if text:
                 content.append(text)
 
