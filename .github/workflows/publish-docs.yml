@@ -57,14 +57,6 @@ jobs:
           source venv/bin/activate
           python -m pdoc --skip-errors --html livekit.rtc livekit.agents --output-dir docs
 
-      - name: Remove Submodules
-        run: |
-          NON_MODULE_DIRS=$(find docs -type f -not -name index.html)
-          INPUT_FILES=$(docs/**/index.html)
-          sed '/<h2 class="section-title" id="header-submodules">Sub-modules<\/h2>/,/<\/section>/d' "$input_file" > "$output_file"
-          rm -rf livekit-agents
-          rm -rf livekit-plugins
-
       - name: S3 Upload
         run: |
           source venv/bin/activate
