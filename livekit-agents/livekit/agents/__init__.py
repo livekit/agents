@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from . import (
+    cli,
     ipc,
     llm,
     multimodal,
@@ -32,6 +33,7 @@ from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequ
 from .plugin import Plugin
 from .version import __version__
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
+
 
 __all__ = [
     "__version__",
@@ -57,7 +59,17 @@ __all__ = [
     "pipeline",
     "multimodal",
     "voice_assistant",
+    "cli",
     "AssignmentTimeoutError",
     "ATTRIBUTE_AGENT_STATE",
     "AgentState",
 ]
+
+# Cleanup docs of unexported modules
+module = dir()
+NOT_IN_ALL = [m for m in module if m not in __all__]
+
+__pdoc__ = {}
+
+for n in NOT_IN_ALL:
+    __pdoc__[n] = False
