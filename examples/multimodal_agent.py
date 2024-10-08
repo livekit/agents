@@ -53,9 +53,10 @@ async def entrypoint(ctx: JobContext):
     # to use Microsoft Azure, uncomment the following lines
     # agent = multimodal.MultimodalAgent(
     #     model=openai.realtime.RealtimeModel.with_azure(
-    #         base_url="wss://<endpoint>.openai.azure.com/",
-    #         api_key="<api-key>",
     #         azure_deployment="<model-deployment>",
+    #         azure_endpoint="wss://<endpoint>.openai.azure.com/", # or AZURE_OPENAI_ENDPOINT
+    #         api_key="<api-key>", # or AZURE_OPENAI_API_KEY
+    #         api_version="2024-10-01-preview", # or OPENAI_API_VERSION
     #         voice="alloy",
     #         temperature=0.8,
     #         instructions="You are a helpful assistant",

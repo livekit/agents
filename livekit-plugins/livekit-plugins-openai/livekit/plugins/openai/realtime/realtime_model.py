@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import overload
 import asyncio
 import base64
 import os
@@ -128,12 +129,9 @@ class InputTranscriptionOptions:
     model: api_proto.InputTranscriptionModel | str
 
 
-RealtimeAPIProvider = Literal["openai", "microsoft"]
-
-
 @dataclass
 class _ModelOptions:
-    model: str
+    model: str | None
     modalities: list[api_proto.Modality]
     instructions: str
     voice: api_proto.Voice
@@ -146,9 +144,10 @@ class _ModelOptions:
     max_response_output_tokens: int | Literal["inf"]
     api_key: str | None
     base_url: str
-    provider: RealtimeAPIProvider
-    query_params: dict[str, str]
-    entra_token: str | None = None
+    entra_token: str | None
+    azure_deployment: str | None
+    is_azure: bool
+    api_version: str | None
 
 
 class _ContentPtr(TypedDict):
@@ -166,75 +165,7 @@ DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
 class RealtimeModel:
-    @classmethod
-    def with_azure(
-        cls,
-        *,
-        base_url: str,
-        azure_deployment: str,
-        api_version: str | None = None,
-        api_key: str | None = None,
-        entra_token: str | None = None,
-        instructions: str = "",
-        modalities: list[api_proto.Modality] = ["text", "audio"],
-        voice: api_proto.Voice = "alloy",
-        input_audio_format: api_proto.AudioFormat = "pcm16",
-        output_audio_format: api_proto.AudioFormat = "pcm16",
-        input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
-        tool_choice: api_proto.ToolChoice = "auto",
-        temperature: float = 0.8,
-        max_response_output_tokens: int | Literal["inf"] = "inf",
-        http_session: aiohttp.ClientSession | None = None,
-        loop: asyncio.AbstractEventLoop | None = None,
-    ):
-        """
-        Create a RealtimeModel instance configured for Azure OpenAI.
-
-        Args:
-            base_url (str): The base URL for the Azure OpenAI endpoint. (e.g., "https://my-endpoint.openai.azure.com/")
-            azure_deployment (str): The name of the Azure deployment to use. (e.g., "gpt-4o-realtime-preview")
-            api_version (str, optional): The API version to use. Defaults to "2024-10-01-preview".
-            api_key (str, optional): The API key for Azure OpenAI.
-            entra_token (str, optional): The Entra token for authentication. entra_token could be used instead of api_key for authentication.
-            instructions (str, optional): Instructions for the model.
-            modalities (list[api_proto.Modality], optional): Modalities to use, e.g., ["text", "audio"]. Defaults to ["text", "audio"].
-            voice (api_proto.Voice, optional): The voice to use for audio output.
-            input_audio_format (api_proto.AudioFormat, optional): Format of input audio. Defaults to "pcm16".
-            output_audio_format (api_proto.AudioFormat, optional): Format of output audio. Defaults to "pcm16".
-            input_audio_transcription (InputTranscriptionOptions, optional): Options for input audio transcription.
-            turn_detection (ServerVadOptions, optional): Options for server-side voice activity detection.
-            tool_choice (api_proto.ToolChoice, optional): Tool choice strategy. Defaults to "auto".
-            temperature (float, optional): Sampling temperature for the model. Defaults to 0.8.
-            max_response_output_tokens (int or Literal["inf"], optional): Maximum tokens for the response output. Defaults to "inf".
-            http_session (aiohttp.ClientSession, optional): HTTP session to use for requests.
-            loop (asyncio.AbstractEventLoop, optional): Event loop to use.
-
-        Returns:
-            RealtimeModel: An instance of RealtimeModel configured for Azure OpenAI.
-        """
-        url = urljoin(base_url, "openai")
-        return cls(
-            instructions=instructions,
-            modalities=modalities,
-            model=azure_deployment,
-            voice=voice,
-            input_audio_format=input_audio_format,
-            output_audio_format=output_audio_format,
-            input_audio_transcription=input_audio_transcription,
-            turn_detection=turn_detection,
-            tool_choice=tool_choice,
-            temperature=temperature,
-            max_response_output_tokens=max_response_output_tokens,
-            api_key=api_key,
-            base_url=url,
-            http_session=http_session,
-            loop=loop,
-            provider="microsoft",
-            api_version=api_version,
-            entra_token=entra_token,
-        )
-
+    @overload
     def __init__(
         self,
         *,
@@ -253,50 +184,71 @@ class RealtimeModel:
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
-        provider: RealtimeAPIProvider = "openai",
-        api_version: str | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        *,
+        azure_deployment: str | None = None,
         entra_token: str | None = None,
+        api_key: str | None = None,
+        api_version: str | None = None,
+        base_url: str | None = None,
+        instructions: str = "",
+        modalities: list[api_proto.Modality] = ["text", "audio"],
+        voice: api_proto.Voice = "alloy",
+        input_audio_format: api_proto.AudioFormat = "pcm16",
+        output_audio_format: api_proto.AudioFormat = "pcm16",
+        input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        tool_choice: api_proto.ToolChoice = "auto",
+        temperature: float = 0.8,
+        max_response_output_tokens: int | Literal["inf"] = "inf",
+        http_session: aiohttp.ClientSession | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None: ...
+
+    def __init__(
+        self,
+        *,
+        instructions: str = "",
+        modalities: list[api_proto.Modality] = ["text", "audio"],
+        model: str | None = "gpt-4o-realtime-preview-2024-10-01",
+        voice: api_proto.Voice = "alloy",
+        input_audio_format: api_proto.AudioFormat = "pcm16",
+        output_audio_format: api_proto.AudioFormat = "pcm16",
+        input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        tool_choice: api_proto.ToolChoice = "auto",
+        temperature: float = 0.8,
+        max_response_output_tokens: int | Literal["inf"] = "inf",
+        base_url: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
+        # azure specific parameters
+        azure_deployment: str | None = None,
+        entra_token: str | None = None,
+        api_key: str | None = None,
+        api_version: str | None = None,
     ) -> None:
-        """
-        Initialize a RealtimeModel instance.
-
-        Args:
-            instructions (str, optional): Instructions for the model.
-            modalities (list[api_proto.Modality], optional): Modalities to use, e.g., ["text", "audio"]. Defaults to ["text", "audio"].
-            model (str, optional): The model to use. Defaults to "gpt-4o-realtime-preview-2024-10-01".
-            voice (api_proto.Voice, optional): Voice to use for audio output. Defaults to "alloy".
-            input_audio_format (api_proto.AudioFormat, optional): Format of input audio. Defaults to "pcm16".
-            output_audio_format (api_proto.AudioFormat, optional): Format of output audio. Defaults to "pcm16".
-            input_audio_transcription (InputTranscriptionOptions, optional): Options for input audio transcription.
-            turn_detection (ServerVadOptions, optional): Options for server-side voice activity detection.
-            tool_choice (api_proto.ToolChoice, optional): Tool choice strategy. Defaults to "auto".
-            temperature (float, optional): Sampling temperature for the model. Defaults to 0.8.
-            max_response_output_tokens (int or Literal["inf"], optional): Maximum tokens for the response output. Defaults to "inf".
-            api_key (str, optional): API key for authentication.
-            base_url (str, optional): Base URL for the API endpoint.
-            http_session (aiohttp.ClientSession, optional): HTTP session to use for requests.
-            loop (asyncio.AbstractEventLoop, optional): Event loop to use.
-            provider (RealtimeAPIProvider, optional): API provider, e.g., "openai" or "microsoft". Defaults to "openai".
-        """
         super().__init__()
-
         self._base_url = base_url
 
+        is_azure = (
+            api_version is not None
+            or entra_token is not None
+            or azure_deployment is not None
+        )
+
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if api_key is None and provider == "openai":
+        if api_key is None and not is_azure:
             raise ValueError(
                 "OpenAI API key is required, either using the argument or by setting the OPENAI_API_KEY environmental variable"
             )
 
         if not base_url:
             base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-
-        query_params = {}
-        if provider == "microsoft":
-            query_params["api-version"] = api_version or "2024-10-01-preview"
-            query_params["deployment"] = model
-        else:
-            query_params["model"] = model
 
         self._default_opts = _ModelOptions(
             model=model,
@@ -312,14 +264,81 @@ class RealtimeModel:
             max_response_output_tokens=max_response_output_tokens,
             api_key=api_key,
             base_url=base_url,
-            provider=provider,
-            query_params=query_params,
+            azure_deployment=azure_deployment,
             entra_token=entra_token,
+            is_azure=is_azure,
+            api_version=api_version,
         )
 
         self._loop = loop or asyncio.get_event_loop()
         self._rt_sessions: list[RealtimeSession] = []
         self._http_session = http_session
+
+    @classmethod
+    def with_azure(
+        cls,
+        *,
+        azure_deployment: str,
+        azure_endpoint: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        entra_token: str | None = None,
+        base_url: str | None = None,
+        instructions: str = "",
+        modalities: list[api_proto.Modality] = ["text", "audio"],
+        voice: api_proto.Voice = "alloy",
+        input_audio_format: api_proto.AudioFormat = "pcm16",
+        output_audio_format: api_proto.AudioFormat = "pcm16",
+        input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        tool_choice: api_proto.ToolChoice = "auto",
+        temperature: float = 0.8,
+        max_response_output_tokens: int | Literal["inf"] = "inf",
+        http_session: aiohttp.ClientSession | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ):
+        api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
+        if api_key is None and entra_token is None:
+            raise ValueError(
+                "Missing credentials. Please pass one of `api_key`, `entra_token`, or the `AZURE_OPENAI_API_KEY` environment variable."
+            )
+
+        api_version = api_version or os.getenv("OPENAI_API_VERSION")
+        if api_version is None:
+            raise ValueError(
+                "Must provide either the `api_version` argument or the `OPENAI_API_VERSION` environment variable"
+            )
+
+        if base_url is None:
+            azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
+            if azure_endpoint is None:
+                raise ValueError(
+                    "Missing Azure endpoint. Please pass the `azure_endpoint` parameter or set the `AZURE_OPENAI_ENDPOINT` environment variable."
+                )
+
+            base_url = f"{azure_endpoint.rstrip('/')}/openai"
+        elif azure_endpoint is not None:
+            raise ValueError("base_url and azure_endpoint are mutually exclusive")
+
+        return cls(
+            instructions=instructions,
+            modalities=modalities,
+            voice=voice,
+            input_audio_format=input_audio_format,
+            output_audio_format=output_audio_format,
+            input_audio_transcription=input_audio_transcription,
+            turn_detection=turn_detection,
+            tool_choice=tool_choice,
+            temperature=temperature,
+            max_response_output_tokens=max_response_output_tokens,
+            api_key=api_key,
+            http_session=http_session,
+            loop=loop,
+            azure_deployment=azure_deployment,
+            api_version=api_version,
+            entra_token=entra_token,
+            base_url=base_url,
+        )
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._http_session:
@@ -680,8 +699,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             "max_response_output_tokens": None,
         }
 
-        # microsoft doesn't support inf for max_response_output_tokens
-        if self._opts.provider != "microsoft" or isinstance(
+        # azure doesn't support inf for max_response_output_tokens
+        if not self._opts.is_azure or isinstance(
             self._opts.max_response_output_tokens, int
         ):
             session_data["max_response_output_tokens"] = (
@@ -702,25 +721,25 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     async def _main_task(self) -> None:
         try:
             headers = {"User-Agent": "LiveKit Agents"}
-            if self._opts.provider == "microsoft":
-                # Microsoft API has two ways of authentication
-                # 1. Entra token set as `Bearer` token
-                # 2. API key set as `api_key` header (also accepts query string)
+            query_params = {}
+
+            base_url = self._opts.base_url
+            if self._opts.is_azure:
                 if self._opts.entra_token:
                     headers["Authorization"] = f"Bearer {self._opts.entra_token}"
-                elif self._opts.api_key:
+
+                if self._opts.api_key:
                     headers["api-key"] = self._opts.api_key
-                else:
-                    raise ValueError(
-                        "Either Entra token or API key is required for Microsoft API"
-                    )
+
+                query_params["api-version"] = self._opts.api_version
+                query_params["deployment"] = self._opts.azure_deployment
             else:
+                # OAI endpoint
                 headers["Authorization"] = f"Bearer {self._opts.api_key}"
                 headers["OpenAI-Beta"] = "realtime=v1"
-            url = (
-                urljoin(self._opts.base_url + "/", "realtime")
-                + f"?{urlencode(self._opts.query_params)}"
-            )
+                query_params["model"] = self._opts.model
+
+            url = f"{base_url.rstrip('/')}/realtime?{urlencode(query_params)}"
             if url.startswith("http"):
                 url = url.replace("http", "ws", 1)
 
