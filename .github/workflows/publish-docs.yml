@@ -34,6 +34,7 @@ jobs:
         run: |
           source venv/bin/activate
           python -m pip install livekit \
+                                livekit-protocol \
                                 ./livekit-agents \
                                 ./livekit-plugins/livekit-plugins-anthropic \
                                 ./livekit-plugins/livekit-plugins-azure \
