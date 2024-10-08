@@ -2,6 +2,10 @@ name: Publish docs
 
 on:
   workflow_dispatch:
+  workflow_call:
+    secrets: 
+      DOCS_DEPLOY_AWS_ACCESS_KEY: {}
+      DOCS_DEPLOY_AWS_API_SECRET: {}
 
 jobs:
   docs:
