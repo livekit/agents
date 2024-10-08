@@ -43,13 +43,6 @@ jobs:
                                 ./livekit-plugins/livekit-plugins-nltk \
                                 ./livekit-plugins/livekit-plugins-openai
 
-      - name: Download ffi
-        run: |
-          source venv/bin/activate
-          SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
-          git clone https://github.com/livekit/rust-sdks.git
-          python -m pip install requests && python rust-sdks/download_ffi.py --output $SITE_PACKAGES/livekit/rtc/resources
-
       - name: Build Docs
         run: |
           source venv/bin/activate
@@ -58,7 +51,7 @@ jobs:
       - name: S3 Upload
         run: |
           source venv/bin/activate
-          aws s3 cp docs/ s3://livekit-docs/test --recursive
+          aws s3 cp docs/ s3://livekit-docs/python --recursive
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
