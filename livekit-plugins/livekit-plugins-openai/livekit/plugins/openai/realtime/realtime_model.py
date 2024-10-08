@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from typing import overload
 import asyncio
 import base64
 import os
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal
-from urllib.parse import urlencode, urljoin
+from typing import AsyncIterable, Literal, overload
+from urllib.parse import urlencode
 
 import aiohttp
 from livekit import rtc
@@ -232,6 +231,29 @@ class RealtimeModel:
         api_key: str | None = None,
         api_version: str | None = None,
     ) -> None:
+        """
+        Initializes a RealtimeClient instance for interacting with OpenAI's Realtime API.
+
+        Args:
+            instructions (str, optional): Initial system instructions for the model. Defaults to "".
+            api_key (str or None, optional): OpenAI API key. If None, will attempt to read from the environment variable OPENAI_API_KEY
+            modalities (list[api_proto.Modality], optional): Modalities to use, such as ["text", "audio"]. Defaults to ["text", "audio"].
+            model (str or None, optional): The name of the model to use. Defaults to "gpt-4o-realtime-preview-2024-10-01".
+            voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "alloy".
+            input_audio_format (api_proto.AudioFormat, optional): Format of input audio data. Defaults to "pcm16".
+            output_audio_format (api_proto.AudioFormat, optional): Format of output audio data. Defaults to "pcm16".
+            input_audio_transcription (InputTranscriptionOptions, optional): Options for transcribing input audio. Defaults to DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
+            turn_detection (ServerVadOptions, optional): Options for server-based voice activity detection (VAD). Defaults to DEFAULT_SERVER_VAD_OPTIONS.
+            tool_choice (api_proto.ToolChoice, optional): Tool choice for the model, such as "auto". Defaults to "auto".
+            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+            max_response_output_tokens (int or Literal["inf"], optional): Maximum number of tokens in the response. Defaults to "inf".
+            base_url (str or None, optional): Base URL for the API endpoint. If None, defaults to OpenAI's default API URL.
+            http_session (aiohttp.ClientSession or None, optional): Async HTTP session to use for requests. If None, a new session will be created.
+            loop (asyncio.AbstractEventLoop or None, optional): Event loop to use for async operations. If None, the current event loop is used.
+
+        Raises:
+            ValueError: If the API key is not provided and cannot be found in environment variables.
+        """
         super().__init__()
         self._base_url = base_url
 
@@ -297,6 +319,35 @@ class RealtimeModel:
         http_session: aiohttp.ClientSession | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
     ):
+        """
+        Create a RealtimeClient instance configured for Azure OpenAI Service.
+
+        Args:
+            azure_deployment (str): The name of your Azure OpenAI deployment.
+            azure_endpoint (str or None, optional): The endpoint URL for your Azure OpenAI resource. If None, will attempt to read from the environment variable AZURE_OPENAI_ENDPOINT.
+            api_version (str or None, optional): API version to use with Azure OpenAI Service. If None, will attempt to read from the environment variable OPENAI_API_VERSION.
+            api_key (str or None, optional): Azure OpenAI API key. If None, will attempt to read from the environment variable AZURE_OPENAI_API_KEY.
+            entra_token (str or None, optional): Azure Entra authentication token. Required if not using API key authentication.
+            base_url (str or None, optional): Base URL for the API endpoint. If None, constructed from the azure_endpoint.
+            instructions (str, optional): Initial system instructions for the model. Defaults to "".
+            modalities (list[api_proto.Modality], optional): Modalities to use, such as ["text", "audio"]. Defaults to ["text", "audio"].
+            voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "alloy".
+            input_audio_format (api_proto.AudioFormat, optional): Format of input audio data. Defaults to "pcm16".
+            output_audio_format (api_proto.AudioFormat, optional): Format of output audio data. Defaults to "pcm16".
+            input_audio_transcription (InputTranscriptionOptions, optional): Options for transcribing input audio. Defaults to DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
+            turn_detection (ServerVadOptions, optional): Options for server-based voice activity detection (VAD). Defaults to DEFAULT_SERVER_VAD_OPTIONS.
+            tool_choice (api_proto.ToolChoice, optional): Tool choice for the model, such as "auto". Defaults to "auto".
+            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+            max_response_output_tokens (int or Literal["inf"], optional): Maximum number of tokens in the response. Defaults to "inf".
+            http_session (aiohttp.ClientSession or None, optional): Async HTTP session to use for requests. If None, a new session will be created.
+            loop (asyncio.AbstractEventLoop or None, optional): Event loop to use for async operations. If None, the current event loop is used.
+
+        Returns:
+            RealtimeClient: An instance of RealtimeClient configured for Azure OpenAI Service.
+
+        Raises:
+            ValueError: If required Azure parameters are missing or invalid.
+        """
         api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
         if api_key is None and entra_token is None:
             raise ValueError(
