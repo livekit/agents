@@ -552,6 +552,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         llm_stream = self._opts.before_llm_cb(self, copied_ctx)
         if llm_stream is False:
+            handle.interrupt()
             return
 
         if asyncio.iscoroutine(llm_stream):
