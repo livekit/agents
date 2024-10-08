@@ -33,7 +33,8 @@ jobs:
       - name: Install package
         run: |
           source venv/bin/activate
-          python -m pip install ./livekit-agents \
+          python -m pip install livekit \
+                                ./livekit-agents \
                                 ./livekit-plugins/livekit-plugins-anthropic \
                                 ./livekit-plugins/livekit-plugins-azure \
                                 ./livekit-plugins/livekit-plugins-cartesia \
@@ -43,12 +44,12 @@ jobs:
                                 ./livekit-plugins/livekit-plugins-nltk \
                                 ./livekit-plugins/livekit-plugins-openai
 
-      - name: Download ffi
-        run: |
-          source venv/bin/activate
-          SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
-          git clone https://github.com/livekit/rust-sdks.git
-          python -m pip install requests && python rust-sdks/download_ffi.py --output $SITE_PACKAGES/livekit/rtc/resources
+      # - name: Download ffi
+      #   run: |
+      #     source venv/bin/activate
+      #     SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
+      #     git clone https://github.com/livekit/rust-sdks.git
+      #     python -m pip install requests && python rust-sdks/download_ffi.py --output $SITE_PACKAGES/livekit/rtc/resources
 
       - name: Build Docs
         run: |
