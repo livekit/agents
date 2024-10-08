@@ -34,7 +34,6 @@ from .plugin import Plugin
 from .version import __version__
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
 
-
 __all__ = [
     "__version__",
     "Worker",
