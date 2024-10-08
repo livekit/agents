@@ -55,7 +55,7 @@ jobs:
       - name: Build Docs
         run: |
           source venv/bin/activate
-          python -m pdoc --exclude livekit.rtc.resources.liblivekit_ffi --html livekit --output-dir docs
+          python -m pdoc --skip-errors --html livekit --output-dir docs
 
       - name: S3 Upload
         run: |
