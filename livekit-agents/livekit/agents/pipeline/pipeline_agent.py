@@ -398,7 +398,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self._plotter.plot_event("user_started_speaking")
             self.emit("user_started_speaking")
             self._deferred_validation.on_human_start_of_speech(ev)
-            self._update_state("listening")
 
         def _on_vad_updated(ev: vad.VADEvent) -> None:
             if not self._track_published_fut.done():
@@ -439,7 +438,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             ) + new_transcript
 
             if self._opts.preemptive_synthesis:
-                self._synthesize_agent_reply()
+                if not self._synthesize_agent_reply():
+                    return
 
             self._deferred_validation.on_human_final_transcript(new_transcript)
 
@@ -504,11 +504,17 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             self._speech_q_changed.clear()
 
-    def _synthesize_agent_reply(self) -> None:
+    def _synthesize_agent_reply(self) -> bool:
         """Synthesize the agent reply to the user question, also make sure only one reply
         is synthesized/played at a time"""
 
         if self._pending_agent_reply is not None:
+            if not self._pending_agent_reply.allow_interruptions:
+                logger.debug(
+                    "ignoring reply synthesis since interruptions are not allowed"
+                )
+                return False
+
             self._pending_agent_reply.interrupt()
 
         if self._human_input is not None and not self._human_input.speaking:
@@ -523,6 +529,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._agent_reply_task = asyncio.create_task(
             self._synthesize_answer_task(self._agent_reply_task, new_handle)
         )
+
+        return True
 
     @utils.log_exceptions(logger=logger)
     async def _synthesize_answer_task(
@@ -793,7 +801,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if self._opts.preemptive_synthesis or not self._transcribed_text:
                 return
 
-            self._synthesize_agent_reply()  # this will populate self._pending_agent_reply
+            if not self._synthesize_agent_reply():
+                return
 
         assert self._pending_agent_reply is not None
 
@@ -803,10 +812,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if not speech.is_reply:
                 continue
 
-            if not speech.allow_interruptions:
-                continue  # we shouldn't validate this speech to avoid stacking replies
-
-            speech.interrupt()
+            if speech.allow_interruptions:
+                speech.interrupt()
 
         logger.debug(
             "validated agent reply",
