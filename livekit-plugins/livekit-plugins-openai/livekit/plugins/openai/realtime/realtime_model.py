@@ -772,7 +772,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     async def _main_task(self) -> None:
         try:
             headers = {"User-Agent": "LiveKit Agents"}
-            query_params = {}
+            query_params: dict[str, str] = {}
 
             base_url = self._opts.base_url
             if self._opts.is_azure:
@@ -782,13 +782,18 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 if self._opts.api_key:
                     headers["api-key"] = self._opts.api_key
 
-                query_params["api-version"] = self._opts.api_version
-                query_params["deployment"] = self._opts.azure_deployment
+                if self._opts.api_version:
+                    query_params["api-version"] = self._opts.api_version
+
+                if self._opts.azure_deployment:
+                    query_params["deployment"] = self._opts.azure_deployment
             else:
                 # OAI endpoint
                 headers["Authorization"] = f"Bearer {self._opts.api_key}"
                 headers["OpenAI-Beta"] = "realtime=v1"
-                query_params["model"] = self._opts.model
+
+                if self._opts.model:
+                    query_params["model"] = self._opts.model
 
             url = f"{base_url.rstrip('/')}/realtime?{urlencode(query_params)}"
             if url.startswith("http"):
