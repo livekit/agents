@@ -90,6 +90,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         self._started, self._closed = False, False
 
         self._update_state_task: asyncio.Task | None = None
+        self._http_session: aiohttp.ClientSession | None = None
 
     @property
     def vad(self) -> vad.VAD | None:

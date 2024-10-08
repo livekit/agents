@@ -431,6 +431,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         def _on_final_transcript(ev: stt.SpeechEvent) -> None:
             new_transcript = ev.alternatives[0].text
+            if not new_transcript:
+                return
+
             self._transcribed_text += (
                 " " if self._transcribed_text else ""
             ) + new_transcript
@@ -549,6 +552,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         llm_stream = self._opts.before_llm_cb(self, copied_ctx)
         if llm_stream is False:
+            handle.interrupt()
             return
 
         if asyncio.iscoroutine(llm_stream):

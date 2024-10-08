@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal
-from urllib.parse import urlencode, urljoin
+from typing import AsyncIterable, Literal, overload
+from urllib.parse import urlencode
 
 import aiohttp
 from livekit import rtc
@@ -129,7 +130,7 @@ class InputTranscriptionOptions:
 
 @dataclass
 class _ModelOptions:
-    model: str
+    model: str | None
     modalities: list[api_proto.Modality]
     instructions: str
     voice: api_proto.Voice
@@ -140,8 +141,12 @@ class _ModelOptions:
     tool_choice: api_proto.ToolChoice
     temperature: float
     max_response_output_tokens: int | Literal["inf"]
-    api_key: str
+    api_key: str | None
     base_url: str
+    entra_token: str | None
+    azure_deployment: str | None
+    is_azure: bool
+    api_version: str | None
 
 
 class _ContentPtr(TypedDict):
@@ -159,6 +164,7 @@ DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
 class RealtimeModel:
+    @overload
     def __init__(
         self,
         *,
@@ -177,12 +183,88 @@ class RealtimeModel:
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
-    ) -> None:
-        super().__init__()
+    ) -> None: ...
 
+    @overload
+    def __init__(
+        self,
+        *,
+        azure_deployment: str | None = None,
+        entra_token: str | None = None,
+        api_key: str | None = None,
+        api_version: str | None = None,
+        base_url: str | None = None,
+        instructions: str = "",
+        modalities: list[api_proto.Modality] = ["text", "audio"],
+        voice: api_proto.Voice = "alloy",
+        input_audio_format: api_proto.AudioFormat = "pcm16",
+        output_audio_format: api_proto.AudioFormat = "pcm16",
+        input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        tool_choice: api_proto.ToolChoice = "auto",
+        temperature: float = 0.8,
+        max_response_output_tokens: int | Literal["inf"] = "inf",
+        http_session: aiohttp.ClientSession | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None: ...
+
+    def __init__(
+        self,
+        *,
+        instructions: str = "",
+        modalities: list[api_proto.Modality] = ["text", "audio"],
+        model: str | None = "gpt-4o-realtime-preview-2024-10-01",
+        voice: api_proto.Voice = "alloy",
+        input_audio_format: api_proto.AudioFormat = "pcm16",
+        output_audio_format: api_proto.AudioFormat = "pcm16",
+        input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        tool_choice: api_proto.ToolChoice = "auto",
+        temperature: float = 0.8,
+        max_response_output_tokens: int | Literal["inf"] = "inf",
+        base_url: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
+        # azure specific parameters
+        azure_deployment: str | None = None,
+        entra_token: str | None = None,
+        api_key: str | None = None,
+        api_version: str | None = None,
+    ) -> None:
+        """
+        Initializes a RealtimeClient instance for interacting with OpenAI's Realtime API.
+
+        Args:
+            instructions (str, optional): Initial system instructions for the model. Defaults to "".
+            api_key (str or None, optional): OpenAI API key. If None, will attempt to read from the environment variable OPENAI_API_KEY
+            modalities (list[api_proto.Modality], optional): Modalities to use, such as ["text", "audio"]. Defaults to ["text", "audio"].
+            model (str or None, optional): The name of the model to use. Defaults to "gpt-4o-realtime-preview-2024-10-01".
+            voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "alloy".
+            input_audio_format (api_proto.AudioFormat, optional): Format of input audio data. Defaults to "pcm16".
+            output_audio_format (api_proto.AudioFormat, optional): Format of output audio data. Defaults to "pcm16".
+            input_audio_transcription (InputTranscriptionOptions, optional): Options for transcribing input audio. Defaults to DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
+            turn_detection (ServerVadOptions, optional): Options for server-based voice activity detection (VAD). Defaults to DEFAULT_SERVER_VAD_OPTIONS.
+            tool_choice (api_proto.ToolChoice, optional): Tool choice for the model, such as "auto". Defaults to "auto".
+            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+            max_response_output_tokens (int or Literal["inf"], optional): Maximum number of tokens in the response. Defaults to "inf".
+            base_url (str or None, optional): Base URL for the API endpoint. If None, defaults to OpenAI's default API URL.
+            http_session (aiohttp.ClientSession or None, optional): Async HTTP session to use for requests. If None, a new session will be created.
+            loop (asyncio.AbstractEventLoop or None, optional): Event loop to use for async operations. If None, the current event loop is used.
+
+        Raises:
+            ValueError: If the API key is not provided and cannot be found in environment variables.
+        """
+        super().__init__()
         self._base_url = base_url
+
+        is_azure = (
+            api_version is not None
+            or entra_token is not None
+            or azure_deployment is not None
+        )
+
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if api_key is None:
+        if api_key is None and not is_azure:
             raise ValueError(
                 "OpenAI API key is required, either using the argument or by setting the OPENAI_API_KEY environmental variable"
             )
@@ -204,11 +286,110 @@ class RealtimeModel:
             max_response_output_tokens=max_response_output_tokens,
             api_key=api_key,
             base_url=base_url,
+            azure_deployment=azure_deployment,
+            entra_token=entra_token,
+            is_azure=is_azure,
+            api_version=api_version,
         )
 
         self._loop = loop or asyncio.get_event_loop()
         self._rt_sessions: list[RealtimeSession] = []
         self._http_session = http_session
+
+    @classmethod
+    def with_azure(
+        cls,
+        *,
+        azure_deployment: str,
+        azure_endpoint: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        entra_token: str | None = None,
+        base_url: str | None = None,
+        instructions: str = "",
+        modalities: list[api_proto.Modality] = ["text", "audio"],
+        voice: api_proto.Voice = "alloy",
+        input_audio_format: api_proto.AudioFormat = "pcm16",
+        output_audio_format: api_proto.AudioFormat = "pcm16",
+        input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        tool_choice: api_proto.ToolChoice = "auto",
+        temperature: float = 0.8,
+        max_response_output_tokens: int | Literal["inf"] = "inf",
+        http_session: aiohttp.ClientSession | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ):
+        """
+        Create a RealtimeClient instance configured for Azure OpenAI Service.
+
+        Args:
+            azure_deployment (str): The name of your Azure OpenAI deployment.
+            azure_endpoint (str or None, optional): The endpoint URL for your Azure OpenAI resource. If None, will attempt to read from the environment variable AZURE_OPENAI_ENDPOINT.
+            api_version (str or None, optional): API version to use with Azure OpenAI Service. If None, will attempt to read from the environment variable OPENAI_API_VERSION.
+            api_key (str or None, optional): Azure OpenAI API key. If None, will attempt to read from the environment variable AZURE_OPENAI_API_KEY.
+            entra_token (str or None, optional): Azure Entra authentication token. Required if not using API key authentication.
+            base_url (str or None, optional): Base URL for the API endpoint. If None, constructed from the azure_endpoint.
+            instructions (str, optional): Initial system instructions for the model. Defaults to "".
+            modalities (list[api_proto.Modality], optional): Modalities to use, such as ["text", "audio"]. Defaults to ["text", "audio"].
+            voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "alloy".
+            input_audio_format (api_proto.AudioFormat, optional): Format of input audio data. Defaults to "pcm16".
+            output_audio_format (api_proto.AudioFormat, optional): Format of output audio data. Defaults to "pcm16".
+            input_audio_transcription (InputTranscriptionOptions, optional): Options for transcribing input audio. Defaults to DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
+            turn_detection (ServerVadOptions, optional): Options for server-based voice activity detection (VAD). Defaults to DEFAULT_SERVER_VAD_OPTIONS.
+            tool_choice (api_proto.ToolChoice, optional): Tool choice for the model, such as "auto". Defaults to "auto".
+            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+            max_response_output_tokens (int or Literal["inf"], optional): Maximum number of tokens in the response. Defaults to "inf".
+            http_session (aiohttp.ClientSession or None, optional): Async HTTP session to use for requests. If None, a new session will be created.
+            loop (asyncio.AbstractEventLoop or None, optional): Event loop to use for async operations. If None, the current event loop is used.
+
+        Returns:
+            RealtimeClient: An instance of RealtimeClient configured for Azure OpenAI Service.
+
+        Raises:
+            ValueError: If required Azure parameters are missing or invalid.
+        """
+        api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
+        if api_key is None and entra_token is None:
+            raise ValueError(
+                "Missing credentials. Please pass one of `api_key`, `entra_token`, or the `AZURE_OPENAI_API_KEY` environment variable."
+            )
+
+        api_version = api_version or os.getenv("OPENAI_API_VERSION")
+        if api_version is None:
+            raise ValueError(
+                "Must provide either the `api_version` argument or the `OPENAI_API_VERSION` environment variable"
+            )
+
+        if base_url is None:
+            azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
+            if azure_endpoint is None:
+                raise ValueError(
+                    "Missing Azure endpoint. Please pass the `azure_endpoint` parameter or set the `AZURE_OPENAI_ENDPOINT` environment variable."
+                )
+
+            base_url = f"{azure_endpoint.rstrip('/')}/openai"
+        elif azure_endpoint is not None:
+            raise ValueError("base_url and azure_endpoint are mutually exclusive")
+
+        return cls(
+            instructions=instructions,
+            modalities=modalities,
+            voice=voice,
+            input_audio_format=input_audio_format,
+            output_audio_format=output_audio_format,
+            input_audio_transcription=input_audio_transcription,
+            turn_detection=turn_detection,
+            tool_choice=tool_choice,
+            temperature=temperature,
+            max_response_output_tokens=max_response_output_tokens,
+            api_key=api_key,
+            http_session=http_session,
+            loop=loop,
+            azure_deployment=azure_deployment,
+            api_version=api_version,
+            entra_token=entra_token,
+            base_url=base_url,
+        )
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._http_session:
@@ -236,27 +417,27 @@ class RealtimeModel:
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
     ) -> RealtimeSession:
-        opts = _ModelOptions(
-            model=self._default_opts.model,
-            modalities=modalities or self._default_opts.modalities,
-            instructions=instructions or self._default_opts.instructions,
-            voice=voice or self._default_opts.voice,
-            input_audio_format=input_audio_format
-            or self._default_opts.input_audio_format,
-            output_audio_format=output_audio_format
-            or self._default_opts.output_audio_format,
-            input_audio_transcription=(
-                input_audio_transcription
-                or self._default_opts.input_audio_transcription
-            ),
-            tool_choice=tool_choice or self._default_opts.tool_choice,
-            turn_detection=turn_detection or self._default_opts.turn_detection,
-            temperature=temperature or self._default_opts.temperature,
-            max_response_output_tokens=max_response_output_tokens
-            or self._default_opts.max_response_output_tokens,
-            api_key=self._default_opts.api_key,
-            base_url=self._default_opts.base_url,
-        )
+        opts = deepcopy(self._default_opts)
+        if modalities is not None:
+            opts.modalities = modalities
+        if instructions is not None:
+            opts.instructions = instructions
+        if voice is not None:
+            opts.voice = voice
+        if input_audio_format is not None:
+            opts.input_audio_format = input_audio_format
+        if output_audio_format is not None:
+            opts.output_audio_format = output_audio_format
+        if tool_choice is not None:
+            opts.tool_choice = tool_choice
+        if input_audio_transcription is not None:
+            opts.input_audio_transcription
+        if turn_detection is not None:
+            opts.turn_detection = turn_detection
+        if temperature is not None:
+            opts.temperature = temperature
+        if max_response_output_tokens is not None:
+            opts.max_response_output_tokens = max_response_output_tokens
 
         new_session = RealtimeSession(
             chat_ctx=chat_ctx or llm.ChatContext(),
@@ -304,6 +485,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 return
 
             tool_call_id = message.tool_call_id
+            event: api_proto.ClientEvent.ConversationItemCreate | None = None
             if tool_call_id:
                 assert isinstance(message_content, str)
                 event = {
@@ -317,9 +499,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 }
             else:
                 if not isinstance(message_content, list):
-                    message_content = [message.content]
+                    message_content = [message_content]
 
-                event: api_proto.ClientEvent.ConversationItemCreate | None = None
                 if message.role == "user":
                     user_contents: list[
                         api_proto.InputTextContent | api_proto.InputAudioContent
@@ -513,24 +694,27 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
     ) -> None:
-        self._opts = _ModelOptions(
-            model=self._opts.model,
-            modalities=modalities or self._opts.modalities,
-            instructions=instructions or self._opts.instructions,
-            voice=voice or self._opts.voice,
-            input_audio_format=input_audio_format or self._opts.input_audio_format,
-            output_audio_format=output_audio_format or self._opts.output_audio_format,
-            input_audio_transcription=(
-                input_audio_transcription or self._opts.input_audio_transcription
-            ),
-            tool_choice=tool_choice or self._opts.tool_choice,
-            turn_detection=turn_detection or self._opts.turn_detection,
-            temperature=temperature or self._opts.temperature,
-            max_response_output_tokens=max_response_output_tokens
-            or self._opts.max_response_output_tokens,
-            api_key=self._opts.api_key,
-            base_url=self._opts.base_url,
-        )
+        self._opts = deepcopy(self._opts)
+        if modalities is not None:
+            self._opts.modalities = modalities
+        if instructions is not None:
+            self._opts.instructions = instructions
+        if voice is not None:
+            self._opts.voice = voice
+        if input_audio_format is not None:
+            self._opts.input_audio_format = input_audio_format
+        if output_audio_format is not None:
+            self._opts.output_audio_format = output_audio_format
+        if input_audio_transcription is not None:
+            self._opts.input_audio_transcription = input_audio_transcription
+        if turn_detection is not None:
+            self._opts.turn_detection = turn_detection
+        if tool_choice is not None:
+            self._opts.tool_choice = tool_choice
+        if temperature is not None:
+            self._opts.temperature = temperature
+        if max_response_output_tokens is not None:
+            self._opts.max_response_output_tokens = max_response_output_tokens
 
         tools = []
         if self._fnc_ctx is not None:
@@ -550,24 +734,34 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
         }
 
+        session_data: api_proto.ClientEvent.SessionUpdateData = {
+            "modalities": self._opts.modalities,
+            "instructions": self._opts.instructions,
+            "voice": self._opts.voice,
+            "input_audio_format": self._opts.input_audio_format,
+            "output_audio_format": self._opts.output_audio_format,
+            "input_audio_transcription": {
+                "model": self._opts.input_audio_transcription.model,
+            },
+            "turn_detection": server_vad_opts,
+            "tools": tools,
+            "tool_choice": self._opts.tool_choice,
+            "temperature": self._opts.temperature,
+            "max_response_output_tokens": None,
+        }
+
+        # azure doesn't support inf for max_response_output_tokens
+        if not self._opts.is_azure or isinstance(
+            self._opts.max_response_output_tokens, int
+        ):
+            session_data["max_response_output_tokens"] = (
+                self._opts.max_response_output_tokens
+            )
+
         self._queue_msg(
             {
                 "type": "session.update",
-                "session": {
-                    "modalities": self._opts.modalities,
-                    "instructions": self._opts.instructions,
-                    "voice": self._opts.voice,
-                    "input_audio_format": self._opts.input_audio_format,
-                    "output_audio_format": self._opts.output_audio_format,
-                    "input_audio_transcription": {
-                        "model": self._opts.input_audio_transcription.model,
-                    },
-                    "turn_detection": server_vad_opts,
-                    "tools": tools,
-                    "tool_choice": self._opts.tool_choice,
-                    "temperature": self._opts.temperature,
-                    "max_response_output_tokens": self._opts.max_response_output_tokens,
-                },
+                "session": session_data,
             }
         )
 
@@ -577,13 +771,33 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         try:
-            params = {"model": self._opts.model}
-            base_url = self._opts.base_url.rstrip("/")
-            url = urljoin(base_url + "/", "realtime") + f"?{urlencode(params)}"
-            headers = {
-                "Authorization": "Bearer " + self._opts.api_key,
-                "OpenAI-Beta": "realtime=v1",
-            }
+            headers = {"User-Agent": "LiveKit Agents"}
+            query_params: dict[str, str] = {}
+
+            base_url = self._opts.base_url
+            if self._opts.is_azure:
+                if self._opts.entra_token:
+                    headers["Authorization"] = f"Bearer {self._opts.entra_token}"
+
+                if self._opts.api_key:
+                    headers["api-key"] = self._opts.api_key
+
+                if self._opts.api_version:
+                    query_params["api-version"] = self._opts.api_version
+
+                if self._opts.azure_deployment:
+                    query_params["deployment"] = self._opts.azure_deployment
+            else:
+                # OAI endpoint
+                headers["Authorization"] = f"Bearer {self._opts.api_key}"
+                headers["OpenAI-Beta"] = "realtime=v1"
+
+                if self._opts.model:
+                    query_params["model"] = self._opts.model
+
+            url = f"{base_url.rstrip('/')}/realtime?{urlencode(query_params)}"
+            if url.startswith("http"):
+                url = url.replace("http", "ws", 1)
 
             ws_conn = await self._http_session.ws_connect(
                 url,
@@ -769,16 +983,17 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         done_fut = self._loop.create_future()
         item_data = response_output_added["item"]
 
-        assert item_data["type"] in ("message", "function_call")
+        item_type: Literal["message", "function_call"] = item_data["type"]  # type: ignore
+        assert item_type in ("message", "function_call")
+        # function_call doesn't have a role field, defaulting it to assistant
+        item_role: api_proto.Role = item_data.get("role") or "assistant"  # type: ignore
 
         new_output = RealtimeOutput(
             response_id=response_id,
             item_id=item_data["id"],
             output_index=response_output_added["output_index"],
-            type=item_data["type"],
-            role=item_data.get(
-                "role", "assistant"
-            ),  # function_call doesn't have a role field, defaulting it to assistant
+            type=item_type,
+            role=item_role,
             content=[],
             done_fut=done_fut,
         )
@@ -908,8 +1123,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             code: str | None = None
             message: str | None = None
             if error is not None:
-                code = error.get("code")
-                message = error.get("message")
+                code = error.get("code")  # type: ignore
+                message = error.get("message")  # type: ignore
 
             logger.error(
                 "response generation failed",
