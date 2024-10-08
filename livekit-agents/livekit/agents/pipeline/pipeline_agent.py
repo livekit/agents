@@ -140,7 +140,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
         min_endpointing_delay: float = 0.5,
-        preemptive_synthesis: bool = True,
+        preemptive_synthesis: bool = False,
         transcription: AgentTranscriptionOptions = AgentTranscriptionOptions(),
         before_llm_cb: BeforeLLMCallback = _default_before_llm_cb,
         before_tts_cb: BeforeTTSCallback = _default_before_tts_cb,
@@ -433,6 +433,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if not new_transcript:
                 return
 
+            logger.debug(
+                "received user transcript",
+                extra={"user_transcript": new_transcript},
+            )
+
             self._transcribed_text += (
                 " " if self._transcribed_text else ""
             ) + new_transcript
@@ -586,7 +591,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         logger.debug(
             "synthesizing agent reply",
             extra={
-                "user_transcript": handle.user_question,
                 "speech_id": handle.id,
                 "elapsed": elapsed,
             },
