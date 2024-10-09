@@ -110,7 +110,7 @@ jobs:
   trigger-docs-publish:
     name: Publish Docs 
     needs: publish
-    uses: ./.github/workflows/publish-docs.yaml
+    uses: ./.github/workflows/publish-docs.yml
     secrets:
         DOCS_DEPLOY_AWS_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
         DOCS_DEPLOY_AWS_API_SECRET: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
