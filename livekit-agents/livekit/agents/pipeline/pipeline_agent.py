@@ -443,8 +443,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             ) + new_transcript
 
             if self._opts.preemptive_synthesis:
-                if not self._synthesize_agent_reply():
-                    return
+                if (
+                    self._playing_speech is None
+                    or self._playing_speech.allow_interruptions
+                ):
+                    self._synthesize_agent_reply()
 
             self._deferred_validation.on_human_final_transcript(new_transcript)
 
@@ -509,17 +512,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             self._speech_q_changed.clear()
 
-    def _synthesize_agent_reply(self) -> bool:
+    def _synthesize_agent_reply(self):
         """Synthesize the agent reply to the user question, also make sure only one reply
         is synthesized/played at a time"""
 
         if self._pending_agent_reply is not None:
-            if not self._pending_agent_reply.allow_interruptions:
-                logger.debug(
-                    "ignoring reply synthesis since interruptions are not allowed"
-                )
-                return False
-
             self._pending_agent_reply.interrupt()
 
         if self._human_input is not None and not self._human_input.speaking:
@@ -534,8 +531,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._agent_reply_task = asyncio.create_task(
             self._synthesize_answer_task(self._agent_reply_task, new_handle)
         )
-
-        return True
 
     @utils.log_exceptions(logger=logger)
     async def _synthesize_answer_task(
@@ -801,12 +796,21 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
 
+        if (
+            self._playing_speech is not None
+            and not self._playing_speech.allow_interruptions
+        ):
+            logger.debug(
+                "skipping validation, agent is speaking and does not allow interruptions",
+                extra={"speech_id": self._playing_speech.id},
+            )
+            return
+
         if self._pending_agent_reply is None:
             if self._opts.preemptive_synthesis or not self._transcribed_text:
                 return
 
-            if not self._synthesize_agent_reply():
-                return
+            self._synthesize_agent_reply()
 
         assert self._pending_agent_reply is not None
 
