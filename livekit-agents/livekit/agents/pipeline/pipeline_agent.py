@@ -600,7 +600,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
-        if not (is_using_tools and not interrupted):
+        if interrupted or not is_using_tools:
             return [], collected_text, interrupted
 
         assert isinstance(speech_handle.source, LLMStream)
