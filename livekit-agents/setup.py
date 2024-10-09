@@ -12,16 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import pathlib
-
 import setuptools
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, "livekit", "agents", "version.py"), "r") as f:
-    exec(f.read(), about)
-
+version_file = here / "livekit" / "agents" / "version.py"
+exec(version_file.read_text(), about)
 
 setuptools.setup(
     name="livekit-agents",
@@ -76,3 +73,46 @@ setuptools.setup(
         "Source": "https://github.com/livekit/agents",
     },
 )
+
+
+
+
+"""Original Code 
+import os
+import pathlib
+
+import setuptools
+
+here = pathlib.Path(__file__).parent.resolve()
+about = {}
+with open(os.path.join(here, "livekit", "agents", "version.py"), "r") as f:
+    exec(f.read(), about)
+
+ Improved Code
+import pathlib
+import setuptools
+
+here = pathlib.Path(__file__).parent.resolve()
+about = {}
+version_file = here / "livekit" / "agents" / "version.py"
+exec(version_file.read_text(), about)
+
+Removed os Import:
+
+Original: import os
+Improved: Removed
+Reason: The os module was used only for path manipulations, which can be handled by pathlib. Removing it simplifies the imports and makes the code more consistent.
+
+Consistent Use of pathlib:
+
+Original:
+
+with open(os.path.join(here, "livekit", "agents", "version.py"), "r") as f:
+    exec(f.read(), about)
+
+Improved:
+
+version_file = here / "livekit" / "agents" / "version.py"
+exec(version_file.read_text(), about)
+
+Reason: Using pathlib consistently for all path manipulations improves readability and modernizes the code. pathlib provides a more intuitive and object-oriented approach to handling file paths."""
