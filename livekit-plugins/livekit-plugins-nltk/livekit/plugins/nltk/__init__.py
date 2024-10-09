@@ -41,7 +41,7 @@ Plugin.register_plugin(NltkPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()
-NOT_IN_ALL = [m for m in module if m not in __all__]
+NOT_IN_ALL = [m for m in _module if m not in __all__]
 
 __pdoc__ = {}
 

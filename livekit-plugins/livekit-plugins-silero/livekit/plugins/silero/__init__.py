@@ -30,8 +30,8 @@ class SileroPlugin(Plugin):
 Plugin.register_plugin(SileroPlugin())
 
 # Cleanup docs of unexported modules
-module = dir()
-NOT_IN_ALL = [m for m in module if m not in __all__]
+_module = dir()
+NOT_IN_ALL = [m for m in _module if m not in __all__]
 
 __pdoc__ = {}
 
