@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 import json
 import pathlib
 import re
 
 
-def update_py_version(project_root: pathlib.Path, py_version_path: pathlib.Path) -> str:
+def update_py_version(
+    project_root: pathlib.Path, py_version_path: pathlib.Path
+) -> str | None:
     pkg_file = project_root / "package.json"
     if not pkg_file.exists():
         return
@@ -62,7 +66,9 @@ if __name__ == "__main__":
         if not plugin.is_dir():
             continue
 
-        plugin_name = plugin.name.split("-")[-1]
+        plugin_name = plugin.name.removeprefix("livekit-plugins-")
+        plugin_name = plugin_name.replace("-", "_")  # module name can't have dashes
+
         version = update_py_version(
             plugin, plugin / "livekit" / "plugins" / plugin_name / "version.py"
         )
