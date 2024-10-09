@@ -681,7 +681,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         return extra_tools_messages, collected_text, interrupted
 
-    def _wait_and_commit_user_question(self, speech_handle: SpeechHandle) -> None:
+    async def _wait_and_commit_user_question(self, speech_handle: SpeechHandle) -> None:
         user_question = speech_handle.user_question
         synthesis_handle = speech_handle.synthesis_handle
         play_handle = synthesis_handle.play()
