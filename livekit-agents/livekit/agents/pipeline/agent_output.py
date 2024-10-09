@@ -184,6 +184,7 @@ class AgentOutput:
             )
         finally:
             await utils.aio.gracefully_cancel(synth)
+            await handle.tts_forwarder.aclose()
 
 
 @utils.log_exceptions(logger=logger)
@@ -238,7 +239,7 @@ async def _stream_synthesis_task(
             if first_frame:
                 first_frame = False
                 logger.debug(
-                    "first TTS frame",
+                    "received first TTS frame",
                     extra={
                         "speech_id": handle.speech_id,
                         "elapsed": round(time.time() - start_time, 3),
