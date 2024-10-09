@@ -242,8 +242,8 @@ def run_worker(args: proto.CliArgs) -> None:
     loop.slow_callback_duration = 0.1  # 100ms
     utils.aio.debug.hook_slow_callbacks(2)
 
-    if args.room:
-        # directly connect to a specific roomj
+    if args.room and args.reload_count == 0:
+        # directly connect to a specific room
         @worker.once("worker_registered")
         def _connect_on_register(worker_id: str, server_info: models.ServerInfo):
             logger.info("connecting to room %s", args.room)

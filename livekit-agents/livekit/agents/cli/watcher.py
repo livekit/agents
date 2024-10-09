@@ -84,7 +84,6 @@ class WatchServer:
             logger.log(DEV_LEVEL, f"Watching {pth}")
 
         self._pch = await utils.aio.duplex_unix._AsyncDuplex.open(self._mp_pch)
-
         read_ipc_task = self._loop.create_task(self._read_ipc_task())
 
         try:
@@ -100,6 +99,8 @@ class WatchServer:
             await self._pch.aclose()
 
     async def _on_reload(self, _: Set[watchfiles.main.FileChange]) -> None:
+        self._cli_args.reload_count += 1
+
         if self._reloading_jobs:
             return
 
@@ -156,7 +157,6 @@ class WatchClient:
 
                 if isinstance(msg, proto.ActiveJobsRequest):
                     jobs = self._worker.active_jobs
-
                     await channel.asend_message(
                         self._cch, proto.ActiveJobsResponse(jobs=jobs)
                     )
