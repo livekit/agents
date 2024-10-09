@@ -2,4 +2,5 @@
 "livekit-agents": patch
 ---
 
-patch: move function calling into its own method
+Simplify the play speech method by refactoring into smaller methods.
+Add error logging when function calls fail.

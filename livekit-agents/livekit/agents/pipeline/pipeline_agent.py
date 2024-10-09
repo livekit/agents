@@ -681,20 +681,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         return extra_tools_messages, collected_text, interrupted
 
-    async def _play_speech(self, speech_handle: SpeechHandle) -> None:
-        try:
-            await speech_handle.wait_for_initialization()
-        except asyncio.CancelledError:
-            return
-
-        await self._agent_publication.wait_for_subscription()
-
-        synthesis_handle = speech_handle.synthesis_handle
-        if synthesis_handle.interrupted:
-            return
-
+    def _wait_and_commit_user_question(self, speech_handle: SpeechHandle) -> None:
         user_question = speech_handle.user_question
-
+        synthesis_handle = speech_handle.synthesis_handle
         play_handle = synthesis_handle.play()
         join_fut = play_handle.join()
 
@@ -748,6 +737,19 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         _commit_user_question_if_needed()
 
+    async def _play_speech(self, speech_handle: SpeechHandle) -> None:
+        try:
+            await speech_handle.wait_for_initialization()
+        except asyncio.CancelledError:
+            return
+
+        await self._agent_publication.wait_for_subscription()
+
+        if speech_handle.synthesis_handle.interrupted:
+            return
+
+        await self._wait_and_commit_user_question(speech_handle)
+
         (
             extra_tools_messages,
             collected_text,
@@ -755,7 +757,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         ) = await self._execute_function_calls(speech_handle)
 
         if speech_handle.add_to_chat_ctx and (
-            not user_question or speech_handle.user_commited
+            not speech_handle.user_question or speech_handle.user_commited
         ):
             self._chat_ctx.messages.extend(extra_tools_messages)
 
