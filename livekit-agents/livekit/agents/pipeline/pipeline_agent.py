@@ -124,6 +124,10 @@ class AgentTranscriptionOptions:
 
 
 class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
+    """
+    A pipeline agent (VAD + STT + LLM + TTS) implementation.
+    """
+
     MIN_TIME_PLAYED_FOR_COMMIT = 1.5
     """Minimum time played for the user speech to be committed to the chat context"""
 
