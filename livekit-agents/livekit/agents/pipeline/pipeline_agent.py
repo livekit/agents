@@ -14,7 +14,7 @@ from .._types import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
 from .agent_output import AgentOutput, SynthesisHandle
 from .agent_playout import AgentPlayout
-from .human_input import HumanInput
+from .human_input import HumanInput, SpeechDetectionMode
 from .log import logger
 from .plotter import AssistantPlotter
 from .speech_handle import SpeechHandle
@@ -99,6 +99,7 @@ class _ImplOptions:
     before_tts_cb: BeforeTTSCallback
     plotting: bool
     transcription: AgentTranscriptionOptions
+    speech_detection_mode: SpeechDetectionMode
 
 
 @dataclass(frozen=True)
@@ -134,7 +135,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        vad: vad.VAD,
+        vad: vad.VAD | None,
         stt: stt.STT,
         llm: LLM,
         tts: tts.TTS,
@@ -150,6 +151,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         before_tts_cb: BeforeTTSCallback = _default_before_tts_cb,
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
+        speech_detection_mode: SpeechDetectionMode = SpeechDetectionMode.VAD,
         # backward compatibility
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply | None = None,
     ) -> None:
@@ -182,8 +184,16 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 (e.g: editing the pronunciation of a word).
             plotting: Whether to enable plotting for debugging. matplotlib must be installed.
             loop: Event loop to use. Default to asyncio.get_event_loop().
+            speech_detection_mode: Whether to use the VAD or the STT for speech detection. Note that some
+                STT providers may not support streaming, in which case VAD is the only option.
         """
         super().__init__()
+        if vad is None:
+            if not stt.capabilities.streaming:
+                raise ValueError("STT must support streaming if no VAD is provided")
+            if speech_detection_mode == SpeechDetectionMode.VAD:
+                raise ValueError("VAD is required for SpeechDetectionMode.VAD")
+
         self._loop = loop or asyncio.get_event_loop()
 
         if will_synthesize_assistant_reply is not None:
@@ -202,6 +212,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             transcription=transcription,
             before_llm_cb=before_llm_cb,
             before_tts_cb=before_tts_cb,
+            speech_detection_mode=speech_detection_mode,
         )
         self._plotter = AssistantPlotter(self._loop)
 
@@ -278,7 +289,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         return self._stt
 
     @property
-    def vad(self) -> vad.VAD:
+    def vad(self) -> vad.VAD | None:
         return self._vad
 
     def start(
@@ -396,6 +407,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             stt=self._stt,
             participant=participant,
             transcription=self._opts.transcription.user_transcription,
+            speech_detection_mode=self._opts.speech_detection_mode,
         )
 
         def _on_start_of_speech(ev: vad.VADEvent) -> None:
