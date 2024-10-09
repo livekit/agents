@@ -184,7 +184,6 @@ class AgentOutput:
             )
         finally:
             await utils.aio.gracefully_cancel(synth)
-            await handle.tts_forwarder.aclose()
 
 
 @utils.log_exceptions(logger=logger)
