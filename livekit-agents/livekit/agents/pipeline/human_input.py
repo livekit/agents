@@ -185,4 +185,5 @@ class HumanInput(utils.EventEmitter[EventTypes]):
 
             await stt_forwarder.aclose()
             await stt_stream.aclose()
-            await vad_stream.aclose()
+            if vad_stream is not None:
+                await vad_stream.aclose()
