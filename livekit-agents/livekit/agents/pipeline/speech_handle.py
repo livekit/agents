@@ -146,9 +146,12 @@ class SpeechHandle:
             self._synthesis_handle is not None and self._synthesis_handle.interrupted
         )
 
-    def interrupt(self, force: bool = False) -> None:
-        if not self.allow_interruptions and not force:
+    def interrupt(self) -> None:
+        if not self.allow_interruptions:
             raise RuntimeError("interruptions are not allowed")
+        self.cancel()
+
+    def cancel(self) -> None:
         self._init_fut.cancel()
 
         if self._synthesis_handle is not None:
