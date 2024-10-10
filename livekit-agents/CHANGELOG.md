@@ -1,5 +1,39 @@
 # livekit-agents
 
+## 0.10.1
+
+### Patch Changes
+
+- use rtc.combine_audio_frames - [#841](https://github.com/livekit/agents/pull/841) ([@theomonnom](https://github.com/theomonnom))
+
+- Fix agent state to not change to listening when user speaks - [#857](https://github.com/livekit/agents/pull/857) ([@martin-purplefish](https://github.com/martin-purplefish))
+  Fixed canceling uncancelable speech
+  Fixed bug where agent would get stuck with uninterruptable speech.
+
+- Fix bug where empty audio would cause agent to get stuck. - [#836](https://github.com/livekit/agents/pull/836) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- fix: handle when STT does not return any speech - [#854](https://github.com/livekit/agents/pull/854) ([@davidzhao](https://github.com/davidzhao))
+
+- Fix watcher reloaded processes double connecting to rooms - [#822](https://github.com/livekit/agents/pull/822) ([@keepingitneil](https://github.com/keepingitneil))
+
+- voice-pipeline: avoid stacked replies when interruptions is disallowed - [#869](https://github.com/livekit/agents/pull/869) ([@theomonnom](https://github.com/theomonnom))
+
+- disable preemptive_synthesis by default - [#867](https://github.com/livekit/agents/pull/867) ([@theomonnom](https://github.com/theomonnom))
+
+- Fixed bug where agent would get stuck on non-interruptable speech - [#850](https://github.com/livekit/agents/pull/850) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- use EventEmitter from rtc - [#879](https://github.com/livekit/agents/pull/879) ([@theomonnom](https://github.com/theomonnom))
+
+- AudioByteStream: avoid empty frames on flush - [#840](https://github.com/livekit/agents/pull/840) ([@theomonnom](https://github.com/theomonnom))
+
+- improve worker logs - [#878](https://github.com/livekit/agents/pull/878) ([@theomonnom](https://github.com/theomonnom))
+
+- voice-pipeline: fix tts_forwarder not always being closed - [#871](https://github.com/livekit/agents/pull/871) ([@theomonnom](https://github.com/theomonnom))
+
+- bump livekit-rtc to v0.17.5 - [#880](https://github.com/livekit/agents/pull/880) ([@theomonnom](https://github.com/theomonnom))
+
+- Fixed bug where agent would freeze if before_llm_cb returned false - [#865](https://github.com/livekit/agents/pull/865) ([@martin-purplefish](https://github.com/martin-purplefish))
+
 ## 0.10.0
 
 ### Minor Changes

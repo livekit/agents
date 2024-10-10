@@ -147,7 +147,7 @@ class TTSSegmentsForwarder:
 
         self._played_text = ""
 
-        self._main_atask = self._loop.create_task(self._main_task())
+        self._main_atask: asyncio.Task | None = None
         self._task_set = utils.aio.TaskSet(loop)
 
     def segment_playout_started(self) -> None:
@@ -157,6 +157,9 @@ class TTSSegmentsForwarder:
         """
         self._check_not_closed()
         self._playing_seg_index += 1
+
+        if self._main_atask is None:
+            self._main_atask = asyncio.create_task(self._main_task())
 
     def segment_playout_finished(self) -> None:
         """
@@ -237,7 +240,9 @@ class TTSSegmentsForwarder:
         self._audio_q_changed.set()
 
         await self._task_set.aclose()
-        await self._main_atask
+
+        if self._main_atask is not None:
+            await self._main_atask
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:

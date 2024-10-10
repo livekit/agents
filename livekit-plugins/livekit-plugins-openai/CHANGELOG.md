@@ -1,5 +1,13 @@
 # livekit-plugins-openai
 
+## 0.10.3
+
+### Patch Changes
+
+- fix: handle when STT does not return any speech - [#854](https://github.com/livekit/agents/pull/854) ([@davidzhao](https://github.com/davidzhao))
+
+- Support for Realtime API with Azure OpenAI - [#848](https://github.com/livekit/agents/pull/848) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.10.2
 
 ### Patch Changes

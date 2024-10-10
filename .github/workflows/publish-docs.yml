@@ -1,0 +1,59 @@
+name: Publish docs
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets: 
+      DOCS_DEPLOY_AWS_ACCESS_KEY: {}
+      DOCS_DEPLOY_AWS_API_SECRET: {}
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'  # Specify the Python version you want to use
+
+      - name: Create and activate virtual environment
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+
+      - name: Install pdoc and other dependencies
+        run: |
+          source venv/bin/activate
+          python -m pip install pdoc3 setuptools
+
+      - name: Install package
+        run: |
+          source venv/bin/activate
+          python -m pip install ./livekit-agents \
+                                ./livekit-plugins/livekit-plugins-anthropic \
+                                ./livekit-plugins/livekit-plugins-azure \
+                                ./livekit-plugins/livekit-plugins-cartesia \
+                                ./livekit-plugins/livekit-plugins-deepgram \
+                                ./livekit-plugins/livekit-plugins-elevenlabs \
+                                ./livekit-plugins/livekit-plugins-google \
+                                ./livekit-plugins/livekit-plugins-nltk \
+                                ./livekit-plugins/livekit-plugins-openai
+
+      - name: Build Docs
+        run: |
+          source venv/bin/activate
+          python -m pdoc --skip-errors --html livekit --output-dir docs
+
+      - name: S3 Upload
+        run: |
+          source venv/bin/activate
+          aws s3 cp docs/ s3://livekit-docs/python --recursive
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
+          AWS_DEFAULT_REGION: "us-east-1"

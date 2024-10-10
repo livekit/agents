@@ -124,6 +124,10 @@ class AgentTranscriptionOptions:
 
 
 class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
+    """
+    A pipeline agent (VAD + STT + LLM + TTS) implementation.
+    """
+
     MIN_TIME_PLAYED_FOR_COMMIT = 1.5
     """Minimum time played for the user speech to be committed to the chat context"""
 
@@ -893,7 +897,7 @@ async def _llm_stream_to_str_iterable(
         if first_frame:
             first_frame = False
             logger.debug(
-                "first LLM token",
+                "received first LLM token",
                 extra={
                     "speech_id": speech_id,
                     "elapsed": round(time.time() - start_time, 3),
