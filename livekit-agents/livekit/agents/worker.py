@@ -482,8 +482,11 @@ class Worker(utils.EventEmitter[EventTypes]):
                     else agent.WorkerStatus.WS_FULL
                 )
 
+                normalized_load = current_load / _WorkerEnvOption.getvalue(
+                    self._opts.load_threshold, self._devmode
+                )
                 update = agent.UpdateWorkerStatus(
-                    load=current_load, status=current_status
+                    load=normalized_load, status=current_status
                 )
 
                 # only log if status has changed
