@@ -595,20 +595,99 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             },
         )
 
-    async def _play_speech(self, speech_handle: SpeechHandle) -> None:
-        try:
-            await speech_handle.wait_for_initialization()
-        except asyncio.CancelledError:
-            return
+    async def _execute_function_calls(
+        self, speech_handle: SpeechHandle
+    ) -> tuple[list[ChatMessage], str, bool]:
+        collected_text = speech_handle.synthesis_handle.tts_forwarder.played_text
+        interrupted = speech_handle.interrupted
+        is_using_tools = isinstance(speech_handle.source, LLMStream) and len(
+            speech_handle.source.function_calls
+        )
 
-        await self._agent_publication.wait_for_subscription()
+        if interrupted or not is_using_tools:
+            return [], collected_text, interrupted
 
-        synthesis_handle = speech_handle.synthesis_handle
-        if synthesis_handle.interrupted:
-            return
+        assert isinstance(speech_handle.source, LLMStream)
+        assert (
+            not speech_handle.user_question or speech_handle.user_commited
+        ), "user speech should have been committed before using tools"
 
+        # execute functions
+        call_ctx = AgentCallContext(self, speech_handle.source)
+        tk = _CallContextVar.set(call_ctx)
+        self.emit("function_calls_collected", speech_handle.source.function_calls)
+        called_fncs_info = speech_handle.source.function_calls
+
+        called_fncs = []
+        for fnc in called_fncs_info:
+            called_fnc = fnc.execute()
+            called_fncs.append(called_fnc)
+            logger.debug(
+                "executing ai function",
+                extra={
+                    "function": fnc.function_info.name,
+                    "speech_id": speech_handle.id,
+                },
+            )
+            try:
+                await called_fnc.task
+            except Exception as e:
+                logger.error(
+                    "error executing ai function",
+                    extra={
+                        "function": fnc.function_info.name,
+                        "speech_id": speech_handle.id,
+                        "error": str(e),
+                    },
+                )
+
+        self.emit("function_calls_finished", called_fncs)
+        _CallContextVar.reset(tk)
+
+        tool_calls = []
+        tool_calls_results_msg = []
+
+        for called_fnc in called_fncs:
+            # ignore the function calls that returns None
+            if called_fnc.result is None:
+                continue
+
+            tool_calls.append(called_fnc.call_info)
+            tool_calls_results_msg.append(
+                ChatMessage.create_tool_from_called_function(called_fnc)
+            )
+
+        extra_tools_messages = []
+        if tool_calls:
+            extra_tools_messages.append(ChatMessage.create_tool_calls(tool_calls))
+            extra_tools_messages.extend(tool_calls_results_msg)
+
+            chat_ctx = speech_handle.source.chat_ctx.copy()
+            chat_ctx.messages.extend(extra_tools_messages)
+
+            answer_llm_stream = self._llm.chat(
+                chat_ctx=chat_ctx,
+                fnc_ctx=self._fnc_ctx,
+            )
+            answer_synthesis = self._synthesize_agent_speech(
+                speech_handle.id, answer_llm_stream
+            )
+            # replace the synthesis handle with the new one to allow interruption
+            speech_handle.synthesis_handle = answer_synthesis
+            play_handle = answer_synthesis.play()
+            await play_handle.join()
+
+            collected_text = answer_synthesis.tts_forwarder.played_text
+            interrupted = answer_synthesis.interrupted
+        else:
+            collected_text = speech_handle.synthesis_handle.tts_forwarder.played_text
+            interrupted = speech_handle.interrupted
+
+        return extra_tools_messages, collected_text, interrupted
+
+    async def _wait_and_commit_user_question(self, speech_handle: SpeechHandle) -> None:
         user_question = speech_handle.user_question
-
+        synthesis_handle = speech_handle.synthesis_handle
         play_handle = synthesis_handle.play()
         join_fut = play_handle.join()
 
@@ -662,84 +741,27 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         _commit_user_question_if_needed()
 
-        collected_text = speech_handle.synthesis_handle.tts_forwarder.played_text
-        interrupted = speech_handle.interrupted
-        is_using_tools = isinstance(speech_handle.source, LLMStream) and len(
-            speech_handle.source.function_calls
-        )
+    async def _play_speech(self, speech_handle: SpeechHandle) -> None:
+        try:
+            await speech_handle.wait_for_initialization()
+        except asyncio.CancelledError:
+            return
 
-        extra_tools_messages = []  # additional messages from the functions to add to the context if needed
+        await self._agent_publication.wait_for_subscription()
 
-        # if the answer is using tools, execute the functions and automatically generate
-        # a response to the user question from the returned values
-        if is_using_tools and not interrupted:
-            assert isinstance(speech_handle.source, LLMStream)
-            assert (
-                not user_question or speech_handle.user_commited
-            ), "user speech should have been committed before using tools"
+        if speech_handle.synthesis_handle.interrupted:
+            return
 
-            # execute functions
-            call_ctx = AgentCallContext(self, speech_handle.source)
-            tk = _CallContextVar.set(call_ctx)
-            self.emit("function_calls_collected", speech_handle.source.function_calls)
-            called_fncs_info = speech_handle.source.function_calls
+        await self._wait_and_commit_user_question(speech_handle)
 
-            called_fncs = []
-            for fnc in called_fncs_info:
-                called_fnc = fnc.execute()
-                called_fncs.append(called_fnc)
-                logger.debug(
-                    "executing ai function",
-                    extra={
-                        "function": fnc.function_info.name,
-                        "speech_id": speech_handle.id,
-                    },
-                )
-                try:
-                    await called_fnc.task
-                except Exception:
-                    pass
-
-            self.emit("function_calls_finished", called_fncs)
-            _CallContextVar.reset(tk)
-
-            tool_calls = []
-            tool_calls_results_msg = []
-
-            for called_fnc in called_fncs:
-                # ignore the function calls that returns None
-                if called_fnc.result is None:
-                    continue
-
-                tool_calls.append(called_fnc.call_info)
-                tool_calls_results_msg.append(
-                    ChatMessage.create_tool_from_called_function(called_fnc)
-                )
-
-            if tool_calls:
-                extra_tools_messages.append(ChatMessage.create_tool_calls(tool_calls))
-                extra_tools_messages.extend(tool_calls_results_msg)
-
-                chat_ctx = speech_handle.source.chat_ctx.copy()
-                chat_ctx.messages.extend(extra_tools_messages)
-
-                answer_llm_stream = self._llm.chat(
-                    chat_ctx=chat_ctx,
-                    fnc_ctx=self._fnc_ctx,
-                )
-                answer_synthesis = self._synthesize_agent_speech(
-                    speech_handle.id, answer_llm_stream
-                )
-                # replace the synthesis handle with the new one to allow interruption
-                speech_handle.synthesis_handle = answer_synthesis
-                play_handle = answer_synthesis.play()
-                await play_handle.join()
-
-                collected_text = answer_synthesis.tts_forwarder.played_text
-                interrupted = answer_synthesis.interrupted
+        (
+            extra_tools_messages,
+            collected_text,
+            interrupted,
+        ) = await self._execute_function_calls(speech_handle)
 
         if speech_handle.add_to_chat_ctx and (
-            not user_question or speech_handle.user_commited
+            not speech_handle.user_question or speech_handle.user_commited
         ):
             self._chat_ctx.messages.extend(extra_tools_messages)
 
