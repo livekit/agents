@@ -8,14 +8,14 @@ from livekit.agents import (
     AutoSubscribe,
     JobContext,
     WorkerOptions,
-    transcription,
     cli,
     llm,
     stt,
     tokenize,
+    transcription,
     tts,
 )
-from livekit.plugins import deepgram, elevenlabs, openai, silero
+from livekit.plugins import deepgram, elevenlabs, openai
 
 load_dotenv()
 
