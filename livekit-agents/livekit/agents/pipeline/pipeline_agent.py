@@ -521,7 +521,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         is synthesized/played at a time"""
 
         if self._pending_agent_reply is not None:
-            self._pending_agent_reply.interrupt()
+            self._pending_agent_reply.cancel()
 
         if self._human_input is not None and not self._human_input.speaking:
             self._update_state("thinking", 0.2)
@@ -564,7 +564,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         llm_stream = self._opts.before_llm_cb(self, copied_ctx)
         if llm_stream is False:
-            handle.interrupt()
+            handle.cancel()
             return
 
         if asyncio.iscoroutine(llm_stream):
