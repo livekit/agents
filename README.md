@@ -14,7 +14,7 @@ Looking for the JS/TS library? Check out [AgentsJS](https://github.com/livekit/a
 
 ## ✨ [NEW] OpenAI Realtime API support
 
-We're partnering with OpenAI on a new `MultimodalAgent` API in the Agents framework. This class completely wraps OpenAI’s Realtime API, abstract away the raw wire protocol, and provide an ultra-low latency WebRTC transport between GPT-4o and your users’ devices. This same stack powers Advanced Voice in the ChatGPT app.
+We are partnering with OpenAI on a new `MultimodalAgent` API in the Agents framework. This class completely wraps OpenAI’s Realtime API, abstracts away the raw wire protocol, and provide an ultra-low latency WebRTC transport between GPT-4o and your users’ devices. This same stack powers Advanced Voice in the ChatGPT app.
 
 - Try the Realtime API in our [playground](https://playground.livekit.io/) [[code](https://github.com/livekit-examples/realtime-playground)]
 - Check out our [guide](https://docs.livekit.io/agents/openai) to building your first app with this new API
