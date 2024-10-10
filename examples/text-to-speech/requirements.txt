@@ -1,4 +1,4 @@
-livekit-agents>=0.10.1
+livekit-agents>=0.10.2
 livekit-plugins-openai>=0.10.3
 livekit-plugins-cartesia>=0.4.2
 livekit-plugins-elevenlabs>=0.7.5

@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.10.2
+
+### Patch Changes
+
+- Allow forcing interruptions of incomplete audio - [#891](https://github.com/livekit/agents/pull/891) ([@martin-purplefish](https://github.com/martin-purplefish))
+
 ## 0.10.1
 
 ### Patch Changes
