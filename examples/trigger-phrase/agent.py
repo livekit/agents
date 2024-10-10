@@ -8,6 +8,7 @@ from livekit.agents import (
     AutoSubscribe,
     JobContext,
     WorkerOptions,
+    transcription,
     cli,
     llm,
     stt,
@@ -47,6 +48,7 @@ async def _respond_to_user(
     agent_audio_source: rtc.AudioSource,
     local_llm: llm.LLM,
     llm_stream: llm.LLMStream,
+    stt_forwarder: transcription.STTSegmentsForwarder,
 ):
     playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
     tts_stream = tts.stream()
@@ -61,6 +63,7 @@ async def _respond_to_user(
     playout_task = asyncio.create_task(_playout_task(playout_q, agent_audio_source))
 
     async for ev in stt_stream:
+        stt_forwarder.update(ev)
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             new_transcribed_text_words = word_tokenizer_without_punctuation.tokenize(
                 text=ev.alternatives[0].text
@@ -98,18 +101,8 @@ async def _llm_stream_to_str_iterable(stream: llm.LLMStream) -> AsyncIterable[st
 async def entrypoint(ctx: JobContext):
     logger.info("starting trigger-phrase agent example")
 
-    vad = silero.VAD.load(
-        min_speech_duration=0.01,
-        min_silence_duration=0.5,
-    )
-
-    stt_local = stt.StreamAdapter(
-        stt=deepgram.STT(keywords=[(TRIGGER_PHRASE, 3.5)]), vad=vad
-    )
+    stt_local = deepgram.STT(keywords=[(TRIGGER_PHRASE, 3.5)])
     stt_stream = stt_local.stream()
-
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    first_participant = await ctx.wait_for_participant()
 
     # publish agent track
     tts = elevenlabs.TTS(model_id="eleven_turbo_v2")
@@ -119,7 +112,6 @@ async def entrypoint(ctx: JobContext):
     )
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
-    await ctx.room.local_participant.publish_track(agent_track, options)
 
     # setup LLM
     initial_ctx = llm.ChatContext().append(
@@ -134,6 +126,9 @@ async def entrypoint(ctx: JobContext):
 
     async def subscribe_track(participant: rtc.RemoteParticipant, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
+        stt_forwarder = transcription.STTSegmentsForwarder(
+            room=ctx.room, participant=participant, track=track
+        )
         asyncio.create_task(
             _respond_to_user(
                 stt_stream=stt_stream,
@@ -141,6 +136,7 @@ async def entrypoint(ctx: JobContext):
                 agent_audio_source=agent_audio_source,
                 local_llm=local_llm,
                 llm_stream=llm_stream,
+                stt_forwarder=stt_forwarder,
             )
         )
 
@@ -153,12 +149,12 @@ async def entrypoint(ctx: JobContext):
         publication: rtc.TrackPublication,
         participant: rtc.RemoteParticipant,
     ):
-        if (
-            track.kind == rtc.TrackKind.KIND_AUDIO
-            and participant.identity == first_participant.identity
-        ):
+        if track.kind == rtc.TrackKind.KIND_AUDIO:
             subscribe_task = asyncio.create_task(subscribe_track(participant, track))
             asyncio.gather(subscribe_task)
+
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+    await ctx.room.local_participant.publish_track(agent_track, options)
 
 
 if __name__ == "__main__":
