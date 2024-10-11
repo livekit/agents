@@ -270,7 +270,7 @@ PARAGRAPH_TEST_CASES = [
     ),
     (
         "\n\n  Paragraph with leading and trailing spaces.  \n\n",
-        [("Paragraph with leading and trailing spaces.", 4, 46)],
+        [("Paragraph with leading and trailing spaces.", 4, 47)],
     ),
     (
         "Para 1.\n\n\n\nPara 2.",  # Multiple newlines between paragraphs
