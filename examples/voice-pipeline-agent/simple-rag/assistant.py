@@ -29,10 +29,15 @@ async def entrypoint(ctx: JobContext):
 
         result = annoy_index.query(user_embedding[0].embedding, n=1)[0]
         paragraph = paragraphs_by_uuid[result.userdata]
-        logger.info(f"enriching with RAG: {paragraph}")
-        user_msg.content = (
-            "Context:\n" + paragraph + "\n\nUser question: " + user_msg.content
-        )
+        if paragraph:
+            logger.info(f"enriching with RAG: {paragraph}")
+            rag_msg = llm.ChatMessage.create(
+                text="Context:\n" + paragraph,
+                role="assistant",
+            )
+            # replace last message with RAG, and append user message at the end
+            chat_ctx.messages[-1] = rag_msg
+            chat_ctx.messages.append(user_msg)
 
     initial_ctx = llm.ChatContext().append(
         role="system",
