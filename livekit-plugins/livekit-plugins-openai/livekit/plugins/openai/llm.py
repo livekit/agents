@@ -552,7 +552,11 @@ class LLMStream(llm.LLMStream):
         return llm.ChatChunk(
             choices=[
                 llm.Choice(
-                    delta=llm.ChoiceDelta(role="assistant", tool_calls=[fnc_info]),
+                    delta=llm.ChoiceDelta(
+                        role="assistant",
+                        tool_calls=[fnc_info],
+                        content=choice.delta.content,
+                    ),
                     index=choice.index,
                 )
             ]
