@@ -4,7 +4,8 @@ from livekit.plugins import silero
 from . import utils
 
 VAD = silero.VAD.load(
-    min_speech_duration=0.5, min_silence_duration=0.5, padding_duration=1.0
+    min_speech_duration=0.5,
+    min_silence_duration=0.5,
 )
 
 

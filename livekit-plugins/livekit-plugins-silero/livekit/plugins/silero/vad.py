@@ -15,7 +15,6 @@
 from __future__ import annotations, print_function
 
 import asyncio
-import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -55,7 +54,6 @@ class VAD(agents.vad.VAD):
         *,
         min_speech_duration: float = 0.05,
         min_silence_duration: float = 0.25,
-        prefix_padding_duration: float = 0.1,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
         sample_rate: Literal[8000, 16000] = 16000,
@@ -199,13 +197,13 @@ class VADStream(agents.vad.VADStream):
                 pub_sample_rate = input_frame.sample_rate
 
                 # alloc the buffers now that we know the input sample rate
-                pub_prefix_padding_samples = math.ceil(
+                pub_prefix_padding_samples = int(
                     self._opts.prefix_padding_duration * pub_sample_rate
                 )
 
                 speech_buffer = np.empty(
                     int(self._opts.max_buffered_speech * pub_sample_rate)
-                    + int(self._opts.prefix_padding_duration * pub_sample_rate),
+                    + pub_prefix_padding_samples,
                     dtype=np.int16,
                 )
 
@@ -273,7 +271,7 @@ class VADStream(agents.vad.VADStream):
 
                 # copy the inference window to the speech buffer
                 available_space = len(speech_buffer) - speech_buffer_index
-                to_copy_buffer = min(len(input_frame.data), available_space)
+                to_copy_buffer = min(to_copy_int, available_space)
                 if to_copy_buffer > 0:
                     speech_buffer[
                         speech_buffer_index : speech_buffer_index + to_copy_buffer
