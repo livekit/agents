@@ -5,7 +5,7 @@ from . import utils
 
 VAD = silero.VAD.load(
     min_speech_duration=0.5,
-    min_silence_duration=0.5,
+    min_silence_duration=0.6,
 )
 
 
