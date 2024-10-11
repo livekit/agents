@@ -12,7 +12,7 @@ def split_paragraphs(text: str) -> list[tuple[str, int, int]]:
     # Find all splits in the text
     splits = list(re.finditer(pattern, text))
 
-    paragraphs = []
+    paragraphs: list[tuple[str, int, int]] = []
     start = 0
 
     # Handle the case where there are no splits (i.e., single paragraph)
