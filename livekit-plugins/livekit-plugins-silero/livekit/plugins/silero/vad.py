@@ -273,7 +273,7 @@ class VADStream(agents.vad.VADStream):
 
                 # copy the inference window to the speech buffer
                 available_space = len(speech_buffer) - speech_buffer_index
-                to_copy_buffer = min(self._model.window_size_samples, available_space)
+                to_copy_buffer = min(len(input_frame.data), available_space)
                 if to_copy_buffer > 0:
                     speech_buffer[
                         speech_buffer_index : speech_buffer_index + to_copy_buffer
