@@ -79,7 +79,7 @@ class ChatMessage:
     @staticmethod
     def create_tool_calls(
         called_functions: list[function_context.FunctionCallInfo],
-        content: ChatContent | list[ChatContent] | None = None,
+        content: ChatContent | list[ChatContent] | None,
     ) -> "ChatMessage":
         return ChatMessage(
             role="assistant", tool_calls=called_functions, content=content
