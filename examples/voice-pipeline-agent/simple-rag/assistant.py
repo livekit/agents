@@ -14,9 +14,7 @@ with open("my_data.pkl", "rb") as f:
 
 
 async def entrypoint(ctx: JobContext):
-    async def _enrich_with_rag(
-        agent: VoicePipelineAgent, chat_ctx: llm.ChatContext
-    ):
+    async def _enrich_with_rag(agent: VoicePipelineAgent, chat_ctx: llm.ChatContext):
         # locate the last user message and use it to query the RAG model
         # to get the most relevant paragraph
         # then provide that as additional context to the LLM
