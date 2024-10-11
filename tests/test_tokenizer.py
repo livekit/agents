@@ -1,8 +1,8 @@
 import pytest
 from livekit.agents import tokenize
 from livekit.agents.tokenize import basic
-from livekit.plugins import nltk
 from livekit.agents.tokenize._basic_paragraph import split_paragraphs
+from livekit.plugins import nltk
 
 # Download the punkt tokenizer, will only download if not already present
 nltk.NltkPlugin().download_files()
@@ -250,52 +250,52 @@ async def test_replace_words_async():
     assert replaced == REPLACE_EXPECTED
 
 
-@pytest.mark.parametrize("test_case", [
-    (
-        "Single paragraph.",
-        [("Single paragraph.", 0, 18)]
-    ),
-    (
-        "Paragraph 1.\n\nParagraph 2.",
-        [("Paragraph 1.", 0, 12), ("Paragraph 2.", 14, 26)]
-    ),
-    (
-        "Para 1.\n\nPara 2.\n\nPara 3.",
-        [("Para 1.", 0, 7), ("Para 2.", 9, 16), ("Para 3.", 18, 25)]
-    ),
-    (
-        "\n\nParagraph with leading newlines.",
-        [("Paragraph with leading newlines.", 2, 34)]
-    ),
-    (
-        "Paragraph with trailing newlines.\n\n",
-        [("Paragraph with trailing newlines.", 0, 34)]
-    ),
-    (
-        "\n\n  Paragraph with leading and trailing spaces.  \n\n",
-        [("Paragraph with leading and trailing spaces.", 4, 46)]
-    ),
-    (
-        "Para 1.\n\n\n\nPara 2.",  # Multiple newlines between paragraphs
-        [("Para 1.", 0, 7), ("Para 2.", 11, 18)]
-    ),
-    (
-        "Para 1.\n \n \nPara 2.",  # Newlines with spaces between paragraphs
-        [("Para 1.", 0, 7), ("Para 2.", 11, 18)]
-    ),
-    (
-        "",  # Empty string
-        []
-    ),
-    (
-        "\n\n\n",  # Only newlines
-        []
-    ),
-    (
-        "Line 1\nLine 2\nLine 3",  # Single paragraph with newlines
-        [("Line 1\nLine 2\nLine 3", 0, 20)]
-    ),
-])
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        ("Single paragraph.", [("Single paragraph.", 0, 18)]),
+        (
+            "Paragraph 1.\n\nParagraph 2.",
+            [("Paragraph 1.", 0, 12), ("Paragraph 2.", 14, 26)],
+        ),
+        (
+            "Para 1.\n\nPara 2.\n\nPara 3.",
+            [("Para 1.", 0, 7), ("Para 2.", 9, 16), ("Para 3.", 18, 25)],
+        ),
+        (
+            "\n\nParagraph with leading newlines.",
+            [("Paragraph with leading newlines.", 2, 34)],
+        ),
+        (
+            "Paragraph with trailing newlines.\n\n",
+            [("Paragraph with trailing newlines.", 0, 34)],
+        ),
+        (
+            "\n\n  Paragraph with leading and trailing spaces.  \n\n",
+            [("Paragraph with leading and trailing spaces.", 4, 46)],
+        ),
+        (
+            "Para 1.\n\n\n\nPara 2.",  # Multiple newlines between paragraphs
+            [("Para 1.", 0, 7), ("Para 2.", 11, 18)],
+        ),
+        (
+            "Para 1.\n \n \nPara 2.",  # Newlines with spaces between paragraphs
+            [("Para 1.", 0, 7), ("Para 2.", 11, 18)],
+        ),
+        (
+            "",  # Empty string
+            [],
+        ),
+        (
+            "\n\n\n",  # Only newlines
+            [],
+        ),
+        (
+            "Line 1\nLine 2\nLine 3",  # Single paragraph with newlines
+            [("Line 1\nLine 2\nLine 3", 0, 20)],
+        ),
+    ],
+)
 def test_split_paragraphs(test_case):
     input_text, expected_output = test_case
     result = split_paragraphs(input_text)

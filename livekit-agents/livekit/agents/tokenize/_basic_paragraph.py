@@ -7,7 +7,7 @@ def split_paragraphs(text: str) -> list[tuple[str, int, int]]:
     Returns a list of paragraphs with their start and end indices of the original text.
     """
     # Use a regex pattern to split on one or more blank lines
-    pattern = r'\n\s*\n'
+    pattern = r"\n\s*\n"
 
     # Find all splits in the text
     splits = list(re.finditer(pattern, text))
