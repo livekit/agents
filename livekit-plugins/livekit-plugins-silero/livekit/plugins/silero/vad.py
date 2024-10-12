@@ -215,6 +215,18 @@ class VADStream(agents.vad.VADStream):
         max_buffered_speech: float,
         activation_threshold: float,
     ) -> None:
+        """
+        Update the VAD options.
+
+        This method allows you to update the VAD options after the VAD object has been created.
+
+        Args:
+            min_speech_duration (float): Minimum duration of speech to start a new speech chunk.
+            min_silence_duration (float): At the end of each speech, wait this duration before ending the speech.
+            prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
+            max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
+            activation_threshold (float): Threshold to consider a frame as speech.
+        """
         old_max_buffered_speech = self._opts.max_buffered_speech
 
         self._opts = _VADOptions(
