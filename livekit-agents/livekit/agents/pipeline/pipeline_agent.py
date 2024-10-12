@@ -784,7 +784,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         tts_source = self._opts.before_tts_cb(self, og_source)
         if tts_source is None:
-            logger.error("before_tts_cb must return str or AsyncIterable[str]")
+            raise ValueError("before_tts_cb must return str or AsyncIterable[str]")
 
         return self._agent_output.synthesize(
             speech_id=speech_id,
