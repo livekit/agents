@@ -243,7 +243,7 @@ async def _str_synthesis_task(
 @utils.log_exceptions(logger=logger)
 async def _stream_synthesis_task(
     tts_source: AsyncIterable[str],
-    transcript_source: str | AsyncIterable[str],
+    transcript_source: AgentSpeech,
     handle: SynthesisHandle,
 ) -> None:
     """synthesize speech from streamed text"""
