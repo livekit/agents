@@ -36,6 +36,7 @@ from .models import (
     PerplexityChatModels,
     TelnyxChatModels,
     TogetherChatModels,
+    XAIChatModels,
 )
 from .utils import AsyncAzureADTokenProvider, build_oai_message
 
@@ -177,6 +178,35 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("FIREWORKS_API_KEY")
         if api_key is None:
             raise ValueError("Fireworks API key is required")
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+        )
+
+    @staticmethod
+    def with_x_ai(
+        *,
+        model: str | XAIChatModels = "grok-2-public",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.x.ai/v1",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+        temperature: float | None = None,
+    ):
+        """
+        Create a new instance of XAI LLM.
+
+        ``api_key`` must be set to your XAI API key, either using the argument or by setting
+        the ``XAI_API_KEY`` environmental variable.
+        """
+        api_key = api_key or os.environ.get("XAI_API_KEY")
+        if api_key is None:
+            raise ValueError("XAI API key is required")
 
         return LLM(
             model=model,
