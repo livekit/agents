@@ -30,6 +30,9 @@ class CliArgs:
     # when reload/dev mode is enabled
     mp_cch: socket.socket | None = None
 
+    def validate_config(self):
+        self.opts.validate_config(self.devmode)
+
 
 @dataclass
 class ActiveJobsRequest:

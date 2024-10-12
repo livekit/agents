@@ -234,6 +234,7 @@ def _run_dev(
 
 def run_worker(args: proto.CliArgs) -> None:
     setup_logging(args.log_level, args.devmode)
+    args.validate_config()
 
     loop = asyncio.get_event_loop()
     worker = Worker(args.opts, devmode=args.devmode, loop=loop)
