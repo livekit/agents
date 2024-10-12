@@ -12,7 +12,7 @@ from .. import stt, tokenize, tts, utils, vad
 from .._constants import ATTRIBUTE_AGENT_STATE
 from .._types import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
-from .agent_output import AgentOutput, SynthesisHandle
+from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
 from .log import logger
@@ -28,7 +28,7 @@ WillSynthesizeAssistantReply = BeforeLLMCallback
 
 BeforeTTSCallback = Callable[
     ["VoicePipelineAgent", Union[str, AsyncIterable[str]]],
-    Union[str, AsyncIterable[str], Awaitable[str]],
+    SpeechSource,
 ]
 
 
