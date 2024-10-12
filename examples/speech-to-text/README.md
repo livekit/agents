@@ -8,7 +8,7 @@ It uses Deepgram's STT API, but supports other STT plugins by changing this line
 stt = deepgram.STT()
 ```
 
-To render the transcriptions into your client application, refer to the [full documentation](https://docs.livekit.io/agents/build/transcriptions).
+To render the transcriptions into your client application, refer to the [full documentation](https://docs.livekit.io/agents/voice-agent/transcriptions/).
 
 ## Running the example
 
