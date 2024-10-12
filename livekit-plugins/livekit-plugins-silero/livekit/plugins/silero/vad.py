@@ -155,11 +155,11 @@ class VAD(agents.vad.VAD):
     def update_options(
         self,
         *,
-        min_speech_duration: float,
-        min_silence_duration: float,
-        prefix_padding_duration: float,
-        max_buffered_speech: float,
-        activation_threshold: float,
+        min_speech_duration: float | None = None,
+        min_silence_duration: float | None = None,
+        prefix_padding_duration: float | None = None,
+        max_buffered_speech: float | None = None,
+        activation_threshold: float | None = None,
     ) -> None:
         """
         Update the VAD options.
@@ -174,11 +174,14 @@ class VAD(agents.vad.VAD):
             activation_threshold (float): Threshold to consider a frame as speech.
         """
         self._opts = _VADOptions(
-            min_speech_duration=min_speech_duration,
-            min_silence_duration=min_silence_duration,
-            prefix_padding_duration=prefix_padding_duration,
-            max_buffered_speech=max_buffered_speech,
-            activation_threshold=activation_threshold,
+            min_speech_duration=min_speech_duration or self._opts.min_speech_duration,
+            min_silence_duration=min_silence_duration
+            or self._opts.min_silence_duration,
+            prefix_padding_duration=prefix_padding_duration
+            or self._opts.prefix_padding_duration,
+            max_buffered_speech=max_buffered_speech or self._opts.max_buffered_speech,
+            activation_threshold=activation_threshold
+            or self._opts.activation_threshold,
             sample_rate=self._opts.sample_rate,
         )
         for stream in self._streams:
@@ -209,11 +212,11 @@ class VADStream(agents.vad.VADStream):
     def update_options(
         self,
         *,
-        min_speech_duration: float,
-        min_silence_duration: float,
-        prefix_padding_duration: float,
-        max_buffered_speech: float,
-        activation_threshold: float,
+        min_speech_duration: float | None = None,
+        min_silence_duration: float | None = None,
+        prefix_padding_duration: float | None = None,
+        max_buffered_speech: float | None = None,
+        activation_threshold: float | None = None,
     ) -> None:
         """
         Update the VAD options.
@@ -230,11 +233,14 @@ class VADStream(agents.vad.VADStream):
         old_max_buffered_speech = self._opts.max_buffered_speech
 
         self._opts = _VADOptions(
-            min_speech_duration=min_speech_duration,
-            min_silence_duration=min_silence_duration,
-            prefix_padding_duration=prefix_padding_duration,
-            max_buffered_speech=max_buffered_speech,
-            activation_threshold=activation_threshold,
+            min_speech_duration=min_speech_duration or self._opts.min_speech_duration,
+            min_silence_duration=min_silence_duration
+            or self._opts.min_silence_duration,
+            prefix_padding_duration=prefix_padding_duration
+            or self._opts.prefix_padding_duration,
+            max_buffered_speech=max_buffered_speech or self._opts.max_buffered_speech,
+            activation_threshold=activation_threshold
+            or self._opts.activation_threshold,
             sample_rate=self._opts.sample_rate,
         )
 
