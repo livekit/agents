@@ -12,7 +12,7 @@ from .. import tts as text_to_speech
 from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
 
-AgentSpeech = AsyncIterable[str] | str
+AgentSpeech = Union[AsyncIterable[str], str]
 SpeechSource = Union[Awaitable[AgentSpeech], AgentSpeech]
 
 
