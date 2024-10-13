@@ -12,8 +12,7 @@ from .. import tts as text_to_speech
 from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
 
-AgentSpeech = Union[AsyncIterable[str], str]
-SpeechSource = Union[Awaitable[AgentSpeech], AgentSpeech]
+SpeechSource = Union[str, Awaitable[str], AsyncIterable[str]]
 
 
 class SynthesisHandle:
@@ -243,7 +242,7 @@ async def _str_synthesis_task(
 @utils.log_exceptions(logger=logger)
 async def _stream_synthesis_task(
     tts_source: AsyncIterable[str],
-    transcript_source: AgentSpeech,
+    transcript_source: str | AsyncIterable[str],
     handle: SynthesisHandle,
 ) -> None:
     """synthesize speech from streamed text"""
