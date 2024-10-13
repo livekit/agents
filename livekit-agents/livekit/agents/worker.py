@@ -186,12 +186,11 @@ class WorkerOptions:
     """
 
     def validate_config(self, devmode: bool):
-        if not devmode:
-            load_threshold = _WorkerEnvOption.getvalue(self.load_threshold, False)
-            if load_threshold > 1:
-                logger.warning(
-                    f"load_threshold in prod env must be less than 1, current value: {load_threshold}"
-                )
+        load_threshold = _WorkerEnvOption.getvalue(self.load_threshold, devmode)
+        if load_threshold > 1 and not devmode:
+            logger.warning(
+                f"load_threshold in prod env must be less than 1, current value: {load_threshold}"
+            )
 
 
 EventTypes = Literal["worker_registered"]
