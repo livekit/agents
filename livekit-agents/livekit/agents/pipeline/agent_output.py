@@ -185,6 +185,10 @@ class AgentOutput:
             await utils.aio.gracefully_cancel(synth)
 
 
+async def _str_to_aiter(s: str) -> AsyncIterable[str]:
+    yield s
+
+
 @utils.log_exceptions(logger=logger)
 async def _stream_synthesis_task(
     tts_source: AsyncIterable[str] | str,
@@ -193,9 +197,9 @@ async def _stream_synthesis_task(
 ) -> None:
     """synthesize speech from streamed text"""
     if isinstance(tts_source, str):
-        tts_source = iter([tts_source])
+        tts_source = _str_to_aiter(tts_source)
     if isinstance(transcript_source, str):
-        transcript_source = iter([transcript_source])
+        transcript_source = _str_to_aiter(transcript_source)
 
     @utils.log_exceptions(logger=logger)
     async def _read_generated_audio_task():
