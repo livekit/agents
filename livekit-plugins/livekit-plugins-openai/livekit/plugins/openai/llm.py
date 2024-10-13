@@ -467,6 +467,7 @@ class LLM(llm.LLM):
             temperature = self._opts.temperature
 
         messages = _build_oai_context(chat_ctx, id(self))
+
         cmp = self._client.chat.completions.create(
             messages=messages,
             model=self._opts.model,
@@ -543,7 +544,7 @@ class LLMStream(llm.LLMStream):
                 if call_chunk is not None:
                     return call_chunk
 
-        if choice.finish_reason == "tool_calls":
+        if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
             # we're done with the tool calls, run the last one
             return self._try_run_function(choice)
 
@@ -576,6 +577,7 @@ class LLMStream(llm.LLMStream):
         fnc_info = llm._oai_api.create_ai_function_info(
             self._fnc_ctx, self._tool_call_id, self._fnc_name, self._fnc_raw_arguments
         )
+
         self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
         self._function_calls_info.append(fnc_info)
 
