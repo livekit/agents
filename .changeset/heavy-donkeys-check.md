@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-Fix bug in before_tts_cb where AsyncIterable[str] was not being handled correctly.
+Fix bug where if the tts_source was a string but before_tts_cb returned AsyncIterable[str], the transcript would not be synthesized.
