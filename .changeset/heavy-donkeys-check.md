@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-Allow async methods to be passed as before_tts_cb
+Fix bug in before_tts_cb where AsyncIterable[str] was not being handled correctly.
