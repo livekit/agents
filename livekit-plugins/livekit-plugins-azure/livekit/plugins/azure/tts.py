@@ -53,16 +53,22 @@ class ProsodyConfig:
         if self.volume:
             if isinstance(self.volume, float) and not 0 <= self.volume <= 100:
                 raise ValueError("Prosody volume must be between 0 and 100")
-        if self.volume not in ["silent", "x-soft", "soft", "medium", "loud", "x-loud"]:
-            raise ValueError(
-                "Prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'"
-            )
-
-        if self.pitch:
-            if self.pitch not in ["x-low", "low", "medium", "high", "x-high"]:
+            if self.volume not in [
+                "silent",
+                "x-soft",
+                "soft",
+                "medium",
+                "loud",
+                "x-loud",
+            ]:
                 raise ValueError(
-                    "Prosody pitch must be one of 'x-low', 'low', 'medium', 'high', 'x-high'"
+                    "Prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'"
                 )
+
+        if self.pitch and self.pitch not in ["x-low", "low", "medium", "high", "x-high"]:
+            raise ValueError(
+                "Prosody pitch must be one of 'x-low', 'low', 'medium', 'high', 'x-high'"
+            )
 
     def __post_init__(self):
         self.validate()
