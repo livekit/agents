@@ -185,6 +185,13 @@ class WorkerOptions:
     The HTTP server is used as a health check endpoint.
     """
 
+    def validate_config(self, devmode: bool):
+        load_threshold = _WorkerEnvOption.getvalue(self.load_threshold, devmode)
+        if load_threshold > 1 and not devmode:
+            logger.warning(
+                f"load_threshold in prod env must be less than 1, current value: {load_threshold}"
+            )
+
 
 EventTypes = Literal["worker_registered"]
 
