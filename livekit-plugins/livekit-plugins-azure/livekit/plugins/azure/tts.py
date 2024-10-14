@@ -142,7 +142,25 @@ class ChunkedStream(tts.ChunkedStream):
             stream=stream_callback,
         )
 
+        def _create_ssml_text(text: str, opts: _TTSOptions) -> str:
+            ssml = f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{opts.language or "en-US"}">'
+            prosody_ssml = "<prosody"
+            if opts.prosody.rate:
+                prosody_ssml += f' rate="{opts.prosody.rate}"'
+            if opts.prosody.volume:
+                prosody_ssml += f' volume="{opts.prosody.volume}"'
+            if opts.prosody.pitch:
+                prosody_ssml += f' pitch="{opts.prosody.pitch}"'
+            prosody_ssml += ">"
+            ssml += prosody_ssml
+            ssml += text
+            ssml += "</prosody></speak>"
+            return ssml
+
         def _synthesize() -> speechsdk.SpeechSynthesisResult:
+            if self._opts.prosody:
+                ssml_text = _create_ssml_text(self._text, self._opts)
+                return synthesizer.speak_ssml_async(ssml_text).get()
             return synthesizer.speak_text_async(self._text).get()  # type: ignore
 
         result = None
@@ -209,7 +227,9 @@ def _create_speech_synthesizer(
     *, config: _TTSOptions, stream: speechsdk.audio.AudioOutputStream
 ) -> speechsdk.SpeechSynthesizer:
     speech_config = speechsdk.SpeechConfig(
-        subscription=config.speech_key, region=config.speech_region
+        subscription=config.speech_key,
+        region=config.speech_region,
+        speech_recognition_language=config.language or "en-US",
     )
     stream_config = speechsdk.audio.AudioOutputConfig(stream=stream)
     if config.voice is not None:
