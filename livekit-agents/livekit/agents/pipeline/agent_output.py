@@ -172,14 +172,6 @@ class AgentOutput:
             tts_source = await tts_source
         if isinstance(transcript_source, Awaitable):
             transcript_source = await transcript_source
-        if not self._tts.capabilities.streaming:
-            logger.debug(
-                "forcing tts source to be a string since TTS does not streaming"
-            )
-            if isinstance(tts_source, AsyncIterable):
-                tts_source = "".join([seg async for seg in tts_source])
-            if isinstance(transcript_source, AsyncIterable):
-                transcript_source = "".join([seg async for seg in transcript_source])
 
         if isinstance(tts_source, str) and isinstance(transcript_source, str):
             co = _str_synthesis_task(tts_source, transcript_source, handle)
