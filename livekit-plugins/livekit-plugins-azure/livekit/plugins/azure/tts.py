@@ -24,6 +24,7 @@ AZURE_SAMPLE_RATE: int = 16000
 AZURE_BITS_PER_SAMPLE: int = 16
 AZURE_NUM_CHANNELS: int = 1
 
+
 @dataclass
 class ProsodyConfig:
     """
