@@ -189,6 +189,7 @@ class AgentOutput:
             await utils.aio.gracefully_cancel(synth)
 
 
+@utils.log_exceptions(logger=logger)
 async def _str_synthesis_task(
     tts_text: str, transcript: str, handle: SynthesisHandle
 ) -> None:
