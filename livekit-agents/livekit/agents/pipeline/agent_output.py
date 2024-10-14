@@ -173,7 +173,10 @@ class AgentOutput:
         if isinstance(transcript_source, Awaitable):
             transcript_source = await transcript_source
 
-        co = _stream_synthesis_task(tts_source, transcript_source, handle)
+        if isinstance(tts_source, str) and isinstance(transcript_source, str):
+            co = _str_synthesis_task(tts_source, transcript_source, handle)
+        else:
+            co = _stream_synthesis_task(tts_source, transcript_source, handle)
 
         synth = asyncio.create_task(co)
         synth.add_done_callback(lambda _: handle._buf_ch.close())
@@ -183,6 +186,41 @@ class AgentOutput:
             )
         finally:
             await utils.aio.gracefully_cancel(synth)
+
+
+async def _str_synthesis_task(
+    tts_text: str, transcript: str, handle: SynthesisHandle
+) -> None:
+    """synthesize speech from a string"""
+    if not handle.tts_forwarder.closed:
+        handle.tts_forwarder.push_text(transcript)
+        handle.tts_forwarder.mark_text_segment_end()
+
+    start_time = time.time()
+    first_frame = True
+
+    try:
+        async for audio in handle._tts.synthesize(tts_text):
+            if first_frame:
+                first_frame = False
+                logger.debug(
+                    "received first TTS frame",
+                    extra={
+                        "speech_id": handle.speech_id,
+                        "elapsed": round(time.time() - start_time, 3),
+                        "streamed": False,
+                    },
+                )
+
+            frame = audio.frame
+
+            handle._buf_ch.send_nowait(frame)
+            if not handle.tts_forwarder.closed:
+                handle.tts_forwarder.push_audio(frame)
+
+    finally:
+        if not handle.tts_forwarder.closed:
+            handle.tts_forwarder.mark_audio_segment_end()
 
 
 async def _str_to_aiter(s: str) -> AsyncIterable[str]:
