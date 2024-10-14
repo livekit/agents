@@ -40,7 +40,7 @@ async def entrypoint(ctx: JobContext):
     initial_ctx.messages.append(system_msg)
 
     async def _will_synthesize_assistant_reply(
-        assistant: VoiceAssistant, chat_ctx: llm.ChatContext
+        assistant: VoicePipelineAgent, chat_ctx: llm.ChatContext
     ):
         ctx_msg = system_msg.copy()
         user_msg = chat_ctx.messages[-1]
