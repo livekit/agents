@@ -173,7 +173,9 @@ class AgentOutput:
         if isinstance(transcript_source, Awaitable):
             transcript_source = await transcript_source
         if not self._tts.capabilities.streaming:
-            logger.debug("forcing tts source to be a string since TTS is not streaming")
+            logger.debug(
+                "forcing tts source to be a string since TTS does not streaming"
+            )
             if isinstance(tts_source, AsyncIterable):
                 # force the tts source to be a string
                 tts_source = await asyncio.to_thread("".join, tts_source)
