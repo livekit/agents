@@ -33,14 +33,14 @@ class ProsodyConfig:
     Args:
         rate: Speaking rate. Can be one of "x-slow", "slow", "medium", "fast", "x-fast", or a float. A float value of 1.0 represents normal speed.
         volume: Speaking volume. Can be one of "silent", "x-soft", "soft", "medium", "loud", "x-loud", or a float. A float value of 100 (x-loud) represents the highest volume and it's the default pitch.
-        pitch: Speaking pitch. Can be one of "x-low", "low", "medium", "high", "x-high".
+        pitch: Speaking pitch. Can be one of "x-low", "low", "medium", "high", "x-high". The default pitch is "medium".
     """
 
-    rate: Literal["x-slow", "slow", "medium", "fast", "x-fast"] | float | None = "medium"
+    rate: Literal["x-slow", "slow", "medium", "fast", "x-fast"] | float | None = None
     volume: (
         Literal["silent", "x-soft", "soft", "medium", "loud", "x-loud"] | float | None
     ) = "x-loud"
-    pitch: Literal["x-low", "low", "medium", "high", "x-high"] | None = "medium"
+    pitch: Literal["x-low", "low", "medium", "high", "x-high"] | None = None
 
     def validate(self) -> None:
         if isinstance(self.rate, float) and not 0.5 <= self.rate <= 2:
