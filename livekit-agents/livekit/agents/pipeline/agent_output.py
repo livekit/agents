@@ -276,7 +276,6 @@ async def _stream_synthesis_task(
 
     tts_stream = handle._tts.stream()
     read_tts_atask: asyncio.Task | None = None
-
     read_transcript_atask: asyncio.Task | None = None
 
     try:
