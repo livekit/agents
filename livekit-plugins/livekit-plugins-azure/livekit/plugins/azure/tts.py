@@ -43,22 +43,26 @@ class ProsodyConfig:
     pitch: Literal["x-low", "low", "medium", "high", "x-high"] | None = None
 
     def validate(self) -> None:
-        if isinstance(self.rate, float) and not 0.5 <= self.rate <= 2:
-            raise ValueError("Prosody rate must be between 0.5 and 2")
-        if isinstance(self.volume, float) and not 0 <= self.volume <= 100:
-            raise ValueError("Prosody volume must be between 0 and 100")
-        if self.pitch not in ["x-low", "low", "medium", "high", "x-high"]:
-            raise ValueError(
-                "Prosody pitch must be one of 'x-low', 'low', 'medium', 'high', 'x-high'"
-            )
-        if self.rate not in ["x-slow", "slow", "medium", "fast", "x-fast"]:
-            raise ValueError(
-                "Prosody rate must be one of 'x-slow', 'slow', 'medium', 'fast', 'x-fast'"
-            )
+        if self.rate:
+            if isinstance(self.rate, float) and not 0.5 <= self.rate <= 2:
+                raise ValueError("Prosody rate must be between 0.5 and 2")
+            if self.rate not in ["x-slow", "slow", "medium", "fast", "x-fast"]:
+                raise ValueError(
+                    "Prosody rate must be one of 'x-slow', 'slow', 'medium', 'fast', 'x-fast'"
+                )
+        if self.volume:
+            if isinstance(self.volume, float) and not 0 <= self.volume <= 100:
+                raise ValueError("Prosody volume must be between 0 and 100")
         if self.volume not in ["silent", "x-soft", "soft", "medium", "loud", "x-loud"]:
             raise ValueError(
                 "Prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'"
             )
+
+        if self.pitch:
+            if self.pitch not in ["x-low", "low", "medium", "high", "x-high"]:
+                raise ValueError(
+                    "Prosody pitch must be one of 'x-low', 'low', 'medium', 'high', 'x-high'"
+                )
 
     def __post_init__(self):
         self.validate()
