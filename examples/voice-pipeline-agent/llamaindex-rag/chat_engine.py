@@ -2,7 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
-from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, llama_index, openai, silero
 from llama_index.core import (
     SimpleDirectoryReader,
@@ -41,7 +41,7 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    assistant = VoiceAssistant(
+    assistant = VoicePipelineAgent(
         vad=silero.VAD.load(),
         stt=deepgram.STT(),
         llm=llama_index.LLM(chat_engine=chat_engine),

@@ -2,7 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
-from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 from llama_index.core import (
     SimpleDirectoryReader,
@@ -47,7 +47,7 @@ async def entrypoint(ctx: JobContext):
         print("Query result:", res)
         return str(res)
 
-    assistant = VoiceAssistant(
+    assistant = VoicePipelineAgent(
         vad=silero.VAD.load(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
