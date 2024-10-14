@@ -178,10 +178,10 @@ class AgentOutput:
             )
             if isinstance(tts_source, AsyncIterable):
                 # force the tts source to be a string
-                tts_source = await asyncio.to_thread("".join, tts_source)
+                tts_source = "".join([seg async for seg in tts_source])
             if isinstance(transcript_source, AsyncIterable):
                 # force the transcript source to be a string
-                transcript_source = await asyncio.to_thread("".join, transcript_source)
+                transcript_source = "".join([seg async for seg in transcript_source])
 
         if isinstance(tts_source, str) and isinstance(transcript_source, str):
             co = _str_synthesis_task(tts_source, transcript_source, handle)
