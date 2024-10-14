@@ -191,17 +191,16 @@ class AgentOutput:
 @utils.log_exceptions(logger=logger)
 async def _read_transcript_task(
     transcript_source: AsyncIterable[str] | str, handle: SynthesisHandle
-):
-    async for seg in transcript_source:
-        if not handle._tr_fwd.closed:
-            handle._tr_fwd.push_text(seg)
+) -> None:
+    if isinstance(transcript_source, str):
+        handle._tr_fwd.push_text(transcript_source)
+    else:
+        async for seg in transcript_source:
+            if not handle._tr_fwd.closed:
+                handle._tr_fwd.push_text(seg)
 
     if not handle.tts_forwarder.closed:
         handle.tts_forwarder.mark_text_segment_end()
-
-
-def _str_to_aiter(text: str) -> AsyncIterable[str]:
-    yield text
 
 
 @utils.log_exceptions(logger=logger)
@@ -211,10 +210,6 @@ async def _str_synthesis_task(
     """synthesize speech from a string"""
     start_time = time.time()
     first_frame = True
-
-    if isinstance(transcript_source, str):
-        transcript_source = _str_to_aiter(transcript_source)
-
     read_transcript_atask: asyncio.Task | None = None
 
     try:
@@ -278,9 +273,6 @@ async def _stream_synthesis_task(
 
         if handle._tr_fwd and not handle._tr_fwd.closed:
             handle._tr_fwd.mark_audio_segment_end()
-
-    if isinstance(transcript_source, str):
-        transcript_source = _str_to_aiter(transcript_source)
 
     tts_stream = handle._tts.stream()
     read_tts_atask: asyncio.Task | None = None
