@@ -2,7 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
-from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 from llama_index.core import (
     SimpleDirectoryReader,
@@ -10,11 +10,12 @@ from llama_index.core import (
     VectorStoreIndex,
     load_index_from_storage,
 )
+from llama_index.core.schema import MetadataMode
 
 load_dotenv()
 
 # check if storage already exists
-PERSIST_DIR = "./query-engine-storage"
+PERSIST_DIR = "./retrieval-engine-storage"
 if not os.path.exists(PERSIST_DIR):
     # load the documents and create the index
     documents = SimpleDirectoryReader("data").load_data()
@@ -28,32 +29,41 @@ else:
 
 
 async def entrypoint(ctx: JobContext):
-    initial_ctx = llm.ChatContext().append(
+    system_msg = llm.ChatMessage(
         role="system",
-        text=(
+        content=(
             "You are a voice assistant created by LiveKit. Your interface with users will be voice. "
             "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
         ),
     )
+    initial_ctx = llm.ChatContext()
+    initial_ctx.messages.append(system_msg)
+
+    async def _will_synthesize_assistant_reply(
+        assistant: VoiceAssistant, chat_ctx: llm.ChatContext
+    ):
+        ctx_msg = system_msg.copy()
+        user_msg = chat_ctx.messages[-1]
+        retriever = index.as_retriever()
+        nodes = await retriever.aretrieve(user_msg.content)
+
+        ctx_msg.content = "Context that might help answer the user's question:"
+        for node in nodes:
+            node_content = node.get_content(metadata_mode=MetadataMode.LLM)
+            ctx_msg.content += f"\n\n{node_content}"
+
+        chat_ctx.messages[0] = ctx_msg  # the first message is the system message
+        return assistant.llm.chat(chat_ctx=chat_ctx)
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    fnc_ctx = llm.FunctionContext()
-
-    @fnc_ctx.ai_callable(description="Get more information about a specific topic")
-    async def query_info(query: str) -> str:
-        query_engine = index.as_query_engine(use_async=True)
-        res = await query_engine.aquery(query)
-        print("Query result:", res)
-        return str(res)
-
-    assistant = VoiceAssistant(
+    assistant = VoicePipelineAgent(
         vad=silero.VAD.load(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
-        fnc_ctx=fnc_ctx,
+        will_synthesize_assistant_reply=_will_synthesize_assistant_reply,
     )
     assistant.start(ctx.room)
     await assistant.say("Hey, how can I help you today?", allow_interruptions=True)
