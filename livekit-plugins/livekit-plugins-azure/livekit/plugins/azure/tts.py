@@ -105,12 +105,12 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        speech_key: str | None = None,
-        speech_region: str | None = None,
         voice: str | None = None,
-        endpoint_id: str | None = None,
         language: str | None = None,
         prosody: ProsodyConfig | None = None,
+        speech_key: str | None = None,
+        speech_region: str | None = None,
+        endpoint_id: str | None = None,
     ) -> None:
         """
         Create a new instance of Azure TTS.
@@ -146,6 +146,17 @@ class TTS(tts.TTS):
             language=language,
             prosody=prosody,
         )
+
+    def update_options(
+        self,
+        *,
+        voice: str | None = None,
+        language: str | None = None,
+        prosody: ProsodyConfig | None = None,
+    ) -> None:
+        self._opts.voice = voice or self._opts.voice
+        self._opts.language = language or self._opts.language
+        self._opts.prosody = prosody or self._opts.prosody
 
     def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(text, self._opts)

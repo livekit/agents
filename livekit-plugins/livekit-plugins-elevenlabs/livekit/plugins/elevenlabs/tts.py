@@ -79,7 +79,7 @@ AUTHORIZATION_HEADER = "xi-api-key"
 class _TTSOptions:
     api_key: str
     voice: Voice
-    model_id: TTSModels
+    model: TTSModels | str
     base_url: str
     encoding: TTSEncoding
     sample_rate: int
@@ -94,7 +94,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: Voice = DEFAULT_VOICE,
-        model_id: TTSModels = "eleven_turbo_v2_5",
+        model: TTSModels | str = "eleven_turbo_v2_5",
         api_key: str | None = None,
         base_url: str | None = None,
         encoding: TTSEncoding = "mp3_22050_32",
@@ -105,12 +105,23 @@ class TTS(tts.TTS):
         enable_ssml_parsing: bool = False,
         chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
+        # deprecated
+        model_id: TTSModels | str | None = None,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
 
-        ``api_key`` must be set to your ElevenLabs API key, either using the argument or by setting
-        the ``ELEVEN_API_KEY`` environmental variable.
+        Args:
+            voice (Voice): Voice configuration. Defaults to `DEFAULT_VOICE`.
+            model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
+            api_key (str | None): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
+            base_url (str | None): Custom base URL for the API. Optional.
+            encoding (TTSEncoding): Audio encoding format. Defaults to "mp3_22050_32".
+            streaming_latency (int): Latency in seconds for streaming. Defaults to 3.
+            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
+            enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
+            chunk_length_schedule (list[int]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
+            http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
         """
 
         super().__init__(
@@ -120,13 +131,20 @@ class TTS(tts.TTS):
             sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
         )
+
+        if model_id is not None:
+            logger.warning(
+                "model_id is deprecated and will be removed in 1.5.0, use model instead",
+            )
+            model = model_id
+
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
         if not api_key:
             raise ValueError("ELEVEN_API_KEY must be set")
 
         self._opts = _TTSOptions(
             voice=voice,
-            model_id=model_id,
+            model=model,
             api_key=api_key,
             base_url=base_url or API_BASE_URL_V1,
             encoding=encoding,
@@ -150,6 +168,20 @@ class TTS(tts.TTS):
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
         ) as resp:
             return _dict_to_voices_list(await resp.json())
+
+    def update_options(
+        self,
+        *,
+        voice: Voice = DEFAULT_VOICE,
+        model: TTSModels | str = "eleven_turbo_v2_5",
+    ) -> None:
+        """
+        Args:
+            voice (Voice): Voice configuration. Defaults to `DEFAULT_VOICE`.
+            model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
+        """
+        self._opts.model = model or self._opts.model
+        self._opts.voice = voice or self._opts.voice
 
     def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(text, self._opts, self._ensure_session())
@@ -184,7 +216,7 @@ class ChunkedStream(tts.ChunkedStream):
         )
         data = {
             "text": self._text,
-            "model_id": self._opts.model_id,
+            "model_id": self._opts.model,
             "voice_settings": voice_settings,
         }
 
@@ -450,7 +482,7 @@ def _strip_nones(data: dict[str, Any]):
 def _synthesize_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
     voice_id = opts.voice.id
-    model_id = opts.model_id
+    model_id = opts.model
     output_format = opts.encoding
     latency = opts.streaming_latency
     return (
@@ -462,7 +494,7 @@ def _synthesize_url(opts: _TTSOptions) -> str:
 def _stream_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
     voice_id = opts.voice.id
-    model_id = opts.model_id
+    model_id = opts.model
     output_format = opts.encoding
     latency = opts.streaming_latency
     enable_ssml = str(opts.enable_ssml_parsing).lower()
