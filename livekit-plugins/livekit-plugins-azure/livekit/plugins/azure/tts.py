@@ -46,7 +46,7 @@ class ProsodyConfig:
         if self.rate:
             if isinstance(self.rate, float) and not 0.5 <= self.rate <= 2:
                 raise ValueError("Prosody rate must be between 0.5 and 2")
-            if isinstance(self.rate and self.rate not in [
+            if isinstance(self.rate, str) and self.rate not in [
                 "x-slow",
                 "slow",
                 "medium",
