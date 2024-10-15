@@ -1,5 +1,17 @@
 # livekit-agents
 
+## 0.10.2
+
+### Patch Changes
+
+- Fix split_paragraphs and simple-rag example - [#896](https://github.com/livekit/agents/pull/896) ([@davidzhao](https://github.com/davidzhao))
+
+- Fix bug where if the tts_source was a string but before_tts_cb returned AsyncIterable[str], the transcript would not be synthesized. - [#906](https://github.com/livekit/agents/pull/906) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Allow forcing interruptions of incomplete audio - [#891](https://github.com/livekit/agents/pull/891) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Include chat context on collected tool calls - [#897](https://github.com/livekit/agents/pull/897) ([@martin-purplefish](https://github.com/martin-purplefish))
+
 ## 0.10.1
 
 ### Patch Changes
