@@ -17,9 +17,8 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
-from livekit.agents import tts, utils
-
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
+from livekit.agents import tts, utils
 
 AZURE_SAMPLE_RATE: int = 16000
 AZURE_BITS_PER_SAMPLE: int = 16
@@ -40,21 +39,27 @@ class ProsodyConfig:
     rate: Literal["x-slow", "slow", "medium", "fast", "x-fast"] | float | None = None
     volume: (
         Literal["silent", "x-soft", "soft", "medium", "loud", "x-loud"] | float | None
-    ) = "x-loud"
+    ) = None
     pitch: Literal["x-low", "low", "medium", "high", "x-high"] | None = None
 
     def validate(self) -> None:
         if self.rate:
             if isinstance(self.rate, float) and not 0.5 <= self.rate <= 2:
                 raise ValueError("Prosody rate must be between 0.5 and 2")
-            if self.rate not in ["x-slow", "slow", "medium", "fast", "x-fast"]:
+            if isinstance(self.rate and self.rate not in [
+                "x-slow",
+                "slow",
+                "medium",
+                "fast",
+                "x-fast",
+            ]:
                 raise ValueError(
                     "Prosody rate must be one of 'x-slow', 'slow', 'medium', 'fast', 'x-fast'"
                 )
         if self.volume:
             if isinstance(self.volume, float) and not 0 <= self.volume <= 100:
                 raise ValueError("Prosody volume must be between 0 and 100")
-            if self.volume not in [
+            if isinstance(self.volume, str) and self.volume not in [
                 "silent",
                 "x-soft",
                 "soft",
