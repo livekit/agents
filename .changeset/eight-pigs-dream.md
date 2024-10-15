@@ -6,4 +6,4 @@
 "livekit-plugins-openai": patch
 ---
 
-add update_options to TTTs
+add update_options to TTS
