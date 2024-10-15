@@ -12,7 +12,7 @@ from .. import stt, tokenize, tts, utils, vad
 from .._constants import ATTRIBUTE_AGENT_STATE
 from .._types import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
-from .agent_output import AgentOutput, SynthesisHandle
+from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
 from .log import logger
@@ -28,7 +28,7 @@ WillSynthesizeAssistantReply = BeforeLLMCallback
 
 BeforeTTSCallback = Callable[
     ["VoicePipelineAgent", Union[str, AsyncIterable[str]]],
-    Union[str, AsyncIterable[str], Awaitable[str]],
+    SpeechSource,
 ]
 
 
@@ -717,7 +717,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 )
 
             if tool_calls:
-                extra_tools_messages.append(ChatMessage.create_tool_calls(tool_calls))
+                extra_tools_messages.append(
+                    ChatMessage.create_tool_calls(tool_calls, text=collected_text)
+                )
                 extra_tools_messages.extend(tool_calls_results_msg)
 
                 chat_ctx = speech_handle.source.chat_ctx.copy()
@@ -784,7 +786,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         tts_source = self._opts.before_tts_cb(self, og_source)
         if tts_source is None:
-            logger.error("before_tts_cb must return str or AsyncIterable[str]")
+            raise ValueError("before_tts_cb must return str or AsyncIterable[str]")
 
         return self._agent_output.synthesize(
             speech_id=speech_id,

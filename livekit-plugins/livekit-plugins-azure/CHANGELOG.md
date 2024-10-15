@@ -1,5 +1,11 @@
 # livekit-plugins-azure
 
+## 0.4.0
+
+### Minor Changes
+
+- Azure TTS Prosody SSML support #912 - [#914](https://github.com/livekit/agents/pull/914) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.3.2
 
 ### Patch Changes
