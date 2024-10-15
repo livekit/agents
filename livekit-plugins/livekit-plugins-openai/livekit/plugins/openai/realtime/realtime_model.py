@@ -770,43 +770,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        try:
-            headers = {"User-Agent": "LiveKit Agents"}
-            query_params: dict[str, str] = {}
-
-            base_url = self._opts.base_url
-            if self._opts.is_azure:
-                if self._opts.entra_token:
-                    headers["Authorization"] = f"Bearer {self._opts.entra_token}"
-
-                if self._opts.api_key:
-                    headers["api-key"] = self._opts.api_key
-
-                if self._opts.api_version:
-                    query_params["api-version"] = self._opts.api_version
-
-                if self._opts.azure_deployment:
-                    query_params["deployment"] = self._opts.azure_deployment
-            else:
-                # OAI endpoint
-                headers["Authorization"] = f"Bearer {self._opts.api_key}"
-                headers["OpenAI-Beta"] = "realtime=v1"
-
-                if self._opts.model:
-                    query_params["model"] = self._opts.model
-
-            url = f"{base_url.rstrip('/')}/realtime?{urlencode(query_params)}"
-            if url.startswith("http"):
-                url = url.replace("http", "ws", 1)
-
-            ws_conn = await self._http_session.ws_connect(
-                url,
-                headers=headers,
-            )
-        except Exception:
-            logger.exception("failed to connect to OpenAI API S2S")
-            return
-
         closing = False
 
         @utils.log_exceptions(logger=logger)
@@ -891,15 +854,56 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                         extra={"websocket_message": msg, **self.logging_extra()},
                     )
 
-        tasks = [
-            asyncio.create_task(_send_task(), name="openai-realtime-send"),
-            asyncio.create_task(_recv_task(), name="openai-realtime-recv"),
-        ]
+        while not closing:
+            try:
+                headers = {"User-Agent": "LiveKit Agents"}
+                query_params: dict[str, str] = {}
 
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
+                base_url = self._opts.base_url
+                if self._opts.is_azure:
+                    if self._opts.entra_token:
+                        headers["Authorization"] = f"Bearer {self._opts.entra_token}"
+
+                    if self._opts.api_key:
+                        headers["api-key"] = self._opts.api_key
+
+                    if self._opts.api_version:
+                        query_params["api-version"] = self._opts.api_version
+
+                    if self._opts.azure_deployment:
+                        query_params["deployment"] = self._opts.azure_deployment
+                else:
+                    # OAI endpoint
+                    headers["Authorization"] = f"Bearer {self._opts.api_key}"
+                    headers["OpenAI-Beta"] = "realtime=v1"
+
+                    if self._opts.model:
+                        query_params["model"] = self._opts.model
+
+                url = f"{base_url.rstrip('/')}/realtime?{urlencode(query_params)}"
+                if url.startswith("http"):
+                    url = url.replace("http", "ws", 1)
+
+                ws_conn = await self._http_session.ws_connect(
+                    url,
+                    headers=headers,
+                )
+            except Exception:
+                logger.exception("failed to connect to OpenAI API S2S")
+                return
+
+            tasks = [
+                asyncio.create_task(_send_task(), name="openai-realtime-send"),
+                asyncio.create_task(_recv_task(), name="openai-realtime-recv"),
+            ]
+
+            try:
+                await asyncio.gather(*tasks)
+            except Exception:
+                logger.exception("Exception occurred during the OpenAI API S2S process. Try to reconnect.")
+                continue
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
 
     def _handle_session_created(
         self, session_created: api_proto.ServerEvent.SessionCreated
