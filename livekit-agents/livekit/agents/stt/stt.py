@@ -116,7 +116,6 @@ class SpeechStream(ABC):
                 )
 
         if self._resampler:
-            print("resampling", frame.sample_rate, self._needed_sr)
             for frame in self._resampler.push(frame):
                 self._input_ch.send_nowait(frame)
         else:
