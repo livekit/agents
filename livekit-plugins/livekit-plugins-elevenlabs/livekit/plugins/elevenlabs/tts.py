@@ -180,7 +180,7 @@ class TTS(tts.TTS):
             voice (Voice): Voice configuration. Defaults to `DEFAULT_VOICE`.
             model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
         """
-        self._otps.model = model or self._opts.model
+        self._opts.model = model or self._opts.model
         self._opts.voice = voice or self._opts.voice
 
     def synthesize(self, text: str) -> "ChunkedStream":

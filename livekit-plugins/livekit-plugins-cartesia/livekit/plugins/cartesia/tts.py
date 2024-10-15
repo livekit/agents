@@ -134,7 +134,7 @@ class TTS(tts.TTS):
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
             emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
         """
-        self._otps.model = model or self._opts.model
+        self._opts.model = model or self._opts.model
         self._opts.language = language or self._opts.language
         self._opts.voice = voice or self._opts.voice
         self._opts.speed = speed or self._opts.speed
