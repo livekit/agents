@@ -718,7 +718,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             if tool_calls:
                 extra_tools_messages.append(
-                    ChatMessage.create_tool_calls(tool_calls, content=collected_text)
+                    ChatMessage.create_tool_calls(tool_calls, text=collected_text)
                 )
                 extra_tools_messages.extend(tool_calls_results_msg)
 
