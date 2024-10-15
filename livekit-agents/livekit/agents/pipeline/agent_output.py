@@ -170,8 +170,10 @@ class AgentOutput:
 
         if isinstance(tts_source, Awaitable):
             tts_source = await tts_source
-            co = _str_synthesis_task(tts_source, transcript_source, handle)
-        elif isinstance(tts_source, str):
+        if isinstance(transcript_source, Awaitable):
+            transcript_source = await transcript_source
+
+        if isinstance(tts_source, str):
             co = _str_synthesis_task(tts_source, transcript_source, handle)
         else:
             co = _stream_synthesis_task(tts_source, transcript_source, handle)
@@ -187,16 +189,28 @@ class AgentOutput:
 
 
 @utils.log_exceptions(logger=logger)
-async def _str_synthesis_task(
-    tts_text: str, transcript: str, handle: SynthesisHandle
+async def _read_transcript_task(
+    transcript_source: AsyncIterable[str] | str, handle: SynthesisHandle
 ) -> None:
-    """synthesize speech from a string"""
+    if isinstance(transcript_source, str):
+        handle._tr_fwd.push_text(transcript_source)
+    else:
+        async for seg in transcript_source:
+            if not handle._tr_fwd.closed:
+                handle._tr_fwd.push_text(seg)
+
     if not handle.tts_forwarder.closed:
-        handle.tts_forwarder.push_text(transcript)
         handle.tts_forwarder.mark_text_segment_end()
 
+
+@utils.log_exceptions(logger=logger)
+async def _str_synthesis_task(
+    tts_text: str, transcript_source: AsyncIterable[str] | str, handle: SynthesisHandle
+) -> None:
+    """synthesize speech from a string"""
     start_time = time.time()
     first_frame = True
+    read_transcript_atask: asyncio.Task | None = None
 
     try:
         async for audio in handle._tts.synthesize(tts_text):
@@ -210,6 +224,9 @@ async def _str_synthesis_task(
                         "streamed": False,
                     },
                 )
+                read_transcript_atask = asyncio.create_task(
+                    _read_transcript_task(transcript_source, handle)
+                )
 
             frame = audio.frame
 
@@ -221,11 +238,14 @@ async def _str_synthesis_task(
         if not handle.tts_forwarder.closed:
             handle.tts_forwarder.mark_audio_segment_end()
 
+        if read_transcript_atask is not None:
+            await read_transcript_atask
+
 
 @utils.log_exceptions(logger=logger)
 async def _stream_synthesis_task(
     tts_source: AsyncIterable[str],
-    transcript_source: AsyncIterable[str],
+    transcript_source: AsyncIterable[str] | str,
     handle: SynthesisHandle,
 ) -> None:
     """synthesize speech from streamed text"""
@@ -254,16 +274,6 @@ async def _stream_synthesis_task(
         if handle._tr_fwd and not handle._tr_fwd.closed:
             handle._tr_fwd.mark_audio_segment_end()
 
-    @utils.log_exceptions(logger=logger)
-    async def _read_transcript_task():
-        async for seg in transcript_source:
-            if not handle._tr_fwd.closed:
-                handle._tr_fwd.push_text(seg)
-
-        if not handle.tts_forwarder.closed:
-            handle.tts_forwarder.mark_text_segment_end()
-
-    # otherwise, stream the text to the TTS
     tts_stream = handle._tts.stream()
     read_tts_atask: asyncio.Task | None = None
     read_transcript_atask: asyncio.Task | None = None
@@ -273,7 +283,9 @@ async def _stream_synthesis_task(
             if read_tts_atask is None:
                 # start the task when we receive the first text segment (so start_time is more accurate)
                 read_tts_atask = asyncio.create_task(_read_generated_audio_task())
-                read_transcript_atask = asyncio.create_task(_read_transcript_task())
+                read_transcript_atask = asyncio.create_task(
+                    _read_transcript_task(transcript_source, handle)
+                )
 
             tts_stream.push_text(seg)
 
