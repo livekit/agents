@@ -89,6 +89,13 @@ class TTS(tts.TTS):
             speed=speed,
         )
 
+    def update_options(
+        self, *, model: TTSModels | None, voice: TTSVoices | None, speed: float | None
+    ) -> None:
+        self._opts.model = model or self._opts.model
+        self._opts.voice = voice or self._opts.voice
+        self._opts.speed = speed or self._opts.speed
+
     @staticmethod
     def create_azure_client(
         *,
