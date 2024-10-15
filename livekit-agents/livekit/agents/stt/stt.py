@@ -76,25 +76,60 @@ class SpeechStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self):
+    def __init__(self, *, sample_rate: int | None = None):
+        """
+        Args:
+        sample_rate : int or None, optional
+            The desired sample rate for the audio input.
+            If specified, the audio input will be automatically resampled to match
+            the given sample rate before being processed for Speech-to-Text.
+            If not provided (None), the input will retain its original sample rate.
+        """
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, SpeechStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SpeechEvent]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
+        self._needed_sr = sample_rate
+        self._pushed_sr = 0
+        self._resampler: rtc.AudioResampler | None = None
+
     @abstractmethod
-    def _main_task(self) -> None: ...
+    async def _main_task(self) -> None: ...
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized"""
         self._check_input_not_ended()
         self._check_not_closed()
-        self._input_ch.send_nowait(frame)
+
+        if self._pushed_sr and self._pushed_sr != frame.sample_rate:
+            raise ValueError("the sample rate of the input frames must be consistent")
+
+        self._pushed_sr = frame.sample_rate
+
+        if self._needed_sr and self._needed_sr != frame.sample_rate:
+            if not self._resampler:
+                self._resampler = rtc.AudioResampler(
+                    frame.sample_rate,
+                    self._needed_sr,
+                    quality=rtc.AudioResamplerQuality.HIGH,
+                )
+
+        if self._resampler:
+            for frame in self._resampler.push(frame):
+                self._input_ch.send_nowait(frame)
+        else:
+            self._input_ch.send_nowait(frame)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
         self._check_input_not_ended()
         self._check_not_closed()
+
+        if self._resampler:
+            for frame in self._resampler.flush():
+                self._input_ch.send_nowait(frame)
+
         self._input_ch.send_nowait(self._FlushSentinel())
 
     def end_input(self) -> None:

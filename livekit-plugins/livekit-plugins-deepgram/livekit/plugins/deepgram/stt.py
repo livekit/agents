@@ -63,6 +63,7 @@ class STT(stt.STT):
         interim_results: bool = True,
         punctuate: bool = True,
         smart_format: bool = True,
+        sample_rate: int = 16000,
         no_delay: bool = True,
         endpointing_ms: int = 25,
         filler_words: bool = False,
@@ -116,7 +117,7 @@ class STT(stt.STT):
             no_delay=no_delay,
             endpointing_ms=endpointing_ms,
             filler_words=filler_words,
-            sample_rate=48000,
+            sample_rate=sample_rate,
             num_channels=1,
             keywords=keywords,
             profanity_filter=profanity_filter,
@@ -195,7 +196,7 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         max_retry: int = 32,
     ) -> None:
-        super().__init__()
+        super().__init__(sample_rate=opts.sample_rate)
 
         if opts.detect_language and opts.language is None:
             raise ValueError("language detection is not supported in streaming mode")

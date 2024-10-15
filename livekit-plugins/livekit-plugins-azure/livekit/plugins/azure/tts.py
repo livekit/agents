@@ -17,8 +17,9 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
-import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit.agents import tts, utils
+
+import azure.cognitiveservices.speech as speechsdk  # type: ignore
 
 AZURE_SAMPLE_RATE: int = 16000
 AZURE_BITS_PER_SAMPLE: int = 16
