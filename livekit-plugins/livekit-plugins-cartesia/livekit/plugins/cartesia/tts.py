@@ -112,6 +112,35 @@ class TTS(tts.TTS):
 
         return self._session
 
+    def update_options(
+        self,
+        *,
+        model: TTSModels | None = None,
+        language: str | None = None,
+        voice: str | list[float] | None = None,
+        speed: TTSVoiceSpeed | float | None = None,
+        emotion: list[TTSVoiceEmotion | str] | None = None,
+    ) -> None:
+        """
+        Update the Text-to-Speech (TTS) configuration options.
+
+        This method allows updating the TTS settings, including model type, language, voice, speed,
+        and emotion. If any parameter is not provided, the existing value will be retained.
+
+        Args:
+            model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-english".
+            language (str, optional): The language code for synthesis. Defaults to "en".
+            voice (str | list[float], optional): The voice ID or embedding array.
+            speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
+            emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
+        """
+        self._otps.model = model or self._opts.model
+        self._opts.language = language or self._opts.language
+        self._opts.voice = voice or self._opts.voice
+        self._opts.speed = speed or self._opts.speed
+        if emotion is not None:
+            self._opts.emotion = emotion
+
     def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(text, self._opts, self._ensure_session())
 
