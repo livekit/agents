@@ -43,7 +43,7 @@ BUFFERED_WORDS_COUNT = 8
 
 @dataclass
 class _TTSOptions:
-    model: TTSModels
+    model: TTSModels | str
     encoding: TTSEncoding
     sample_rate: int
     voice: str | list[float]
@@ -57,7 +57,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels = "sonic-english",
+        model: TTSModels | str = "sonic-english",
         language: str = "en",
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
