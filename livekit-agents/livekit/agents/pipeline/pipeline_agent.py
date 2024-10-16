@@ -727,7 +727,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
                 answer_llm_stream = self._llm.chat(
                     chat_ctx=chat_ctx,
-                    fnc_ctx=self._fnc_ctx,
                 )
                 answer_synthesis = self._synthesize_agent_speech(
                     speech_handle.id, answer_llm_stream
