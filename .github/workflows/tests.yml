@@ -13,11 +13,8 @@ on:
 
 jobs:
   tests:
-    if: > # don't run tests for PRs on forks
-      ${{
-        !github.event.pull_request ||
-        github.event.pull_request.head.repo.full_name == github.repository
-      }}
+    # don't run tests for PRs on forks
+    if: github.repository == 'livekit/livekit-agents'
     strategy:
       fail-fast: false
       matrix:
@@ -43,8 +40,8 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
-          cache: 'pip'
+          python-version: "3.9"
+          cache: "pip"
 
       - name: Install ffmpeg (Linux)
         if: ${{ matrix.platform == 'linux' }}
