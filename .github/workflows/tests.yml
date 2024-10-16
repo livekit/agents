@@ -71,7 +71,7 @@ jobs:
 
       - name: Install ffmpeg (macOS)
         if: ${{ matrix.platform == 'macos' }}
-        run: brew update && brew install ffmpeg
+        run: brew install ffmpeg
 
       - name: Install ffmpeg (Windows)
         if: ${{ matrix.platform == 'windows' }}
