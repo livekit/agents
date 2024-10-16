@@ -80,18 +80,14 @@ class HumanInput(utils.EventEmitter[EventTypes]):
             if not publication.subscribed:
                 publication.set_subscribed(True)
 
-            if (
-                publication.track is not None
-                and publication.track != self._subscribed_track
-            ):
-                self._subscribed_track = publication.track  # type: ignore
+            track = publication.track
+            if track is not None and track != self._subscribed_track:
+                self._subscribed_track = track
                 if self._recognize_atask is not None:
                     self._recognize_atask.cancel()
 
                 self._recognize_atask = asyncio.create_task(
-                    self._recognize_task(
-                        rtc.AudioStream(self._subscribed_track, sample_rate=16000)
-                    )  # type: ignore
+                    self._recognize_task(rtc.AudioStream(track, sample_rate=16000))
                 )
                 break
 
