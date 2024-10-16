@@ -17,9 +17,8 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
-from livekit.agents import tts, utils
-
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
+from livekit.agents import tts, utils
 
 AZURE_SAMPLE_RATE: int = 16000
 AZURE_BITS_PER_SAMPLE: int = 16
@@ -180,7 +179,7 @@ class ChunkedStream(tts.ChunkedStream):
         def _synthesize() -> speechsdk.SpeechSynthesisResult:
             if self._opts.prosody:
                 ssml = f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{self._opts.language or "en-US"}">'
-                prosody_ssml = "<prosody"
+                prosody_ssml = f'<voice name="{self._opts.voice}"><prosody'
                 if self._opts.prosody.rate:
                     prosody_ssml += f' rate="{self._opts.prosody.rate}"'
                 if self._opts.prosody.volume:
@@ -190,7 +189,7 @@ class ChunkedStream(tts.ChunkedStream):
                 prosody_ssml += ">"
                 ssml += prosody_ssml
                 ssml += self._text
-                ssml += "</prosody></speak>"
+                ssml += "</prosody></voice></speak>"
                 return synthesizer.speak_ssml_async(ssml).get()  # type: ignore
 
             return synthesizer.speak_text_async(self._text).get()  # type: ignore
