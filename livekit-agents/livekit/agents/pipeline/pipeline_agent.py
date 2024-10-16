@@ -152,6 +152,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         loop: asyncio.AbstractEventLoop | None = None,
         # backward compatibility
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply | None = None,
+        use_endpoint_detector: bool = False,
     ) -> None:
         """
         Create a new VoicePipelineAgent.
@@ -244,6 +245,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self._validate_reply_if_possible,
             self._opts.min_endpointing_delay,
             loop=self._loop,
+            use_endpoint_detector=use_endpoint_detector,
         )
 
         self._speech_q: list[SpeechHandle] = []
@@ -893,14 +895,22 @@ class _DeferredReplyValidation:
     # if the STT gives us punctuation, we can try validate the reply faster.
     PUNCTUATION = ".!?"
     PUNCTUATION_REDUCE_FACTOR = 0.75
-
+    
     LATE_TRANSCRIPT_TOLERANCE = 1.5  # late compared to end of speech
+
+    # When endpoint probability is below this threshold we think the user is not finished speaking
+    # so we will use a long delay 
+    UNLIKELY_ENDPOINT_THRESHOLD = 0.25
+    
+    # Long delay to use when the model thinks the user is still speaking
+    UNLIKELY_ENDPOINT_DELAY = 10.0  
 
     def __init__(
         self,
         validate_fnc: Callable[[], None],
         min_endpointing_delay: float,
         loop: asyncio.AbstractEventLoop | None = None,
+        use_endpoint_detector: bool = False,        
     ) -> None:
         self._validate_fnc = validate_fnc
         self._validating_task: asyncio.Task | None = None
@@ -910,17 +920,19 @@ class _DeferredReplyValidation:
 
         self._end_of_speech_delay = min_endpointing_delay
         self._final_transcript_delay = min_endpointing_delay + 1.0
-
+        
+        self._endpoint_detector = None
+        self._endpoint_probability = None
+        
+        if use_endpoint_detector:
+            from .endpoint_detector import EndpointDetector
+            self._endpoint_detector = EndpointDetector()
+        
     @property
     def validating(self) -> bool:
         return self._validating_task is not None and not self._validating_task.done()
-
-    def on_human_final_transcript(self, transcript: str) -> None:
-        self._last_final_transcript = transcript.strip()  # type: ignore
-
-        if self._speaking:
-            return
-
+    
+    def get_endpoint_delay(self) -> float:
         has_recent_end_of_speech = (
             time.time() - self._last_recv_end_of_speech_time
             < self.LATE_TRANSCRIPT_TOLERANCE
@@ -935,7 +947,36 @@ class _DeferredReplyValidation:
             if self._end_with_punctuation()
             else 1.0
         )
+        
+        if self._endpoint_probability is not None:
+            if self._endpoint_probability < self.UNLIKELY_ENDPOINT_THRESHOLD:
+                new_delay = self.UNLIKELY_ENDPOINT_DELAY
+                
+                logger.debug(
+                    "Unlikely endpoint detected",
+                    extra={
+                        "new_delay": new_delay,
+                        "old_delay": delay,
+                        "endpoint_prob": round(self._endpoint_probability, 2),
+                        "transcript": self._last_final_transcript,
+                    }
+                )
+                delay = new_delay
+        return delay
 
+    def on_human_final_transcript(self, transcript: str) -> None:
+        self._last_final_transcript = transcript.strip()  # type: ignore
+        
+        if self._endpoint_detector:
+            self._endpoint_probability = self._endpoint_detector.predict(
+                utterance=self._last_final_transcript,
+                convo=[]
+            )
+
+        if self._speaking:
+            return
+    
+        delay = self.get_endpoint_delay()
         self._run(delay)
 
     def on_human_start_of_speech(self, ev: vad.VADEvent) -> None:
@@ -949,11 +990,7 @@ class _DeferredReplyValidation:
         self._last_recv_end_of_speech_time = time.time()
 
         if self._last_final_transcript:
-            delay = (
-                self._end_of_speech_delay * self.PUNCTUATION_REDUCE_FACTOR
-                if self._end_with_punctuation()
-                else 1.0
-            )
+            delay = self.get_endpoint_delay()
             self._run(delay)
 
     async def aclose(self) -> None:
