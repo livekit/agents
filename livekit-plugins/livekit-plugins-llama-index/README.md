@@ -14,16 +14,16 @@ Query Engine is primarily used for RAG. See [example voice agent](https://github
 
 ## Chat Engine
 
-Chat Engine can be used as an LLM within the frame work.
+Chat Engine can be used as an LLM within the framework.
 
 ```python
 # load the existing index
 storage_context = StorageContext.from_defaults(persist_dir=<mydir>)
 index = load_index_from_storage(storage_context)
-chat_engine = index.as_chat_engine(chat_mode=ChatMode.CONTEXT)
 
 async def entrypoint(ctx: JobContext):
     ...
+    chat_engine = index.as_chat_engine(chat_mode=ChatMode.CONTEXT)
     assistant = VoicePipelineAgent(
         vad=silero.VAD.load(),
         stt=deepgram.STT(),

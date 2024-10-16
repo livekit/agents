@@ -173,6 +173,8 @@ class SpeechStream(stt.SpeechStream):
         self._loop.call_soon_threadsafe(self._done_event.set)
 
     def _threadsafe_send(self, evt: stt.SpeechEvent | None):
+        if evt is None:
+            return
         self._loop.call_soon_threadsafe(self._event_ch.send_nowait, evt)
 
 
