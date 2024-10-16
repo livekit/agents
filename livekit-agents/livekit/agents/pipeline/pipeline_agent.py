@@ -99,6 +99,7 @@ class _ImplOptions:
     before_tts_cb: BeforeTTSCallback
     plotting: bool
     transcription: AgentTranscriptionOptions
+    min_delay_between_playouts: float
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         before_tts_cb: BeforeTTSCallback = _default_before_tts_cb,
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
+        min_delay_between_playouts: float = 0.0,
         # backward compatibility
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply | None = None,
     ) -> None:
@@ -182,6 +184,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 (e.g: editing the pronunciation of a word).
             plotting: Whether to enable plotting for debugging. matplotlib must be installed.
             loop: Event loop to use. Default to asyncio.get_event_loop().
+            min_delay_between_playouts: Minimum delay between consecutive agent playouts.
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
@@ -202,6 +205,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             transcription=transcription,
             before_llm_cb=before_llm_cb,
             before_tts_cb=before_tts_cb,
+            min_delay_between_playouts=min_delay_between_playouts,
         )
         self._plotter = AssistantPlotter(self._loop)
 
@@ -252,6 +256,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._last_end_of_speech_time: float | None = None
 
         self._update_state_task: asyncio.Task | None = None
+        self._last_playout_end_time: float = 0.0
 
     @property
     def fnc_ctx(self) -> FunctionContext | None:
@@ -601,6 +606,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         except asyncio.CancelledError:
             return
 
+        time_since_last_playout = time.time() - self._last_playout_end_time
+        if time_since_last_playout < self._opts.min_delay_between_playouts:
+            await asyncio.sleep(
+                self._opts.min_delay_between_playouts - time_since_last_playout
+            )
+
         await self._agent_publication.wait_for_subscription()
 
         synthesis_handle = speech_handle.synthesis_handle
@@ -766,6 +777,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     "speech_id": speech_handle.id,
                 },
             )
+
+        self._last_playout_end_time = time.time()
 
     def _synthesize_agent_speech(
         self,
