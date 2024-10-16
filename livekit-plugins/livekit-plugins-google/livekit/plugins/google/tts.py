@@ -206,4 +206,4 @@ def _gender_from_str(gender: str) -> SsmlVoiceGender:
     elif gender == "female":
         ssml_gender = SsmlVoiceGender.FEMALE
 
-    return ssml_gender
+    return ssml_gender  # type: ignore
