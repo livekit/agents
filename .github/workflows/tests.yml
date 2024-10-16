@@ -14,7 +14,7 @@ on:
 jobs:
   tests:
     # don't run tests for PRs on forks
-    if: github.repository == 'livekit/agents'
+    if: github.event.pull_request.head.repo.fork == false
     strategy:
       fail-fast: false
       matrix:
