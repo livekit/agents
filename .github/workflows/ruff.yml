@@ -1,5 +1,15 @@
 name: Ruff - Checks
-on: push
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
