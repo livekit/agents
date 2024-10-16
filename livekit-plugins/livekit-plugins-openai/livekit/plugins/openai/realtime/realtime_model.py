@@ -758,7 +758,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 self._opts.max_response_output_tokens
             )
         else:
-            del session_data["max_response_output_tokens"]
+            del session_data["max_response_output_tokens"]  # type: ignore
 
         self._queue_msg(
             {
