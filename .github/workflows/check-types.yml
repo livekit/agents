@@ -20,7 +20,6 @@ jobs:
         with:
           submodules: recursive
 
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.9"
@@ -41,7 +40,8 @@ jobs:
                       ./livekit-plugins/livekit-plugins-cartesia \
                       ./livekit-plugins/livekit-plugins-rag \
                       ./livekit-plugins/livekit-plugins-azure \
-                      ./livekit-plugins/livekit-plugins-anthropic
+                      ./livekit-plugins/livekit-plugins-anthropic \
+                      ./livekit-plugins/livekit-plugins-llama-index
 
       - name: Install stub packages
         run: |

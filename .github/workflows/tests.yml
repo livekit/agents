@@ -13,11 +13,8 @@ on:
 
 jobs:
   tests:
-    if: > # don't run tests for PRs on forks
-      ${{
-        !github.event.pull_request ||
-        github.event.pull_request.head.repo.full_name == github.repository
-      }}
+    # don't run tests for PRs on forks
+    if: github.repository == 'livekit/agents'
     strategy:
       fail-fast: false
       matrix:
@@ -41,10 +38,23 @@ jobs:
           submodules: true
           lfs: true
 
-      - uses: actions/setup-python@v5
+      - name: Cache packages
+        uses: actions/cache@v4
         with:
-          python-version: '3.9'
-          cache: 'pip'
+          path: |
+            /var/cache/apt/archives
+            ~/Library/Caches/Homebrew
+            C:\ProgramData\chocolatey\lib\ffmpeg
+          key: ${{ runner.os }}-cache
+          restore-keys: |
+            ${{ runner.os }}-cache
+
+      - uses: actions/setup-python@v5
+        # on mac, ffmpeg installs python
+        if: ${{ matrix.os != 'macos' }}
+        with:
+          python-version: "3.9"
+          cache: "pip"
 
       - name: Install ffmpeg (Linux)
         if: ${{ matrix.platform == 'linux' }}
