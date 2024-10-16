@@ -80,7 +80,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
             if not publication.subscribed:
                 publication.set_subscribed(True)
 
-            track = publication.track
+            track: rtc.RemoteAudioTrack | None = publication.track  # type: ignore
             if track is not None and track != self._subscribed_track:
                 self._subscribed_track = track
                 if self._recognize_atask is not None:

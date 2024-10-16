@@ -200,10 +200,10 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 def _gender_from_str(gender: str) -> SsmlVoiceGender:
-    ssml_gender: SsmlVoiceGender = SsmlVoiceGender.NEUTRAL
+    ssml_gender = SsmlVoiceGender.NEUTRAL
     if gender == "male":
         ssml_gender = SsmlVoiceGender.MALE
     elif gender == "female":
         ssml_gender = SsmlVoiceGender.FEMALE
 
-    return ssml_gender
+    return ssml_gender  # type: ignore
