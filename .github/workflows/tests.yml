@@ -38,7 +38,20 @@ jobs:
           submodules: true
           lfs: true
 
+      - name: Cache packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/apt/archives
+            ~/Library/Caches/Homebrew
+            C:\ProgramData\chocolatey\lib\ffmpeg
+          key: ${{ runner.os }}-cache
+          restore-keys: |
+            ${{ runner.os }}-cache
+
       - uses: actions/setup-python@v5
+        # on mac, ffmpeg installs python
+        if: ${{ matrix.os != 'macos' }}
         with:
           python-version: "3.9"
           cache: "pip"
