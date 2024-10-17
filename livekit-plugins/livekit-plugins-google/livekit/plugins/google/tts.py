@@ -41,6 +41,8 @@ class TTS(tts.TTS):
         voice_name: str = "",  # Not required
         encoding: AudioEncoding | str = "linear16",
         sample_rate: int = 24000,
+        pitch: int = 0,
+        effects_profile_id: str = "",
         speaking_rate: float = 1.0,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
@@ -58,6 +60,8 @@ class TTS(tts.TTS):
             voice_name (str, optional): Specific voice name. Default is an empty string.
             encoding (AudioEncoding | str, optional): Audio encoding format (e.g., "linear16"). Default is "linear16".
             sample_rate (int, optional): Audio sample rate in Hz. Default is 24000.
+            pitch (float, optional): Speaking pitch, ranging from -20.0 to 20.0 semitones relative to the original pitch. Default is 0.
+            effects_profile_id (str): Optional identifier for selecting audio effects profiles to apply to the synthesized speech.
             speaking_rate (float, optional): Speed of speech. Default is 1.0.
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
@@ -93,6 +97,8 @@ class TTS(tts.TTS):
             audio_config=texttospeech.AudioConfig(
                 audio_encoding=_audio_encoding,
                 sample_rate_hertz=sample_rate,
+                pitch=pitch,
+                effects_profile_id=effects_profile_id,
                 speaking_rate=speaking_rate,
             ),
         )
