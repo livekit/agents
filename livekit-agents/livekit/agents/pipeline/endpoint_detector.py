@@ -50,11 +50,10 @@ class EndpointDetector:
     def predict(self, utterance, convo=[]):
         start_time = time.time()
 
-        convo_copy = copy.deepcopy(convo)
-        convo_copy.append(dict(role='user', content=utterance))
-        convo_copy = convo_copy[-MAX_HISTORY:]
+        convo.append(dict(role='user', content=utterance))
+        convo = convo[-MAX_HISTORY:]
 
-        text = self.apply_chat_template(convo_copy)
+        text = self.apply_chat_template(convo)
         inputs = self.tokenize(text)
 
         outputs = self.model(**inputs)
@@ -66,7 +65,7 @@ class EndpointDetector:
         latency = end_time - start_time
         
         logger.debug(
-            "EndpointDetector prediction", 
+            "EndpointDetector inference", 
             extra={
                 "probability": round(result, 2), 
                 "utterance": utterance,
