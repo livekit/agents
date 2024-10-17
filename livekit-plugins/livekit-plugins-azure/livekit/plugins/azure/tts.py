@@ -180,7 +180,9 @@ class ChunkedStream(tts.ChunkedStream):
         def _synthesize() -> speechsdk.SpeechSynthesisResult:
             if self._opts.prosody:
                 ssml = f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{self._opts.language or "en-US"}">'
+                voice_ssml = f'<voice name="{self._opts.voice}">'
                 prosody_ssml = "<prosody"
+                
                 if self._opts.prosody.rate:
                     prosody_ssml += f' rate="{self._opts.prosody.rate}"'
                 if self._opts.prosody.volume:
@@ -188,9 +190,10 @@ class ChunkedStream(tts.ChunkedStream):
                 if self._opts.prosody.pitch:
                     prosody_ssml += f' pitch="{self._opts.prosody.pitch}"'
                 prosody_ssml += ">"
+                ssml += voice_ssml
                 ssml += prosody_ssml
                 ssml += self._text
-                ssml += "</prosody></speak>"
+                ssml += "</prosody></voice></speak>"
                 return synthesizer.speak_ssml_async(ssml).get()  # type: ignore
 
             return synthesizer.speak_text_async(self._text).get()  # type: ignore
