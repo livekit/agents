@@ -1,5 +1,11 @@
 # livekit-plugins-cartesia
 
+## 0.4.3
+
+### Patch Changes
+
+- add update_options to TTS - [#922](https://github.com/livekit/agents/pull/922) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.4.2
 
 ### Patch Changes

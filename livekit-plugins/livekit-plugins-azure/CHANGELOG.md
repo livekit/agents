@@ -1,5 +1,15 @@
 # livekit-plugins-azure
 
+## 0.4.1
+
+### Patch Changes
+
+- add update_options to TTS - [#922](https://github.com/livekit/agents/pull/922) ([@theomonnom](https://github.com/theomonnom))
+
+- azure tts: fix SSML Implementation by Adding <voice> Tag - [#929](https://github.com/livekit/agents/pull/929) ([@samirsalman](https://github.com/samirsalman))
+
+- azure tts: fix Prosody Config Validation - [#918](https://github.com/livekit/agents/pull/918) ([@samirsalman](https://github.com/samirsalman))
+
 ## 0.4.0
 
 ### Minor Changes
