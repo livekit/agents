@@ -243,9 +243,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._deferred_validation = _DeferredReplyValidation(
             self._validate_reply_if_possible,
-            self._opts.min_endpointing_delay,
-            self._chat_ctx,  # Pass the ChatContext here
+            self._opts.min_endpointing_delay,            
             loop=self._loop,
+            chat_ctx=self._chat_ctx,
             use_endpoint_detector=use_endpoint_detector,
         )
 
@@ -910,7 +910,7 @@ class _DeferredReplyValidation:
         self,
         validate_fnc: Callable[[], None],
         min_endpointing_delay: float,
-        chat_ctx: ChatContext,  # Add this parameter
+        chat_ctx: ChatContext, 
         loop: asyncio.AbstractEventLoop | None = None,
         use_endpoint_detector: bool = False,        
     ) -> None:
@@ -930,7 +930,7 @@ class _DeferredReplyValidation:
             from .endpoint_detector import EndpointDetector
             self._endpoint_detector = EndpointDetector()
         
-        self._chat_ctx = chat_ctx  # Store the ChatContext
+        self._chat_ctx = chat_ctx 
 
     @property
     def validating(self) -> bool:
