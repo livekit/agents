@@ -9,7 +9,7 @@ from transformers import AutoTokenizer
 from .log import logger
 
 PUNCS = string.punctuation.replace("'","")
-
+MAX_HISTORY = 3
 
 class EndpointDetector:
     def __init__(self, model_path='jeradf/opt-125m-eou'):
@@ -24,6 +24,8 @@ class EndpointDetector:
 
     def apply_chat_template(self, convo):
         for msg in convo:
+            if msg['role'] not in ['user', 'assistant']:
+                continue
             msg['content'] = self.normalize(msg['content'])
 
         convo_text = self.tokenizer.apply_chat_template(
@@ -50,6 +52,7 @@ class EndpointDetector:
 
         convo_copy = copy.deepcopy(convo)
         convo_copy.append(dict(role='user', content=utterance))
+        convo_copy = convo_copy[-MAX_HISTORY:]
 
         text = self.apply_chat_template(convo_copy)
         inputs = self.tokenize(text)

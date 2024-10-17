@@ -244,6 +244,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._deferred_validation = _DeferredReplyValidation(
             self._validate_reply_if_possible,
             self._opts.min_endpointing_delay,
+            self._chat_ctx,  # Pass the ChatContext here
             loop=self._loop,
             use_endpoint_detector=use_endpoint_detector,
         )
@@ -900,15 +901,16 @@ class _DeferredReplyValidation:
 
     # When endpoint probability is below this threshold we think the user is not finished speaking
     # so we will use a long delay 
-    UNLIKELY_ENDPOINT_THRESHOLD = 0.25
+    UNLIKELY_ENDPOINT_THRESHOLD = 0.15
     
     # Long delay to use when the model thinks the user is still speaking
-    UNLIKELY_ENDPOINT_DELAY = 10.0  
+    UNLIKELY_ENDPOINT_DELAY = 5.0
 
     def __init__(
         self,
         validate_fnc: Callable[[], None],
         min_endpointing_delay: float,
+        chat_ctx: ChatContext,  # Add this parameter
         loop: asyncio.AbstractEventLoop | None = None,
         use_endpoint_detector: bool = False,        
     ) -> None:
@@ -928,6 +930,8 @@ class _DeferredReplyValidation:
             from .endpoint_detector import EndpointDetector
             self._endpoint_detector = EndpointDetector()
         
+        self._chat_ctx = chat_ctx  # Store the ChatContext
+
     @property
     def validating(self) -> bool:
         return self._validating_task is not None and not self._validating_task.done()
@@ -968,9 +972,11 @@ class _DeferredReplyValidation:
         self._last_final_transcript = transcript.strip()  # type: ignore
         
         if self._endpoint_detector:
+            convo = [dict(role=msg.role, content=msg.content) 
+                     for msg in self._chat_ctx.messages]
             self._endpoint_probability = self._endpoint_detector.predict(
                 utterance=self._last_final_transcript,
-                convo=[]
+                convo=convo
             )
 
         if self._speaking:
