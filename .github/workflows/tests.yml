@@ -19,8 +19,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14-large
-            platform: macos
           - os: macos-14
             platform: macos
           - os: windows-2019
