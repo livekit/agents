@@ -51,6 +51,7 @@ setuptools.setup(
         "google-auth >= 2, < 3",
         "google-cloud-speech >= 2, < 3",
         "google-cloud-texttospeech >= 2, < 3",
+        "google-generativeai >= 0.7, < 1",
         "livekit-agents>=0.8.0.dev0",
     ],
     package_data={"livekit.plugins.google": ["py.typed"]},
