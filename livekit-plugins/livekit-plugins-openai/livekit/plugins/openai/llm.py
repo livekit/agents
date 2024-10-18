@@ -23,7 +23,11 @@ import httpx
 from livekit.agents import llm
 
 import openai
-from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
+from openai.types.chat import (
+    ChatCompletion,
+    ChatCompletionChunk,
+    ChatCompletionMessageParam,
+)
 from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
@@ -46,6 +50,9 @@ class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
+
+
+ResponseFormat = openai.types.chat.completion_create_params.ResponseFormat
 
 
 class LLM(llm.LLM):
@@ -450,7 +457,11 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        response_format: ResponseFormat | None = None,
     ) -> "LLMStream":
+        # Note that not all models support all response_format types.
+        # See https://platform.openai.com/docs/api-reference/chat/create#chat-create-response_format for more information.
+        # When using response_format, parse the response in your before_tts_callback.
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
@@ -473,8 +484,9 @@ class LLM(llm.LLM):
             model=self._opts.model,
             n=n,
             temperature=temperature,
-            stream=True,
+            stream=response_format is None,
             user=user,
+            response_format=response_format,
             **opts,
         )
 
@@ -485,18 +497,21 @@ class LLMStream(llm.LLMStream):
     def __init__(
         self,
         *,
-        oai_stream: Awaitable[openai.AsyncStream[ChatCompletionChunk]],
+        oai_stream: Awaitable[openai.AsyncStream[ChatCompletionChunk] | ChatCompletion],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
     ) -> None:
         super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._awaitable_oai_stream = oai_stream
-        self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
+        self._oai_stream: (
+            openai.AsyncStream[ChatCompletionChunk] | ChatCompletion | None
+        ) = None
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
+        self._has_sent_content = False
 
     async def aclose(self) -> None:
         if self._oai_stream:
@@ -504,9 +519,25 @@ class LLMStream(llm.LLMStream):
 
         return await super().aclose()
 
-    async def __anext__(self):
+    async def __anext__(self) -> llm.ChatChunk:
         if not self._oai_stream:
             self._oai_stream = await self._awaitable_oai_stream
+
+        if isinstance(self._oai_stream, ChatCompletion):
+            if self._has_sent_content:
+                raise StopAsyncIteration
+            self._has_sent_content = True
+            return llm.ChatChunk(
+                choices=[
+                    llm.Choice(
+                        delta=llm.ChoiceDelta(
+                            content=self._oai_stream.choices[0].message.content,
+                            role="assistant",
+                        ),
+                        index=0,
+                    )
+                ]
+            )
 
         async for chunk in self._oai_stream:
             for choice in chunk.choices:
