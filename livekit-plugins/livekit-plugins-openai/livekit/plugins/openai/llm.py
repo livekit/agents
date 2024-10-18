@@ -511,6 +511,7 @@ class LLMStream(llm.LLMStream):
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
+        self._has_sent_content = False
 
     async def aclose(self) -> None:
         if self._oai_stream:
@@ -523,7 +524,20 @@ class LLMStream(llm.LLMStream):
             self._oai_stream = await self._awaitable_oai_stream
 
         if isinstance(self._oai_stream, ChatCompletion):
-            return self._parse_choice(self._oai_stream.choices[0])
+            if self._has_sent_content:
+                raise StopAsyncIteration
+            self._has_sent_content = True
+            return llm.ChatChunk(
+                choices=[
+                    llm.Choice(
+                        delta=llm.ChoiceDelta(
+                            content=self._oai_stream.choices[0].message.content,
+                            role="assistant",
+                        ),
+                        index=0,
+                    )
+                ]
+            )
 
         async for chunk in self._oai_stream:
             for choice in chunk.choices:
