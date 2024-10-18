@@ -289,15 +289,15 @@ class VoicePipelineAgent(
         return self._llm
 
     @property
-    def tts(self) -> tts.TTST:
+    def tts(self) -> TTST:
         return self._tts
 
     @property
-    def stt(self) -> stt.STTT:
+    def stt(self) -> STTT:
         return self._stt
 
     @property
-    def vad(self) -> vad.VADT:
+    def vad(self) -> VADT:
         return self._vad
 
     def start(
