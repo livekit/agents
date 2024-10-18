@@ -4,7 +4,17 @@ import asyncio
 import contextvars
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, Union
+from typing import (
+    Any,
+    AsyncIterable,
+    Awaitable,
+    Callable,
+    Generic,
+    Literal,
+    Optional,
+    TypeVar,
+    Union,
+)
 
 from livekit import rtc
 
@@ -123,7 +133,16 @@ class AgentTranscriptionOptions:
     representing the hyphenated parts of the word."""
 
 
-class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
+FunctionContextT = TypeVar("FunctionContextT", bound=FunctionContext)
+LLMT = TypeVar("LLMT", bound=LLM)
+TTST = TypeVar("TTST", bound=tts.TTS)
+VADT = TypeVar("VADT", bound=vad.VAD)
+STTT = TypeVar("STTT", bound=stt.STT)
+
+
+class VoicePipelineAgent(
+    utils.EventEmitter[EventTypes], Generic[FunctionContextT, LLMT, TTST, VADT, STTT]
+):
     """
     A pipeline agent (VAD + STT + LLM + TTS) implementation.
     """
@@ -134,12 +153,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        vad: vad.VAD,
-        stt: stt.STT,
-        llm: LLM,
-        tts: tts.TTS,
+        vad: VADT,
+        stt: STTT,
+        llm: LLMT,
+        tts: TTST,
         chat_ctx: ChatContext | None = None,
-        fnc_ctx: FunctionContext | None = None,
+        fnc_ctx: FunctionContextT | None = None,
         allow_interruptions: bool = True,
         interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
@@ -254,11 +273,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._update_state_task: asyncio.Task | None = None
 
     @property
-    def fnc_ctx(self) -> FunctionContext | None:
+    def fnc_ctx(self) -> FunctionContextT | None:
         return self._fnc_ctx
 
     @fnc_ctx.setter
-    def fnc_ctx(self, fnc_ctx: FunctionContext | None) -> None:
+    def fnc_ctx(self, fnc_ctx: FunctionContextT | None) -> None:
         self._fnc_ctx = fnc_ctx
 
     @property
@@ -266,19 +285,19 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         return self._chat_ctx
 
     @property
-    def llm(self) -> LLM:
+    def llm(self) -> LLMT:
         return self._llm
 
     @property
-    def tts(self) -> tts.TTS:
+    def tts(self) -> tts.TTST:
         return self._tts
 
     @property
-    def stt(self) -> stt.STT:
+    def stt(self) -> stt.STTT:
         return self._stt
 
     @property
-    def vad(self) -> vad.VAD:
+    def vad(self) -> vad.VADT:
         return self._vad
 
     def start(
