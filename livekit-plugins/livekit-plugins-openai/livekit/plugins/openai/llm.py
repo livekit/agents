@@ -456,7 +456,7 @@ class LLM(llm.LLM):
         response_format: ResponseFormat | None = None,
     ) -> "LLMStream":
         # Note that not all models support all response_format types.
-        # See https://platform.openai.com/docs/guides/structured-outputs for more information.
+        # See https://platform.openai.com/docs/api-reference/chat/create#chat-create-response_format for more information.
         # When using response_format, parse the response in your before_tts_callback.
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
