@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Callable, Literal, Protocol
+from typing import AsyncIterable,Awaitable, Callable, Literal, Protocol
 
 import aiohttp
 from livekit import rtc
@@ -92,6 +92,10 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         self._update_state_task: asyncio.Task | None = None
         self._http_session: aiohttp.ClientSession | None = None
 
+        # audio output post processing
+        self._audio_processor: Callable[[AsyncIterable[bytes]], Awaitable[AsyncIterable[bytes]]] | None = None
+
+
     @property
     def vad(self) -> vad.VAD | None:
         return self._vad
@@ -103,6 +107,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     @fnc_ctx.setter
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
         self._session.fnc_ctx = value
+
+    def set_audio_processor(self, processor: Callable[[AsyncIterable[bytes]], Awaitable[AsyncIterable[bytes]]]):
+        """
+        Set a custom audio processor function.
+        """
+        self._audio_processor = processor
 
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
@@ -145,6 +155,10 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 hyphenate_word=self._opts.transcription.hyphenate_word,
             )
 
+            audio_stream = message.audio_stream
+            if self._audio_processor:
+                audio_stream = self._audio_processor(audio_stream)
+                
             self._playing_handle = self._agent_playout.play(
                 item_id=message.item_id,
                 content_index=message.content_index,
