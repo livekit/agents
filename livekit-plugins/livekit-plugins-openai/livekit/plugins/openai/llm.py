@@ -48,6 +48,9 @@ class LLMOptions:
     temperature: float | None
 
 
+ResponseFormat = openai.types.chat.completion_create_params.ResponseFormat
+
+
 class LLM(llm.LLM):
     def __init__(
         self,
@@ -450,7 +453,11 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        response_format: ResponseFormat | None = None,
     ) -> "LLMStream":
+        # Note that not all models support all response_format types.
+        # See https://platform.openai.com/docs/guides/structured-outputs for more information.
+        # When using response_format, parse the response in your before_tts_callback.
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
@@ -475,6 +482,7 @@ class LLM(llm.LLM):
             temperature=temperature,
             stream=True,
             user=user,
+            response_format=response_format,
             **opts,
         )
 
