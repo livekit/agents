@@ -246,9 +246,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             loop=self._loop,
         )
 
-        self._speech_q: list[SpeechHandle] = []
-        self._speech_q_changed = asyncio.Event()
-
+        self._speech_q: asyncio.Queue[SpeechHandle] = asyncio.Queue()
         self._last_end_of_speech_time: float | None = None
 
         self._update_state_task: asyncio.Task | None = None
@@ -344,6 +342,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             allow_interruptions: Whether to allow interruptions during the speech playback.
             add_to_chat_ctx: Whether to add the speech to the chat context.
         """
+        if not source:
+            logger.warning("Empty speech source; skipping playback.")
+            return
+
         await self._track_published_fut
 
         new_handle = SpeechHandle.create_assistant_speech(
@@ -351,7 +353,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         )
         synthesis_handle = self._synthesize_agent_speech(new_handle.id, source)
         new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
-        self._add_speech_for_playout(new_handle)
+        await self._add_speech_for_playout(new_handle)
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -505,16 +507,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._track_published_fut.set_result(None)
 
         while True:
-            await self._speech_q_changed.wait()
-
-            while self._speech_q:
-                speech = self._speech_q[0]
-                self._playing_speech = speech
-                await self._play_speech(speech)
-                self._speech_q.pop(0)  # Remove the element only after playing
-                self._playing_speech = None
-
-            self._speech_q_changed.clear()
+            speech_handle = await self._speech_q.get()
+            self._playing_speech = speech_handle
+            await self._play_speech(speech_handle)
+            self._speech_q.task_done()
+            self._playing_speech = None
 
     def _synthesize_agent_reply(self):
         """Synthesize the agent reply to the user question, also make sure only one reply
@@ -828,11 +825,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         # in some bad timing, we could end up with two pushed agent replies inside the speech queue.
         # so make sure we directly interrupt every reply when validating a new one
-        for speech in self._speech_q:
-            if not speech.is_reply:
-                continue
-
-            if speech.allow_interruptions:
+        for speech in list(self._speech_q._queue):  # Access the underlying deque with _queue
+            if speech.is_reply and speech.allow_interruptions:
                 speech.interrupt()
 
         logger.debug(
@@ -840,7 +834,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             extra={"speech_id": self._pending_agent_reply.id},
         )
 
-        self._add_speech_for_playout(self._pending_agent_reply)
+        asyncio.create_task(self._add_speech_for_playout(self._pending_agent_reply))
         self._pending_agent_reply = None
         self._transcribed_interim_text = ""
         # self._transcribed_text is reset after MIN_TIME_PLAYED_FOR_COMMIT, see self._play_speech
@@ -865,10 +859,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._playing_speech.interrupt()
 
-    def _add_speech_for_playout(self, speech_handle: SpeechHandle) -> None:
-        self._speech_q.append(speech_handle)
-        self._speech_q_changed.set()
-
+    async def _add_speech_for_playout(self, speech_handle: SpeechHandle) -> None:
+        await self._speech_q.put(speech_handle)
 
 async def _llm_stream_to_str_iterable(
     speech_id: str, stream: LLMStream
