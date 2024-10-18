@@ -23,7 +23,11 @@ import httpx
 from livekit.agents import llm
 
 import openai
-from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
+from openai.types.chat import (
+    ChatCompletion,
+    ChatCompletionChunk,
+    ChatCompletionMessageParam,
+)
 from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
@@ -493,13 +497,15 @@ class LLMStream(llm.LLMStream):
     def __init__(
         self,
         *,
-        oai_stream: Awaitable[openai.AsyncStream[ChatCompletionChunk]],
+        oai_stream: Awaitable[openai.AsyncStream[ChatCompletionChunk] | ChatCompletion],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
     ) -> None:
         super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._awaitable_oai_stream = oai_stream
-        self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
+        self._oai_stream: (
+            openai.AsyncStream[ChatCompletionChunk] | ChatCompletion | None
+        ) = None
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
@@ -512,9 +518,12 @@ class LLMStream(llm.LLMStream):
 
         return await super().aclose()
 
-    async def __anext__(self):
+    async def __anext__(self) -> llm.ChatChunk:
         if not self._oai_stream:
             self._oai_stream = await self._awaitable_oai_stream
+
+        if isinstance(self._oai_stream, ChatCompletion):
+            return self._parse_choice(self._oai_stream.choices[0])
 
         async for chunk in self._oai_stream:
             for choice in chunk.choices:
