@@ -480,7 +480,7 @@ class LLM(llm.LLM):
             model=self._opts.model,
             n=n,
             temperature=temperature,
-            stream=True,
+            stream=response_format is None,
             user=user,
             response_format=response_format,
             **opts,
