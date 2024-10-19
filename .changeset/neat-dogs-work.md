@@ -3,4 +3,4 @@
 "livekit-plugins-silero": patch
 ---
 
-pipelineagent: initial metrics
+pipelineagent: expose timing metrics
