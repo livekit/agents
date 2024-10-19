@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import inspect
 from typing import Any, AsyncIterable, Awaitable, Callable, Union
 
 from livekit import rtc
@@ -11,6 +12,8 @@ from .. import transcription as agent_transcription
 from .. import tts as text_to_speech
 from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
+
+from . import metrics
 
 SpeechSource = Union[AsyncIterable[str], str, Awaitable[str]]
 
@@ -80,7 +83,7 @@ class SynthesisHandle:
             return
 
         logger.debug(
-            "interrupting synthesis/playout",
+            "agent interrupted",
             extra={"speech_id": self.speech_id},
         )
 
@@ -98,12 +101,14 @@ class AgentOutput:
         agent_playout: AgentPlayout,
         llm: llm.LLM,
         tts: text_to_speech.TTS,
+        metrics_emitter: metrics.PipelineMetrics,
     ) -> None:
-        self._room, self._agent_playout, self._llm, self._tts = (
+        self._room, self._agent_playout, self._llm, self._tts, self._metrics_emitter = (
             room,
             agent_playout,
             llm,
             tts,
+            metrics_emitter,
         )
         self._tasks = set[asyncio.Task[Any]]()
 
@@ -174,9 +179,9 @@ class AgentOutput:
             transcript_source = await transcript_source
 
         if isinstance(tts_source, str):
-            co = _str_synthesis_task(tts_source, transcript_source, handle)
+            co = self._str_synthesis_task(tts_source, transcript_source, handle)
         else:
-            co = _stream_synthesis_task(tts_source, transcript_source, handle)
+            co = self._stream_synthesis_task(tts_source, transcript_source, handle)
 
         synth = asyncio.create_task(co)
         synth.add_done_callback(lambda _: handle._buf_ch.close())
@@ -187,118 +192,183 @@ class AgentOutput:
         finally:
             await utils.aio.gracefully_cancel(synth)
 
+    @utils.log_exceptions(logger=logger)
+    async def _read_transcript_task(
+        self, transcript_source: AsyncIterable[str] | str, handle: SynthesisHandle
+    ) -> None:
+        try:
+            if isinstance(transcript_source, str):
+                handle._tr_fwd.push_text(transcript_source)
+            else:
+                async for seg in transcript_source:
+                    if not handle._tr_fwd.closed:
+                        handle._tr_fwd.push_text(seg)
 
-@utils.log_exceptions(logger=logger)
-async def _read_transcript_task(
-    transcript_source: AsyncIterable[str] | str, handle: SynthesisHandle
-) -> None:
-    if isinstance(transcript_source, str):
-        handle._tr_fwd.push_text(transcript_source)
-    else:
-        async for seg in transcript_source:
-            if not handle._tr_fwd.closed:
-                handle._tr_fwd.push_text(seg)
-
-    if not handle.tts_forwarder.closed:
-        handle.tts_forwarder.mark_text_segment_end()
-
-
-@utils.log_exceptions(logger=logger)
-async def _str_synthesis_task(
-    tts_text: str, transcript_source: AsyncIterable[str] | str, handle: SynthesisHandle
-) -> None:
-    """synthesize speech from a string"""
-    start_time = time.time()
-    first_frame = True
-    read_transcript_atask: asyncio.Task | None = None
-
-    try:
-        async for audio in handle._tts.synthesize(tts_text):
-            if first_frame:
-                first_frame = False
-                logger.debug(
-                    "received first TTS frame",
-                    extra={
-                        "speech_id": handle.speech_id,
-                        "elapsed": round(time.time() - start_time, 3),
-                        "streamed": False,
-                    },
-                )
-                read_transcript_atask = asyncio.create_task(
-                    _read_transcript_task(transcript_source, handle)
-                )
-
-            frame = audio.frame
-
-            handle._buf_ch.send_nowait(frame)
             if not handle.tts_forwarder.closed:
-                handle.tts_forwarder.push_audio(frame)
-
-    finally:
-        if not handle.tts_forwarder.closed:
-            handle.tts_forwarder.mark_audio_segment_end()
-
-        if read_transcript_atask is not None:
-            await read_transcript_atask
-
-
-@utils.log_exceptions(logger=logger)
-async def _stream_synthesis_task(
-    tts_source: AsyncIterable[str],
-    transcript_source: AsyncIterable[str] | str,
-    handle: SynthesisHandle,
-) -> None:
-    """synthesize speech from streamed text"""
+                handle.tts_forwarder.mark_text_segment_end()
+        finally:
+            if inspect.isasyncgen(transcript_source):
+                await transcript_source.aclose()
 
     @utils.log_exceptions(logger=logger)
-    async def _read_generated_audio_task():
-        start_time = time.time()
-        first_frame = True
-        async for audio in tts_stream:
-            if first_frame:
-                first_frame = False
+    async def _str_synthesis_task(
+        self,
+        tts_text: str,
+        transcript_source: AsyncIterable[str] | str,
+        handle: SynthesisHandle,
+    ) -> None:
+        """synthesize speech from a string"""
+        read_transcript_atask: asyncio.Task | None = None
+
+        start_time = time.perf_counter()
+        cancelled = False
+        audio_duration = 0.0
+        ttfb = -1.0
+
+        tts_stream = handle._tts.synthesize(tts_text)
+        try:
+            async for audio in tts_stream:
+                if ttfb == -1.0:
+                    ttfb = time.perf_counter() - start_time
+
+                    read_transcript_atask = asyncio.create_task(
+                        self._read_transcript_task(transcript_source, handle)
+                    )
+
+                audio_duration += audio.frame.duration
+
+                handle._buf_ch.send_nowait(audio.frame)
+                if not handle.tts_forwarder.closed:
+                    handle.tts_forwarder.push_audio(audio.frame)
+
+            if not handle.tts_forwarder.closed:
+                handle.tts_forwarder.mark_audio_segment_end()
+
+            if read_transcript_atask is not None:
+                await read_transcript_atask
+        except asyncio.CancelledError:
+            cancelled = True
+        finally:
+            await tts_stream.aclose()
+
+            duration = time.perf_counter() - start_time
+
+            tts_metrics: metrics.TTSMetrics = {
+                "type": "tts_metrics",
+                "timestamp": time.time(),
+                "speech_id": handle.speech_id,
+                "ttfb": ttfb,
+                "duration": duration,
+                "audio_duration": audio_duration,
+                "cancelled": cancelled,
+                "streamed": False,
+            }
+            self._metrics_emitter.emit("tts_metrics_collected", tts_metrics)
+
+            logger.debug(
+                "tts metrics collected",
+                extra={
+                    "speech_id": handle.speech_id,
+                    "ttfb": round(ttfb, 3),
+                    "duration": round(duration, 3),
+                    "audio_duration": round(audio_duration, 3),
+                    "cancelled": cancelled,
+                    "streamed": False,
+                },
+            )
+
+            if read_transcript_atask is not None:
+                await utils.aio.gracefully_cancel(read_transcript_atask)
+
+    @utils.log_exceptions(logger=logger)
+    async def _stream_synthesis_task(
+        self,
+        tts_source: AsyncIterable[str],
+        transcript_source: AsyncIterable[str] | str,
+        handle: SynthesisHandle,
+    ) -> None:
+        """synthesize speech from streamed text"""
+
+        @utils.log_exceptions(logger=logger)
+        async def _read_generated_audio_task(
+            tts_stream: text_to_speech.SynthesizeStream,
+        ) -> None:
+            start_time = time.perf_counter()
+            cancelled = False
+            audio_duration = 0.0
+            ttfb = -1.0
+            try:
+                async for audio in tts_stream:
+                    if ttfb == -1.0:
+                        ttfb = time.perf_counter() - start_time
+
+                    if not handle._tr_fwd.closed:
+                        handle._tr_fwd.push_audio(audio.frame)
+
+                    audio_duration += audio.frame.duration
+                    handle._buf_ch.send_nowait(audio.frame)
+            except asyncio.CancelledError:
+                cancelled = True
+            finally:
+                if handle._tr_fwd and not handle._tr_fwd.closed:
+                    handle._tr_fwd.mark_audio_segment_end()
+
+                await tts_stream.aclose()
+
+                duration = time.perf_counter() - start_time
+
+                tts_metrics: metrics.TTSMetrics = {
+                    "type": "tts_metrics",
+                    "timestamp": time.time(),
+                    "speech_id": handle.speech_id,
+                    "ttfb": ttfb,
+                    "duration": duration,
+                    "audio_duration": audio_duration,
+                    "cancelled": cancelled,
+                    "streamed": True,
+                }
+                self._metrics_emitter.emit("tts_metrics_collected", tts_metrics)
+
                 logger.debug(
-                    "received first TTS frame",
+                    "tts metrics collected",
                     extra={
                         "speech_id": handle.speech_id,
-                        "elapsed": round(time.time() - start_time, 3),
+                        "ttfb": round(ttfb, 3),
+                        "duration": round(duration, 3),
+                        "audio_duration": round(audio_duration, 3),
+                        "cancelled": cancelled,
                         "streamed": True,
                     },
                 )
 
-            if not handle._tr_fwd.closed:
-                handle._tr_fwd.push_audio(audio.frame)
+        tts_stream: text_to_speech.SynthesizeStream | None = None
+        read_tts_atask: asyncio.Task | None = None
+        read_transcript_atask: asyncio.Task | None = None
 
-            handle._buf_ch.send_nowait(audio.frame)
+        try:
+            async for seg in tts_source:
+                if tts_stream is None:
+                    tts_stream = handle._tts.stream()
+                    # start the task when we receive the first text segment (so start_time is more accurate)
+                    read_tts_atask = asyncio.create_task(
+                        _read_generated_audio_task(tts_stream)
+                    )
+                    read_transcript_atask = asyncio.create_task(
+                        self._read_transcript_task(transcript_source, handle)
+                    )
 
-        if handle._tr_fwd and not handle._tr_fwd.closed:
-            handle._tr_fwd.mark_audio_segment_end()
+                tts_stream.push_text(seg)
 
-    tts_stream = handle._tts.stream()
-    read_tts_atask: asyncio.Task | None = None
-    read_transcript_atask: asyncio.Task | None = None
+            if tts_stream is not None:
+                tts_stream.end_input()
+                assert read_transcript_atask and read_tts_atask
+                await read_tts_atask
+                await read_transcript_atask
 
-    try:
-        async for seg in tts_source:
-            if read_tts_atask is None:
-                # start the task when we receive the first text segment (so start_time is more accurate)
-                read_tts_atask = asyncio.create_task(_read_generated_audio_task())
-                read_transcript_atask = asyncio.create_task(
-                    _read_transcript_task(transcript_source, handle)
-                )
+        finally:
+            if read_tts_atask is not None:
+                assert read_transcript_atask is not None
+                await utils.aio.gracefully_cancel(read_tts_atask, read_transcript_atask)
 
-            tts_stream.push_text(seg)
-
-        tts_stream.end_input()
-
-        if read_tts_atask is not None:
-            assert read_transcript_atask is not None
-            await read_tts_atask
-            await read_transcript_atask
-
-    finally:
-        if read_tts_atask is not None:
-            assert read_transcript_atask is not None
-            await utils.aio.gracefully_cancel(read_tts_atask, read_transcript_atask)
-
-        await tts_stream.aclose()
+            if inspect.isasyncgen(tts_source):
+                await tts_source.aclose()
