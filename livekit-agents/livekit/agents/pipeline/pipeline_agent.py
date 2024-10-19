@@ -21,14 +21,13 @@ from .. import stt, tokenize, tts, utils, vad
 from .._constants import ATTRIBUTE_AGENT_STATE
 from .._types import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from . import metrics
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
 from .log import logger
 from .plotter import AssistantPlotter
 from .speech_handle import SpeechHandle
-
-from . import metrics
 
 BeforeLLMCallback = Callable[
     ["VoicePipelineAgent", ChatContext],
@@ -434,18 +433,18 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             vad_inference_count += 1
             vad_inference_duration_sum += ev.inference_duration
 
-            if vad_inference_count >= 1/self._vad.capabilities.update_interval:
+            if vad_inference_count >= 1 / self._vad.capabilities.update_interval:
                 # capture metrics every second
                 vad_metrics: metrics.VADMetrics = {
                     "type": "vad_metrics",
                     "timestamp": time.time(),
-                    "avg_inference_duration": vad_inference_duration_sum / vad_inference_count,
+                    "avg_inference_duration": vad_inference_duration_sum
+                    / vad_inference_count,
                     "inference_count": vad_inference_count,
                 }
                 self._metrics_emitter.emit("vad_metrics_collected", vad_metrics)
                 vad_inference_count = 0
                 vad_inference_duration_sum = 0.0
-
 
             tv = 1.0
             if self._opts.allow_interruptions:

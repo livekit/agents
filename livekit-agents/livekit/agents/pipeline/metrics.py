@@ -1,6 +1,6 @@
-from typing import TypedDict, Literal
-from livekit.rtc import EventEmitter
+from typing import Literal, TypedDict
 
+from livekit.rtc import EventEmitter
 
 MetricsEventTypes = Literal[
     "vad_metrics_collected",

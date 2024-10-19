@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import inspect
+import time
 from typing import Any, AsyncIterable, Awaitable, Callable, Union
 
 from livekit import rtc
@@ -10,10 +10,9 @@ from livekit import rtc
 from .. import llm, tokenize, utils
 from .. import transcription as agent_transcription
 from .. import tts as text_to_speech
+from . import metrics
 from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
-
-from . import metrics
 
 SpeechSource = Union[AsyncIterable[str], str, Awaitable[str]]
 
