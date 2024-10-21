@@ -1,5 +1,13 @@
 # livekit-plugins-google
 
+## 0.7.2
+
+### Patch Changes
+
+- add update_options to TTS - [#922](https://github.com/livekit/agents/pull/922) ([@theomonnom](https://github.com/theomonnom))
+
+- Additional options enabled on Google TTS - [#945](https://github.com/livekit/agents/pull/945) ([@hari-truviz](https://github.com/hari-truviz))
+
 ## 0.7.1
 
 ### Patch Changes

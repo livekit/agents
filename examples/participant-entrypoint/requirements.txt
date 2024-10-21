@@ -1,1 +1,1 @@
-livekit-agents>=0.10.2
+livekit-agents>=0.10.3

@@ -1,5 +1,19 @@
 # livekit-agents
 
+## 0.10.3
+
+### Patch Changes
+
+- stt: reduce bandwidth usage by reducing sample_rate to 16khz - [#920](https://github.com/livekit/agents/pull/920) ([@theomonnom](https://github.com/theomonnom))
+
+- fix before_llm_cb not handling coroutines returning False - [#961](https://github.com/livekit/agents/pull/961) ([@Tanesan](https://github.com/Tanesan))
+
+- Add exception logging for tool calls - [#923](https://github.com/livekit/agents/pull/923) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- pipeline-agent: avoid nested function calls - [#935](https://github.com/livekit/agents/pull/935) ([@theomonnom](https://github.com/theomonnom))
+
+- fix jobs never reloading - [#934](https://github.com/livekit/agents/pull/934) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.10.2
 
 ### Patch Changes
