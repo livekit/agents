@@ -1,5 +1,15 @@
 # livekit-plugins-openai
 
+## 0.10.5
+
+### Patch Changes
+
+- fix: Azure realtime model does not accept null for max_response_output_tokens - [#927](https://github.com/livekit/agents/pull/927) ([@davidzhao](https://github.com/davidzhao))
+
+- add update_options to TTS - [#922](https://github.com/livekit/agents/pull/922) ([@theomonnom](https://github.com/theomonnom))
+
+- openai: fix low timeouts - [#926](https://github.com/livekit/agents/pull/926) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.10.4
 
 ### Patch Changes
