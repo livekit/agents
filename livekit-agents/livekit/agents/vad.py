@@ -34,10 +34,10 @@ class VADEvent:
     """Timestamp (in seconds) when the event was fired."""
 
     speech_duration: float
-    """Duration of the detected speech segment in seconds."""
+    """Duration of the speech segment in seconds."""
 
     silence_duration: float
-    """Duration of the silence segment preceding or following the speech, in seconds."""
+    """Duration of the silence segment in seconds."""
 
     frames: List[rtc.AudioFrame] = field(default_factory=list)
     """
@@ -56,6 +56,12 @@ class VADEvent:
 
     speaking: bool = False
     """Indicates whether speech was detected in the frames."""
+
+    raw_accumulated_silence: float = 0.0
+    """Threshold used to detect silence."""
+
+    raw_accumulated_speech: float = 0.0
+    """Threshold used to detect speech."""
 
 
 @dataclass

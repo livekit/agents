@@ -442,6 +442,8 @@ class VADStream(agents.vad.VADStream):
                             )
                         ],
                         speaking=pub_speaking,
+                        raw_accumulated_silence=silence_threshold_duration,
+                        raw_accumulated_speech=speech_threshold_duration,
                     )
                 )
 
