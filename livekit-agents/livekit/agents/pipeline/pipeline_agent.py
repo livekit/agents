@@ -21,7 +21,12 @@ from .speech_handle import SpeechHandle
 
 BeforeLLMCallback = Callable[
     ["VoicePipelineAgent", ChatContext],
-    Union[Optional[LLMStream], Awaitable[Optional[LLMStream]], Literal[False], Awaitable[Literal[False]]],
+    Union[
+        Optional[LLMStream],
+        Awaitable[Optional[LLMStream]],
+        Literal[False],
+        Awaitable[Literal[False]],
+    ],
 ]
 
 WillSynthesizeAssistantReply = BeforeLLMCallback
