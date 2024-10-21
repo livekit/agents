@@ -563,12 +563,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         )
 
         llm_stream = self._opts.before_llm_cb(self, copied_ctx)
+        if asyncio.iscoroutine(llm_stream):
+            llm_stream = await llm_stream
+
         if llm_stream is False:
             handle.cancel()
             return
-
-        if asyncio.iscoroutine(llm_stream):
-            llm_stream = await llm_stream
 
         # fallback to default impl if no custom/user stream is returned
         if not isinstance(llm_stream, LLMStream):
