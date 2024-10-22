@@ -69,10 +69,23 @@ def _is_docker() -> bool:
     return os.path.exists("/sys/fs/cgroup/cpu.max")
 
 
+def _read_cpu_max() -> tuple[str, int]:
+    with open("/sys/fs/cgroup/cpu.max", "r") as f:
+        data = f.read().strip().split()
+        quota = data[0]
+        period = int(data[1])
+        return quota, period
+
+
 def _get_allocated_cpu_count() -> int:
-    if hasattr(os, "sched_getaffinity"):
-        return len(os.sched_getaffinity(0))
-    raise RuntimeError("Failed to get allocated CPU count")
+    # quota: The maximum CPU time in microseconds that the cgroup can use within a given period.
+    # period: The period of time in microseconds over which the quota applies.
+    # If the quota is set to "max", it means the cgroup is allowed to use all available CPUs without restriction.
+    # Otherwise, the quota is a number that represents the maximum CPU time in microseconds that the cgroup can use within a given period.
+    quota, period = _read_cpu_max()
+    if quota == "max":
+        return os.cpu_count() or 1
+    return int(quota) // period
 
 
 def _read_cpu_usage() -> int:
@@ -97,8 +110,6 @@ def _calculate_docker_cpu_usage(interval: float = 1.0) -> float:
 
     # Calculate the percentage
     cpu_usage_percent = cpu_usage_seconds / (interval * num_cpus)
-
-    print("Calculated cpu usage", min(cpu_usage_percent, 1))
 
     return min(cpu_usage_percent, 1)
 
