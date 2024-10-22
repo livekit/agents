@@ -72,8 +72,8 @@ class _DefaultLoadCalc:
         self._thread = threading.Thread(
             target=self._calc_load, daemon=True, name="worker_cpu_load_monitor"
         )
-        self._thread.start()
         self._lock = threading.Lock()
+        self._thread.start()
 
     def _calc_load(self) -> None:
         while True:
