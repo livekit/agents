@@ -27,11 +27,9 @@ from enum import Enum
 from functools import reduce
 from typing import Any, Awaitable, Callable, Generic, Literal, TypeVar
 from urllib.parse import urljoin, urlparse
-import time
 
 import aiohttp
 import jwt
-import psutil
 from livekit import api, rtc
 from livekit.protocol import agent, models
 
@@ -46,6 +44,7 @@ from .job import (
     RunningJobInfo,
 )
 from .log import DEV_LEVEL, logger
+from .utils import get_cpu_monitor
 from .version import __version__
 
 ASSIGNMENT_TIMEOUT = 7.5
@@ -65,60 +64,12 @@ class WorkerType(Enum):
     PUBLISHER = agent.JobType.JT_PUBLISHER
 
 
-def _is_docker() -> bool:
-    return os.path.exists("/sys/fs/cgroup/cpu.max")
-
-
-def _read_cpu_max() -> tuple[str, int]:
-    with open("/sys/fs/cgroup/cpu.max", "r") as f:
-        data = f.read().strip().split()
-        quota = data[0]
-        period = int(data[1])
-        return quota, period
-
-
-def _get_allocated_cpu_count() -> int:
-    # quota: The maximum CPU time in microseconds that the cgroup can use within a given period.
-    # period: The period of time in microseconds over which the quota applies.
-    # If the quota is set to "max", it means the cgroup is allowed to use all available CPUs without restriction.
-    # Otherwise, the quota is a number that represents the maximum CPU time in microseconds that the cgroup can use within a given period.
-    quota, period = _read_cpu_max()
-    if quota == "max":
-        return os.cpu_count() or 1
-    return int(quota) // period
-
-
-def _read_cpu_usage() -> int:
-    with open("/sys/fs/cgroup/cpu.stat", "r") as f:
-        for line in f:
-            if line.startswith("usage_usec"):
-                return int(line.split()[1])
-    raise RuntimeError("Failed to read CPU usage")
-
-
-def _calculate_docker_cpu_usage(interval: float = 1.0) -> float:
-    cpu_usage_start = _read_cpu_usage()
-    time.sleep(interval)
-    cpu_usage_end = _read_cpu_usage()
-    cpu_usage_diff = cpu_usage_end - cpu_usage_start
-
-    # Convert microseconds to seconds
-    cpu_usage_seconds = cpu_usage_diff / 1_000_000
-
-    # Get the number of CPUs available to the container
-    num_cpus = _get_allocated_cpu_count()
-
-    # Calculate the percentage
-    cpu_usage_percent = cpu_usage_seconds / (interval * num_cpus)
-
-    return min(cpu_usage_percent, 1)
-
-
 class _DefaultLoadCalc:
     _instance = None
 
     def __init__(self) -> None:
         self._m_avg = utils.MovingAverage(5)  # avg over 2.5
+        self._cpu_monitor = get_cpu_monitor()
         self._thread = threading.Thread(
             target=self._calc_load, daemon=True, name="worker_cpu_load_monitor"
         )
@@ -126,13 +77,8 @@ class _DefaultLoadCalc:
         self._thread.start()
 
     def _calc_load(self) -> None:
-        is_docker = _is_docker()
         while True:
-            if is_docker:
-                cpu_p = _calculate_docker_cpu_usage()
-            else:
-                cpu_p = psutil.cpu_percent(0.5) / 100.0  # 2 samples/s
-
+            cpu_p = self._cpu_monitor.cpu_percent(interval=0.5)
             with self._lock:
                 self._m_avg.add_sample(cpu_p)
 
@@ -199,7 +145,7 @@ class WorkerOptions:
         dev_default=math.inf, prod_default=0.75
     )
     """When the load exceeds this threshold, the worker will be marked as unavailable.
-    
+
     Defaults to 0.75 on "production" mode, and is disabled in "development" mode.
     """
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
