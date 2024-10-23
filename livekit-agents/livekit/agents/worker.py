@@ -27,6 +27,7 @@ from enum import Enum
 from functools import reduce
 from typing import Any, Awaitable, Callable, Generic, Literal, TypeVar
 from urllib.parse import urljoin, urlparse
+import time
 
 import aiohttp
 import jwt
@@ -64,6 +65,55 @@ class WorkerType(Enum):
     PUBLISHER = agent.JobType.JT_PUBLISHER
 
 
+def _is_docker() -> bool:
+    return os.path.exists("/sys/fs/cgroup/cpu.max")
+
+
+def _read_cpu_max() -> tuple[str, int]:
+    with open("/sys/fs/cgroup/cpu.max", "r") as f:
+        data = f.read().strip().split()
+        quota = data[0]
+        period = int(data[1])
+        return quota, period
+
+
+def _get_allocated_cpu_count() -> int:
+    # quota: The maximum CPU time in microseconds that the cgroup can use within a given period.
+    # period: The period of time in microseconds over which the quota applies.
+    # If the quota is set to "max", it means the cgroup is allowed to use all available CPUs without restriction.
+    # Otherwise, the quota is a number that represents the maximum CPU time in microseconds that the cgroup can use within a given period.
+    quota, period = _read_cpu_max()
+    if quota == "max":
+        return os.cpu_count() or 1
+    return int(quota) // period
+
+
+def _read_cpu_usage() -> int:
+    with open("/sys/fs/cgroup/cpu.stat", "r") as f:
+        for line in f:
+            if line.startswith("usage_usec"):
+                return int(line.split()[1])
+    raise RuntimeError("Failed to read CPU usage")
+
+
+def _calculate_docker_cpu_usage(interval: float = 1.0) -> float:
+    cpu_usage_start = _read_cpu_usage()
+    time.sleep(interval)
+    cpu_usage_end = _read_cpu_usage()
+    cpu_usage_diff = cpu_usage_end - cpu_usage_start
+
+    # Convert microseconds to seconds
+    cpu_usage_seconds = cpu_usage_diff / 1_000_000
+
+    # Get the number of CPUs available to the container
+    num_cpus = _get_allocated_cpu_count()
+
+    # Calculate the percentage
+    cpu_usage_percent = cpu_usage_seconds / (interval * num_cpus)
+
+    return min(cpu_usage_percent, 1)
+
+
 class _DefaultLoadCalc:
     _instance = None
 
@@ -76,8 +126,12 @@ class _DefaultLoadCalc:
         self._thread.start()
 
     def _calc_load(self) -> None:
+        is_docker = _is_docker()
         while True:
-            cpu_p = psutil.cpu_percent(0.5) / 100.0  # 2 samples/s
+            if is_docker:
+                cpu_p = _calculate_docker_cpu_usage()
+            else:
+                cpu_p = psutil.cpu_percent(0.5) / 100.0  # 2 samples/s
 
             with self._lock:
                 self._m_avg.add_sample(cpu_p)
