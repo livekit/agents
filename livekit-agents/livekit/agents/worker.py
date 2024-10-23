@@ -44,7 +44,7 @@ from .job import (
     RunningJobInfo,
 )
 from .log import DEV_LEVEL, logger
-from .utils import get_cpu_monitor
+from .utils.hw import get_cpu_monitor
 from .version import __version__
 
 ASSIGNMENT_TIMEOUT = 7.5
