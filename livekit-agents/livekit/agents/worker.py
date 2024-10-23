@@ -79,7 +79,6 @@ class _DefaultLoadCalc:
     def _calc_load(self) -> None:
         while True:
             cpu_p = self._cpu_monitor.cpu_percent(interval=0.5)
-            logger.info(f"cpu_percent: {cpu_p}", extra={"cpu_p": cpu_p})
             with self._lock:
                 self._m_avg.add_sample(cpu_p)
 
