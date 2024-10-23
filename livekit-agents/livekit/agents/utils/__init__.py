@@ -1,8 +1,9 @@
 from livekit import rtc
 
-from . import aio, audio, codecs, http_context, images
+from . import aio, audio, codecs, http_context, hw, images
 from .audio import AudioBuffer, combine_frames, merge_frames
 from .exp_filter import ExpFilter
+from .hw import get_cpu_monitor
 from .log import log_exceptions
 from .misc import shortuuid, time_ms
 from .moving_average import MovingAverage
@@ -24,4 +25,6 @@ __all__ = [
     "images",
     "audio",
     "aio",
+    "hw",
+    "get_cpu_monitor",
 ]
