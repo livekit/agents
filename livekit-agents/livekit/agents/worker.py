@@ -30,7 +30,6 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
-import psutil
 from livekit import api, rtc
 from livekit.protocol import agent, models
 
@@ -45,6 +44,7 @@ from .job import (
     RunningJobInfo,
 )
 from .log import DEV_LEVEL, logger
+from .utils.hw import get_cpu_monitor
 from .version import __version__
 
 ASSIGNMENT_TIMEOUT = 7.5
@@ -69,16 +69,16 @@ class _DefaultLoadCalc:
 
     def __init__(self) -> None:
         self._m_avg = utils.MovingAverage(5)  # avg over 2.5
+        self._cpu_monitor = get_cpu_monitor()
         self._thread = threading.Thread(
             target=self._calc_load, daemon=True, name="worker_cpu_load_monitor"
         )
-        self._thread.start()
         self._lock = threading.Lock()
+        self._thread.start()
 
     def _calc_load(self) -> None:
         while True:
-            cpu_p = psutil.cpu_percent(0.5) / 100.0  # 2 samples/s
-
+            cpu_p = self._cpu_monitor.cpu_percent(interval=0.5)
             with self._lock:
                 self._m_avg.add_sample(cpu_p)
 
@@ -145,7 +145,7 @@ class WorkerOptions:
         dev_default=math.inf, prod_default=0.75
     )
     """When the load exceeds this threshold, the worker will be marked as unavailable.
-    
+
     Defaults to 0.75 on "production" mode, and is disabled in "development" mode.
     """
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
