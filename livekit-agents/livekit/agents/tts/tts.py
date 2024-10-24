@@ -158,8 +158,6 @@ class SynthesizeStream(ABC):
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._metrics_task: asyncio.Task | None = None  # started on first push
 
-        self._first_push_fut = asyncio.Future()
-
     @abstractmethod
     async def _main_task(self) -> None: ...
 
