@@ -245,6 +245,9 @@ class SynthesizeStream(ABC):
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
     async def __anext__(self) -> SynthesizedAudio:
+        if self._task.done() and (exc := self._task.exception()):
+            raise exc
+
         return await self._event_aiter.__anext__()
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:

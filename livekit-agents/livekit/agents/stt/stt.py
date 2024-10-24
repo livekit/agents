@@ -167,6 +167,9 @@ class SpeechStream(ABC):
         self._event_ch.close()
 
     async def __anext__(self) -> SpeechEvent:
+        if self._task.done() and (exc := self._task.exception()):
+            raise exc
+
         return await self._event_ch.__anext__()
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
