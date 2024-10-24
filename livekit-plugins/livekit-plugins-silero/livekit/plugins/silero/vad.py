@@ -144,6 +144,7 @@ class VAD(agents.vad.VAD):
             VADStream: A stream object for processing audio input and detecting speech.
         """
         stream = VADStream(
+            self,
             self._opts,
             onnx_model.OnnxModel(
                 onnx_session=self._onnx_session, sample_rate=self._opts.sample_rate
@@ -195,8 +196,10 @@ class VAD(agents.vad.VAD):
 
 
 class VADStream(agents.vad.VADStream):
-    def __init__(self, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
-        super().__init__()
+    def __init__(
+        self, vad: VAD, opts: _VADOptions, model: onnx_model.OnnxModel
+    ) -> None:
+        super().__init__(vad)
         self._opts, self._model = opts, model
         self._loop = asyncio.get_event_loop()
 
