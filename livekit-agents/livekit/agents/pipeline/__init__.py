@@ -1,9 +1,3 @@
-from .pipeline_agent import (
-    AgentCallContext,
-    AgentTranscriptionOptions,
-    VoicePipelineAgent,
-)
-
 from .metrics import (
     PipelineEOUMetrics,
     PipelineLLMMetrics,
@@ -11,6 +5,11 @@ from .metrics import (
     PipelineSTTMetrics,
     PipelineTTSMetrics,
     PipelineVADMetrics,
+)
+from .pipeline_agent import (
+    AgentCallContext,
+    AgentTranscriptionOptions,
+    VoicePipelineAgent,
 )
 
 __all__ = [

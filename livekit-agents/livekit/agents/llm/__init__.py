@@ -15,9 +15,9 @@ from .llm import (
     ChatChunk,
     Choice,
     ChoiceDelta,
+    CompletionUsage,
     LLMMetrics,
     LLMStream,
-    CompletionUsage,
 )
 
 __all__ = [
