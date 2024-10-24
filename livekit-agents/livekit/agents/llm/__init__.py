@@ -10,7 +10,15 @@ from .function_context import (
     TypeInfo,
     ai_callable,
 )
-from .llm import LLM, ChatChunk, Choice, ChoiceDelta, LLMMetrics, LLMStream
+from .llm import (
+    LLM,
+    ChatChunk,
+    Choice,
+    ChoiceDelta,
+    LLMMetrics,
+    LLMStream,
+    CompletionUsage,
+)
 
 __all__ = [
     "LLM",
@@ -25,6 +33,7 @@ __all__ = [
     "ChoiceDelta",
     "Choice",
     "ChatChunk",
+    "CompletionUsage",
     "FunctionContext",
     "ai_callable",
     "TypeInfo",

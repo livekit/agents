@@ -1,5 +1,6 @@
 # Copyright 2023 LiveKit, Inc.
 #
+
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -470,6 +471,7 @@ class LLM(llm.LLM):
             model=self._opts.model,
             n=n,
             temperature=temperature,
+            stream_options={"include_usage": True},
             stream=True,
             user=user,
             **opts,
@@ -506,6 +508,19 @@ class LLMStream(llm.LLMStream):
                     chat_chunk = self._parse_choice(chunk.id, choice)
                     if chat_chunk is not None:
                         self._event_ch.send_nowait(chat_chunk)
+
+                if chunk.usage is not None:
+                    usage = chunk.usage
+                    self._event_ch.send_nowait(
+                        llm.ChatChunk(
+                            request_id=chunk.id,
+                            usage=llm.CompletionUsage(
+                                completion_tokens=usage.completion_tokens,
+                                prompt_tokens=usage.prompt_tokens,
+                                total_tokens=usage.total_tokens,
+                            ),
+                        )
+                    )
 
     def _parse_choice(self, id: str, choice: Choice) -> llm.ChatChunk | None:
         delta = choice.delta
