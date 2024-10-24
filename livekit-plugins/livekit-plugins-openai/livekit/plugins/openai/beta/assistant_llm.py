@@ -96,6 +96,8 @@ class AssistantLLM(llm.LLM):
         base_url: str | None = None,
         on_file_uploaded: OnFileUploaded | None = None,
     ) -> None:
+        super().__init__()
+
         test_ctx = llm.ChatContext()
         if not hasattr(test_ctx, "_metadata"):
             raise Exception(

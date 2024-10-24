@@ -1,52 +1,24 @@
-from typing import Literal, TypedDict
+import contextvars
+from dataclasses import dataclass
 
-from livekit.rtc import EventEmitter
-
-MetricsEventTypes = Literal[
-    "vad_metrics_collected",
-    "stt_metrics_collected",
-    "llm_metrics_collected",
-    "tts_metrics_collected",
-]
+from ..tts import TTSMetrics
 
 
-class PipelineMetrics(EventEmitter[MetricsEventTypes]): ...
+@dataclass
+class SpeechData:
+    sequence_id: str
 
 
-# VAD Metrics are currently being sent every 1s
-class VADMetrics(TypedDict):
-    type: Literal["vad_metrics"]
-    timestamp: float
-    avg_inference_duration: float
-    inference_count: int
+SpeechDataContextVar = contextvars.ContextVar[SpeechData]("voice_assistant_speech_data")
 
 
-class STTMetrics(TypedDict):
-    type: Literal["stt_metrics"]
-    timestamp: float
-    speech_id: str
-    estimated_ttfb: float
-    """
-    The estimated time-to-first-byte (TTFB) of the STT service.
-    This is calculated using the VAD provided inside the PipelineAgent.
-    """
+class PipelineSTTMetrics(TTSMetrics):
+    sequence_id: str
 
 
-class LLMMetrics(TypedDict):
-    type: Literal["llm_metrics"]
-    timestamp: float
-    speech_id: str
-    ttft: float
-    duration: float
-    cancelled: bool
+class PipelineLLMMetrics(TTSMetrics):
+    sequence_id: str
 
 
-class TTSMetrics(TypedDict):
-    type: Literal["tts_metrics"]
-    timestamp: float
-    speech_id: str
-    ttfb: float
-    duration: float
-    audio_duration: float
-    cancelled: bool
-    streamed: bool
+class PipelineTTSMetrics(TTSMetrics):
+    sequence_id: str

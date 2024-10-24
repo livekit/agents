@@ -85,7 +85,7 @@ class STT(stt.STT):
         config.language = language or config.language
         return config
 
-    async def recognize(
+    async def _recognize_impl(
         self, buffer: AudioBuffer, *, language: str | None = None
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)

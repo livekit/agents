@@ -1,6 +1,7 @@
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .tts import (
     TTS,
+    TTSMetrics,
     ChunkedStream,
     SynthesizedAudio,
     SynthesizeStream,
@@ -9,6 +10,7 @@ from .tts import (
 
 __all__ = [
     "TTS",
+    "TTSMetrics",
     "SynthesizedAudio",
     "SynthesizeStream",
     "TTSCapabilities",

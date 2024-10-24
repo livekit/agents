@@ -4,11 +4,17 @@ import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterator, List, Union
+from typing import AsyncIterator, List, Literal, Union, TypedDict
 
 from livekit import rtc
 
 from .utils import aio
+
+
+class VADMetrics(TypedDict):
+    timestamp: float
+    inference_duration_avg: float
+    inference_count: int
 
 
 @unique
@@ -69,8 +75,9 @@ class VADCapabilities:
     update_interval: float
 
 
-class VAD(ABC):
+class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(self, *, capabilities: VADCapabilities) -> None:
+        super().__init__()
         self._capabilities = capabilities
 
     @property
@@ -78,15 +85,15 @@ class VAD(ABC):
         return self._capabilities
 
     @abstractmethod
-    def stream(self) -> "VADStream":
-        pass
+    def stream(self) -> "VADStream": ...
 
 
 class VADStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self):
+    def __init__(self, vad: VAD) -> None:
+        self._vad = vad
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, VADStream._FlushSentinel]]()
         self._event_ch = aio.Chan[VADEvent]()
         self._task = asyncio.create_task(self._main_task())

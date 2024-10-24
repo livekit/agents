@@ -16,6 +16,7 @@ from __future__ import annotations, print_function
 
 import asyncio
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Literal
@@ -133,8 +134,7 @@ class VAD(agents.vad.VAD):
         super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.032))
         self._onnx_session = session
         self._opts = opts
-
-        self._streams: list[VADStream] = []
+        self._streams = weakref.WeakSet()
 
     def stream(self) -> "VADStream":
         """
@@ -149,7 +149,7 @@ class VAD(agents.vad.VAD):
                 onnx_session=self._onnx_session, sample_rate=self._opts.sample_rate
             ),
         )
-        self._streams.append(stream)
+        self._streams.add(stream)
         return stream
 
     def update_options(
@@ -283,6 +283,10 @@ class VADStream(agents.vad.VADStream):
 
         extra_inference_time = 0.0
 
+        # reset every 1/self._opts.update_interval
+        metrics_inference_duration_sum = 0.0
+        metrics_inference_count = 0
+
         async for input_frame in self._input_ch:
             if not isinstance(input_frame, rtc.AudioFrame):
                 continue  # ignore flush sentinel for now
@@ -390,6 +394,28 @@ class VADStream(agents.vad.VADStream):
                         "inference is slower than realtime",
                         extra={"delay": extra_inference_time},
                     )
+
+                # metrics
+                metrics_inference_duration_sum += inference_duration
+                metrics_inference_count += 1
+
+                if (
+                    metrics_inference_count
+                    >= 1 / self._vad.capabilities.update_interval
+                ):
+                    vad_metrics: agents.vad.VADMetrics = {
+                        "timestamp": time.time(),
+                        "inference_duration_avg": metrics_inference_duration_sum
+                        / metrics_inference_count,
+                        "inference_count": metrics_inference_count,
+                    }
+                    self._vad.emit(
+                        "metrics_collected",
+                        vad_metrics,
+                    )
+
+                    metrics_inference_duration_sum = 0.0
+                    metrics_inference_count = 0
 
                 def _reset_write_cursor():
                     nonlocal speech_buffer_index, speech_buffer_max_reached

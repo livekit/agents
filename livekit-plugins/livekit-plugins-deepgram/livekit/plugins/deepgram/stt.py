@@ -130,7 +130,7 @@ class STT(stt.STT):
 
         return self._session
 
-    async def recognize(
+    async def _recognize_impl(
         self, buffer: AudioBuffer, *, language: DeepgramLanguages | str | None = None
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
@@ -165,8 +165,10 @@ class STT(stt.STT):
                 "Content-Type": "audio/wav",
             },
         ) as res:
+            data = await res.json()
             return prerecorded_transcription_to_speech_event(
-                config.language, await res.json()
+                config.language,
+                data,
             )
 
     def stream(
@@ -364,6 +366,8 @@ class SpeechStream(stt.SpeechStream):
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
         # for more information about the different types of events
         elif data["type"] == "Results":
+            metadata = data["metadata"]
+            request_id = metadata["request_id"]
             is_final_transcript = data["is_final"]
             is_endpoint = data["speech_final"]
 
@@ -381,12 +385,16 @@ class SpeechStream(stt.SpeechStream):
 
                 if is_final_transcript:
                     final_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=alts
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        request_id=request_id,
+                        alternatives=alts,
                     )
                     self._event_ch.send_nowait(final_event)
                 else:
                     interim_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT, alternatives=alts
+                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                        request_id=request_id,
+                        alternatives=alts,
                     )
                     self._event_ch.send_nowait(interim_event)
 
@@ -427,6 +435,7 @@ def prerecorded_transcription_to_speech_event(
     data: dict,
 ) -> stt.SpeechEvent:
     # We only support one channel for now
+    request_id = data["metadata"]["request_id"]
     channel = data["results"]["channels"][0]
     dg_alts = channel["alternatives"]
 
@@ -435,6 +444,7 @@ def prerecorded_transcription_to_speech_event(
     detected_language = channel.get("detected_language")
 
     return stt.SpeechEvent(
+        request_id=request_id,
         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[
             stt.SpeechData(
