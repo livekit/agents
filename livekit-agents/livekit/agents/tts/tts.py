@@ -18,6 +18,7 @@ class TTSMetrics(TypedDict):
     duration: float
     audio_duration: float
     cancelled: bool
+    characters: int
     label: str
     streamed: bool
 
@@ -77,9 +78,10 @@ class TTS(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
-    def __init__(self, tts: TTS) -> None:
+    def __init__(self, tts: TTS, text: str) -> None:
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._tts = tts
+        self._input_text = text
 
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
         self._metrics_task = asyncio.create_task(
@@ -112,6 +114,7 @@ class ChunkedStream(ABC):
             "request_id": request_id,
             "ttfb": ttfb,
             "duration": duration,
+            "characters": len(self._input_text),
             "audio_duration": audio_duration,
             "cancelled": self._task.cancelled(),
             "label": self._tts._label,

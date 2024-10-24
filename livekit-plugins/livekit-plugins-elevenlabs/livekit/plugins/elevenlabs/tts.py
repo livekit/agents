@@ -196,8 +196,8 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self, tts: TTS, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
     ) -> None:
-        super().__init__(tts)
-        self._text, self._opts, self._session = text, opts, session
+        super().__init__(tts, text)
+        self._opts, self._session = opts, session
         if _encoding_from_format(self._opts.encoding) == "mp3":
             self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
@@ -215,7 +215,7 @@ class ChunkedStream(tts.ChunkedStream):
             else None
         )
         data = {
-            "text": self._text,
+            "text": self._input_text,
             "model_id": self._opts.model,
             "voice_settings": voice_settings,
         }
