@@ -130,8 +130,8 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self, tts: TTS, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
     ) -> None:
-        super().__init__(tts)
-        self._text, self._opts, self._session = text, opts, session
+        super().__init__(tts, text)
+        self._opts, self._session = opts, session
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -149,7 +149,7 @@ class ChunkedStream(tts.ChunkedStream):
             USERID_HEADER: self._opts.user_id,
         }
         json_data = {
-            "text": self._text,
+            "text": self._input_text,
             "output_format": self._opts.encoding,
             "voice": self._opts.voice.id,
         }

@@ -160,15 +160,15 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _TTSOptions,
         client: texttospeech.TextToSpeechAsyncClient,
     ) -> None:
-        super().__init__(tts)
-        self._text, self._opts, self._client = text, opts, client
+        super().__init__(tts, text)
+        self._opts, self._client = opts, client
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
         response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
-            input=texttospeech.SynthesisInput(text=self._text),
+            input=texttospeech.SynthesisInput(text=self._input_text),
             voice=self._opts.voice,
             audio_config=self._opts.audio_config,
         )

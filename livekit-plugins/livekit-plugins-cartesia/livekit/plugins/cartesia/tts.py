@@ -162,8 +162,8 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self, tts: TTS, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
     ) -> None:
-        super().__init__(tts)
-        self._text, self._opts, self._session = text, opts, session
+        super().__init__(tts, text)
+        self._opts, self._session = opts, session
 
     async def _main_task(self) -> None:
         request_id = utils.shortuuid()
@@ -172,7 +172,7 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         json = _to_cartesia_options(self._opts)
-        json["transcript"] = self._text
+        json["transcript"] = self._input_text
 
         headers = {
             API_AUTH_HEADER: self._opts.api_key,

@@ -164,8 +164,8 @@ class TTS(tts.TTS):
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, tts: TTS, text: str, opts: _TTSOptions) -> None:
-        super().__init__(tts)
-        self._text, self._opts = text, opts
+        super().__init__(tts, text)
+        self._opts = opts
 
     @utils.log_exceptions()
     async def _main_task(self):
@@ -189,11 +189,11 @@ class ChunkedStream(tts.ChunkedStream):
                     prosody_ssml += f' pitch="{self._opts.prosody.pitch}"'
                 prosody_ssml += ">"
                 ssml += prosody_ssml
-                ssml += self._text
+                ssml += self._input_text
                 ssml += "</prosody></voice></speak>"
                 return synthesizer.speak_ssml_async(ssml).get()  # type: ignore
 
-            return synthesizer.speak_text_async(self._text).get()  # type: ignore
+            return synthesizer.speak_text_async(self._input_text).get()  # type: ignore
 
         result = None
         try:
