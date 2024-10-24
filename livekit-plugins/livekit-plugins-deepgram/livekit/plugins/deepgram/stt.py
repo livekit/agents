@@ -165,10 +165,9 @@ class STT(stt.STT):
                 "Content-Type": "audio/wav",
             },
         ) as res:
-            data = await res.json()
             return prerecorded_transcription_to_speech_event(
                 config.language,
-                data,
+                await res.json(),
             )
 
     def stream(

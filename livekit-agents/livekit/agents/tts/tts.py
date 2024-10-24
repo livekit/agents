@@ -136,8 +136,8 @@ class ChunkedStream(ABC):
         await self._metrics_task
 
     async def __anext__(self) -> SynthesizedAudio:
-        if self._task.done() and self._task.exception():
-            raise self._task.exception()
+        if self._task.done() and (exc := self._task.exception()):
+            raise exc
 
         return await self._event_aiter.__anext__()
 

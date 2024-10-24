@@ -171,8 +171,8 @@ class ChunkedStream(tts.ChunkedStream):
             sample_rate=self._opts.sample_rate, num_channels=NUM_CHANNELS
         )
 
-        data = _to_cartesia_options(self._opts)
-        data["transcript"] = self._text
+        json = _to_cartesia_options(self._opts)
+        json["transcript"] = self._text
 
         headers = {
             API_AUTH_HEADER: self._opts.api_key,
@@ -183,7 +183,7 @@ class ChunkedStream(tts.ChunkedStream):
             async with self._session.post(
                 "https://api.cartesia.ai/tts/bytes",
                 headers=headers,
-                json=data,
+                json=json,
             ) as resp:
                 resp.raise_for_status()
                 async for data, _ in resp.content.iter_chunks():
