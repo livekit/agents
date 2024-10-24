@@ -302,7 +302,6 @@ class AssistantLLMStream(llm.LLMStream):
         on_file_uploaded: OnFileUploaded | None,
     ) -> None:
         super().__init__(assistant_llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
-        self._llm = assistant_llm
         self._client = client
         self._temperature = temperature
         self._on_file_uploaded = on_file_uploaded
@@ -318,6 +317,8 @@ class AssistantLLMStream(llm.LLMStream):
         self._done_future: asyncio.Future[None] = asyncio.Future()
 
     async def _main_task(self) -> None:
+        assert isinstance(self._llm, AssistantLLM)
+
         # This function's complexity is due to the fact that we need to sync chat_ctx messages with OpenAI.
         # OpenAI also does not allow us to modify messages while a stream is running. So we need to make sure streams run
         # sequentially. The strategy is as follows:
