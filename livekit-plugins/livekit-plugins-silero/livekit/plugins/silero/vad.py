@@ -134,7 +134,7 @@ class VAD(agents.vad.VAD):
         super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.032))
         self._onnx_session = session
         self._opts = opts
-        self._streams = weakref.WeakSet()
+        self._streams = weakref.WeakSet[VADStream]()
 
     def stream(self) -> "VADStream":
         """
