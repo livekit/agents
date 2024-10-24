@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import time
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterator, List, Union, Literal, TypedDict
+from typing import AsyncIterator, List, Literal, TypedDict, Union
 
 from livekit import rtc
 
@@ -15,6 +15,7 @@ from ..utils import AudioBuffer, aio
 class STTMetrics(TypedDict):
     timestamp: float
     duration: float
+    label: str
 
 
 @unique
@@ -74,7 +75,11 @@ class STT(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         start_time = time.perf_counter()
         event = await self._recognize_impl(buffer, language=language)
         duration = time.perf_counter() - start_time
-        stt_metrics: STTMetrics = {"timestamp": time.time(), "duration": duration}
+        stt_metrics: STTMetrics = {
+            "timestamp": time.time(),
+            "duration": duration,
+            "label": self._label,
+        }
         self.emit("metrics_collected", stt_metrics)
         return event
 

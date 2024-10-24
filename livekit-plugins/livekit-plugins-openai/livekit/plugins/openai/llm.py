@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, MutableSet
 
 import httpx
-from livekit.agents import llm, utils
+from livekit.agents import llm
 
 import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam

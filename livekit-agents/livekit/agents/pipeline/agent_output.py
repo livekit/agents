@@ -12,8 +12,6 @@ from .. import tts as text_to_speech
 from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
 
-from . import metrics
-
 SpeechSource = Union[AsyncIterable[str], str, Awaitable[str]]
 
 

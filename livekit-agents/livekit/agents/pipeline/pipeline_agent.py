@@ -17,7 +17,7 @@ from typing import (
 
 from livekit import rtc
 
-from .. import stt, tokenize, tts, utils, vad, llm
+from .. import llm, stt, tokenize, tts, utils, vad
 from .._constants import ATTRIBUTE_AGENT_STATE
 from .._types import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
@@ -52,9 +52,7 @@ EventTypes = Literal[
     "agent_speech_interrupted",
     "function_calls_collected",
     "function_calls_finished",
-    "stt_error",
-    "llm_error",
-    "tts_error",
+    "metrics_collected",
 ]
 
 _CallContextVar = contextvars.ContextVar["AgentCallContext"](
@@ -264,7 +262,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._update_state_task: asyncio.Task | None = None
 
-        self._last_stt_elapsed: float = -1.0
+        self._last_final_transcript_time: float | None = None
+        self._last_speech_time: float | None = None
 
     @property
     def fnc_ctx(self) -> FunctionContext | None:
@@ -307,15 +306,47 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         if self._started:
             raise RuntimeError("voice assistant already started")
 
+        @self._stt.on("metrics_collected")
+        def _on_stt_metrics(stt_metrics: stt.STTMetrics) -> None:
+            pipeline_metrics: metrics.PipelineMetrics = {
+                "type": "stt_metrics",
+                **stt_metrics,
+            }
+            self.emit("metrics_collected", pipeline_metrics)
+
         @self._tts.on("metrics_collected")
         def _on_tts_metrics(tts_metrics: tts.TTSMetrics) -> None:
-            speech_data = metrics.SpeechDataContextVar.get()
-            print("test", speech_data.sequence_id, tts_metrics)
+            speech_data = metrics.SpeechDataContextVar.get(None)
+            if speech_data is None:
+                return
+
+            pipeline_metrics: metrics.PipelineMetrics = {
+                "type": "tts_metrics",
+                "sequence_id": speech_data.sequence_id,
+                **tts_metrics,
+            }
+            self.emit("metrics_collected", pipeline_metrics)
 
         @self._llm.on("metrics_collected")
         def _on_llm_metrics(llm_metrics: llm.LLMMetrics) -> None:
-            speech_data = metrics.SpeechDataContextVar.get()
-            print("test", speech_data.sequence_id, llm_metrics)
+            speech_data = metrics.SpeechDataContextVar.get(None)
+            if speech_data is None:
+                return
+
+            pipeline_metrics: metrics.PipelineMetrics = {
+                "type": "llm_metrics",
+                "sequence_id": speech_data.sequence_id,
+                **llm_metrics,
+            }
+            self.emit("metrics_collected", pipeline_metrics)
+
+        @self._vad.on("metrics_collected")
+        def _on_vad_metrics(vad_metrics: vad.VADMetrics) -> None:
+            pipeline_metrics: metrics.PipelineMetrics = {
+                "type": "vad_metrics",
+                **vad_metrics,
+            }
+            self.emit("metrics_collected", pipeline_metrics)
 
         room.on("participant_connected", self._on_participant_connected)
         self._room, self._participant = room, participant
@@ -447,7 +478,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 self._interrupt_if_possible()
 
             if ev.raw_accumulated_speech > 0.0:
-                last_speech_time = time.perf_counter() - ev.raw_accumulated_silence
+                self._last_speech_time = (
+                    time.perf_counter() - ev.raw_accumulated_silence
+                )
 
         def _on_end_of_speech(ev: vad.VADEvent) -> None:
             self._plotter.plot_event("user_stopped_speaking")
@@ -462,15 +495,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if not new_transcript:
                 return
 
-            # calculate elapsed time
-            # nonlocal last_speech_time
-            # now = time.perf_counter()
-            # elapsed = -1.0
-            # if last_speech_time is not None:
-            #     elapsed = now - last_speech_time
-            #     last_speech_time = None
-
-            # self._last_stt_elapsed = elapsed
+            self._last_final_transcript_time = time.perf_counter()
 
             self._transcribed_text += (
                 " " if self._transcribed_text else ""
@@ -610,23 +635,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             synthesis_handle = self._synthesize_agent_speech(handle.id, llm_stream)
             handle.initialize(source=llm_stream, synthesis_handle=synthesis_handle)
-
-            # if self._last_stt_elapsed != -1.0:
-            #     stt_metrics: metrics.STTMetrics = {
-            #         "type": "stt_metrics",
-            #         "timestamp": time.time(),
-            #         "speech_id": handle.id,
-            #         "estimated_ttfb": self._last_stt_elapsed,
-            #     }
-            #     self._metrics_emitter.emit("stt_metrics_collected", stt_metrics)
-
-            #     logger.debug(
-            #         "stt metrics collected",
-            #         extra={
-            #             "speech_id": handle.id,
-            #             "ttfb": self._last_stt_elapsed,
-            #         },
-            #     )
         finally:
             metrics.SpeechDataContextVar.reset(tk)
 
@@ -889,6 +897,21 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             "validated agent reply",
             extra={"speech_id": self._pending_agent_reply.id},
         )
+
+        if self._last_speech_time is not None:
+            time_since_last_speech = time.perf_counter() - self._last_speech_time
+            transcription_delay = max(
+                (self._last_final_transcript_time or 0) - self._last_speech_time, 0
+            )
+
+            eou_metrics: metrics.PipelineEOUMetrics = {
+                "type": "eou_metrics",
+                "timestamp": time.time(),
+                "sequence_id": self._pending_agent_reply.id,
+                "duration": time_since_last_speech,
+                "transcription_delay": transcription_delay,
+            }
+            self.emit("metrics_collected", eou_metrics)
 
         self._add_speech_for_playout(self._pending_agent_reply)
         self._pending_agent_reply = None

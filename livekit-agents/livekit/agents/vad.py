@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterator, List, Literal, Union, TypedDict
+from typing import AsyncIterable, AsyncIterator, List, Literal, TypedDict, Union
 
 from livekit import rtc
 
@@ -15,6 +16,7 @@ class VADMetrics(TypedDict):
     timestamp: float
     inference_duration_avg: float
     inference_count: int
+    label: str
 
 
 @unique
@@ -79,6 +81,7 @@ class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(self, *, capabilities: VADCapabilities) -> None:
         super().__init__()
         self._capabilities = capabilities
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
     def capabilities(self) -> VADCapabilities:
@@ -96,11 +99,40 @@ class VADStream(ABC):
         self._vad = vad
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, VADStream._FlushSentinel]]()
         self._event_ch = aio.Chan[VADEvent]()
+
+        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
+        )
+
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @abstractmethod
     async def _main_task(self) -> None: ...
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[VADEvent]) -> None:
+        """Task used to collect metrics"""
+
+        inference_duration_sum = 0.0
+        inference_count = 0
+
+        async for ev in event_aiter:
+            if ev.type == VADEventType.INFERENCE_DONE:
+                inference_duration_sum += ev.inference_duration
+                inference_count += 1
+
+                if inference_count >= 1 / self._vad.capabilities.update_interval:
+                    vad_metrics: VADMetrics = {
+                        "timestamp": time.time(),
+                        "inference_duration_avg": inference_duration_sum
+                        / inference_count,
+                        "inference_count": inference_count,
+                        "label": self._vad._label,
+                    }
+                    self._vad.emit("metrics_collected", vad_metrics)
+                    inference_duration_sum = 0.0
+                    inference_count = 0
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push some text to be synthesized"""
@@ -124,9 +156,13 @@ class VADStream(ABC):
         self._input_ch.close()
         await aio.gracefully_cancel(self._task)
         self._event_ch.close()
+        await self._metrics_task
 
     async def __anext__(self) -> VADEvent:
-        return await self._event_ch.__anext__()
+        if self._task.done() and self._task.exception():
+            raise self._task.exception()
+
+        return await self._event_aiter.__anext__()
 
     def __aiter__(self) -> AsyncIterator[VADEvent]:
         return self

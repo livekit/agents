@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Literal, TypedDict, AsyncIterable
+from typing import Any, AsyncIterable, AsyncIterator, Literal, TypedDict
 
 from livekit import rtc
+
 from .. import utils
 from ..utils import aio
 from . import function_context
 from .chat_context import ChatContext, ChatRole
-
-import asyncio
-import time
 
 
 class LLMMetrics(TypedDict):
