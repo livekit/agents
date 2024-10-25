@@ -146,7 +146,8 @@ class TTS(tts.TTS):
             raise ValueError("ELEVEN_API_KEY must be set")
         
         if language is not None and model != "eleven_turbo_v2_5":
-            raise ValueError("language is only supported for the 'eleven_turbo_v2_5' model")
+            language = None
+            logger.warning("Excluding 'language' as it is only supported for the 'eleven_turbo_v2_5' model")
 
         self._opts = _TTSOptions(
             voice=voice,
