@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from enum import Enum
 from typing import Annotated, Callable, Optional
 
