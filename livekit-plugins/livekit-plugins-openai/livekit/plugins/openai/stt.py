@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import os
 import wave
 from dataclasses import dataclass
 
@@ -26,7 +27,7 @@ from livekit.agents.utils import AudioBuffer
 
 import openai
 
-from .models import WhisperModels
+from .models import WhisperModels, GroqAudioModels
 
 
 @dataclass
@@ -78,6 +79,39 @@ class STT(stt.STT):
                     keepalive_expiry=120,
                 ),
             ),
+        )
+
+    
+    @staticmethod
+    def with_groq(
+        *,
+        model: GroqAudioModels = "whisper-large-v3-turbo",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.groq.com/openai/v1",
+        client: openai.AsyncClient | None = None,
+        language: str = "en",
+        detect_language: bool = False,
+    ) -> STT:
+        """
+        Create a new instance of Groq STT.
+
+        ``api_key`` must be set to your Groq API key, either using the argument or by setting
+        the ``GROQ_API_KEY`` environmental variable.
+        """
+        
+        # Use environment variable if API key is not provided
+        api_key = api_key or os.environ.get("GROQ_API_KEY")
+        if api_key is None:
+            raise ValueError("Groq API key is required")
+
+        # Instantiate and return a configured STT instance
+        return STT(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            language=language,
+            detect_language=detect_language,
         )
 
     def _sanitize_options(self, *, language: str | None = None) -> _STTOptions:
