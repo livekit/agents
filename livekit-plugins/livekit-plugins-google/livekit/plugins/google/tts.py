@@ -149,14 +149,18 @@ class TTS(tts.TTS):
         return self._client
 
     def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts, self._ensure_client())
+        return ChunkedStream(self, text, self._opts, self._ensure_client())
 
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
-        self, text: str, opts: _TTSOptions, client: texttospeech.TextToSpeechAsyncClient
+        self,
+        tts: TTS,
+        text: str,
+        opts: _TTSOptions,
+        client: texttospeech.TextToSpeechAsyncClient,
     ) -> None:
-        super().__init__()
+        super().__init__(tts)
         self._text, self._opts, self._client = text, opts, client
 
     @utils.log_exceptions(logger=logger)
@@ -176,7 +180,7 @@ class ChunkedStream(tts.ChunkedStream):
                 sample_rate=self._opts.audio_config.sample_rate_hertz, num_channels=1
             )
             for frame in decoder.decode_chunk(data):
-                for frame in bstream.write(frame.data):
+                for frame in bstream.write(frame.data.tobytes()):
                     self._event_ch.send_nowait(
                         tts.SynthesizedAudio(
                             request_id=request_id, segment_id=segment_id, frame=frame

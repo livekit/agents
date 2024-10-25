@@ -159,12 +159,12 @@ class TTS(tts.TTS):
         self._opts.prosody = prosody or self._opts.prosody
 
     def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts)
+        return ChunkedStream(self, text, self._opts)
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, text: str, opts: _TTSOptions) -> None:
-        super().__init__()
+    def __init__(self, tts: TTS, text: str, opts: _TTSOptions) -> None:
+        super().__init__(tts)
         self._text, self._opts = text, opts
 
     @utils.log_exceptions()
