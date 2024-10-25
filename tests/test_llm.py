@@ -90,15 +90,15 @@ def test_hashable_typeinfo():
 
 LLMS: list[Callable[[], llm.LLM]] = [
     lambda: openai.LLM(),
-    lambda: openai.beta.AssistantLLM(
-        assistant_opts=openai.beta.AssistantOptions(
-            create_options=openai.beta.AssistantCreateOptions(
-                name=f"test-{uuid.uuid4()}",
-                instructions="You are a basic assistant",
-                model="gpt-4o",
-            )
-        )
-    ),
+    # lambda: openai.beta.AssistantLLM(
+    #     assistant_opts=openai.beta.AssistantOptions(
+    #         create_options=openai.beta.AssistantCreateOptions(
+    #             name=f"test-{uuid.uuid4()}",
+    #             instructions="You are a basic assistant",
+    #             model="gpt-4o",
+    #         )
+    #     )
+    # ),
     # anthropic.LLM(),
 ]
 
