@@ -34,7 +34,7 @@ from .models import GroqAudioModels, WhisperModels
 class _STTOptions:
     language: str
     detect_language: bool
-    model: WhisperModels
+    model: WhisperModels | str
 
 
 class STT(stt.STT):
@@ -43,7 +43,7 @@ class STT(stt.STT):
         *,
         language: str = "en",
         detect_language: bool = False,
-        model: WhisperModels = "whisper-1",
+        model: WhisperModels | str = "whisper-1",
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
@@ -84,7 +84,7 @@ class STT(stt.STT):
     @staticmethod
     def with_groq(
         *,
-        model: GroqAudioModels = "whisper-large-v3-turbo",
+        model: GroqAudioModels | str = "whisper-large-v3-turbo",
         api_key: str | None = None,
         base_url: str | None = "https://api.groq.com/openai/v1",
         client: openai.AsyncClient | None = None,
