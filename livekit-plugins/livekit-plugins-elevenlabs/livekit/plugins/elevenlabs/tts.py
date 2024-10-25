@@ -80,6 +80,7 @@ class _TTSOptions:
     api_key: str
     voice: Voice
     model: TTSModels | str
+    language: str | None
     base_url: str
     encoding: TTSEncoding
     sample_rate: int
@@ -107,6 +108,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         # deprecated
         model_id: TTSModels | str | None = None,
+        language: str | None = None,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -122,6 +124,7 @@ class TTS(tts.TTS):
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             chunk_length_schedule (list[int]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
+            language (str | None): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5". Optional.
         """
 
         super().__init__(
@@ -141,6 +144,10 @@ class TTS(tts.TTS):
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
         if not api_key:
             raise ValueError("ELEVEN_API_KEY must be set")
+        
+        if language is not None and model != "eleven_turbo_v2_5":
+            language = None
+            logger.warning("Excluding 'language' as it is only supported for the 'eleven_turbo_v2_5' model")
 
         self._opts = _TTSOptions(
             voice=voice,
@@ -153,6 +160,7 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
+            language=language,
         )
         self._session = http_session
 
@@ -498,8 +506,12 @@ def _stream_url(opts: _TTSOptions) -> str:
     output_format = opts.encoding
     latency = opts.streaming_latency
     enable_ssml = str(opts.enable_ssml_parsing).lower()
-    return (
+    language = opts.language
+    url = (
         f"{base_url}/text-to-speech/{voice_id}/stream-input?"
         f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}&"
         f"enable_ssml_parsing={enable_ssml}"
     )
+    if language is not None:
+        url += f"&language_code={language}"
+    return url
