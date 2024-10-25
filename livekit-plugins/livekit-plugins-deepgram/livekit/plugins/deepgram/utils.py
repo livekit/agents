@@ -7,7 +7,7 @@ MAGIC_NUMBER_THRESHOLD = 0.004
 
 
 class BasicAudioEnergyFilter:
-    def __init__(self, *, cooldown_seconds: float = 1):
+    def __init__(self, *, cooldown_seconds: float = 1.0):
         self._cooldown_seconds = cooldown_seconds
         self._cooldown = cooldown_seconds
 
@@ -19,9 +19,5 @@ class BasicAudioEnergyFilter:
             self._cooldown = self._cooldown_seconds
             return True
 
-        duration_seconds = frame.samples_per_channel / frame.sample_rate
-        self._cooldown -= duration_seconds
-        if self._cooldown > 0:
-            return True
-
-        return False
+        self._cooldown -= frame.duration
+        return self._cooldown > 0

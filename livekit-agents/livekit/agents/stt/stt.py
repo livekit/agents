@@ -13,9 +13,11 @@ from ..utils import AudioBuffer, aio
 
 
 class STTMetrics(TypedDict):
+    request_id: str # can be empty when just emitting usage (in streaming mode)
     timestamp: float
     duration: float
     label: str
+    audio_duration: float
 
 
 @unique
@@ -28,6 +30,8 @@ class SpeechEventType(str, Enum):
     FINAL_TRANSCRIPT = "final_transcript"
     """final transcript, emitted when the STT is confident enough that a certain
     portion of speech will not change"""
+    RECOGNITION_USAGE = "recognition_usage"
+    """usage event, emitted periodically to indicate usage metrics"""
     END_OF_SPEECH = "end_of_speech"
     """indicate the end of speech, emitted when the user stops speaking"""
 
@@ -42,10 +46,16 @@ class SpeechData:
 
 
 @dataclass
+class RecognitionUsage:
+    audio_duration: float
+
+
+@dataclass
 class SpeechEvent:
     type: SpeechEventType
     request_id: str = ""
     alternatives: List[SpeechData] = field(default_factory=list)
+    recognition_usage: RecognitionUsage | None = None
 
 
 @dataclass
@@ -89,9 +99,7 @@ class STT(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         )
 
     async def aclose(self) -> None:
-        """
-        Close the STT, and every stream/requests associated with it
-        """
+        """Close the STT, and every stream/requests associated with it"""
         ...
 
 
