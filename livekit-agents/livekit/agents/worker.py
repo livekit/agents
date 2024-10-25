@@ -129,6 +129,39 @@ class _WorkerEnvOption(Generic[T]):
 # NOTE: this object must be pickle-able
 @dataclass
 class WorkerOptions:
+    """
+    Configuration class for a worker that handles job assignments and processing within a LiveKit environment.
+
+    Args:
+        entrypoint_fnc: Entrypoint function that will be called when a job is assigned to this worker.
+        request_fnc: Function to inspect the request and decide if the current worker should handle it. 
+            Defaults to accepting all jobs if not specified.
+        prewarm_fnc: Function to perform any necessary initialization before the job starts.
+            Typically used to prewarm the worker process.
+        load_fnc: Function to determine the current load of the worker. Should return a value between 0 (idle) and 1 (fully loaded).
+        job_executor_type: Specifies the type of executor to use to run jobs. The available options are `PROCESS` or `THREAD`.
+        load_threshold: Load threshold value. If the worker's load exceeds this threshold, it will be marked as unavailable. 
+            Default is 0.75 in production and disabled in development.
+        num_idle_processes: Number of idle processes to keep warm. Used to reduce startup time when new jobs are assigned. 
+            Default is 3 in production and 0 in development.
+        shutdown_process_timeout: Maximum amount of time (in seconds) to wait for a job to shut down gracefully before being 
+            forced to terminate. Default is 60.0 seconds.
+        initialize_process_timeout: Maximum amount of time (in seconds) to wait for a process to initialize or prewarm 
+            before marking it as failed. Default is 10.0 seconds.
+        permissions: Permissions that the worker should use when joining a LiveKit room.
+        agent_name: Optional name for the agent. Used to allow multiple agents to join the same room independently.
+            LiveKit dispatches jobs to workers based on unique `agent_name` values.
+        worker_type: Determines whether the worker is spun up per room or per publisher. Default is `ROOM`.
+        max_retry: Maximum number of times to retry connecting to LiveKit before giving up. Default is 16 retries.
+        ws_url: WebSocket URL to connect to the LiveKit server. By default, it uses the `LIVEKIT_URL` from the environment. 
+            Default is "ws://localhost:7880".
+        api_key: API key used to authenticate with LiveKit. By default, it uses the `LIVEKIT_API_KEY` from the environment.
+        api_secret: API secret used to authenticate with LiveKit. By default, it uses the `LIVEKIT_API_SECRET` from the environment.
+        host: Host address for the local HTTP server to listen on. Defaults to an empty string, which means it listens on all interfaces.
+        port: Port number for the local HTTP server to listen on. The HTTP server is used as a health check endpoint. 
+            Default is 8081 in production and 0 in development.
+    """
+
     entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
     """Entrypoint function that will be called when a job is assigned to this worker."""
     request_fnc: Callable[[JobRequest], Awaitable[None]] = _default_request_fnc
