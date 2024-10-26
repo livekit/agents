@@ -10,7 +10,7 @@ from .function_context import (
     TypeInfo,
     ai_callable,
 )
-from .llm import LLM, ChatChunk, Choice, ChoiceDelta, LLMStream
+from .base import LLM, ChatChunk, Choice, ChoiceDelta, LLMStream
 
 __all__ = [
     "LLM",

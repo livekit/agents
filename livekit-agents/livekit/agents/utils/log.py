@@ -3,6 +3,10 @@ import functools
 import logging
 from typing import Any, Callable
 
+DEV_LEVEL = 23
+logging.addLevelName(DEV_LEVEL, "DEV")
+
+logger = logging.getLogger("livekit.agents")
 
 def log_exceptions(
     msg: str = "", logger: logging.Logger = logging.getLogger()

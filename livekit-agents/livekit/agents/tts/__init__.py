@@ -1,5 +1,5 @@
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
-from .tts import (
+from .base import (
     TTS,
     ChunkedStream,
     SynthesizedAudio,

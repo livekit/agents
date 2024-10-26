@@ -3,7 +3,7 @@ from livekit import rtc
 from . import aio, audio, codecs, http_context, hw, images
 from .audio import AudioBuffer, combine_frames, merge_frames
 from .exp_filter import ExpFilter
-from .log import log_exceptions
+from .log import log_exceptions, logger
 from .misc import shortuuid, time_ms
 from .moving_average import MovingAverage
 
@@ -19,6 +19,7 @@ __all__ = [
     "ExpFilter",
     "MovingAverage",
     "EventEmitter",
+    "logger",
     "log_exceptions",
     "codecs",
     "images",

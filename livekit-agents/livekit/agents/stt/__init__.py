@@ -1,5 +1,5 @@
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
-from .stt import (
+from .base import (
     STT,
     SpeechData,
     SpeechEvent,
