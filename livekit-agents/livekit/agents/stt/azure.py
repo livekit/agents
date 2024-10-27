@@ -19,8 +19,9 @@ from dataclasses import dataclass
 
 from livekit import rtc
 from livekit.agents import utils
-from livekit.agents.utils.log import logger
 from livekit.agents.stt import base as stt
+from livekit.agents.utils.log import logger
+
 try:
     import azure.cognitiveservices.speech as speechsdk  # type: ignore
 except ImportError:

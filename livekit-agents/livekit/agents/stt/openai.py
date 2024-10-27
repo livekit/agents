@@ -24,6 +24,7 @@ import httpx
 from livekit import agents
 from livekit.agents.stt import base as stt
 from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils.log import logger
 
 try:
     import openai
@@ -31,7 +32,7 @@ except ImportError:
     logger.error("`openai` not installed. Please install it using `pip install openai`")
     raise ImportError
 
-from .models import WhisperModels, GroqAudioModels
+from .models import GroqAudioModels, WhisperModels
 
 
 @dataclass
@@ -109,7 +110,7 @@ class OpenAISTT(stt.STT):
             raise ValueError("Groq API key is required")
 
         # Instantiate and return a configured STT instance
-        return STT(
+        return OpenAISTT(
             model=model,
             api_key=api_key,
             base_url=base_url,

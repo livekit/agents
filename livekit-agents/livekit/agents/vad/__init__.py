@@ -1,3 +1,9 @@
-from livekit.agents.vad.base import VAD, VADStream, VADCapabilities,VADEvent, VADEventType
+from livekit.agents.vad.base import (
+    VAD,
+    VADCapabilities,
+    VADEvent,
+    VADEventType,
+    VADStream,
+)
 
 __all__ = ['VAD', 'VADStream', 'VADCapabilities', 'VADEvent', 'VADEventType']

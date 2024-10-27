@@ -1,4 +1,3 @@
-from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .base import (
     TTS,
     ChunkedStream,
@@ -6,6 +5,7 @@ from .base import (
     SynthesizeStream,
     TTSCapabilities,
 )
+from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 
 __all__ = [
     "TTS",

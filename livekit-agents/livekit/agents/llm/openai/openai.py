@@ -44,6 +44,7 @@ from .models import (
 )
 from .utils import AsyncAzureADTokenProvider, build_oai_message
 
+
 @dataclass
 class LLMOptions:
     model: str | ChatModels
@@ -431,7 +432,7 @@ class OpenAI(llm.LLM):
         temperature: float | None = None,
     ) -> OpenAI:
         logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
-        return LLM.with_azure(
+        return OpenAI.with_azure(
             model=model,
             azure_endpoint=azure_endpoint,
             api_version=api_version,

@@ -26,8 +26,8 @@ from typing import Any, List, Literal
 import aiohttp
 from livekit import rtc
 from livekit.agents import tokenize, tts, utils
-
 from livekit.agents.utils.log import logger
+
 from .models import TTSEncoding, TTSModels
 
 _Encoding = Literal["mp3", "pcm"]

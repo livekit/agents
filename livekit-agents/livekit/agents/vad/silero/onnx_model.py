@@ -2,6 +2,8 @@ import atexit
 import importlib.resources
 from contextlib import ExitStack
 
+from livekit.agents.utils.log import logger
+
 try:
     import numpy as np
     import onnxruntime  # type: ignore

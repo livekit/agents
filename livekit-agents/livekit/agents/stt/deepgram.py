@@ -26,9 +26,9 @@ from urllib.parse import urlencode
 
 import aiohttp
 from livekit.agents import stt, utils
-from livekit.agents.utils import AudioBuffer, merge_frames,BasicAudioEnergyFilter
-
+from livekit.agents.utils import AudioBuffer, BasicAudioEnergyFilter, merge_frames
 from livekit.agents.utils.log import logger
+
 from .models import DeepgramLanguages, DeepgramModels
 
 BASE_URL = "https://api.deepgram.com/v1/listen"

@@ -1,4 +1,5 @@
 from . import _oai_api
+from .base import LLM, ChatChunk, Choice, ChoiceDelta, LLMStream
 from .chat_context import ChatAudio, ChatContext, ChatImage, ChatMessage, ChatRole
 from .function_context import (
     USE_DOCSTRING,
@@ -10,7 +11,6 @@ from .function_context import (
     TypeInfo,
     ai_callable,
 )
-from .base import LLM, ChatChunk, Choice, ChoiceDelta, LLMStream
 
 __all__ = [
     "LLM",

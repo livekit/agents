@@ -6,6 +6,7 @@ from typing import List, Union
 from livekit import rtc
 
 from .log import logger
+
 try:
     import numpy as np
 except ImportError:

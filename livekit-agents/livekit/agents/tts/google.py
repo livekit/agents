@@ -22,7 +22,10 @@ from livekit.agents.utils.log import logger
 
 try:
     from google.cloud import texttospeech
-    from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
+    from google.cloud.texttospeech_v1.types import (
+        SsmlVoiceGender,
+        SynthesizeSpeechResponse,
+    )
 except ImportError:
     logger.error("`google-auth` or `google-cloud-texttospeech` not installed. Please install it using `pip install google-auth google-cloud-texttospeech`")
     raise ImportError

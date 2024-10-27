@@ -19,6 +19,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Literal
+
+from livekit.agents.utils.log import logger
+
 try:
     import numpy as np
     import onnxruntime  # type: ignore
@@ -27,9 +30,10 @@ except ImportError:
     raise ImportError
 from livekit import agents, rtc
 from livekit.agents import utils
-from livekit.agents.vad import VAD, VADStream, VADCapabilities,VADEvent, VADEventType
-from . import onnx_model
 from livekit.agents.log import logger
+from livekit.agents.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
+
+from . import onnx_model
 
 SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
 
@@ -79,7 +83,7 @@ class Silero(VAD):
 
             ```python
             def prewarm(proc: JobProcess):
-                proc.userdata["vad"] = silero.VAD.load()
+                proc.userdata["vad"] = Silero.load()
 
 
             async def entrypoint(ctx: JobContext):
@@ -429,7 +433,7 @@ class VADStream(VADStream):
 
                 self._event_ch.send_nowait(
                     VADEvent(
-                        type=vad.VADEventType.INFERENCE_DONE,
+                        type=VADEventType.INFERENCE_DONE,
                         samples_index=pub_current_sample,
                         timestamp=pub_timestamp,
                         silence_duration=pub_silence_duration,
@@ -460,7 +464,7 @@ class VADStream(VADStream):
 
                             self._event_ch.send_nowait(
                                 VADEvent(
-                                    type=vad.VADEventType.START_OF_SPEECH,
+                                    type=VADEventType.START_OF_SPEECH,
                                     samples_index=pub_current_sample,
                                     timestamp=pub_timestamp,
                                     silence_duration=pub_silence_duration,
@@ -488,7 +492,7 @@ class VADStream(VADStream):
 
                         self._event_ch.send_nowait(
                             VADEvent(
-                                type=vad.VADEventType.END_OF_SPEECH,
+                                type=VADEventType.END_OF_SPEECH,
                                 samples_index=pub_current_sample,
                                 timestamp=pub_timestamp,
                                 silence_duration=pub_silence_duration,

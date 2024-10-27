@@ -19,9 +19,9 @@ from dataclasses import dataclass
 from typing import AsyncContextManager
 
 import httpx
-from livekit.agents import tts
-from livekit.agents import utils
+from livekit.agents import tts, utils
 from livekit.agents.utils import logger
+
 try:
     import openai
 except ImportError:

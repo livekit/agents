@@ -1,8 +1,8 @@
-from typing import Optional, Dict, List, Tuple, Any
-from typing_extensions import Literal
+from typing import Any, Dict, List, Optional, Tuple
 
 from livekit.agents.embedder.base import Embedder
 from livekit.agents.utils.log import logger
+from typing_extensions import Literal
 
 try:
     from openai import OpenAI as OpenAIClient
