@@ -27,7 +27,7 @@ from livekit.agents.utils import AudioBuffer
 
 import openai
 
-from .models import WhisperModels, GroqAudioModels
+from .models import GroqAudioModels, WhisperModels
 
 
 @dataclass
@@ -81,7 +81,6 @@ class STT(stt.STT):
             ),
         )
 
-    
     @staticmethod
     def with_groq(
         *,
@@ -98,7 +97,7 @@ class STT(stt.STT):
         ``api_key`` must be set to your Groq API key, either using the argument or by setting
         the ``GROQ_API_KEY`` environmental variable.
         """
-        
+
         # Use environment variable if API key is not provided
         api_key = api_key or os.environ.get("GROQ_API_KEY")
         if api_key is None:
