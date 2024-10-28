@@ -14,7 +14,7 @@ from .utils import aio
 
 class VADMetrics(TypedDict):
     timestamp: float
-    inference_duration_avg: float
+    inference_duration_total: float
     inference_count: int
     label: str
 
@@ -114,24 +114,23 @@ class VADStream(ABC):
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[VADEvent]) -> None:
         """Task used to collect metrics"""
 
-        inference_duration_sum = 0.0
+        inference_duration_total = 0.0
         inference_count = 0
 
         async for ev in event_aiter:
             if ev.type == VADEventType.INFERENCE_DONE:
-                inference_duration_sum += ev.inference_duration
+                inference_duration_total += ev.inference_duration
                 inference_count += 1
 
                 if inference_count >= 1 / self._vad.capabilities.update_interval:
                     vad_metrics: VADMetrics = {
                         "timestamp": time.time(),
-                        "inference_duration_avg": inference_duration_sum
-                        / inference_count,
+                        "inference_duration_total": inference_duration_total,
                         "inference_count": inference_count,
                         "label": self._vad._label,
                     }
                     self._vad.emit("metrics_collected", vad_metrics)
-                    inference_duration_sum = 0.0
+                    inference_duration_total = 0.0
                     inference_count = 0
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:

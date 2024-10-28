@@ -26,7 +26,8 @@ class PipelineEOUMetrics(TypedDict):
     type: Literal["eou_metrics"]
     sequence_id: str
     timestamp: float
-    duration: float
+    end_of_utterance_delay: float
+    """mount of time between when end of speech from VAD, and when we've decided the user turn is over"""
     transcription_delay: float
     """time it took to get the transcript after the end of the user's speech
     could be 0 if the transcript was already available"""
