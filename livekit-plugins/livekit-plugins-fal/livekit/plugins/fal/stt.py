@@ -33,14 +33,14 @@ class WizperSTT(stt.STT):
         super().__init__(
             capabilities=STTCapabilities(streaming=False, interim_results=True)
         )
-        self._api_key = api_key or os.getenv("FAL_KEY")
+        self._api_key = api_key or os.getenv("FAL_API_KEY")
         self._opts = _STTOptions(
             language=language, task=task, chunk_level=chunk_level, version=version
         )
 
         if not self._api_key:
             raise ValueError(
-                "FAL AI API key is required. It should be set with env FAL_KEY"
+                "FAL AI API key is required. It should be set with env FAL_API_KEY"
             )
 
     def _sanitize_options(

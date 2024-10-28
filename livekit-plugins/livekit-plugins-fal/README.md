@@ -1,14 +1,13 @@
-# LiveKit Plugins Minimal
+# LiveKit Plugins Fal
 
-This is a minimal example of a LiveKit plugin for Agents.
+This plugin provides a simple way to integrate FAL models into the LiveKit Agent Framework. currently supports Whizper model for STT
 
-### Developer note
+## Installation
 
-When copying this directory over to create a new `livekit-plugins` package, make sure it's nested within the `livekit-plugins` folder and that the `"name"` field in `package.json` follows the proper naming convention for CI:
-
-```json
-{
-  "name": "livekit-plugins-<name>",
-  "private": true
-}
+```bash
+pip install livekit-plugins-fal
 ```
+
+## Pre-requisites
+
+You'll need an API key from FAL. It can be set as an environment variable: `FAL_API_KEY`
