@@ -171,7 +171,7 @@ class LLMStream(llm.LLMStream):
             # print(f"Received chunk: {chunk.strip()}")  
 
             self._current_count += 1
-            # print(f"Current count: {self._current_count}, Skip interval: {self._skip_interval}")  # 跳过计数和间隔
+            # print(f"Current count: {self._current_count}, Skip interval: {self._skip_interval}") 
 
             if self._current_count < self._skip_interval:
                 # print("Skipping this chunk.")
