@@ -18,7 +18,7 @@ class TTSMetrics(TypedDict):
     duration: float
     audio_duration: float
     cancelled: bool
-    characters: int
+    num_characters: int
     label: str
     streamed: bool
 
@@ -114,7 +114,7 @@ class ChunkedStream(ABC):
             "request_id": request_id,
             "ttfb": ttfb,
             "duration": duration,
-            "characters": len(self._input_text),
+            "num_characters": len(self._input_text),
             "audio_duration": audio_duration,
             "cancelled": self._task.cancelled(),
             "label": self._tts._label,
@@ -190,7 +190,7 @@ class SynthesizeStream(ABC):
                 "request_id": request_id,
                 "ttfb": ttfb,
                 "duration": duration,
-                "characters": len(text),
+                "num_characters": len(text),
                 "audio_duration": audio_duration,
                 "cancelled": self._task.cancelled(),
                 "label": self._tts._label,
