@@ -21,7 +21,7 @@ import json
 import os
 import wave
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from urllib.parse import urlencode
 
 import aiohttp
@@ -46,6 +46,7 @@ class STTOptions:
     smart_format: bool
     no_delay: bool
     endpointing_ms: int
+    utterance_end_ms: Optional[int]
     filler_words: bool
     sample_rate: int
     num_channels: int
@@ -66,6 +67,7 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         no_delay: bool = True,
         endpointing_ms: int = 25,
+        utterance_end_ms: Optional[int] = None,
         filler_words: bool = False,
         keywords: list[Tuple[str, float]] = [],
         profanity_filter: bool = False,
@@ -116,6 +118,7 @@ class STT(stt.STT):
             smart_format=smart_format,
             no_delay=no_delay,
             endpointing_ms=endpointing_ms,
+            utterance_end_ms=utterance_end_ms,
             filler_words=filler_words,
             sample_rate=sample_rate,
             num_channels=1,
@@ -242,6 +245,9 @@ class SpeechStream(stt.SpeechStream):
 
                 if self._opts.language:
                     live_config["language"] = self._opts.language
+
+                if self._opts.utterance_end_ms:
+                    live_config["utterance_end_ms"] = self._opts.utterance_end_ms
 
                 headers = {"Authorization": f"Token {self._api_key}"}
                 ws = await self._session.ws_connect(
