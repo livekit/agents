@@ -9,7 +9,8 @@ from typing import AsyncIterable, AsyncIterator, List, Literal, TypedDict, Union
 
 from livekit import rtc
 
-from ..utils import AudioBuffer, aio, calculate_audio_duration
+from ..utils import AudioBuffer, aio
+from ..utils.audio import calculate_audio_duration
 
 
 class STTMetrics(TypedDict):
