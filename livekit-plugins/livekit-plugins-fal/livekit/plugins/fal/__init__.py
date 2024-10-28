@@ -30,7 +30,7 @@
 from .stt import WizperSTT
 from .version import __version__
 
-__all__ = [ "WizperSTT", "__version__" ]
+__all__ = ["WizperSTT", "__version__"]
 
 
 from livekit.agents import Plugin
