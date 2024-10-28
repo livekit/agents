@@ -21,19 +21,60 @@ import json
 import os
 import wave
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Tuple
 from urllib.parse import urlencode
 
 import aiohttp
+import numpy as np
+from livekit import rtc
 from livekit.agents import stt, utils
 from livekit.agents.utils import AudioBuffer, merge_frames
 
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
-from .utils import BasicAudioEnergyFilter
 
 BASE_URL = "https://api.deepgram.com/v1/listen"
 BASE_URL_WS = "wss://api.deepgram.com/v1/listen"
+
+
+# This is the magic number during testing that we use to determine if a frame is loud enough
+# to possibly contain speech. It's very conservative.
+MAGIC_NUMBER_THRESHOLD = 0.004**2
+
+
+class _AudioEnergyFilter:
+    class _State(Enum):
+        START = 0
+        SPEAKING = 1
+        SILENCE = 2
+        END = 3
+
+    def __init__(self, *, min_silence: float = 1.5):
+        self._cooldown_seconds = min_silence
+        self._cooldown = min_silence
+        self._state = self._State.SILENCE
+
+    def update(self, frame: rtc.AudioFrame) -> _State:
+        arr = np.frombuffer(frame.data, dtype=np.int16)
+        float_arr = arr.astype(np.float32) / 32768.0
+        rms = np.mean(np.square(float_arr))
+
+        if rms > MAGIC_NUMBER_THRESHOLD:
+            self._cooldown = self._cooldown_seconds
+            if self._state in (self._State.SILENCE, self._State.END):
+                self._state = self._State.START
+            else:
+                self._state = self._State.SPEAKING
+        else:
+            self._cooldown -= frame.duration
+            if self._cooldown <= 0:
+                if self._state in (self._State.SPEAKING, self._State.START):
+                    self._state = self._State.END
+                else:
+                    self._state = self._State.SILENCE
+
+        return self._state
 
 
 @dataclass
@@ -207,7 +248,10 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._speaking = False
         self._max_retry = max_retry
-        self._audio_energy_filter = BasicAudioEnergyFilter(cooldown_seconds=1)
+        self._audio_energy_filter = _AudioEnergyFilter()
+
+        self._pushed_audio_duration = 0.0
+        self._request_id = 0
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -303,9 +347,23 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
-                    has_audio = self._audio_energy_filter.push_frame(frame)
-                    if has_audio:
+                    state = self._audio_energy_filter.update(frame)
+                    if state in (
+                        _AudioEnergyFilter._State.START,
+                        _AudioEnergyFilter._State.SPEAKING,
+                    ):
+                        self._pushed_audio_duration += frame.duration
                         await ws.send_bytes(frame.data.tobytes())
+                    elif state == _AudioEnergyFilter._State.END:
+                        usage_event = stt.SpeechEvent(
+                            type=stt.SpeechEventType.RECOGNITION_USAGE,
+                            request_id=self._request_id,
+                            alternatives=[],
+                            recognition_usage=stt.RecognitionUsage(
+                                audio_duration=self._pushed_audio_duration
+                            ),
+                        )
+                        self._event_ch.send_nowait(usage_event)
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True
@@ -369,6 +427,7 @@ class SpeechStream(stt.SpeechStream):
             request_id = metadata["request_id"]
             is_final_transcript = data["is_final"]
             is_endpoint = data["speech_final"]
+            self._request_id = request_id
 
             alts = live_transcription_to_speech_data(self._opts.language, data)
             # If, for some reason, we didn't get a SpeechStarted event but we got

@@ -161,6 +161,10 @@ class SynthesizeStream(ABC):
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._metrics_task: asyncio.Task | None = None  # started on first push
 
+        # used to track metrics
+        self._mtc_pending_texts: list[str] = []
+        self._mtc_text = ""
+
     @abstractmethod
     async def _main_task(self) -> None: ...
 
@@ -176,11 +180,17 @@ class SynthesizeStream(ABC):
         def _emit_metrics():
             nonlocal start_time, audio_duration, ttfb, request_id
             duration = time.perf_counter() - start_time
+
+            text = self._mtc_pending_texts.pop(0)
+            if not text:
+                return
+
             metrics: TTSMetrics = {
                 "timestamp": time.time(),
                 "request_id": request_id,
                 "ttfb": ttfb,
                 "duration": duration,
+                "characters": len(text),
                 "audio_duration": audio_duration,
                 "cancelled": self._task.cancelled(),
                 "label": self._tts._label,
@@ -214,12 +224,17 @@ class SynthesizeStream(ABC):
                 name="TTS._metrics_task",
             )
 
+        self._mtc_text += token
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(token)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
+        if self._mtc_text:
+            self._mtc_pending_texts.append(self._mtc_text)
+            self._mtc_text = ""
+
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(self._FlushSentinel())

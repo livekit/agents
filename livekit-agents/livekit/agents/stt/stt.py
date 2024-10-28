@@ -5,19 +5,20 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterator, List, Literal, TypedDict, Union
+from typing import AsyncIterable, AsyncIterator, List, Literal, TypedDict, Union
 
 from livekit import rtc
 
-from ..utils import AudioBuffer, aio
+from ..utils import AudioBuffer, aio, calculate_audio_duration
 
 
 class STTMetrics(TypedDict):
-    request_id: str  # can be empty when just emitting usage (in streaming mode)
+    request_id: str
     timestamp: float
     duration: float
     label: str
     audio_duration: float
+    streamed: bool
 
 
 @unique
@@ -86,9 +87,12 @@ class STT(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         event = await self._recognize_impl(buffer, language=language)
         duration = time.perf_counter() - start_time
         stt_metrics: STTMetrics = {
+            "request_id": event.request_id,
             "timestamp": time.time(),
             "duration": duration,
             "label": self._label,
+            "audio_duration": calculate_audio_duration(buffer),
+            "streamed": False,
         }
         self.emit("metrics_collected", stt_metrics)
         return event
@@ -107,7 +111,7 @@ class SpeechStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self, *, sample_rate: int | None = None):
+    def __init__(self, stt: STT, *, sample_rate: int | None = None):
         """
         Args:
         sample_rate : int or None, optional
@@ -116,8 +120,15 @@ class SpeechStream(ABC):
             the given sample rate before being processed for Speech-to-Text.
             If not provided (None), the input will retain its original sample rate.
         """
+        self._stt = stt
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, SpeechStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SpeechEvent]()
+
+        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name="STT._metrics_task"
+        )
+
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -127,6 +138,31 @@ class SpeechStream(ABC):
 
     @abstractmethod
     async def _main_task(self) -> None: ...
+
+    async def _metrics_monitor_task(
+        self, event_aiter: AsyncIterable[SpeechEvent]
+    ) -> None:
+        """Task used to collect metrics"""
+
+        start_time = time.perf_counter()
+
+        async for ev in event_aiter:
+            if ev.type == SpeechEventType.RECOGNITION_USAGE:
+                assert (
+                    ev.recognition_usage is not None
+                ), "recognition_usage must be provided for RECOGNITION_USAGE event"
+
+                duration = time.perf_counter() - start_time
+                stt_metrics: STTMetrics = {
+                    "request_id": ev.request_id,
+                    "timestamp": time.time(),
+                    "duration": duration,
+                    "label": self._stt._label,
+                    "audio_duration": ev.recognition_usage.audio_duration,
+                    "streamed": True,
+                }
+
+                self._stt.emit("metrics_collected", stt_metrics)
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized"""
@@ -172,13 +208,15 @@ class SpeechStream(ABC):
         """Close ths stream immediately"""
         self._input_ch.close()
         await aio.gracefully_cancel(self._task)
-        self._event_ch.close()
+
+        if self._metrics_task is not None:
+            await self._metrics_task
 
     async def __anext__(self) -> SpeechEvent:
         if self._task.done() and (exc := self._task.exception()):
             raise exc
 
-        return await self._event_ch.__anext__()
+        return await self._event_aiter.__anext__()
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
         return self
