@@ -25,22 +25,31 @@ class PipelineSTTMetrics(STTMetrics, TypedDict):
 class PipelineEOUMetrics(TypedDict):
     type: Literal["eou_metrics"]
     sequence_id: str
+    """Unique identifier shared across different metrics to combine related STT, LLM, and TTS metrics."""
+
     timestamp: float
+    """Timestamp of when the event was recorded."""
+
     end_of_utterance_delay: float
-    """mount of time between when end of speech from VAD, and when we've decided the user turn is over"""
+    """Amount of time between the end of speech from VAD and the decision to end the user's turn."""
+
     transcription_delay: float
-    """time it took to get the transcript after the end of the user's speech
-    could be 0 if the transcript was already available"""
+    """Time taken to obtain the transcript after the end of the user's speech.
+    
+    May be 0 if the transcript was already available.
+    """
 
 
 class PipelineLLMMetrics(LLMMetrics, TypedDict):
     type: Literal["llm_metrics"]
     sequence_id: str
+    """Unique identifier shared across different metrics to combine related STT, LLM, and TTS metrics."""
 
 
 class PipelineTTSMetrics(TTSMetrics, TypedDict):
     type: Literal["tts_metrics"]
     sequence_id: str
+    """Unique identifier shared across different metrics to combine related STT, LLM, and TTS metrics."""
 
 
 class PipelineVADMetrics(VADMetrics, TypedDict):
