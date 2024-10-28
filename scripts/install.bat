@@ -27,5 +27,5 @@ if %ERRORLEVEL% neq 0 (
     echo Failed to install livekit-agents.
     goto :eof
 )
-
+call "%CURR_DIR%install_plugins_editable.bat"
 goto :eof
