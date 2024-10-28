@@ -1,25 +1,39 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import AsyncIterator, Union
+from typing import AsyncIterable, AsyncIterator, Literal, TypedDict, Union
 
 from livekit import rtc
 
 from ..utils import aio, audio
 
 
+class TTSMetrics(TypedDict):
+    timestamp: float
+    request_id: str
+    ttfb: float
+    duration: float
+    audio_duration: float
+    cancelled: bool
+    label: str
+    streamed: bool
+
+
 @dataclass
 class SynthesizedAudio:
-    request_id: str
-    """Request ID (one segment could be made up of multiple requests)"""
-    segment_id: str
-    """Segment ID, each segment is separated by a flush"""
     frame: rtc.AudioFrame
     """Synthesized audio frame"""
+    request_id: str
+    """Request ID (one segment could be made up of multiple requests)"""
+    is_final: bool = False
+    """Whether this is latest frame of the segment (streaming only)"""
+    segment_id: str = ""
+    """Segment ID, each segment is separated by a flush (streaming only)"""
     delta_text: str = ""
-    """Current segment of the synthesized audio"""
+    """Current segment of the synthesized audio (streaming only)"""
 
 
 @dataclass
@@ -27,13 +41,15 @@ class TTSCapabilities:
     streaming: bool
 
 
-class TTS(ABC):
+class TTS(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(
         self, *, capabilities: TTSCapabilities, sample_rate: int, num_channels: int
     ) -> None:
+        super().__init__()
         self._capabilities = capabilities
         self._sample_rate = sample_rate
         self._num_channels = num_channels
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
     def capabilities(self) -> TTSCapabilities:
@@ -61,10 +77,47 @@ class TTS(ABC):
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
-    def __init__(self):
+    def __init__(self, tts: TTS) -> None:
         self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._tts = tts
+
+        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
+        )
+
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
+
+    async def _metrics_monitor_task(
+        self, event_aiter: AsyncIterable[SynthesizedAudio]
+    ) -> None:
+        """Task used to collect metrics"""
+
+        start_time = time.perf_counter()
+        audio_duration = 0.0
+        ttfb = -1.0
+        request_id = ""
+
+        async for ev in event_aiter:
+            request_id = ev.request_id
+            if ttfb == -1.0:
+                ttfb = time.perf_counter() - start_time
+
+            audio_duration += ev.frame.duration
+
+        duration = time.perf_counter() - start_time
+        metrics: TTSMetrics = {
+            "timestamp": time.time(),
+            "request_id": request_id,
+            "ttfb": ttfb,
+            "duration": duration,
+            "audio_duration": audio_duration,
+            "cancelled": self._task.cancelled(),
+            "label": self._tts._label,
+            "streamed": False,
+        }
+        self._tts.emit("metrics_collected", metrics)
 
     async def collect(self) -> rtc.AudioFrame:
         """Utility method to collect every frame in a single call"""
@@ -80,29 +133,84 @@ class ChunkedStream(ABC):
         """Close is automatically called if the stream is completely collected"""
         await aio.gracefully_cancel(self._task)
         self._event_ch.close()
+        await self._metrics_task
 
     async def __anext__(self) -> SynthesizedAudio:
-        return await self._event_ch.__anext__()
+        if self._task.done() and (exc := self._task.exception()):
+            raise exc
+
+        return await self._event_aiter.__anext__()
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
 
 
 class SynthesizeStream(ABC):
-    class _FlushSentinel:
-        pass
+    class _FlushSentinel: ...
 
-    def __init__(self):
+    def __init__(self, tts: TTS) -> None:
+        self._tts = tts
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._event_aiter, self._monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._metrics_task: asyncio.Task | None = None  # started on first push
 
     @abstractmethod
     async def _main_task(self) -> None: ...
 
+    async def _metrics_monitor_task(
+        self, event_aiter: AsyncIterable[SynthesizedAudio]
+    ) -> None:
+        """Task used to collect metrics"""
+        start_time = time.perf_counter()
+        audio_duration = 0.0
+        ttfb = -1.0
+        request_id = ""
+
+        def _emit_metrics():
+            nonlocal start_time, audio_duration, ttfb, request_id
+            duration = time.perf_counter() - start_time
+            metrics: TTSMetrics = {
+                "timestamp": time.time(),
+                "request_id": request_id,
+                "ttfb": ttfb,
+                "duration": duration,
+                "audio_duration": audio_duration,
+                "cancelled": self._task.cancelled(),
+                "label": self._tts._label,
+                "streamed": True,
+            }
+            self._tts.emit("metrics_collected", metrics)
+
+            audio_duration = 0.0
+            ttfb = -1.0
+            request_id = ""
+            start_time = time.perf_counter()
+
+        async for ev in event_aiter:
+            if ttfb == -1.0:
+                ttfb = time.perf_counter() - start_time
+
+            audio_duration += ev.frame.duration
+            request_id = ev.request_id
+
+            if ev.is_final:
+                _emit_metrics()
+
+        if request_id:
+            _emit_metrics()
+
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""
+        if self._metrics_task is None:
+            self._metrics_task = asyncio.create_task(
+                self._metrics_monitor_task(self._monitor_aiter),
+                name="TTS._metrics_task",
+            )
+
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(token)
@@ -122,7 +230,9 @@ class SynthesizeStream(ABC):
         """Close ths stream immediately"""
         self._input_ch.close()
         await aio.gracefully_cancel(self._task)
-        self._event_ch.close()
+
+        if self._metrics_task is not None:
+            await self._metrics_task
 
     def _check_not_closed(self) -> None:
         if self._event_ch.closed:
@@ -135,7 +245,10 @@ class SynthesizeStream(ABC):
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
     async def __anext__(self) -> SynthesizedAudio:
-        return await self._event_ch.__anext__()
+        if self._task.done() and (exc := self._task.exception()):
+            raise exc
+
+        return await self._event_aiter.__anext__()
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
