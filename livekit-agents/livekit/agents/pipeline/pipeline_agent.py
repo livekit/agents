@@ -47,6 +47,8 @@ EventTypes = Literal[
     "agent_speech_interrupted",
     "function_calls_collected",
     "function_calls_finished",
+    "llm_started_streaming",
+    "tts_started_streaming",
 ]
 
 _CallContextVar = contextvars.ContextVar["AgentCallContext"](
@@ -570,6 +572,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             ChatMessage.create(text=handle.user_question, role="user")
         )
 
+        self.emit("llm_started_streaming", copied_ctx)
         llm_stream = self._opts.before_llm_cb(self, copied_ctx)
         if asyncio.iscoroutine(llm_stream):
             llm_stream = await llm_stream
@@ -676,7 +679,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
-        extra_tools_messages = []  # additional messages from the functions to add to the context if needed
+        extra_tools_messages = (
+            []
+        )  # additional messages from the functions to add to the context if needed
 
         # if the answer is using tools, execute the functions and automatically generate
         # a response to the user question from the returned values
@@ -747,9 +752,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
                 answer_llm_stream = self._llm.chat(
                     chat_ctx=chat_ctx,
-                    fnc_ctx=self.fnc_ctx
-                    if i < self._opts.max_recursive_fnc_calls - 1
-                    else None,
+                    fnc_ctx=(
+                        self.fnc_ctx
+                        if i < self._opts.max_recursive_fnc_calls - 1
+                        else None
+                    ),
                 )
                 answer_synthesis = self._synthesize_agent_speech(
                     speech_handle.id, answer_llm_stream
@@ -814,6 +821,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         if isinstance(og_source, AsyncIterable):
             og_source, transcript_source = utils.aio.itertools.tee(og_source, 2)
 
+        self.emit("tts_started_streaming", og_source)
         tts_source = self._opts.before_tts_cb(self, og_source)
         if tts_source is None:
             raise ValueError("before_tts_cb must return str or AsyncIterable[str]")
