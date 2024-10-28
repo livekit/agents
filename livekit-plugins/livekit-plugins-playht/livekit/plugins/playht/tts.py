@@ -75,7 +75,7 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         user_id: str | None = None,
         base_url: str | None = None,
-        encoding: _TTSEncoding | None = "wav",
+        encoding: _TTSEncoding = "wav",
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -121,16 +121,16 @@ class TTS(tts.TTS):
             return _dict_to_voices_list(await resp.json())
 
     def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts, self._ensure_session())
+        return ChunkedStream(self, text, self._opts, self._ensure_session())
 
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
     def __init__(
-        self, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
+        self, tts: TTS, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
     ) -> None:
-        super().__init__()
+        super().__init__(tts)
         self._text, self._opts, self._session = text, opts, session
 
     @utils.log_exceptions(logger=logger)

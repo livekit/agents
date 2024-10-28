@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterator, List, Union
+from typing import AsyncIterator, List, Literal, TypedDict, Union
 
 from livekit import rtc
 
 from ..utils import AudioBuffer, aio
+
+
+class STTMetrics(TypedDict):
+    timestamp: float
+    duration: float
+    label: str
 
 
 @unique
@@ -37,6 +44,7 @@ class SpeechData:
 @dataclass
 class SpeechEvent:
     type: SpeechEventType
+    request_id: str = ""
     alternatives: List[SpeechData] = field(default_factory=list)
 
 
@@ -46,19 +54,34 @@ class STTCapabilities:
     interim_results: bool
 
 
-class STT(ABC):
+class STT(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(self, *, capabilities: STTCapabilities) -> None:
+        super().__init__()
         self._capabilities = capabilities
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
     def capabilities(self) -> STTCapabilities:
         return self._capabilities
 
     @abstractmethod
+    async def _recognize_impl(
+        self, buffer: AudioBuffer, *, language: str | None = None
+    ) -> SpeechEvent: ...
+
     async def recognize(
         self, buffer: AudioBuffer, *, language: str | None = None
     ) -> SpeechEvent:
-        pass
+        start_time = time.perf_counter()
+        event = await self._recognize_impl(buffer, language=language)
+        duration = time.perf_counter() - start_time
+        stt_metrics: STTMetrics = {
+            "timestamp": time.time(),
+            "duration": duration,
+            "label": self._label,
+        }
+        self.emit("metrics_collected", stt_metrics)
+        return event
 
     def stream(self, *, language: str | None = None) -> "SpeechStream":
         raise NotImplementedError(
@@ -69,7 +92,7 @@ class STT(ABC):
         """
         Close the STT, and every stream/requests associated with it
         """
-        pass
+        ...
 
 
 class SpeechStream(ABC):
@@ -144,6 +167,9 @@ class SpeechStream(ABC):
         self._event_ch.close()
 
     async def __anext__(self) -> SpeechEvent:
+        if self._task.done() and (exc := self._task.exception()):
+            raise exc
+
         return await self._event_ch.__anext__()
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
