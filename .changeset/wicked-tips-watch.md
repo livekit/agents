@@ -1,5 +1,5 @@
 ---
-"livekit-plugins-fal": major
+"livekit-plugins-fal": minor
 ---
 
 initial version
