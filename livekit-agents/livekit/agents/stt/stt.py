@@ -13,7 +13,7 @@ from ..utils import AudioBuffer, aio
 
 
 class STTMetrics(TypedDict):
-    request_id: str # can be empty when just emitting usage (in streaming mode)
+    request_id: str  # can be empty when just emitting usage (in streaming mode)
     timestamp: float
     duration: float
     label: str

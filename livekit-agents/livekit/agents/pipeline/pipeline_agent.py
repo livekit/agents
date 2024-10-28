@@ -935,7 +935,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 "type": "eou_metrics",
                 "timestamp": time.time(),
                 "sequence_id": self._pending_agent_reply.id,
-                "duration": time_since_last_speech,
+                "end_of_utterance_delay": time_since_last_speech,
                 "transcription_delay": transcription_delay,
             }
             self.emit("metrics_collected", eou_metrics)

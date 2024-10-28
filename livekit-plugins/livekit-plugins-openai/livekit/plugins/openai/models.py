@@ -70,6 +70,10 @@ GroqChatModels = Literal[
     "gemma2-9b-it",
 ]
 
+GroqAudioModels = Literal[
+    "whisper-large-v3", "distil-whisper-large-v3-en", "whisper-large-v3-turbo"
+]
+
 DeepSeekChatModels = Literal[
     "deepseek-coder",
     "deepseek-chat",
