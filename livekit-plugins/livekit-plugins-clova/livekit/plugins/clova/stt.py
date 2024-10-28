@@ -69,7 +69,7 @@ class STT(stt.STT):
     ) -> str:
         return f"{self._invoke_url}/{process_method}"
 
-    async def recognize(
+    async def _recognize_impl(
         self,
         *,
         buffer: AudioBuffer,

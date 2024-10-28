@@ -141,7 +141,7 @@ class STT(stt.STT):
 
         return config
 
-    async def recognize(
+    async def _recognize_impl(
         self,
         buffer: utils.AudioBuffer,
         *,

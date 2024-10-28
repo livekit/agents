@@ -21,7 +21,7 @@ class StreamAdapter(STT):
     def wrapped_stt(self) -> STT:
         return self._stt
 
-    async def recognize(
+    async def _recognize_impl(
         self, buffer: utils.AudioBuffer, *, language: str | None = None
     ):
         return await self._stt.recognize(buffer=buffer, language=language)
