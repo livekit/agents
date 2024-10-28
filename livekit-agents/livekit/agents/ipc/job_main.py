@@ -7,10 +7,11 @@ import logging
 import pickle
 import queue
 import socket
+import sys
 import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
-import sys
+
 from livekit import rtc
 
 from .. import utils
@@ -48,7 +49,7 @@ class LogQueueHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             # Check if Python is shutting down
-            if not hasattr(sys, "meta_path") or sys.meta_path is None:
+            if sys.is_finalizing():
                 return
 
             # from https://github.com/python/cpython/blob/91b7f2e7f6593acefda4fa860250dd87d6f849bf/Lib/logging/handlers.py#L1453
