@@ -125,7 +125,7 @@ class LLMStream(ABC):
             "completion_tokens": usage.completion_tokens if usage else 0,
             "prompt_tokens": usage.prompt_tokens if usage else 0,
             "total_tokens": usage.total_tokens if usage else 0,
-            "tokens_per_second": usage.total_tokens / duration if usage else 0.0,
+            "tokens_per_second": usage.completion_tokens / duration if usage else 0.0,
         }
         self._llm.emit("metrics_collected", metrics)
 
