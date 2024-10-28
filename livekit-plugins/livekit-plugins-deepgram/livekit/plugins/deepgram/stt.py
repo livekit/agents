@@ -215,7 +215,7 @@ class STT(stt.STT):
         self, *, language: DeepgramLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(config, self._api_key, self._ensure_session())
+        return SpeechStream(self, config, self._api_key, self._ensure_session())
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
@@ -233,12 +233,13 @@ class SpeechStream(stt.SpeechStream):
 
     def __init__(
         self,
+        stt: STT,
         opts: STTOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
         max_retry: int = 32,
     ) -> None:
-        super().__init__(sample_rate=opts.sample_rate)
+        super().__init__(stt, sample_rate=opts.sample_rate)
 
         if opts.detect_language and opts.language is None:
             raise ValueError("language detection is not supported in streaming mode")

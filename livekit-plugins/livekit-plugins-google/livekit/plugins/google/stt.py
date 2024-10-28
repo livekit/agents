@@ -176,12 +176,13 @@ class STT(stt.STT):
         self, *, language: SpeechLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(self._ensure_client(), self._recognizer, config)
+        return SpeechStream(self, self._ensure_client(), self._recognizer, config)
 
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
         self,
+        stt: STT,
         client: SpeechAsyncClient,
         recognizer: str,
         config: STTOptions,
@@ -189,7 +190,7 @@ class SpeechStream(stt.SpeechStream):
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
-        super().__init__()
+        super().__init__(stt)
 
         self._client = client
         self._recognizer = recognizer
