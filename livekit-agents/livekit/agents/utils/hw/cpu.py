@@ -56,11 +56,15 @@ class CGroupV2CPUMonitor(CPUMonitor):
         return min(cpu_usage_percent, 1)
 
     def _read_cpu_max(self) -> tuple[str, int]:
-        with open("/sys/fs/cgroup/cpu.max", "r") as f:
-            data = f.read().strip().split()
+        try:
+            with open("/sys/fs/cgroup/cpu.max", "r") as f:
+                data = f.read().strip().split()
             quota = data[0]
             period = int(data[1])
-            return quota, period
+        except FileNotFoundError:
+            quota = "max"
+            period = 100000
+        return quota, period
 
     def _read_cpu_usage(self) -> int:
         with open("/sys/fs/cgroup/cpu.stat", "r") as f:
