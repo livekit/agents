@@ -252,6 +252,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         )
         self._proc_pool.on("process_started", self._on_process_started)
         self._proc_pool.on("process_closed", self._on_process_closed)
+        self._proc_pool.on("process_job_launched", self._on_process_job_launched)
 
         self._previous_status = agent.WorkerStatus.WS_AVAILABLE
 
@@ -673,19 +674,13 @@ class Worker(utils.EventEmitter[EventTypes]):
         await proc.aclose()
 
     def _on_process_closed(self, proc: ipc.job_executor.JobExecutor) -> None:
-        pass
-        t = self._loop.create_task(self._update_worker_status())
-        self._tasks.add(t)
-        t.add_done_callback(self._tasks.discard)
+        self._update_job_status_sync(proc)
 
     def _on_process_started(self, proc: ipc.job_executor.JobExecutor) -> None:
-        pass
-        t = self._loop.create_task(self._update_worker_status())
-        self._tasks.add(t)
-        t.add_done_callback(self._tasks.discard)
+        self._update_job_status_sync(proc)
 
     def _on_process_job_launched(self, proc: ipc.job_executor.JobExecutor) -> None:
-        pass
+        self._update_job_status_sync(proc)
 
     async def _update_worker_status(self):
         if self._draining:
@@ -732,6 +727,11 @@ class Worker(utils.EventEmitter[EventTypes]):
         msg = agent.WorkerMessage(update_worker=update)
         with contextlib.suppress(utils.aio.ChanClosed):
             await self._queue_msg(msg)
+
+    def _update_job_status_sync(self, proc: ipc.job_executor.JobExecutor) -> None:
+        t = self._loop.create_task(self._update_job_status(proc))
+        self._tasks.add(t)
+        t.add_done_callback(self._tasks.discard)
 
     async def _update_job_status(self, proc: ipc.job_executor.JobExecutor) -> None:
         job_info = proc.running_job
