@@ -249,6 +249,7 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     _KEEPALIVE_MSG: str = json.dumps({"type": "KeepAlive"})
     _CLOSE_MSG: str = json.dumps({"type": "CloseStream"})
+    _FINALIZE_MSG: str = json.dumps({"type": "Finalize"})
 
     def __init__(
         self,
@@ -271,7 +272,7 @@ class SpeechStream(stt.SpeechStream):
         self._audio_energy_filter = _AudioEnergyFilter()
 
         self._pushed_audio_duration = 0.0
-        self._request_id = 0
+        self._request_id = ""
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -385,6 +386,7 @@ class SpeechStream(stt.SpeechStream):
                         )
                         self._pushed_audio_duration = 0.0
                         self._event_ch.send_nowait(usage_event)
+                        await ws.send_str(SpeechStream._FINALIZE_MSG)
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True
@@ -444,6 +446,7 @@ class SpeechStream(stt.SpeechStream):
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
         # for more information about the different types of events
         elif data["type"] == "Results":
+            print(data)
             metadata = data["metadata"]
             request_id = metadata["request_id"]
             is_final_transcript = data["is_final"]
