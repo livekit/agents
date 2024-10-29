@@ -55,7 +55,7 @@ class RunningJobInfo:
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
-    rtc.ParticipantKind.PARTICIPANT_KIND_AGENT,
+    rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
 ]
 
@@ -81,7 +81,7 @@ class JobContext:
                 Callable[
                     [JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]
                 ],
-                list[rtc.ParticipantKind.ValueType],
+                list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType,
             ]
         ] = []
         self._participant_tasks = dict[Tuple[str, Callable], asyncio.Task[None]]()
@@ -119,7 +119,8 @@ class JobContext:
         self,
         *,
         identity: str | None = None,
-        kinds: list[rtc.ParticipantKind.ValueType] = DEFAULT_PARTICIPANT_KINDS,
+        kind: list[rtc.ParticipantKind.ValueType]
+        | rtc.ParticipantKind.ValueType = DEFAULT_PARTICIPANT_KINDS,
     ) -> rtc.RemoteParticipant:
         """
         Returns a participant that matches the given identity. If identity is None, the first
@@ -131,13 +132,19 @@ class JobContext:
 
         fut = asyncio.Future[rtc.RemoteParticipant]()
 
+        def kind_match(p: rtc.RemoteParticipant) -> bool:
+            if isinstance(kind, list):
+                return p.kind in kind
+
+            return p.kind == kind
+
         for p in self._room.remote_participants.values():
-            if (identity is None or p.identity == identity) and p.kind in kinds:
+            if (identity is None or p.identity == identity) and kind_match(p):
                 fut.set_result(p)
                 break
 
         def _on_participant_connected(p: rtc.RemoteParticipant):
-            if (identity is None or p.identity == identity) and p.kind in kinds:
+            if (identity is None or p.identity == identity) and kind_match(p):
                 self._room.off("participant_connected", _on_participant_connected)
                 if not fut.done():
                     fut.set_result(p)
@@ -183,7 +190,8 @@ class JobContext:
             [JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]
         ],
         *_,
-        kinds: list[rtc.ParticipantKind.ValueType] = DEFAULT_PARTICIPANT_KINDS,
+        kind: list[rtc.ParticipantKind.ValueType]
+        | rtc.ParticipantKind.ValueType = DEFAULT_PARTICIPANT_KINDS,
     ):
         """Adds an entrypoint function to be run when a participant joins the room. In cases where
         the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
@@ -193,12 +201,17 @@ class JobContext:
         if entrypoint_fnc in [e for (e, _) in self._participant_entrypoints]:
             raise ValueError("entrypoints cannot be added more than once")
 
-        self._participant_entrypoints.append((entrypoint_fnc, kinds))
+        self._participant_entrypoints.append((entrypoint_fnc, kind))
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:
-        for coro, kinds in self._participant_entrypoints:
-            if p.kind not in kinds:
-                continue
+        for coro, kind in self._participant_entrypoints:
+            if isinstance(kind, list):
+                if p.kind not in kind:
+                    continue
+            else:
+                if p.kind != kind:
+                    continue
+
             if (p.identity, coro) in self._participant_tasks:
                 logger.warning(
                     f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"
