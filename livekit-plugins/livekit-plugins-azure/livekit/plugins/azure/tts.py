@@ -12,14 +12,24 @@
 
 from __future__ import annotations
 
+import contextlib
 import asyncio
 import os
 from dataclasses import dataclass
 from typing import Literal
 
-from livekit.agents import tts, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    tts,
+    utils,
+)
+
+from .log import logger
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
+
 
 AZURE_SAMPLE_RATE: int = 16000
 AZURE_BITS_PER_SAMPLE: int = 16
@@ -167,7 +177,6 @@ class ChunkedStream(tts.ChunkedStream):
         super().__init__(tts, text)
         self._opts = opts
 
-    @utils.log_exceptions()
     async def _main_task(self):
         stream_callback = speechsdk.audio.PushAudioOutputStream(
             _PushAudioOutputStreamCallback(asyncio.get_running_loop(), self._event_ch)
@@ -199,12 +208,14 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             result = await asyncio.to_thread(_synthesize)
             if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
-                if result.cancellation_details:
-                    raise ValueError(
-                        f"failed to synthesize audio: {result.reason}: {result.cancellation_details.reason} ({result.cancellation_details.error_details})"
-                    )
+                if (
+                    result.cancellation_details.error_code
+                    == speechsdk.CancellationErrorCode.ServiceTimeout
+                ):
+                    raise APITimeoutError()
                 else:
-                    raise ValueError(f"failed to synthesize audio: {result.reason}")
+                    error_details = result.cancellation_details.error_details
+                    raise APIConnectionError(error_details, request_id=result.result_id)
         finally:
 
             def _cleanup() -> None:
@@ -213,9 +224,14 @@ class ChunkedStream(tts.ChunkedStream):
                 nonlocal synthesizer, stream_callback, result
                 del synthesizer
                 del stream_callback
-                del result
 
-            await asyncio.to_thread(_cleanup)
+                if result is not None:
+                    del result
+
+            try:
+                await asyncio.to_thread(_cleanup)
+            except Exception:
+                logger.exception(f"failed to cleanup resources")
 
 
 class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallback):
@@ -228,7 +244,6 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         self._event_ch = event_ch
         self._loop = loop
         self._request_id = utils.shortuuid()
-        self._segment_id = utils.shortuuid()
 
         self._bstream = utils.audio.AudioByteStream(
             sample_rate=AZURE_SAMPLE_RATE, num_channels=AZURE_NUM_CHANNELS
@@ -238,10 +253,10 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         for frame in self._bstream.write(audio_buffer.tobytes()):
             audio = tts.SynthesizedAudio(
                 request_id=self._request_id,
-                segment_id=self._segment_id,
                 frame=frame,
             )
-            self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
 
         return audio_buffer.nbytes
 
@@ -249,10 +264,10 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         for frame in self._bstream.flush():
             audio = tts.SynthesizedAudio(
                 request_id=self._request_id,
-                segment_id=self._segment_id,
                 frame=frame,
             )
-            self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
 
 
 def _create_speech_synthesizer(

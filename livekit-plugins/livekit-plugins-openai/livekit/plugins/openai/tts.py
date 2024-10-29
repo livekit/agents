@@ -160,7 +160,6 @@ class ChunkedStream(tts.ChunkedStream):
         super().__init__(tts, text)
         self._oai_stream = oai_stream
 
-    @utils.log_exceptions(logger=logger)
     async def _main_task(self):
         request_id = utils.shortuuid()
         decoder = utils.codecs.Mp3StreamDecoder()

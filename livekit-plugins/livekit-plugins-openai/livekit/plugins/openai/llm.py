@@ -21,7 +21,13 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, MutableSet
 
 import httpx
-from livekit.agents import llm
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    llm,
+    utils,
+)
 
 import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
@@ -502,25 +508,38 @@ class LLMStream(llm.LLMStream):
         if not self._oai_stream:
             self._oai_stream = await self._awaitable_oai_stream
 
-        async with self._oai_stream as stream:
-            async for chunk in stream:
-                for choice in chunk.choices:
-                    chat_chunk = self._parse_choice(chunk.id, choice)
-                    if chat_chunk is not None:
-                        self._event_ch.send_nowait(chat_chunk)
+        try:
+            async with self._oai_stream as stream:
+                async for chunk in stream:
+                    for choice in chunk.choices:
+                        chat_chunk = self._parse_choice(chunk.id, choice)
+                        if chat_chunk is not None:
+                            self._event_ch.send_nowait(chat_chunk)
 
-                if chunk.usage is not None:
-                    usage = chunk.usage
-                    self._event_ch.send_nowait(
-                        llm.ChatChunk(
-                            request_id=chunk.id,
-                            usage=llm.CompletionUsage(
-                                completion_tokens=usage.completion_tokens,
-                                prompt_tokens=usage.prompt_tokens,
-                                total_tokens=usage.total_tokens,
-                            ),
+                    if chunk.usage is not None:
+                        usage = chunk.usage
+                        self._event_ch.send_nowait(
+                            llm.ChatChunk(
+                                request_id=chunk.id,
+                                usage=llm.CompletionUsage(
+                                    completion_tokens=usage.completion_tokens,
+                                    prompt_tokens=usage.prompt_tokens,
+                                    total_tokens=usage.total_tokens,
+                                ),
+                            )
                         )
-                    )
+
+        except openai.APITimeoutError:
+            raise APITimeoutError()
+        except openai.APIStatusError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.request_id,
+                body=e.body,
+            )
+        except Exception as e:
+            raise APIConnectionError() from e
 
     def _parse_choice(self, id: str, choice: Choice) -> llm.ChatChunk | None:
         delta = choice.delta

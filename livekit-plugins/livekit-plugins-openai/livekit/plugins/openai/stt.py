@@ -21,8 +21,13 @@ import wave
 from dataclasses import dataclass
 
 import httpx
-from livekit import agents
-from livekit.agents import stt
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+    utils,
+)
 from livekit.agents.utils import AudioBuffer
 
 import openai
@@ -121,25 +126,38 @@ class STT(stt.STT):
     async def _recognize_impl(
         self, buffer: AudioBuffer, *, language: str | None = None
     ) -> stt.SpeechEvent:
-        config = self._sanitize_options(language=language)
-        buffer = agents.utils.merge_frames(buffer)
-        io_buffer = io.BytesIO()
-        with wave.open(io_buffer, "wb") as wav:
-            wav.setnchannels(buffer.num_channels)
-            wav.setsampwidth(2)  # 16-bit
-            wav.setframerate(buffer.sample_rate)
-            wav.writeframes(buffer.data)
+        try:
+            config = self._sanitize_options(language=language)
+            buffer = utils.merge_frames(buffer)
+            io_buffer = io.BytesIO()
+            with wave.open(io_buffer, "wb") as wav:
+                wav.setnchannels(buffer.num_channels)
+                wav.setsampwidth(2)  # 16-bit
+                wav.setframerate(buffer.sample_rate)
+                wav.writeframes(buffer.data)
 
-        resp = await self._client.audio.transcriptions.create(
-            file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
-            model=self._opts.model,
-            language=config.language,
-            response_format="json",
-        )
+            resp = await self._client.audio.transcriptions.create(
+                file=("file.wav", io_buffer.getvalue(), "audio/wav"),
+                model=self._opts.model,
+                language=config.language,
+                response_format="json",
+            )
 
-        return stt.SpeechEvent(
-            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[
-                stt.SpeechData(text=resp.text or "", language=language or "")
-            ],
-        )
+            return stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[
+                    stt.SpeechData(text=resp.text or "", language=language or "")
+                ],
+            )
+
+        except openai.APITimeoutError:
+            raise APITimeoutError()
+        except openai.APIStatusError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.request_id,
+                body=e.body,
+            )
+        except Exception as e:
+            raise APIConnectionError() from e
