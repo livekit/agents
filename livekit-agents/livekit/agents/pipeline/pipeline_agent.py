@@ -269,6 +269,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._speech_q_changed = asyncio.Event()
 
         self._update_state_task: asyncio.Task | None = None
+        self._main_atask: asyncio.Task | None = None
 
         self._last_final_transcript_time: float | None = None
         self._last_speech_time: float | None = None
@@ -437,7 +438,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         if not self._started:
             return
 
-        if hasattr(self, "_main_atask"):
+        if self._main_atask is not None:
             await utils.aio.gracefully_cancel(self._main_atask)
 
         self._room.off("participant_connected", self._on_participant_connected)
