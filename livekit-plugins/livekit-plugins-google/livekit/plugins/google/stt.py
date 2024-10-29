@@ -20,7 +20,14 @@ from dataclasses import dataclass
 from typing import AsyncIterable, List, Union
 
 from livekit import agents, rtc
-from livekit.agents import stt, utils
+
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+    utils,
+)
 
 from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
@@ -165,12 +172,27 @@ class STT(stt.STT):
             language_codes=config.languages,
         )
 
-        raw = await self._ensure_client().recognize(
-            cloud_speech.RecognizeRequest(
-                recognizer=self._recognizer, config=config, content=frame.data.tobytes()
+        try:
+            raw = await self._ensure_client().recognize(
+                cloud_speech.RecognizeRequest(
+                    recognizer=self._recognizer,
+                    config=config,
+                    content=frame.data.tobytes(),
+                )
             )
-        )
-        return _recognize_response_to_speech_event(raw)
+
+            return _recognize_response_to_speech_event(raw)
+        except DeadlineExceeded:
+            raise APITimeoutError()
+        except GoogleAPICallError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.code or -1,
+                request_id=None,
+                body=None,
+            )
+        except Exception as e:
+            raise APIConnectionError() from e
 
     def stream(
         self, *, language: SpeechLanguages | str | None = None
