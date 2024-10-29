@@ -192,6 +192,9 @@ class JobContext:
         self._participant_entrypoints.append(entrypoint_fnc)
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:
+        if p.kind in SKIP_PARTICIPANT_KINDS:
+            return
+
         for coro in self._participant_entrypoints:
             if (p.identity, coro) in self._participant_tasks:
                 logger.warning(
