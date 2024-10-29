@@ -54,6 +54,14 @@ class RunningJobInfo:
     token: str
 
 
+SKIP_PARTICIPANT_KINDS = set(
+    [
+        rtc.ParticipantKind.PARTICIPANT_KIND_AGENT,
+        rtc.ParticipantKind.PARTICIPANT_KIND_EGRESS,
+    ]
+)
+
+
 class JobContext:
     def __init__(
         self,
@@ -120,14 +128,14 @@ class JobContext:
         for p in self._room.remote_participants.values():
             if (
                 identity is None or p.identity == identity
-            ) and p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+            ) and p.kind not in SKIP_PARTICIPANT_KINDS:
                 fut.set_result(p)
                 break
 
         def _on_participant_connected(p: rtc.RemoteParticipant):
             if (
                 identity is None or p.identity == identity
-            ) and p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+            ) and p.kind not in SKIP_PARTICIPANT_KINDS:
                 self._room.off("participant_connected", _on_participant_connected)
                 if not fut.done():
                     fut.set_result(p)
