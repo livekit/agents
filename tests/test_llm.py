@@ -119,6 +119,9 @@ async def test_chat(llm_factory: Callable[[], llm.LLM]):
     stream = input_llm.chat(chat_ctx=chat_ctx)
     text = ""
     async for chunk in stream:
+        if not chunk.choices:
+            continue
+
         content = chunk.choices[0].delta.content
         if content:
             text += content

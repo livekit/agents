@@ -130,6 +130,7 @@ class VADStream(ABC):
                         "label": self._vad._label,
                     }
                     self._vad.emit("metrics_collected", vad_metrics)
+
                     inference_duration_total = 0.0
                     inference_count = 0
 

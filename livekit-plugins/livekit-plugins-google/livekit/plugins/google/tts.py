@@ -17,12 +17,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from livekit import rtc
-from livekit.agents import tts, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    tts,
+    utils,
+)
 
+from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
 
-from .log import logger
 from .models import AudioEncoding, Gender, SpeechLanguages
 
 
@@ -160,53 +166,61 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _TTSOptions,
         client: texttospeech.TextToSpeechAsyncClient,
     ) -> None:
-        super().__init__(tts)
-        self._text, self._opts, self._client = text, opts, client
+        super().__init__(tts, text)
+        self._opts, self._client = opts, client
 
-    @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
-        response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
-            input=texttospeech.SynthesisInput(text=self._text),
-            voice=self._opts.voice,
-            audio_config=self._opts.audio_config,
-        )
 
-        data = response.audio_content
-        if self._opts.audio_config.audio_encoding == "mp3":
-            decoder = utils.codecs.Mp3StreamDecoder()
-            bstream = utils.audio.AudioByteStream(
-                sample_rate=self._opts.audio_config.sample_rate_hertz, num_channels=1
+        try:
+            response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
+                input=texttospeech.SynthesisInput(text=self._input_text),
+                voice=self._opts.voice,
+                audio_config=self._opts.audio_config,
             )
-            for frame in decoder.decode_chunk(data):
-                for frame in bstream.write(frame.data.tobytes()):
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id, segment_id=segment_id, frame=frame
-                        )
-                    )
 
-            for frame in bstream.flush():
+            data = response.audio_content
+            if self._opts.audio_config.audio_encoding == "mp3":
+                decoder = utils.codecs.Mp3StreamDecoder()
+                bstream = utils.audio.AudioByteStream(
+                    sample_rate=self._opts.audio_config.sample_rate_hertz,
+                    num_channels=1,
+                )
+                for frame in decoder.decode_chunk(data):
+                    for frame in bstream.write(frame.data.tobytes()):
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(request_id=request_id, frame=frame)
+                        )
+
+                for frame in bstream.flush():
+                    self._event_ch.send_nowait(
+                        tts.SynthesizedAudio(request_id=request_id, frame=frame)
+                    )
+            else:
+                data = data[44:]  # skip WAV header
                 self._event_ch.send_nowait(
                     tts.SynthesizedAudio(
-                        request_id=request_id, segment_id=segment_id, frame=frame
+                        request_id=request_id,
+                        frame=rtc.AudioFrame(
+                            data=data,
+                            sample_rate=self._opts.audio_config.sample_rate_hertz,
+                            num_channels=1,
+                            samples_per_channel=len(data) // 2,  # 16-bit
+                        ),
                     )
                 )
-        else:
-            data = data[44:]  # skip WAV header
-            self._event_ch.send_nowait(
-                tts.SynthesizedAudio(
-                    request_id=request_id,
-                    segment_id=segment_id,
-                    frame=rtc.AudioFrame(
-                        data=data,
-                        sample_rate=self._opts.audio_config.sample_rate_hertz,
-                        num_channels=1,
-                        samples_per_channel=len(data) // 2,  # 16-bit
-                    ),
-                )
+
+        except DeadlineExceeded:
+            raise APITimeoutError()
+        except GoogleAPICallError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.code or -1,
+                request_id=None,
+                body=None,
             )
+        except Exception as e:
+            raise APIConnectionError() from e
 
 
 def _gender_from_str(gender: str) -> SsmlVoiceGender:

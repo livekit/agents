@@ -21,6 +21,10 @@ class LLMMetrics(TypedDict):
     duration: float
     label: str
     cancelled: bool
+    completion_tokens: int
+    prompt_tokens: int
+    total_tokens: int
+    tokens_per_second: float
 
 
 @dataclass
@@ -28,6 +32,13 @@ class ChoiceDelta:
     role: ChatRole
     content: str | None = None
     tool_calls: list[function_context.FunctionCallInfo] | None = None
+
+
+@dataclass
+class CompletionUsage:
+    completion_tokens: int
+    prompt_tokens: int
+    total_tokens: int
 
 
 @dataclass
@@ -40,6 +51,7 @@ class Choice:
 class ChatChunk:
     request_id: str
     choices: list[Choice] = field(default_factory=list)
+    usage: CompletionUsage | None = None
 
 
 class LLM(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
@@ -92,11 +104,15 @@ class LLMStream(ABC):
         start_time = time.perf_counter()
         ttft = -1.0
         request_id = ""
+        usage: CompletionUsage | None = None
 
         async for ev in event_aiter:
             request_id = ev.request_id
             if ttft == -1.0:
                 ttft = time.perf_counter() - start_time
+
+            if ev.usage is not None:
+                usage = ev.usage
 
         duration = time.perf_counter() - start_time
         metrics: LLMMetrics = {
@@ -106,6 +122,10 @@ class LLMStream(ABC):
             "duration": duration,
             "cancelled": self._task.cancelled(),
             "label": self._llm._label,
+            "completion_tokens": usage.completion_tokens if usage else 0,
+            "prompt_tokens": usage.prompt_tokens if usage else 0,
+            "total_tokens": usage.total_tokens if usage else 0,
+            "tokens_per_second": usage.completion_tokens / duration if usage else 0.0,
         }
         self._llm.emit("metrics_collected", metrics)
 

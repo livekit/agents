@@ -28,7 +28,6 @@ from livekit.agents import (
 
 import openai
 
-from .log import logger
 from .models import TTSModels, TTSVoices
 from .utils import AsyncAzureADTokenProvider
 
@@ -139,6 +138,7 @@ class TTS(tts.TTS):
     def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(
             self,
+            text,
             self._client.audio.speech.with_streaming_response.create(
                 input=text,
                 model=self._opts.model,
@@ -153,12 +153,12 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         tts: TTS,
+        text: str,
         oai_stream: AsyncContextManager[openai.AsyncAPIResponse[bytes]],
     ) -> None:
-        super().__init__(tts)
+        super().__init__(tts, text)
         self._oai_stream = oai_stream
 
-    @utils.log_exceptions(logger=logger)
     async def _main_task(self):
         request_id = utils.shortuuid()
         decoder = utils.codecs.Mp3StreamDecoder()
