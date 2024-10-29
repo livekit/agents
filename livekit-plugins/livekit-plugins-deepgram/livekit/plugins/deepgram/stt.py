@@ -446,7 +446,6 @@ class SpeechStream(stt.SpeechStream):
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
         # for more information about the different types of events
         elif data["type"] == "Results":
-            print(data)
             metadata = data["metadata"]
             request_id = metadata["request_id"]
             is_final_transcript = data["is_final"]
