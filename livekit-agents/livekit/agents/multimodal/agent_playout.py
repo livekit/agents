@@ -165,6 +165,9 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
 
             await utils.aio.gracefully_cancel(read_text_task)
 
+            # make sure the text_data.sentence_stream is closed
+            handle._tr_fwd.mark_text_segment_end()
+
             if not first_frame and not handle.interrupted:
                 handle._tr_fwd.segment_playout_finished()
 

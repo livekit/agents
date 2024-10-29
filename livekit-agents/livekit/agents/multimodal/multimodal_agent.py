@@ -185,6 +185,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         @self._session.on("input_speech_started")
         def _input_speech_started():
+            self.emit("user_started_speaking")
             self._update_state("listening")
             if self._playing_handle is not None and not self._playing_handle.done():
                 self._playing_handle.interrupt()
@@ -194,6 +195,10 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     content_index=self._playing_handle.content_index,
                     audio_end_ms=int(self._playing_handle.audio_samples / 24000 * 1000),
                 )
+
+        @self._session.on("input_speech_stopped")
+        def _input_speech_stopped():
+            self.emit("user_stopped_speaking")
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
