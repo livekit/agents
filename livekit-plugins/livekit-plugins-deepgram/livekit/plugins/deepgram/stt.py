@@ -28,7 +28,14 @@ from urllib.parse import urlencode
 import aiohttp
 import numpy as np
 from livekit import rtc
-from livekit.agents import stt, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+    utils,
+)
+
 from livekit.agents.utils import AudioBuffer, merge_frames
 
 from .log import logger
@@ -197,19 +204,32 @@ class STT(stt.STT):
 
         data = io_buffer.getvalue()
 
-        async with self._ensure_session().post(
-            url=_to_deepgram_url(recognize_config),
-            data=data,
-            headers={
-                "Authorization": f"Token {self._api_key}",
-                "Accept": "application/json",
-                "Content-Type": "audio/wav",
-            },
-        ) as res:
-            return prerecorded_transcription_to_speech_event(
-                config.language,
-                await res.json(),
-            )
+        try:
+            async with self._ensure_session().post(
+                url=_to_deepgram_url(recognize_config),
+                data=data,
+                headers={
+                    "Authorization": f"Token {self._api_key}",
+                    "Accept": "application/json",
+                    "Content-Type": "audio/wav",
+                },
+            ) as res:
+                return prerecorded_transcription_to_speech_event(
+                    config.language,
+                    await res.json(),
+                )
+
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError() from e
 
     def stream(
         self, *, language: DeepgramLanguages | str | None = None
