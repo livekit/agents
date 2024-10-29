@@ -12,6 +12,11 @@ from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils.aio import duplex_unix
 from . import channel, job_main, proto
+from .job_executor import (
+    JobExecutorError_ShutdownTimeout,
+    JobExecutorError_Unresponsive,
+    RunStatus,
+)
 
 
 @dataclass
@@ -42,6 +47,7 @@ class ThreadJobExecutor:
 
         self._user_args: Any | None = None
         self._running_job: RunningJobInfo | None = None
+        self._exception: Exception | None = None
 
         self._main_atask: asyncio.Task[None] | None = None
         self._closing = False
@@ -64,6 +70,29 @@ class ThreadJobExecutor:
     @property
     def running_job(self) -> RunningJobInfo | None:
         return self._running_job
+
+    @property
+    def exception(self) -> Exception | None:
+        return self._exception
+
+    @property
+    def run_status(self) -> RunStatus:
+        if not self._running_job:
+            if self.started:
+                return RunStatus.WAITING_FOR_JOB
+            else:
+                return RunStatus.STARTING
+
+        if not self._main_atask:
+            return RunStatus.STARTING
+
+        if self._main_atask.done():
+            if self.exception:
+                return RunStatus.FINISHED_FAILED
+            else:
+                return RunStatus.FINISHED_CLEAN
+        else:
+            return RunStatus.RUNNING_JOB
 
     async def start(self) -> None:
         if self.started:
@@ -158,6 +187,7 @@ class ThreadJobExecutor:
                     asyncio.shield(self._main_atask), timeout=self._opts.close_timeout
                 )
         except asyncio.TimeoutError:
+            self._exception = JobExecutorError_ShutdownTimeout()
             logger.error(
                 "job shutdown is taking too much time..", extra=self.logging_extra()
             )
@@ -235,6 +265,7 @@ class ThreadJobExecutor:
 
         async def _pong_timeout_co():
             await pong_timeout
+            self._exception = JobExecutorError_Unresponsive()
             logger.error("job is unresponsive..", extra=self.logging_extra())
 
         tasks = [

@@ -16,6 +16,12 @@ from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils.aio import duplex_unix
 from . import channel, job_main, proc_lazy_main, proto
+from .job_executor import (
+    JobExecutorError_Runtime,
+    JobExecutorError_ShutdownTimeout,
+    JobExecutorError_Unresponsive,
+    RunStatus,
+)
 
 
 class LogQueueListener:
@@ -93,6 +99,7 @@ class ProcJobExecutor:
         self._running_job: RunningJobInfo | None = None
         self._exitcode: int | None = None
         self._pid: int | None = None
+        self._exception: Exception | None = None
 
         self._main_atask: asyncio.Task[None] | None = None
         self._closing = False
@@ -128,6 +135,29 @@ class ProcJobExecutor:
     @property
     def running_job(self) -> RunningJobInfo | None:
         return self._running_job
+
+    @property
+    def exception(self) -> Exception | None:
+        return self._exception
+
+    @property
+    def run_status(self) -> RunStatus:
+        if not self._running_job:
+            if self.started:
+                return RunStatus.WAITING_FOR_JOB
+            else:
+                return RunStatus.STARTING
+
+        if not self._main_atask:
+            return RunStatus.STARTING
+
+        if self._main_atask.done():
+            if self.exception:
+                return RunStatus.FINISHED_FAILED
+            else:
+                return RunStatus.FINISHED_CLEAN
+        else:
+            return RunStatus.RUNNING_JOB
 
     async def start(self) -> None:
         """start the job process"""
@@ -222,6 +252,7 @@ class ProcJobExecutor:
             self._send_kill_signal()
             raise
         except Exception as e:  # should be channel.ChannelClosed most of the time
+            self._exception = JobExecutorError_Runtime()
             self._initialize_fut.set_exception(e)
             raise
         else:
@@ -245,6 +276,7 @@ class ProcJobExecutor:
             logger.error(
                 "process did not exit in time, killing job", extra=self.logging_extra()
             )
+            self._exception = JobExecutorError_ShutdownTimeout()
             self._send_kill_signal()
 
         async with self._lock:
@@ -312,6 +344,7 @@ class ProcJobExecutor:
             await self._pch.aclose()
 
         if self._exitcode != 0 and not self._kill_sent:
+            self._exception = JobExecutorError_Runtime()
             logger.error(
                 f"job process exited with non-zero exit code {self.exitcode}",
                 extra=self.logging_extra(),
@@ -358,6 +391,7 @@ class ProcJobExecutor:
         async def _pong_timeout_co():
             await pong_timeout
             logger.error("job is unresponsive, killing job", extra=self.logging_extra())
+            self._exception = JobExecutorError_Unresponsive()
             self._send_kill_signal()
 
         tasks = [
