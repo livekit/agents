@@ -64,6 +64,14 @@ class SpeechHandle:
             user_question="",
         )
 
+    def collected_text(self) -> str:
+        if self.interrupted:
+            return self.synthesis_handle.tts_forwarder.played_text + "..."
+        return self.synthesis_handle.tts_forwarder.played_text
+
+    def is_using_tools(self) -> bool:
+        return isinstance(self.source, LLMStream) and len(self.source.function_calls)
+
     async def wait_for_initialization(self) -> None:
         await asyncio.shield(self._init_fut)
 
