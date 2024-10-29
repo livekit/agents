@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from typing import AsyncIterable
 
 from .. import tokenize, utils
 from ..log import logger
 from .tts import (
     TTS,
     ChunkedStream,
+    SynthesizedAudio,
     SynthesizeStream,
     TTSCapabilities,
 )
@@ -28,6 +30,10 @@ class StreamAdapter(TTS):
         )
         self._tts = tts
         self._sentence_tokenizer = sentence_tokenizer
+
+        @self._tts.on("metrics_collected")
+        def _forward_metrics(*args, **kwargs):
+            self.emit("metrics_collected", *args, **kwargs)
 
     def synthesize(self, text: str) -> ChunkedStream:
         return self._tts.synthesize(text=text)
@@ -51,6 +57,11 @@ class StreamAdapterWrapper(SynthesizeStream):
         super().__init__(tts)
         self._wrapped_tts = wrapped_tts
         self._sent_stream = sentence_tokenizer.stream()
+
+    async def _metrics_monitor_task(
+        self, event_aiter: AsyncIterable[SynthesizedAudio]
+    ) -> None:
+        pass  # do nothing
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:

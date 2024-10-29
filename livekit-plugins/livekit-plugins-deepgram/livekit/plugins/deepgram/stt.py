@@ -383,6 +383,7 @@ class SpeechStream(stt.SpeechStream):
                                 audio_duration=self._pushed_audio_duration
                             ),
                         )
+                        self._pushed_audio_duration = 0.0
                         self._event_ch.send_nowait(usage_event)
 
             # tell deepgram we are done sending audio/inputs
