@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, WorkerType, cli
@@ -14,12 +13,6 @@ async def entrypoint(ctx: JobContext):
 
     logger.info("connected to the room")
     # add your agent logic here!
-
-    await asyncio.sleep(5)
-
-    # make job unresponsive
-    while True:
-        pass
 
 
 if __name__ == "__main__":
