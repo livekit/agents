@@ -1,7 +1,8 @@
 # LiveKit Plugins Dify
 
-To use:
+LLM inference implemention from Dify API
 
+Usage:
 ```
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],

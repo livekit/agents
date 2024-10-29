@@ -165,7 +165,7 @@ class LLMStream(llm.LLMStream):
         async for chunk in self._dify_stream.aiter_lines():
 
             if not chunk.strip():
-                await asyncio.sleep(0.1)  
+                # await asyncio.sleep(0.1)  #remove this sleep after testing.
                 continue
 
             # print(f"Received chunk: {chunk.strip()}")  
