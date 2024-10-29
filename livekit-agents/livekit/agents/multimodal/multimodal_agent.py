@@ -7,6 +7,7 @@ from typing import Callable, Literal, Protocol
 import aiohttp
 from livekit import rtc
 from livekit.agents import llm, stt, tokenize, transcription, utils, vad
+from livekit.agents.llm import ChatMessage
 
 from .._constants import ATTRIBUTE_AGENT_STATE
 from .._types import AgentState
@@ -18,6 +19,9 @@ EventTypes = Literal[
     "user_stopped_speaking",
     "agent_started_speaking",
     "agent_stopped_speaking",
+    "user_speech_committed",
+    "agent_speech_committed",
+    "agent_speech_interrupted",
 ]
 
 
@@ -172,6 +176,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     alternatives=[stt.SpeechData(language="", text=ev.transcript)],
                 )
             )
+            user_msg = ChatMessage.create(text=ev.transcript, role="user")
+            self.emit("user_speech_committed", user_msg)
+            logger.debug(
+                "committed user speech",
+                extra={"user_transcript": ev.transcript},
+            )
 
         @self._session.on("input_speech_started")
         def _input_speech_started():
@@ -184,8 +194,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     content_index=self._playing_handle.content_index,
                     audio_end_ms=int(self._playing_handle.audio_samples / 24000 * 1000),
                 )
-
-                self._playing_handle = None
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -219,6 +227,25 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         def _on_playout_stopped(interrupted: bool) -> None:
             self.emit("agent_stopped_speaking")
             self._update_state("listening")
+
+            if self._playing_handle is not None:
+                collected_text = self._playing_handle._tr_fwd.played_text
+                if interrupted:
+                    collected_text += "..."
+
+                msg = ChatMessage.create(text=collected_text, role="assistant")
+                if interrupted:
+                    self.emit("agent_speech_interrupted", msg)
+                else:
+                    self.emit("agent_speech_committed", msg)
+
+                logger.debug(
+                    "committed agent speech",
+                    extra={
+                        "agent_transcript": collected_text,
+                        "interrupted": interrupted,
+                    },
+                )
 
         self._agent_playout.on("playout_started", _on_playout_started)
         self._agent_playout.on("playout_stopped", _on_playout_stopped)
