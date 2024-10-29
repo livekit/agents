@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import AsyncIterable
 
 from .. import utils
 from ..log import logger
@@ -15,6 +16,10 @@ class StreamAdapter(STT):
         )
         self._vad = vad
         self._stt = stt
+
+        @self._stt.on("metrics_collected")
+        def _forward_metrics(*args, **kwargs):
+            self.emit("metrics_collected", *args, **kwargs)
 
     @property
     def wrapped_stt(self) -> STT:
@@ -40,6 +45,11 @@ class StreamAdapterWrapper(SpeechStream):
         self._wrapped_stt = wrapped_stt
         self._vad_stream = self._vad.stream()
         self._language = language
+
+    async def _metrics_monitor_task(
+        self, event_aiter: AsyncIterable[SpeechEvent]
+    ) -> None:
+        pass  # do nothing
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
