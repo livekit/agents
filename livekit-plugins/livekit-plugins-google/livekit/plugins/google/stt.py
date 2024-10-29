@@ -20,8 +20,15 @@ from dataclasses import dataclass
 from typing import AsyncIterable, List, Union
 
 from livekit import agents, rtc
-from livekit.agents import stt, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+    utils,
+)
 
+from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.speech_v2 import SpeechAsyncClient
@@ -141,7 +148,7 @@ class STT(stt.STT):
 
         return config
 
-    async def recognize(
+    async def _recognize_impl(
         self,
         buffer: utils.AudioBuffer,
         *,
@@ -165,23 +172,39 @@ class STT(stt.STT):
             language_codes=config.languages,
         )
 
-        raw = await self._ensure_client().recognize(
-            cloud_speech.RecognizeRequest(
-                recognizer=self._recognizer, config=config, content=frame.data.tobytes()
+        try:
+            raw = await self._ensure_client().recognize(
+                cloud_speech.RecognizeRequest(
+                    recognizer=self._recognizer,
+                    config=config,
+                    content=frame.data.tobytes(),
+                )
             )
-        )
-        return _recognize_response_to_speech_event(raw)
+
+            return _recognize_response_to_speech_event(raw)
+        except DeadlineExceeded:
+            raise APITimeoutError()
+        except GoogleAPICallError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.code or -1,
+                request_id=None,
+                body=None,
+            )
+        except Exception as e:
+            raise APIConnectionError() from e
 
     def stream(
         self, *, language: SpeechLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(self._ensure_client(), self._recognizer, config)
+        return SpeechStream(self, self._ensure_client(), self._recognizer, config)
 
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
         self,
+        stt: STT,
         client: SpeechAsyncClient,
         recognizer: str,
         config: STTOptions,
@@ -189,7 +212,7 @@ class SpeechStream(stt.SpeechStream):
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
-        super().__init__()
+        super().__init__(stt)
 
         self._client = client
         self._recognizer = recognizer

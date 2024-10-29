@@ -21,19 +21,66 @@ import json
 import os
 import wave
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Tuple
 from urllib.parse import urlencode
 
 import aiohttp
-from livekit.agents import stt, utils
+import numpy as np
+from livekit import rtc
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+    utils,
+)
 from livekit.agents.utils import AudioBuffer, merge_frames
 
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
-from .utils import BasicAudioEnergyFilter
 
 BASE_URL = "https://api.deepgram.com/v1/listen"
 BASE_URL_WS = "wss://api.deepgram.com/v1/listen"
+
+
+# This is the magic number during testing that we use to determine if a frame is loud enough
+# to possibly contain speech. It's very conservative.
+MAGIC_NUMBER_THRESHOLD = 0.004**2
+
+
+class _AudioEnergyFilter:
+    class _State(Enum):
+        START = 0
+        SPEAKING = 1
+        SILENCE = 2
+        END = 3
+
+    def __init__(self, *, min_silence: float = 1.5):
+        self._cooldown_seconds = min_silence
+        self._cooldown = min_silence
+        self._state = self._State.SILENCE
+
+    def update(self, frame: rtc.AudioFrame) -> _State:
+        arr = np.frombuffer(frame.data, dtype=np.int16)
+        float_arr = arr.astype(np.float32) / 32768.0
+        rms = np.mean(np.square(float_arr))
+
+        if rms > MAGIC_NUMBER_THRESHOLD:
+            self._cooldown = self._cooldown_seconds
+            if self._state in (self._State.SILENCE, self._State.END):
+                self._state = self._State.START
+            else:
+                self._state = self._State.SPEAKING
+        else:
+            self._cooldown -= frame.duration
+            if self._cooldown <= 0:
+                if self._state in (self._State.SPEAKING, self._State.START):
+                    self._state = self._State.END
+                else:
+                    self._state = self._State.SILENCE
+
+        return self._state
 
 
 @dataclass
@@ -130,7 +177,7 @@ class STT(stt.STT):
 
         return self._session
 
-    async def recognize(
+    async def _recognize_impl(
         self, buffer: AudioBuffer, *, language: DeepgramLanguages | str | None = None
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
@@ -156,24 +203,38 @@ class STT(stt.STT):
 
         data = io_buffer.getvalue()
 
-        async with self._ensure_session().post(
-            url=_to_deepgram_url(recognize_config),
-            data=data,
-            headers={
-                "Authorization": f"Token {self._api_key}",
-                "Accept": "application/json",
-                "Content-Type": "audio/wav",
-            },
-        ) as res:
-            return prerecorded_transcription_to_speech_event(
-                config.language, await res.json()
-            )
+        try:
+            async with self._ensure_session().post(
+                url=_to_deepgram_url(recognize_config),
+                data=data,
+                headers={
+                    "Authorization": f"Token {self._api_key}",
+                    "Accept": "application/json",
+                    "Content-Type": "audio/wav",
+                },
+            ) as res:
+                return prerecorded_transcription_to_speech_event(
+                    config.language,
+                    await res.json(),
+                )
+
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError() from e
 
     def stream(
         self, *, language: DeepgramLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(config, self._api_key, self._ensure_session())
+        return SpeechStream(self, config, self._api_key, self._ensure_session())
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
@@ -191,12 +252,13 @@ class SpeechStream(stt.SpeechStream):
 
     def __init__(
         self,
+        stt: STT,
         opts: STTOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
         max_retry: int = 32,
     ) -> None:
-        super().__init__(sample_rate=opts.sample_rate)
+        super().__init__(stt, sample_rate=opts.sample_rate)
 
         if opts.detect_language and opts.language is None:
             raise ValueError("language detection is not supported in streaming mode")
@@ -206,7 +268,10 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._speaking = False
         self._max_retry = max_retry
-        self._audio_energy_filter = BasicAudioEnergyFilter(cooldown_seconds=1)
+        self._audio_energy_filter = _AudioEnergyFilter()
+
+        self._pushed_audio_duration = 0.0
+        self._request_id = 0
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -302,9 +367,23 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
-                    has_audio = self._audio_energy_filter.push_frame(frame)
-                    if has_audio:
+                    state = self._audio_energy_filter.update(frame)
+                    if state in (
+                        _AudioEnergyFilter._State.START,
+                        _AudioEnergyFilter._State.SPEAKING,
+                    ):
+                        self._pushed_audio_duration += frame.duration
                         await ws.send_bytes(frame.data.tobytes())
+                    elif state == _AudioEnergyFilter._State.END:
+                        usage_event = stt.SpeechEvent(
+                            type=stt.SpeechEventType.RECOGNITION_USAGE,
+                            request_id=self._request_id,
+                            alternatives=[],
+                            recognition_usage=stt.RecognitionUsage(
+                                audio_duration=self._pushed_audio_duration
+                            ),
+                        )
+                        self._event_ch.send_nowait(usage_event)
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True
@@ -364,8 +443,11 @@ class SpeechStream(stt.SpeechStream):
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
         # for more information about the different types of events
         elif data["type"] == "Results":
+            metadata = data["metadata"]
+            request_id = metadata["request_id"]
             is_final_transcript = data["is_final"]
             is_endpoint = data["speech_final"]
+            self._request_id = request_id
 
             alts = live_transcription_to_speech_data(self._opts.language, data)
             # If, for some reason, we didn't get a SpeechStarted event but we got
@@ -381,12 +463,16 @@ class SpeechStream(stt.SpeechStream):
 
                 if is_final_transcript:
                     final_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=alts
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        request_id=request_id,
+                        alternatives=alts,
                     )
                     self._event_ch.send_nowait(final_event)
                 else:
                     interim_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT, alternatives=alts
+                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                        request_id=request_id,
+                        alternatives=alts,
                     )
                     self._event_ch.send_nowait(interim_event)
 
@@ -427,6 +513,7 @@ def prerecorded_transcription_to_speech_event(
     data: dict,
 ) -> stt.SpeechEvent:
     # We only support one channel for now
+    request_id = data["metadata"]["request_id"]
     channel = data["results"]["channels"][0]
     dg_alts = channel["alternatives"]
 
@@ -435,6 +522,7 @@ def prerecorded_transcription_to_speech_event(
     detected_language = channel.get("detected_language")
 
     return stt.SpeechEvent(
+        request_id=request_id,
         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[
             stt.SpeechData(

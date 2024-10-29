@@ -4,14 +4,24 @@ import asyncio
 import contextvars
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncIterable, Awaitable, Callable, Literal, Optional, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    AsyncIterable,
+    Awaitable,
+    Callable,
+    Literal,
+    Optional,
+    Union,
+)
 
 from livekit import rtc
 
-from .. import stt, tokenize, tts, utils, vad
+from .. import llm, stt, tokenize, tts, utils, vad
 from .._constants import ATTRIBUTE_AGENT_STATE
 from .._types import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from . import metrics
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
@@ -49,6 +59,7 @@ EventTypes = Literal[
     "function_calls_finished",
     "llm_started_streaming",
     "tts_started_streaming",
+    "metrics_collected",
 ]
 
 _CallContextVar = contextvars.ContextVar["AgentCallContext"](
@@ -259,9 +270,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._speech_q: list[SpeechHandle] = []
         self._speech_q_changed = asyncio.Event()
 
-        self._last_end_of_speech_time: float | None = None
-
         self._update_state_task: asyncio.Task | None = None
+
+        self._last_final_transcript_time: float | None = None
+        self._last_speech_time: float | None = None
 
     @property
     def fnc_ctx(self) -> FunctionContext | None:
@@ -303,6 +315,48 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """
         if self._started:
             raise RuntimeError("voice assistant already started")
+
+        @self._stt.on("metrics_collected")
+        def _on_stt_metrics(stt_metrics: stt.STTMetrics) -> None:
+            pipeline_metrics: metrics.PipelineMetrics = {
+                "type": "stt_metrics",
+                **stt_metrics,
+            }
+            self.emit("metrics_collected", pipeline_metrics)
+
+        @self._tts.on("metrics_collected")
+        def _on_tts_metrics(tts_metrics: tts.TTSMetrics) -> None:
+            speech_data = metrics.SpeechDataContextVar.get(None)
+            if speech_data is None:
+                return
+
+            pipeline_metrics: metrics.PipelineMetrics = {
+                "type": "tts_metrics",
+                "sequence_id": speech_data.sequence_id,
+                **tts_metrics,
+            }
+            self.emit("metrics_collected", pipeline_metrics)
+
+        @self._llm.on("metrics_collected")
+        def _on_llm_metrics(llm_metrics: llm.LLMMetrics) -> None:
+            speech_data = metrics.SpeechDataContextVar.get(None)
+            if speech_data is None:
+                return
+
+            pipeline_metrics: metrics.PipelineMetrics = {
+                "type": "llm_metrics",
+                "sequence_id": speech_data.sequence_id,
+                **llm_metrics,
+            }
+            self.emit("metrics_collected", pipeline_metrics)
+
+        @self._vad.on("metrics_collected")
+        def _on_vad_metrics(vad_metrics: vad.VADMetrics) -> None:
+            pipeline_metrics: metrics.PipelineMetrics = {
+                "type": "vad_metrics",
+                **vad_metrics,
+            }
+            self.emit("metrics_collected", pipeline_metrics)
 
         room.on("participant_connected", self._on_participant_connected)
         self._room, self._participant = room, participant
@@ -413,7 +467,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self.emit("user_started_speaking")
             self._deferred_validation.on_human_start_of_speech(ev)
 
-        def _on_vad_updated(ev: vad.VADEvent) -> None:
+        def _on_vad_inference_done(ev: vad.VADEvent) -> None:
             if not self._track_published_fut.done():
                 return
 
@@ -433,11 +487,15 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if ev.speech_duration >= self._opts.int_speech_duration:
                 self._interrupt_if_possible()
 
+            if ev.raw_accumulated_speech > 0.0:
+                self._last_speech_time = (
+                    time.perf_counter() - ev.raw_accumulated_silence
+                )
+
         def _on_end_of_speech(ev: vad.VADEvent) -> None:
             self._plotter.plot_event("user_stopped_speaking")
             self.emit("user_stopped_speaking")
             self._deferred_validation.on_human_end_of_speech(ev)
-            self._last_end_of_speech_time = time.time()
 
         def _on_interim_transcript(ev: stt.SpeechEvent) -> None:
             self._transcribed_interim_text = ev.alternatives[0].text
@@ -447,10 +505,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if not new_transcript:
                 return
 
-            logger.debug(
-                "received user transcript",
-                extra={"user_transcript": new_transcript},
-            )
+            self._last_final_transcript_time = time.perf_counter()
 
             self._transcribed_text += (
                 " " if self._transcribed_text else ""
@@ -474,7 +529,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 self._interrupt_if_possible()
 
         self._human_input.on("start_of_speech", _on_start_of_speech)
-        self._human_input.on("vad_inference_done", _on_vad_updated)
+        self._human_input.on("vad_inference_done", _on_vad_inference_done)
         self._human_input.on("end_of_speech", _on_end_of_speech)
         self._human_input.on("interim_transcript", _on_interim_transcript)
         self._human_input.on("final_transcript", _on_final_transcript)
@@ -554,7 +609,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             await utils.aio.gracefully_cancel(old_task)
 
         copied_ctx = self._chat_ctx.copy()
-
         playing_speech = self._playing_speech
         if playing_speech is not None and playing_speech.initialized:
             if (
@@ -572,39 +626,28 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             ChatMessage.create(text=handle.user_question, role="user")
         )
 
-        self.emit("llm_started_streaming", copied_ctx)
-        llm_stream = self._opts.before_llm_cb(self, copied_ctx)
-        if asyncio.iscoroutine(llm_stream):
-            llm_stream = await llm_stream
+        tk = metrics.SpeechDataContextVar.set(metrics.SpeechData(sequence_id=handle.id))
+        try:
+            self.emit("llm_started_streaming", copied_ctx)
+            llm_stream = self._opts.before_llm_cb(self, copied_ctx)
+            if asyncio.iscoroutine(llm_stream):
+                llm_stream = await llm_stream
 
-        if llm_stream is False:
-            handle.cancel()
-            return
+            if llm_stream is False:
+                handle.cancel()
+                return
 
-        # fallback to default impl if no custom/user stream is returned
-        if not isinstance(llm_stream, LLMStream):
-            llm_stream = _default_before_llm_cb(self, chat_ctx=copied_ctx)
+            # fallback to default impl if no custom/user stream is returned
+            if not isinstance(llm_stream, LLMStream):
+                llm_stream = _default_before_llm_cb(self, chat_ctx=copied_ctx)
 
-        if handle.interrupted:
-            return
+            if handle.interrupted:
+                return
 
-        synthesis_handle = self._synthesize_agent_speech(handle.id, llm_stream)
-        handle.initialize(source=llm_stream, synthesis_handle=synthesis_handle)
-
-        # TODO(theomonnom): Find a more reliable way to get the elapsed time from the last end of speech
-        # (VAD could not have detected any speech - maybe unlikely?)
-        if self._last_end_of_speech_time is not None:
-            elapsed = round(time.time() - self._last_end_of_speech_time, 3)
-        else:
-            elapsed = -1.0
-
-        logger.debug(
-            "synthesizing agent reply",
-            extra={
-                "speech_id": handle.id,
-                "elapsed": elapsed,
-            },
-        )
+            synthesis_handle = self._synthesize_agent_speech(handle.id, llm_stream)
+            handle.initialize(source=llm_stream, synthesis_handle=synthesis_handle)
+        finally:
+            metrics.SpeechDataContextVar.reset(tk)
 
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
         try:
@@ -648,9 +691,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             ):
                 return
 
-            logger.debug(
-                "committed user transcript", extra={"user_transcript": user_question}
-            )
             user_msg = ChatMessage.create(text=user_question, role="user")
             self._chat_ctx.messages.append(user_msg)
             self.emit("user_speech_committed", user_msg)
@@ -663,7 +703,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         while not join_fut.done():
             await asyncio.wait(
-                [join_fut], return_when=asyncio.FIRST_COMPLETED, timeout=0.5
+                [join_fut], return_when=asyncio.FIRST_COMPLETED, timeout=0.2
             )
 
             _commit_user_question_if_needed()
@@ -813,8 +853,26 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self._agent_output is not None
         ), "agent output should be initialized when ready"
 
+        tk = metrics.SpeechDataContextVar.set(metrics.SpeechData(speech_id))
+
+        async def _llm_stream_to_str_generator(
+            stream: LLMStream,
+        ) -> AsyncGenerator[str]:
+            try:
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+
+                    content = chunk.choices[0].delta.content
+                    if content is None:
+                        continue
+
+                    yield content
+            finally:
+                await stream.aclose()
+
         if isinstance(source, LLMStream):
-            source = _llm_stream_to_str_iterable(speech_id, source)
+            source = _llm_stream_to_str_generator(source)
 
         og_source = source
         transcript_source = source
@@ -826,16 +884,19 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         if tts_source is None:
             raise ValueError("before_tts_cb must return str or AsyncIterable[str]")
 
-        return self._agent_output.synthesize(
-            speech_id=speech_id,
-            tts_source=tts_source,
-            transcript_source=transcript_source,
-            transcription=self._opts.transcription.agent_transcription,
-            transcription_speed=self._opts.transcription.agent_transcription_speed,
-            sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
-            word_tokenizer=self._opts.transcription.word_tokenizer,
-            hyphenate_word=self._opts.transcription.hyphenate_word,
-        )
+        try:
+            return self._agent_output.synthesize(
+                speech_id=speech_id,
+                tts_source=tts_source,
+                transcript_source=transcript_source,
+                transcription=self._opts.transcription.agent_transcription,
+                transcription_speed=self._opts.transcription.agent_transcription_speed,
+                sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
+                word_tokenizer=self._opts.transcription.word_tokenizer,
+                hyphenate_word=self._opts.transcription.hyphenate_word,
+            )
+        finally:
+            metrics.SpeechDataContextVar.reset(tk)
 
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
@@ -872,6 +933,21 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             extra={"speech_id": self._pending_agent_reply.id},
         )
 
+        if self._last_speech_time is not None:
+            time_since_last_speech = time.perf_counter() - self._last_speech_time
+            transcription_delay = max(
+                (self._last_final_transcript_time or 0) - self._last_speech_time, 0
+            )
+
+            eou_metrics: metrics.PipelineEOUMetrics = {
+                "type": "eou_metrics",
+                "timestamp": time.time(),
+                "sequence_id": self._pending_agent_reply.id,
+                "end_of_utterance_delay": time_since_last_speech,
+                "transcription_delay": transcription_delay,
+            }
+            self.emit("metrics_collected", eou_metrics)
+
         self._add_speech_for_playout(self._pending_agent_reply)
         self._pending_agent_reply = None
         self._transcribed_interim_text = ""
@@ -900,29 +976,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _add_speech_for_playout(self, speech_handle: SpeechHandle) -> None:
         self._speech_q.append(speech_handle)
         self._speech_q_changed.set()
-
-
-async def _llm_stream_to_str_iterable(
-    speech_id: str, stream: LLMStream
-) -> AsyncIterable[str]:
-    start_time = time.time()
-    first_frame = True
-    async for chunk in stream:
-        content = chunk.choices[0].delta.content
-        if content is None:
-            continue
-
-        if first_frame:
-            first_frame = False
-            logger.debug(
-                "received first LLM token",
-                extra={
-                    "speech_id": speech_id,
-                    "elapsed": round(time.time() - start_time, 3),
-                },
-            )
-
-        yield content
 
 
 class _DeferredReplyValidation:
