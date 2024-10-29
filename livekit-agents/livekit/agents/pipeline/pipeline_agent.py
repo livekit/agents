@@ -671,16 +671,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             ):
                 return
 
-            is_using_tools = isinstance(speech_handle.source, LLMStream) and len(
-                speech_handle.source.function_calls
-            )
-
             # make sure at least some speech was played before committing the user message
             # since we try to validate as fast as possible it is possible the agent gets interrupted
             # really quickly (barely audible), we don't want to mark this question as "answered".
             if (
                 speech_handle.allow_interruptions
-                and not is_using_tools
+                and not speech_handle.is_using_tools()
                 and (
                     play_handle.time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
                     and not join_fut.done()
