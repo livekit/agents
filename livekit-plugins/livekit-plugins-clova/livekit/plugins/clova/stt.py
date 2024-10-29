@@ -14,24 +14,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
-import asyncio
 import os
 import time
 import wave
 from typing import Optional, Union
 
 import aiohttp
-
 from livekit.agents import (
-    APIConnectionError,
     APIStatusError,
     APITimeoutError,
     stt,
     utils,
 )
-
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE

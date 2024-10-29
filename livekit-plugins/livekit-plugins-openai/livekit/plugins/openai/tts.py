@@ -28,7 +28,6 @@ from livekit.agents import (
 
 import openai
 
-from .log import logger
 from .models import TTSModels, TTSVoices
 from .utils import AsyncAzureADTokenProvider
 

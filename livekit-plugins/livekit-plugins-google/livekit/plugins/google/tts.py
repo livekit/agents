@@ -25,13 +25,10 @@ from livekit.agents import (
     utils,
 )
 
-
+from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
 
-from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
-
-from .log import logger
 from .models import AudioEncoding, Gender, SpeechLanguages
 
 

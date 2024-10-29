@@ -35,7 +35,6 @@ from livekit.agents import (
     stt,
     utils,
 )
-
 from livekit.agents.utils import AudioBuffer, merge_frames
 
 from .log import logger

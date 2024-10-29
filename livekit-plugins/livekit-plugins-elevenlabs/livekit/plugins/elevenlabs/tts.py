@@ -22,6 +22,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, List, Literal
 
+import aiohttp
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIStatusError,
@@ -30,10 +32,6 @@ from livekit.agents import (
     tts,
     utils,
 )
-
-
-import aiohttp
-from livekit import rtc
 
 from .log import logger
 from .models import TTSEncoding, TTSModels

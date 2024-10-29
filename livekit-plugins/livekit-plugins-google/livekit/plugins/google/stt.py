@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from typing import AsyncIterable, List, Union
 
 from livekit import agents, rtc
-
 from livekit.agents import (
     APIConnectionError,
     APIStatusError,
@@ -29,6 +28,7 @@ from livekit.agents import (
     utils,
 )
 
+from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.speech_v2 import SpeechAsyncClient

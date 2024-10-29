@@ -26,7 +26,6 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     llm,
-    utils,
 )
 
 import openai

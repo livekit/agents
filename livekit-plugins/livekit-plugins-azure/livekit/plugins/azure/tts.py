@@ -12,24 +12,22 @@
 
 from __future__ import annotations
 
-import contextlib
 import asyncio
+import contextlib
 import os
 from dataclasses import dataclass
 from typing import Literal
 
 from livekit.agents import (
     APIConnectionError,
-    APIStatusError,
     APITimeoutError,
     tts,
     utils,
 )
 
-from .log import logger
-
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 
+from .log import logger
 
 AZURE_SAMPLE_RATE: int = 16000
 AZURE_BITS_PER_SAMPLE: int = 16
@@ -231,7 +229,7 @@ class ChunkedStream(tts.ChunkedStream):
             try:
                 await asyncio.to_thread(_cleanup)
             except Exception:
-                logger.exception(f"failed to cleanup resources")
+                logger.exception("failed to cleanup resources")
 
 
 class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallback):
