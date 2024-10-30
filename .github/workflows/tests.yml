@@ -25,13 +25,13 @@ jobs:
           - ubuntu-20.04
           - namespace-profile-default-arm64
         test_group:
-          - name: fast_tests
+          - name: base
             files: 'test_aio.py test_tokenizer.py test_vad.py test_ipc.py'
-          - name: test_llm.py
+          - name: llm
             files: 'test_llm.py'
-          - name: test_stt.py
+          - name: stt
             files: 'test_stt.py'
-          - name: test_tts.py
+          - name: tts
             files: 'test_tts.py'
 
     runs-on: ${{ matrix.os }}
