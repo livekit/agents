@@ -1,5 +1,11 @@
 # livekit-plugins-silero
 
+## 0.7.3
+
+### Patch Changes
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.7.2
 
 ### Patch Changes

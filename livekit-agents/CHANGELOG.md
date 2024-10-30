@@ -1,5 +1,43 @@
 # livekit-agents
 
+## 0.11.0
+
+### Minor Changes
+
+- prepare for release - [#1007](https://github.com/livekit/agents/pull/1007) ([@theomonnom](https://github.com/theomonnom))
+
+### Patch Changes
+
+- Fix race in load calc initialization - [#969](https://github.com/livekit/agents/pull/969) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Fix incorrect load computation on docker instances - [#972](https://github.com/livekit/agents/pull/972) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- stt: reduce bandwidth usage by reducing sample_rate to 16khz - [#920](https://github.com/livekit/agents/pull/920) ([@theomonnom](https://github.com/theomonnom))
+
+- Reorganized metrics, added create_metrics_logger - [#1009](https://github.com/livekit/agents/pull/1009) ([@davidzhao](https://github.com/davidzhao))
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
+- Allow kind to be list or single value - [#1006](https://github.com/livekit/agents/pull/1006) ([@keepingitneil](https://github.com/keepingitneil))
+
+- fix before_llm_cb not handling coroutines returning False - [#961](https://github.com/livekit/agents/pull/961) ([@Tanesan](https://github.com/Tanesan))
+
+- expose transcriptions for multimodal agents - [#1001](https://github.com/livekit/agents/pull/1001) ([@longcw](https://github.com/longcw))
+
+- Fix stack dump on room shutdown - [#989](https://github.com/livekit/agents/pull/989) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Add exception logging for tool calls - [#923](https://github.com/livekit/agents/pull/923) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Skip egress by default in participant-related utilities on JobContext - [#1005](https://github.com/livekit/agents/pull/1005) ([@keepingitneil](https://github.com/keepingitneil))
+
+- pipeline-agent: avoid nested function calls - [#935](https://github.com/livekit/agents/pull/935) ([@theomonnom](https://github.com/theomonnom))
+
+- expose usage metrics - [#984](https://github.com/livekit/agents/pull/984) ([@theomonnom](https://github.com/theomonnom))
+
+- fix jobs never reloading - [#934](https://github.com/livekit/agents/pull/934) ([@theomonnom](https://github.com/theomonnom))
+
+- voicepipeline: support recursive/chained function calls - [#970](https://github.com/livekit/agents/pull/970) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.10.2
 
 ### Patch Changes
