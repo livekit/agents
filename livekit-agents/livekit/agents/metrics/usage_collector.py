@@ -17,9 +17,9 @@ class UsageCollector:
         self._summary = UsageSummary(0, 0, 0, 0.0)
 
     def __call__(self, metrics: AgentMetrics) -> None:
-        self.add_usage(metrics)
+        self.collect(metrics)
 
-    def add_usage(self, metrics: AgentMetrics) -> None:
+    def collect(self, metrics: AgentMetrics) -> None:
         if isinstance(metrics, LLMMetrics):
             self._summary.llm_prompt_tokens += metrics.prompt_tokens
             self._summary.llm_completion_tokens += metrics.completion_tokens

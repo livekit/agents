@@ -53,7 +53,7 @@ async def entrypoint(ctx: JobContext):
     @agent.on("metrics_collected")
     def _on_metrics_collected(mtrcs: metrics.AgentMetrics):
         metrics.log_metrics(mtrcs)
-        usage_collector.add_usage(mtrcs)
+        usage_collector.collect(mtrcs)
 
     async def log_session_cost():
         summary = usage_collector.get_summary()
