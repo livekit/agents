@@ -9,7 +9,7 @@ from livekit.agents import (
     cli,
     llm,
 )
-from livekit.agents.metrics import create_metrics_logger
+from livekit.agents.metrics import create_metrics_logger, create_summary_collector
 from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
@@ -48,16 +48,18 @@ async def entrypoint(ctx: JobContext):
         chat_ctx=initial_ctx,
     )
 
-    log_metrics, summary = create_metrics_logger(logger)
+    log_metrics = create_metrics_logger(logger)
     agent.on("metrics_collected", log_metrics)
+    collect_summary, summary = create_summary_collector()
+    agent.on("metrics_collected", collect_summary)
 
     async def log_session_cost():
         llm_cost = (
-            summary.llm_prompt_tokens * OPENAI_LLM_INPUT_PRICE
-            + summary.llm_completion_tokens * OPENAI_LLM_OUTPUT_PRICE
+            summary["llm_prompt_tokens"] * OPENAI_LLM_INPUT_PRICE
+            + summary["llm_completion_tokens"] * OPENAI_LLM_OUTPUT_PRICE
         )
-        tts_cost = summary.tts_characters_count * OPENAI_TTS_PRICE
-        stt_cost = summary.stt_audio_duration * DEEPGRAM_STT_PRICE / 60
+        tts_cost = summary["tts_characters_count"] * OPENAI_TTS_PRICE
+        stt_cost = summary["stt_audio_duration"] * DEEPGRAM_STT_PRICE / 60
 
         total_cost = llm_cost + tts_cost + stt_cost
 

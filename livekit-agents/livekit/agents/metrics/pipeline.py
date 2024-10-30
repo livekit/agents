@@ -53,7 +53,7 @@ class PipelineVADMetrics(VADMetrics, TypedDict):
     type: Literal["vad_metrics"]
 
 
-PipelineMetrics = Union[
+AgentMetrics = Union[
     PipelineSTTMetrics,
     PipelineEOUMetrics,
     PipelineLLMMetrics,

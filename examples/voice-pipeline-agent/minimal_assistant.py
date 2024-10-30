@@ -11,7 +11,7 @@ from livekit.agents import (
     cli,
     llm,
 )
-from livekit.agents.metrics import create_metrics_logger
+from livekit.agents.metrics import create_metrics_logger, create_summary_collector
 from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
@@ -54,8 +54,10 @@ async def entrypoint(ctx: JobContext):
 
     agent.start(ctx.room, participant)
 
-    log_metrics, summary = create_metrics_logger(logger)
+    log_metrics = create_metrics_logger(logger)
     agent.on("metrics_collected", log_metrics)
+    collect_summary, summary = create_summary_collector()
+    agent.on("metrics_collected", collect_summary)
 
     async def log_usage():
         logger.info(f"Usage: ${summary}")
