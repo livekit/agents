@@ -27,6 +27,5 @@ class UsageCollector:
         elif isinstance(metrics, STTMetrics):
             self._summary.stt_audio_duration += metrics.audio_duration
 
-    @property
-    def summary(self) -> UsageSummary:
+    def get_summary(self) -> UsageSummary:
         return deepcopy(self._summary)
