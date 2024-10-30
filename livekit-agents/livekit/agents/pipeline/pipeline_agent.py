@@ -512,6 +512,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if not new_transcript:
                 return
 
+            logger.debug(
+                "received user transcript",
+                extra={"user_transcript": new_transcript},
+            )
+
             self._last_final_transcript_time = time.perf_counter()
 
             self._transcribed_text += (
