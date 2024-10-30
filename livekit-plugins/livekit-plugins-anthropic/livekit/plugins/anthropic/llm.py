@@ -255,6 +255,8 @@ class LLMStream(llm.LLMStream):
                 self._tool_call_id = self._fnc_raw_arguments = self._fnc_name = None
                 return chat_chunk
 
+        return None
+
 
 def _latest_system_message(chat_ctx: llm.ChatContext) -> str:
     latest_system_message: llm.ChatMessage | None = None
