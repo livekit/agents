@@ -1,4 +1,4 @@
-name: Types
+name: CI
 
 on:
   push:
