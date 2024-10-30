@@ -20,6 +20,13 @@ NOISY_LOGGERS = [
     "watchfiles",
 ]
 
+def _silence_noisy_loggers() -> None:
+    for noisy_logger in NOISY_LOGGERS:
+        logger = logging.getLogger(noisy_logger)
+        if logger.level == logging.NOTSET:
+            logger.setLevel(logging.WARN)
+
+
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
 _RESERVED_ATTRS: Tuple[str, ...] = (
@@ -208,11 +215,8 @@ def setup_logging(log_level: str, devmode: bool) -> None:
     root = logging.getLogger()
     root.addHandler(handler)
     root.setLevel(log_level)
-
-    for noisy_logger in NOISY_LOGGERS:
-        logger = logging.getLogger(noisy_logger)
-        if logger.level == logging.NOTSET:
-            logger.setLevel(logging.WARN)
+    
+    silence_noisy_loggers()
 
     from ..log import logger
 
