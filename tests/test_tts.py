@@ -10,7 +10,7 @@ import pytest
 from livekit import agents
 from livekit.agents import tokenize
 from livekit.agents.utils import AudioBuffer, merge_frames
-from livekit.plugins import cartesia, openai, google, azure, elevenlabs
+from livekit.plugins import azure, cartesia, elevenlabs, google, openai
 
 from .utils import wer
 
