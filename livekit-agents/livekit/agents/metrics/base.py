@@ -39,8 +39,8 @@ class STTMetrics:
 
 @dataclass
 class TTSMetrics:
-    timestamp: float
     request_id: str
+    timestamp: float
     ttfb: float
     duration: float
     audio_duration: float
