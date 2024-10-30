@@ -117,12 +117,12 @@ class VADStream(ABC):
                 inference_count += 1
 
                 if inference_count >= 1 / self._vad.capabilities.update_interval:
-                    vad_metrics: VADMetrics = {
-                        "timestamp": time.time(),
-                        "inference_duration_total": inference_duration_total,
-                        "inference_count": inference_count,
-                        "label": self._vad._label,
-                    }
+                    vad_metrics = VADMetrics(
+                        timestamp=time.time(),
+                        inference_duration_total=inference_duration_total,
+                        inference_count=inference_count,
+                        label=self._vad._label,
+                    )
                     self._vad.emit("metrics_collected", vad_metrics)
 
                     inference_duration_total = 0.0
