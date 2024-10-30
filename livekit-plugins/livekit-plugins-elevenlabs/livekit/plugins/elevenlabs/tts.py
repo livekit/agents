@@ -147,7 +147,9 @@ class TTS(tts.TTS):
 
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
         if not api_key:
-            raise ValueError("ELEVEN_API_KEY must be set")
+            raise ValueError(
+                "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"
+            )
 
         self._opts = _TTSOptions(
             voice=voice,

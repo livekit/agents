@@ -148,7 +148,9 @@ class LLM(llm.LLM):
 
         api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
         if api_key is None:
-            raise ValueError("Cerebras API key is required")
+            raise ValueError(
+                "Cerebras API key is required, either as argument or set CEREBAAS_API_KEY environmental variable"
+            )
 
         return LLM(
             model=model,
@@ -178,7 +180,9 @@ class LLM(llm.LLM):
 
         api_key = api_key or os.environ.get("FIREWORKS_API_KEY")
         if api_key is None:
-            raise ValueError("Fireworks API key is required")
+            raise ValueError(
+                "Fireworks API key is required, either as argument or set FIREWORKS_API_KEY environmental variable"
+            )
 
         return LLM(
             model=model,
@@ -207,7 +211,9 @@ class LLM(llm.LLM):
         """
         api_key = api_key or os.environ.get("XAI_API_KEY")
         if api_key is None:
-            raise ValueError("XAI API key is required")
+            raise ValueError(
+                "XAI API key is required, either as argument or set XAI_API_KEY environmental variable"
+            )
 
         return LLM(
             model=model,
@@ -237,7 +243,9 @@ class LLM(llm.LLM):
 
         api_key = api_key or os.environ.get("GROQ_API_KEY")
         if api_key is None:
-            raise ValueError("Groq API key is required")
+            raise ValueError(
+                "Groq API key is required, either as argument or set GROQ_API_KEY environmental variable"
+            )
 
         return LLM(
             model=model,
@@ -267,7 +275,9 @@ class LLM(llm.LLM):
 
         api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
         if api_key is None:
-            raise ValueError("DeepSeek API key is required")
+            raise ValueError(
+                "DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable"
+            )
 
         return LLM(
             model=model,
@@ -297,7 +307,9 @@ class LLM(llm.LLM):
 
         api_key = api_key or os.environ.get("OCTOAI_TOKEN")
         if api_key is None:
-            raise ValueError("OctoAI API key is required")
+            raise ValueError(
+                "OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable"
+            )
 
         return LLM(
             model=model,
@@ -338,6 +350,19 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
     ) -> LLM:
+        """
+        Create a new instance of PerplexityAI LLM.
+
+        ``api_key`` must be set to your TogetherAI API key, either using the argument or by setting
+        the ``PERPLEXITY_API_KEY`` environmental variable.
+        """
+
+        api_key = api_key or os.environ.get("PERPLEXITY_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "Perplexity AI API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable"
+            )
+
         return LLM(
             model=model,
             api_key=api_key,
@@ -366,7 +391,9 @@ class LLM(llm.LLM):
 
         api_key = api_key or os.environ.get("TOGETHER_API_KEY")
         if api_key is None:
-            raise ValueError("TogetherAI API key is required")
+            raise ValueError(
+                "Together AI API key is required, either as argument or set TOGETHER_API_KEY environmental variable"
+            )
 
         return LLM(
             model=model,
@@ -396,7 +423,9 @@ class LLM(llm.LLM):
 
         api_key = api_key or os.environ.get("TELNYX_API_KEY")
         if api_key is None:
-            raise ValueError("Telnyx API key is required")
+            raise ValueError(
+                "Telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable"
+            )
 
         return LLM(
             model=model,
