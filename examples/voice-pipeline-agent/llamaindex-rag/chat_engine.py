@@ -27,8 +27,6 @@ else:
     storage_context = StorageContext.from_defaults(persist_dir=PERSIST_DIR)
     index = load_index_from_storage(storage_context)
 
-chat_engine = index.as_chat_engine(chat_mode=ChatMode.CONTEXT)
-
 
 async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
@@ -38,6 +36,7 @@ async def entrypoint(ctx: JobContext):
             "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
         ),
     )
+    chat_engine = index.as_chat_engine(chat_mode=ChatMode.CONTEXT)
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
