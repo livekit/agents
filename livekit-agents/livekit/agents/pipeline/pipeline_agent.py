@@ -335,7 +335,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self.emit("metrics_collected", pipeline_metrics)
 
         @self._llm.on("metrics_collected")
-        def _on_llm_metrics(llm_metrics: llm.LLMMetrics) -> None:
+        def _on_llm_metrics(llm_metrics: metrics.LLMMetrics) -> None:
             speech_data = metrics.SpeechDataContextVar.get(None)
             if speech_data is None:
                 return
