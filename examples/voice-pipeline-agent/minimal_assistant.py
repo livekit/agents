@@ -55,8 +55,11 @@ async def entrypoint(ctx: JobContext):
     agent.start(ctx.room, participant)
 
     usage_collector = metrics.UsageCollector()
-    agent.on("metrics_collected", usage_collector)
-    agent.on("metrics_collected", metrics.log_metrics(logger))
+
+    @agent.on("metrics_collected")
+    def _on_metrics_collected(metrics: metrics.AgentMetrics):
+        metrics.log_metrics(metrics)
+        usage_collector.add_usage(metrics)
 
     async def log_usage():
         summary = usage_collector.get_summary()
