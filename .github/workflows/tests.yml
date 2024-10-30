@@ -18,24 +18,29 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - macos-14-large
-          - macos-14
-          - windows-2019
-          - ubuntu-20.04
-          - namespace-profile-default-arm64
-        test_group:
-          - name: base
-            files: 'test_aio.py test_tokenizer.py test_vad.py test_ipc.py'
-          - name: llm
-            files: 'test_llm.py'
-          - name: stt
-            files: 'test_stt.py'
-          - name: tts
-            files: 'test_tts.py'
+        include:
+          # Base tests on all operating systems
+          - os: macos-14-large
+            test_group: base
+          - os: macos-14
+            test_group: base
+          - os: windows-2019
+            test_group: base
+          - os: ubuntu-20.04
+            test_group: base
+          - os: namespace-profile-default-arm64
+            test_group: bse
+
+          # Run llm, stt, and tts tests only on Ubuntu
+          - os: ubuntu-20.04
+            test_group: llm
+          - os: ubuntu-20.04
+            test_group: stt
+          - os: ubuntu-20.04
+            test_group: tts
 
     runs-on: ${{ matrix.os }}
-    name: Run tests (${{ matrix.os }}, ${{ matrix.test_group.name }})
+    name: Run tests (${{ matrix.os }}, ${{ matrix.test_group }})
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,6 +59,7 @@ jobs:
             ${{ runner.os }}-cache
 
       - uses: actions/setup-python@v5
+        # On macOS, ffmpeg installs Python
         if: ${{ matrix.os != 'macos-14-large' && matrix.os != 'macos-14' }}
         with:
           python-version: "3.9"
@@ -73,7 +79,7 @@ jobs:
           sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
 
       - name: Install ffmpeg (macOS)
-        if: ${{ matrix.os == 'macos-14-large' || matrix.os == 'macos-14' }}
+        if: ${{ startsWith(matrix.os, 'macos') }}
         run: brew install ffmpeg
 
       - name: Install ffmpeg (Windows)
@@ -111,8 +117,15 @@ jobs:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
-        working-directory: ./tests
         run: |
           echo "$GOOGLE_CREDENTIALS_JSON" > google.json
-          pytest --asyncio-mode=auto --timeout=60 ${{ matrix.test_group.files }}
+
+          # Map test group names to test files
+          declare -A test_files
+          test_files[base]="test_aio.py test_tokenizer.py test_vad.py test_ipc.py"
+          test_files[llm]="test_llm.py"
+          test_files[stt]="test_stt.py"
+          test_files[tts]="test_tts.py"
+
+          pytest --asyncio-mode=auto --timeout=60 ./tests/${test_files[${{ matrix.test_group }}]}
 
