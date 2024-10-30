@@ -4,6 +4,8 @@ from typing import Callable
 
 from livekit.agents.metrics import PipelineMetrics
 
+from ..log import logger as default_logger
+
 
 @dataclass
 class PipelineUsageSummary:
@@ -17,7 +19,7 @@ def create_metrics_logger(
     logger: logging.Logger | None = None,
 ) -> tuple[Callable[[PipelineMetrics], PipelineUsageSummary], None]:
     if logger is None:
-        logger = logging.getLogger("")
+        logger = default_logger
 
     summary = PipelineUsageSummary()
 
