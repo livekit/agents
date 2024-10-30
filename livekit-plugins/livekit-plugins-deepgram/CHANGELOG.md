@@ -1,5 +1,17 @@
 # livekit-plugins-deepgram
 
+## 0.6.9
+
+### Patch Changes
+
+- stt: reduce bandwidth usage by reducing sample_rate to 16khz - [#920](https://github.com/livekit/agents/pull/920) ([@theomonnom](https://github.com/theomonnom))
+
+- deepgram: send finalize each time we stop sending audio - [#1004](https://github.com/livekit/agents/pull/1004) ([@theomonnom](https://github.com/theomonnom))
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
+- expose usage metrics - [#984](https://github.com/livekit/agents/pull/984) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.8
 
 ### Patch Changes
