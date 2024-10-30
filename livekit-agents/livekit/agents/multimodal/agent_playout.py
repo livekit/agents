@@ -165,11 +165,15 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
 
             await utils.aio.gracefully_cancel(read_text_task)
 
-            if not first_frame:
-                if not handle.interrupted:
-                    handle._tr_fwd.segment_playout_finished()
+            # make sure the text_data.sentence_stream is closed
+            handle._tr_fwd.mark_text_segment_end()
 
-                self.emit("playout_stopped", handle.interrupted)
+            if not first_frame and not handle.interrupted:
+                handle._tr_fwd.segment_playout_finished()
 
-            handle._done_fut.set_result(None)
             await handle._tr_fwd.aclose()
+            handle._done_fut.set_result(None)
+
+            # emit playout_stopped after the transcription forwarder has been closed
+            if not first_frame:
+                self.emit("playout_stopped", handle.interrupted)
