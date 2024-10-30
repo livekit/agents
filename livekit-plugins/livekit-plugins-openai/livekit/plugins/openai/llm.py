@@ -146,7 +146,6 @@ class LLM(llm.LLM):
         the ``CEREBRAS_API_KEY`` environmental variable.
         """
 
-        # shim for not using OPENAI_API_KEY
         api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
         if api_key is None:
             raise ValueError("Cerebras API key is required")
@@ -177,7 +176,6 @@ class LLM(llm.LLM):
         the ``FIREWORKS_API_KEY`` environmental variable.
         """
 
-        # shim for not using OPENAI_API_KEY
         api_key = api_key or os.environ.get("FIREWORKS_API_KEY")
         if api_key is None:
             raise ValueError("Fireworks API key is required")
@@ -237,7 +235,6 @@ class LLM(llm.LLM):
         the ``GROQ_API_KEY`` environmental variable.
         """
 
-        # shim for not using OPENAI_API_KEY
         api_key = api_key or os.environ.get("GROQ_API_KEY")
         if api_key is None:
             raise ValueError("Groq API key is required")
@@ -268,7 +265,6 @@ class LLM(llm.LLM):
         the ``DEEPSEEK_API_KEY`` environmental variable.
         """
 
-        # shim for not using OPENAI_API_KEY
         api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
         if api_key is None:
             raise ValueError("DeepSeek API key is required")
@@ -299,7 +295,6 @@ class LLM(llm.LLM):
         the ``OCTOAI_TOKEN`` environmental variable.
         """
 
-        # shim for not using OPENAI_API_KEY
         api_key = api_key or os.environ.get("OCTOAI_TOKEN")
         if api_key is None:
             raise ValueError("OctoAI API key is required")
@@ -369,7 +364,6 @@ class LLM(llm.LLM):
         the ``TOGETHER_API_KEY`` environmental variable.
         """
 
-        # shim for not using OPENAI_API_KEY
         api_key = api_key or os.environ.get("TOGETHER_API_KEY")
         if api_key is None:
             raise ValueError("TogetherAI API key is required")
@@ -400,7 +394,6 @@ class LLM(llm.LLM):
         the ``TELNYX_API_KEY`` environmental variable.
         """
 
-        # shim for not using OPENAI_API_KEY
         api_key = api_key or os.environ.get("TELNYX_API_KEY")
         if api_key is None:
             raise ValueError("Telnyx API key is required")
