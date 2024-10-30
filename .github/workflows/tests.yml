@@ -40,7 +40,7 @@ jobs:
             test_group: tts
 
     runs-on: ${{ matrix.os }}
-    name: Run ${{ matrix.test_group }} tests — ${{ matrix.os }})
+    name: ${{ matrix.test_group }} — ${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
         with:

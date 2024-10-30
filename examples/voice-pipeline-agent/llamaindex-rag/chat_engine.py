@@ -28,7 +28,6 @@ else:
     index = load_index_from_storage(storage_context)
 
 
-
 async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
         role="system",
