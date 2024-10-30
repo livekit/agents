@@ -4,27 +4,15 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterable, AsyncIterator, Literal, TypedDict
+from typing import Any, AsyncIterable, AsyncIterator, Literal
 
 from livekit import rtc
 
 from .. import utils
+from ..metrics import LLMMetrics
 from ..utils import aio
 from . import function_context
 from .chat_context import ChatContext, ChatRole
-
-
-class LLMMetrics(TypedDict):
-    request_id: str
-    timestamp: float
-    ttft: float
-    duration: float
-    label: str
-    cancelled: bool
-    completion_tokens: int
-    prompt_tokens: int
-    total_tokens: int
-    tokens_per_second: float
 
 
 @dataclass
@@ -115,18 +103,19 @@ class LLMStream(ABC):
                 usage = ev.usage
 
         duration = time.perf_counter() - start_time
-        metrics: LLMMetrics = {
-            "timestamp": time.time(),
-            "request_id": request_id,
-            "ttft": ttft,
-            "duration": duration,
-            "cancelled": self._task.cancelled(),
-            "label": self._llm._label,
-            "completion_tokens": usage.completion_tokens if usage else 0,
-            "prompt_tokens": usage.prompt_tokens if usage else 0,
-            "total_tokens": usage.total_tokens if usage else 0,
-            "tokens_per_second": usage.completion_tokens / duration if usage else 0.0,
-        }
+        metrics = LLMMetrics(
+            timestamp=time.time(),
+            request_id=request_id,
+            ttft=ttft,
+            duration=duration,
+            cancelled=self._task.cancelled(),
+            label=self._llm._label,
+            completion_tokens=usage.completion_tokens if usage else 0,
+            prompt_tokens=usage.prompt_tokens if usage else 0,
+            total_tokens=usage.total_tokens if usage else 0,
+            tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
+            error=None,
+        )
         self._llm.emit("metrics_collected", metrics)
 
     @property

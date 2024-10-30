@@ -17,11 +17,10 @@ from typing import (
 
 from livekit import rtc
 
-from .. import llm, stt, tokenize, tts, utils, vad
+from .. import metrics, stt, tokenize, tts, utils, vad
 from .._constants import ATTRIBUTE_AGENT_STATE
 from .._types import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
-from . import metrics
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
@@ -96,6 +95,14 @@ def _default_before_llm_cb(
         chat_ctx=chat_ctx,
         fnc_ctx=agent.fnc_ctx,
     )
+
+
+@dataclass
+class SpeechData:
+    sequence_id: str
+
+
+SpeechDataContextVar = contextvars.ContextVar[SpeechData]("voice_assistant_speech_data")
 
 
 def _default_before_tts_cb(
@@ -317,46 +324,46 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             raise RuntimeError("voice assistant already started")
 
         @self._stt.on("metrics_collected")
-        def _on_stt_metrics(stt_metrics: stt.STTMetrics) -> None:
-            pipeline_metrics: metrics.PipelineMetrics = {
-                "type": "stt_metrics",
-                **stt_metrics,
-            }
-            self.emit("metrics_collected", pipeline_metrics)
+        def _on_stt_metrics(stt_metrics: metrics.STTMetrics) -> None:
+            self.emit(
+                "metrics_collected",
+                metrics.PipelineSTTMetrics(
+                    **stt_metrics.__dict__,
+                ),
+            )
 
         @self._tts.on("metrics_collected")
-        def _on_tts_metrics(tts_metrics: tts.TTSMetrics) -> None:
-            speech_data = metrics.SpeechDataContextVar.get(None)
+        def _on_tts_metrics(tts_metrics: metrics.TTSMetrics) -> None:
+            speech_data = SpeechDataContextVar.get(None)
             if speech_data is None:
                 return
 
-            pipeline_metrics: metrics.PipelineMetrics = {
-                "type": "tts_metrics",
-                "sequence_id": speech_data.sequence_id,
-                **tts_metrics,
-            }
-            self.emit("metrics_collected", pipeline_metrics)
+            self.emit(
+                "metrics_collected",
+                metrics.PipelineTTSMetrics(
+                    **tts_metrics.__dict__,
+                    sequence_id=speech_data.sequence_id,
+                ),
+            )
 
         @self._llm.on("metrics_collected")
-        def _on_llm_metrics(llm_metrics: llm.LLMMetrics) -> None:
-            speech_data = metrics.SpeechDataContextVar.get(None)
+        def _on_llm_metrics(llm_metrics: metrics.LLMMetrics) -> None:
+            speech_data = SpeechDataContextVar.get(None)
             if speech_data is None:
                 return
-
-            pipeline_metrics: metrics.PipelineMetrics = {
-                "type": "llm_metrics",
-                "sequence_id": speech_data.sequence_id,
-                **llm_metrics,
-            }
-            self.emit("metrics_collected", pipeline_metrics)
+            self.emit(
+                "metrics_collected",
+                metrics.PipelineLLMMetrics(
+                    **llm_metrics.__dict__,
+                    sequence_id=speech_data.sequence_id,
+                ),
+            )
 
         @self._vad.on("metrics_collected")
         def _on_vad_metrics(vad_metrics: vad.VADMetrics) -> None:
-            pipeline_metrics: metrics.PipelineMetrics = {
-                "type": "vad_metrics",
-                **vad_metrics,
-            }
-            self.emit("metrics_collected", pipeline_metrics)
+            self.emit(
+                "metrics_collected", metrics.PipelineVADMetrics(**vad_metrics.__dict__)
+            )
 
         room.on("participant_connected", self._on_participant_connected)
         self._room, self._participant = room, participant
@@ -626,7 +633,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             ChatMessage.create(text=handle.user_question, role="user")
         )
 
-        tk = metrics.SpeechDataContextVar.set(metrics.SpeechData(sequence_id=handle.id))
+        tk = SpeechDataContextVar.set(SpeechData(sequence_id=handle.id))
         try:
             llm_stream = self._opts.before_llm_cb(self, copied_ctx)
             if asyncio.iscoroutine(llm_stream):
@@ -646,7 +653,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             synthesis_handle = self._synthesize_agent_speech(handle.id, llm_stream)
             handle.initialize(source=llm_stream, synthesis_handle=synthesis_handle)
         finally:
-            metrics.SpeechDataContextVar.reset(tk)
+            SpeechDataContextVar.reset(tk)
 
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
         try:
@@ -848,7 +855,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self._agent_output is not None
         ), "agent output should be initialized when ready"
 
-        tk = metrics.SpeechDataContextVar.set(metrics.SpeechData(speech_id))
+        tk = SpeechDataContextVar.set(SpeechData(speech_id))
 
         async def _llm_stream_to_str_generator(
             stream: LLMStream,
@@ -890,7 +897,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 hyphenate_word=self._opts.transcription.hyphenate_word,
             )
         finally:
-            metrics.SpeechDataContextVar.reset(tk)
+            SpeechDataContextVar.reset(tk)
 
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
@@ -933,13 +940,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 (self._last_final_transcript_time or 0) - self._last_speech_time, 0
             )
 
-            eou_metrics: metrics.PipelineEOUMetrics = {
-                "type": "eou_metrics",
-                "timestamp": time.time(),
-                "sequence_id": self._pending_agent_reply.id,
-                "end_of_utterance_delay": time_since_last_speech,
-                "transcription_delay": transcription_delay,
-            }
+            eou_metrics = metrics.PipelineEOUMetrics(
+                timestamp=time.time(),
+                sequence_id=self._pending_agent_reply.id,
+                end_of_utterance_delay=time_since_last_speech,
+                transcription_delay=transcription_delay,
+            )
             self.emit("metrics_collected", eou_metrics)
 
         self._add_speech_for_playout(self._pending_agent_reply)

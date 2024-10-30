@@ -16,13 +16,11 @@ from .llm import (
     Choice,
     ChoiceDelta,
     CompletionUsage,
-    LLMMetrics,
     LLMStream,
 )
 
 __all__ = [
     "LLM",
-    "LLMMetrics",
     "LLMStream",
     "ChatContext",
     "ChatRole",

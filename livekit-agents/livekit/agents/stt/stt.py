@@ -5,21 +5,13 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterable, AsyncIterator, List, Literal, TypedDict, Union
+from typing import AsyncIterable, AsyncIterator, List, Literal, Union
 
 from livekit import rtc
 
+from ..metrics import STTMetrics
 from ..utils import AudioBuffer, aio
 from ..utils.audio import calculate_audio_duration
-
-
-class STTMetrics(TypedDict):
-    request_id: str
-    timestamp: float
-    duration: float
-    label: str
-    audio_duration: float
-    streamed: bool
 
 
 @unique
@@ -87,14 +79,15 @@ class STT(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         start_time = time.perf_counter()
         event = await self._recognize_impl(buffer, language=language)
         duration = time.perf_counter() - start_time
-        stt_metrics: STTMetrics = {
-            "request_id": event.request_id,
-            "timestamp": time.time(),
-            "duration": duration,
-            "label": self._label,
-            "audio_duration": calculate_audio_duration(buffer),
-            "streamed": False,
-        }
+        stt_metrics = STTMetrics(
+            request_id=event.request_id,
+            timestamp=time.time(),
+            duration=duration,
+            label=self._label,
+            audio_duration=calculate_audio_duration(buffer),
+            streamed=False,
+            error=None,
+        )
         self.emit("metrics_collected", stt_metrics)
         return event
 
@@ -154,14 +147,15 @@ class SpeechStream(ABC):
                 ), "recognition_usage must be provided for RECOGNITION_USAGE event"
 
                 duration = time.perf_counter() - start_time
-                stt_metrics: STTMetrics = {
-                    "request_id": ev.request_id,
-                    "timestamp": time.time(),
-                    "duration": duration,
-                    "label": self._stt._label,
-                    "audio_duration": ev.recognition_usage.audio_duration,
-                    "streamed": True,
-                }
+                stt_metrics = STTMetrics(
+                    request_id=ev.request_id,
+                    timestamp=time.time(),
+                    duration=duration,
+                    label=self._stt._label,
+                    audio_duration=ev.recognition_usage.audio_duration,
+                    streamed=True,
+                    error=None,
+                )
 
                 self._stt.emit("metrics_collected", stt_metrics)
 

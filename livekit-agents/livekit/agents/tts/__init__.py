@@ -5,12 +5,10 @@ from .tts import (
     SynthesizedAudio,
     SynthesizeStream,
     TTSCapabilities,
-    TTSMetrics,
 )
 
 __all__ = [
     "TTS",
-    "TTSMetrics",
     "SynthesizedAudio",
     "SynthesizeStream",
     "TTSCapabilities",

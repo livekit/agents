@@ -7,7 +7,6 @@ from .stt import (
     SpeechEventType,
     SpeechStream,
     STTCapabilities,
-    STTMetrics,
 )
 
 __all__ = [
@@ -16,7 +15,6 @@ __all__ = [
     "SpeechData",
     "SpeechStream",
     "STT",
-    "STTMetrics",
     "STTCapabilities",
     "StreamAdapter",
     "StreamAdapterWrapper",
