@@ -1,4 +1,4 @@
-name: Check Types
+name: Types
 
 on:
   push:
