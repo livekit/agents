@@ -1,5 +1,5 @@
 import logging
-from typing import Callable, TypedDict
+from typing import Callable, Optional, TypedDict
 
 from livekit.agents.metrics import AgentMetrics
 
@@ -14,7 +14,7 @@ class UsageSummary(TypedDict):
 
 
 def create_metrics_logger(
-    logger: logging.Logger | None = None,
+    logger: Optional[logging.Logger] = None,
 ) -> Callable[[AgentMetrics], None]:
     if logger is None:
         logger = default_logger
