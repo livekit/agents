@@ -20,6 +20,7 @@ NOISY_LOGGERS = [
     "watchfiles",
 ]
 
+
 def _silence_noisy_loggers() -> None:
     for noisy_logger in NOISY_LOGGERS:
         logger = logging.getLogger(noisy_logger)
@@ -215,7 +216,7 @@ def setup_logging(log_level: str, devmode: bool) -> None:
     root = logging.getLogger()
     root.addHandler(handler)
     root.setLevel(log_level)
-    
+
     _silence_noisy_loggers()
 
     from ..log import logger
