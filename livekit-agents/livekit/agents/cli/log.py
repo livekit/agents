@@ -216,7 +216,7 @@ def setup_logging(log_level: str, devmode: bool) -> None:
     root.addHandler(handler)
     root.setLevel(log_level)
     
-    silence_noisy_loggers()
+    _silence_noisy_loggers()
 
     from ..log import logger
 
