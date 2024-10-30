@@ -13,25 +13,29 @@ on:
 
 jobs:
   tests:
-    # don't run tests for PRs on forks
+    # Don't run tests for PRs on forks
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-14-large
-            platform: macos
-          - os: macos-14
-            platform: macos
-          - os: windows-2019
-            platform: windows
-          - os: ubuntu-20.04
-            platform: linux
-          - os: namespace-profile-default-arm64
-            platform: linux
+        os:
+          - macos-14-large
+          - macos-14
+          - windows-2019
+          - ubuntu-20.04
+          - namespace-profile-default-arm64
+        test_group:
+          - name: fast_tests
+            files: 'test_aio.py test_tokenizer.py test_vad.py test_ipc.py'
+          - name: test_llm.py
+            files: 'test_llm.py'
+          - name: test_stt.py
+            files: 'test_stt.py'
+          - name: test_tts.py
+            files: 'test_tts.py'
 
     runs-on: ${{ matrix.os }}
-    name: Run tests (${{ matrix.os }})
+    name: Run tests (${{ matrix.os }}, ${{ matrix.test_group.name }})
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,14 +54,13 @@ jobs:
             ${{ runner.os }}-cache
 
       - uses: actions/setup-python@v5
-        # on mac, ffmpeg installs python
-        if: ${{ matrix.os != 'macos' }}
+        if: ${{ matrix.os != 'macos-14-large' && matrix.os != 'macos-14' }}
         with:
           python-version: "3.9"
           cache: "pip"
 
       - name: Install ffmpeg (Linux)
-        if: ${{ matrix.platform == 'linux' }}
+        if: ${{ matrix.os == 'ubuntu-20.04' || matrix.os == 'namespace-profile-default-arm64' }}
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
@@ -70,11 +73,11 @@ jobs:
           sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
 
       - name: Install ffmpeg (macOS)
-        if: ${{ matrix.platform == 'macos' }}
+        if: ${{ matrix.os == 'macos-14-large' || matrix.os == 'macos-14' }}
         run: brew install ffmpeg
 
       - name: Install ffmpeg (Windows)
-        if: ${{ matrix.platform == 'windows' }}
+        if: ${{ matrix.os == 'windows-2019' }}
         run: choco install ffmpeg
 
       - name: Install packages
@@ -108,6 +111,8 @@ jobs:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
+        working-directory: ./tests
         run: |
-          echo $GOOGLE_CREDENTIALS_JSON > google.json
-          pytest --asyncio-mode=auto --timeout=60 .
+          echo "$GOOGLE_CREDENTIALS_JSON" > google.json
+          pytest --asyncio-mode=auto --timeout=60 ${{ matrix.test_group.files }}
+
