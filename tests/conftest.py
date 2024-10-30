@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from livekit.agents import utils
 from livekit.agents.cli import log
@@ -13,3 +15,10 @@ def job_process(event_loop):
 @pytest.fixture(autouse=True)
 def configure_test():
     log._silence_noisy_loggers()
+
+
+@pytest.fixture()
+def logger():
+    logger = logging.getLogger("livekit.tests")
+    logger.setLevel(logging.DEBUG)
+    return logger
