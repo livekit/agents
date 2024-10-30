@@ -12,9 +12,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Ruff
+        run: ruff check --output-format=github .
+
+      - name: Check format
+        run: ruff format --check .
+
   type-check:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,8 +73,7 @@ jobs:
             types-psutil \
             types-pyOpenSSL \
             types-requests \
-            types-openpyxl \
-            types-requests
+            types-openpyxl
 
       - name: Check Types
         run: |
@@ -70,3 +89,4 @@ jobs:
                -p livekit.plugins.rag \
                -p livekit.plugins.azure \
                -p livekit.plugins.anthropic
+
