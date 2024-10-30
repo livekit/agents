@@ -110,7 +110,7 @@ class _ImplOptions:
     int_speech_duration: float
     int_min_words: int
     min_endpointing_delay: float
-    max_recursive_fnc_calls: int
+    max_nested_fnc_calls: int
     preemptive_synthesis: bool
     before_llm_cb: BeforeLLMCallback
     before_tts_cb: BeforeTTSCallback
@@ -161,7 +161,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
         min_endpointing_delay: float = 0.5,
-        max_recursive_fnc_calls: int = 1,
+        max_nested_fnc_calls: int = 1,
         preemptive_synthesis: bool = False,
         transcription: AgentTranscriptionOptions = AgentTranscriptionOptions(),
         before_llm_cb: BeforeLLMCallback = _default_before_llm_cb,
@@ -186,6 +186,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             interrupt_min_words: Minimum number of words to consider for interruption.
                 Defaults to 0 as this may increase the latency depending on the STT.
             min_endpointing_delay: Delay to wait before considering the user finished speaking.
+            max_nested_fnc_calls: Maximum number of nested function calls allowed for chaining
+                function calls (e.g functions that depend on each other).
             preemptive_synthesis: Whether to preemptively synthesize responses.
             transcription: Options for assistant transcription.
             before_llm_cb: Callback called when the assistant is about to synthesize a reply.
@@ -216,7 +218,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             int_speech_duration=interrupt_speech_duration,
             int_min_words=interrupt_min_words,
             min_endpointing_delay=min_endpointing_delay,
-            max_recursive_fnc_calls=max_recursive_fnc_calls,
+            max_nested_fnc_calls=max_nested_fnc_calls,
             preemptive_synthesis=preemptive_synthesis,
             transcription=transcription,
             before_llm_cb=before_llm_cb,
@@ -734,7 +736,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             new_function_calls = llm_stream.function_calls
 
-            for i in range(self._opts.max_recursive_fnc_calls):
+            for i in range(self._opts.max_nested_fnc_calls):
                 self.emit("function_calls_collected", new_function_calls)
 
                 called_fncs = []
@@ -788,7 +790,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 answer_llm_stream = self._llm.chat(
                     chat_ctx=chat_ctx,
                     fnc_ctx=self.fnc_ctx
-                    if i < self._opts.max_recursive_fnc_calls - 1
+                    if i < self._opts.max_nested_fnc_calls - 1
                     else None,
                 )
                 answer_synthesis = self._synthesize_agent_speech(

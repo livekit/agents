@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from livekit.agents import llm
+from livekit.agents import (
+    APIConnectionError,
+    llm,
+)
 
 from llama_index.core.chat_engine.types import (
     BaseChatEngine,
@@ -17,6 +20,7 @@ class LLM(llm.LLM):
         *,
         chat_engine: BaseChatEngine,
     ) -> None:
+        super().__init__()
         self._chat_engine = chat_engine
 
     def chat(
@@ -32,6 +36,7 @@ class LLM(llm.LLM):
             logger.warning("fnc_ctx is currently not supported with llama_index.LLM")
 
         return LLMStream(
+            self,
             chat_engine=self._chat_engine,
             chat_ctx=chat_ctx,
         )
@@ -40,43 +45,51 @@ class LLM(llm.LLM):
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
+        llm: LLM,
         *,
         chat_engine: BaseChatEngine,
         chat_ctx: llm.ChatContext,
     ) -> None:
-        super().__init__(chat_ctx=chat_ctx, fnc_ctx=None)
+        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=None)
         self._chat_engine = chat_engine
         self._stream: StreamingAgentChatResponse | None = None
 
-    async def __anext__(self) -> llm.ChatChunk:
-        # remove and get the last message from the chat_ctx
+    async def _main_task(self) -> None:
         chat_ctx = self._chat_ctx.copy()
         user_msg = chat_ctx.messages.pop()
+
         if user_msg.role != "user":
-            raise ValueError("last message in chat_ctx must be from user")
+            raise ValueError(
+                "The last message in the chat context must be from the user"
+            )
 
         assert isinstance(
             user_msg.content, str
         ), "user message content must be a string"
 
-        if not self._stream:
-            self._stream = await self._chat_engine.astream_chat(
-                user_msg.content, chat_history=_to_llama_chat_messages(self._chat_ctx)
-            )
+        try:
+            if not self._stream:
+                self._stream = await self._chat_engine.astream_chat(
+                    user_msg.content,
+                    chat_history=_to_llama_chat_messages(self._chat_ctx),
+                )
 
-        async for delta in self._stream.async_response_gen():
-            return llm.ChatChunk(
-                choices=[
-                    llm.Choice(
-                        delta=llm.ChoiceDelta(
-                            role="assistant",
-                            content=delta,
-                        )
+            async for delta in self._stream.async_response_gen():
+                self._event_ch.send_nowait(
+                    llm.ChatChunk(
+                        request_id="",
+                        choices=[
+                            llm.Choice(
+                                delta=llm.ChoiceDelta(
+                                    role="assistant",
+                                    content=delta,
+                                )
+                            )
+                        ],
                     )
-                ]
-            )
-
-        raise StopAsyncIteration
+                )
+        except Exception as e:
+            raise APIConnectionError() from e
 
 
 def _to_llama_chat_messages(chat_ctx: llm.ChatContext) -> list[ChatMessage]:
