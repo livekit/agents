@@ -59,8 +59,6 @@ jobs:
             ${{ runner.os }}-cache
 
       - uses: actions/setup-python@v5
-        # On macOS, ffmpeg installs Python
-        if: ${{ matrix.os != 'macos-14-large' && matrix.os != 'macos-14' }}
         with:
           python-version: "3.9"
           cache: "pip"
@@ -117,6 +115,7 @@ jobs:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
+        working-directory: tests
         run: |
           echo "$GOOGLE_CREDENTIALS_JSON" > google.json
 
@@ -127,5 +126,5 @@ jobs:
           test_files[stt]="test_stt.py"
           test_files[tts]="test_tts.py"
 
-          pytest --asyncio-mode=auto --timeout=60 ./tests/${test_files[${{ matrix.test_group }}]}
+          pytest --asyncio-mode=auto --timeout=60 ${test_files[${{ matrix.test_group }}]}
 
