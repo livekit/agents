@@ -1,4 +1,4 @@
-name: Ruff
+name: CI
 on:
   push:
     branches:
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  check:
+  ruff:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
