@@ -29,7 +29,7 @@ jobs:
           - os: ubuntu-20.04
             test_group: base
           - os: namespace-profile-default-arm64
-            test_group: bse
+            test_group: base
 
           # Run llm, stt, and tts tests only on Ubuntu
           - os: ubuntu-20.04
@@ -40,7 +40,7 @@ jobs:
             test_group: tts
 
     runs-on: ${{ matrix.os }}
-    name: Run tests (${{ matrix.os }}, ${{ matrix.test_group }})
+    name: Run ${{ matrix.test_group }} tests — ${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
         with:
