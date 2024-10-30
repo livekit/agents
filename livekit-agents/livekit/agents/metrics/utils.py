@@ -1,7 +1,7 @@
 import logging
 from typing import Callable, Optional, TypedDict
 
-from livekit.agents.metrics import AgentMetrics
+from .base import AgentMetrics
 
 from ..log import logger as default_logger
 

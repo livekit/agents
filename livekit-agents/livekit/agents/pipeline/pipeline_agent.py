@@ -97,6 +97,14 @@ def _default_before_llm_cb(
     )
 
 
+@dataclass
+class SpeechData:
+    sequence_id: str
+
+
+SpeechDataContextVar = contextvars.ContextVar[SpeechData]("voice_assistant_speech_data")
+
+
 def _default_before_tts_cb(
     agent: VoicePipelineAgent, text: str | AsyncIterable[str]
 ) -> str | AsyncIterable[str]:
