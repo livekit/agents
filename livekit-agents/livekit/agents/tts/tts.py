@@ -4,23 +4,12 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import AsyncIterable, AsyncIterator, Literal, TypedDict, Union
+from typing import AsyncIterable, AsyncIterator, Literal, Union
 
 from livekit import rtc
 
+from ..metrics import TTSMetrics
 from ..utils import aio, audio
-
-
-class TTSMetrics(TypedDict):
-    timestamp: float
-    request_id: str
-    ttfb: float
-    duration: float
-    audio_duration: float
-    cancelled: bool
-    characters_count: int
-    label: str
-    streamed: bool
 
 
 @dataclass

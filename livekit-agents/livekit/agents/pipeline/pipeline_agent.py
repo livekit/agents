@@ -17,11 +17,10 @@ from typing import (
 
 from livekit import rtc
 
-from .. import llm, stt, tokenize, tts, utils, vad
+from .. import llm, metrics, stt, tokenize, tts, utils, vad
 from .._constants import ATTRIBUTE_AGENT_STATE
 from .._types import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
-from . import metrics
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
@@ -315,7 +314,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             raise RuntimeError("voice assistant already started")
 
         @self._stt.on("metrics_collected")
-        def _on_stt_metrics(stt_metrics: stt.STTMetrics) -> None:
+        def _on_stt_metrics(stt_metrics: metrics.STTMetrics) -> None:
             pipeline_metrics: metrics.PipelineMetrics = {
                 "type": "stt_metrics",
                 **stt_metrics,
@@ -323,7 +322,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self.emit("metrics_collected", pipeline_metrics)
 
         @self._tts.on("metrics_collected")
-        def _on_tts_metrics(tts_metrics: tts.TTSMetrics) -> None:
+        def _on_tts_metrics(tts_metrics: metrics.TTSMetrics) -> None:
             speech_data = metrics.SpeechDataContextVar.get(None)
             if speech_data is None:
                 return

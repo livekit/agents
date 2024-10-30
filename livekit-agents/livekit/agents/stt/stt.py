@@ -5,21 +5,13 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterable, AsyncIterator, List, Literal, TypedDict, Union
+from typing import AsyncIterable, AsyncIterator, List, Literal, Union
 
 from livekit import rtc
 
+from ..metrics import STTMetrics
 from ..utils import AudioBuffer, aio
 from ..utils.audio import calculate_audio_duration
-
-
-class STTMetrics(TypedDict):
-    request_id: str
-    timestamp: float
-    duration: float
-    label: str
-    audio_duration: float
-    streamed: bool
 
 
 @unique

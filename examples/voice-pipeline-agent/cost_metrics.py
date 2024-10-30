@@ -1,8 +1,6 @@
-import asyncio
 import logging
 
 from dotenv import load_dotenv
-from livekit import rtc
 from livekit.agents import (
     AutoSubscribe,
     JobContext,
@@ -16,7 +14,14 @@ from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
-logger = logging.getLogger("voice-assistant")
+logger = logging.getLogger("metrics-example")
+
+# This example logs pipeline metrics and computes cost of the session
+
+OPENAI_LLM_INPUT_PRICE = 2.50 / (10**6)  # $2.50 per million tokens
+OPENAI_LLM_OUTPUT_PRICE = 10 / (10**6)  # $10 per million tokens
+OPENAI_TTS_PRICE = 15 / (10**6)  # $15 per million characters
+DEEPGRAM_STT_PRICE = 0.0043  # $0.0043 per minute
 
 
 def prewarm(proc: JobProcess):
@@ -32,51 +37,37 @@ async def entrypoint(ctx: JobContext):
         ),
     )
 
-    logger.info(f"connecting to room {ctx.room.name}")
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    # wait for the first participant to connect
     participant = await ctx.wait_for_participant()
-    logger.info(f"starting voice assistant for participant {participant.identity}")
-
-    dg_model = "nova-2-general"
-    if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-        # use a model optimized for telephony
-        dg_model = "nova-2-phonecall"
-
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
-        stt=deepgram.STT(model=dg_model),
+        stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
     )
 
-    agent.start(ctx.room, participant)
-
     log_metrics, summary = create_metrics_logger(logger)
     agent.on("metrics_collected", log_metrics)
 
-    async def log_usage():
-        logger.info(f"Usage: ${summary}")
+    async def log_session_cost():
+        llm_cost = (
+            summary.llm_prompt_tokens * OPENAI_LLM_INPUT_PRICE
+            + summary.llm_completion_tokens * OPENAI_LLM_OUTPUT_PRICE
+        )
+        tts_cost = summary.tts_characters_count * OPENAI_TTS_PRICE
+        stt_cost = summary.stt_audio_duration * DEEPGRAM_STT_PRICE / 60
 
-    ctx.add_shutdown_callback(log_usage)
+        total_cost = llm_cost + tts_cost + stt_cost
 
-    # listen to incoming chat messages, only required if you'd like the agent to
-    # answer incoming messages from Chat
-    chat = rtc.ChatManager(ctx.room)
+        logger.info(
+            f"Total cost: ${total_cost:.4f} (LLM: ${llm_cost:.4f}, TTS: ${tts_cost:.4f}, STT: ${stt_cost:.4f})"
+        )
 
-    async def answer_from_text(txt: str):
-        chat_ctx = agent.chat_ctx.copy()
-        chat_ctx.append(role="user", text=txt)
-        stream = agent.llm.chat(chat_ctx=chat_ctx)
-        await agent.say(stream)
+    ctx.add_shutdown_callback(log_session_cost)
 
-    @chat.on("message_received")
-    def on_chat_received(msg: rtc.ChatMessage):
-        if msg.message:
-            asyncio.create_task(answer_from_text(msg.message))
-
+    agent.start(ctx.room, participant)
     await agent.say("Hey, how can I help you today?", allow_interruptions=True)
 
 

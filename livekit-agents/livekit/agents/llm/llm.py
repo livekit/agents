@@ -4,27 +4,15 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterable, AsyncIterator, Literal, TypedDict
+from typing import Any, AsyncIterable, AsyncIterator, Literal
 
 from livekit import rtc
 
 from .. import utils
+from ..metrics import LLMMetrics
 from ..utils import aio
 from . import function_context
 from .chat_context import ChatContext, ChatRole
-
-
-class LLMMetrics(TypedDict):
-    request_id: str
-    timestamp: float
-    ttft: float
-    duration: float
-    label: str
-    cancelled: bool
-    completion_tokens: int
-    prompt_tokens: int
-    total_tokens: int
-    tokens_per_second: float
 
 
 @dataclass

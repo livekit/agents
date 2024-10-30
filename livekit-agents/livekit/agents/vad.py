@@ -5,18 +5,12 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterable, AsyncIterator, List, Literal, TypedDict, Union
+from typing import AsyncIterable, AsyncIterator, List, Literal, Union
 
 from livekit import rtc
 
+from .metrics import VADMetrics
 from .utils import aio
-
-
-class VADMetrics(TypedDict):
-    timestamp: float
-    inference_duration_total: float
-    inference_count: int
-    label: str
 
 
 @unique

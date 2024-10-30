@@ -4,10 +4,7 @@ import contextvars
 from dataclasses import dataclass
 from typing import Literal, TypedDict, Union
 
-from ..llm import LLMMetrics
-from ..stt import STTMetrics
-from ..tts import TTSMetrics
-from ..vad import VADMetrics
+from .components import LLMMetrics, STTMetrics, TTSMetrics, VADMetrics
 
 
 @dataclass
@@ -35,7 +32,7 @@ class PipelineEOUMetrics(TypedDict):
 
     transcription_delay: float
     """Time taken to obtain the transcript after the end of the user's speech.
-    
+
     May be 0 if the transcript was already available.
     """
 
