@@ -10,6 +10,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     llm,
+    metrics,
 )
 from livekit.agents.metrics import create_metrics_logger, create_summary_collector
 from livekit.agents.pipeline import VoicePipelineAgent
@@ -54,12 +55,12 @@ async def entrypoint(ctx: JobContext):
 
     agent.start(ctx.room, participant)
 
-    log_metrics = create_metrics_logger(logger)
-    agent.on("metrics_collected", log_metrics)
-    collect_summary, summary = create_summary_collector()
-    agent.on("metrics_collected", collect_summary)
+    usage_collector = metrics.UsageCollector()
+    agent.on("metrics_collected", usage_collector)
+    agent.on("metrics_collected", metrics.log_metrics(logger))
 
     async def log_usage():
+        summary = usage_collector.get_summary()
         logger.info(f"Usage: ${summary}")
 
     ctx.add_shutdown_callback(log_usage)
