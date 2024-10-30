@@ -103,18 +103,19 @@ class LLMStream(ABC):
                 usage = ev.usage
 
         duration = time.perf_counter() - start_time
-        metrics: LLMMetrics = {
-            "timestamp": time.time(),
-            "request_id": request_id,
-            "ttft": ttft,
-            "duration": duration,
-            "cancelled": self._task.cancelled(),
-            "label": self._llm._label,
-            "completion_tokens": usage.completion_tokens if usage else 0,
-            "prompt_tokens": usage.prompt_tokens if usage else 0,
-            "total_tokens": usage.total_tokens if usage else 0,
-            "tokens_per_second": usage.completion_tokens / duration if usage else 0.0,
-        }
+        metrics = LLMMetrics(
+            timestamp=time.time(),
+            request_id=request_id,
+            ttft=ttft,
+            duration=duration,
+            cancelled=self._task.cancelled(),
+            label=self._llm._label,
+            completion_tokens=usage.completion_tokens if usage else 0,
+            prompt_tokens=usage.prompt_tokens if usage else 0,
+            total_tokens=usage.total_tokens if usage else 0,
+            tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
+            error=None,
+        )
         self._llm.emit("metrics_collected", metrics)
 
     @property

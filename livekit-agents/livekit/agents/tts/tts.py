@@ -98,17 +98,18 @@ class ChunkedStream(ABC):
             audio_duration += ev.frame.duration
 
         duration = time.perf_counter() - start_time
-        metrics: TTSMetrics = {
-            "timestamp": time.time(),
-            "request_id": request_id,
-            "ttfb": ttfb,
-            "duration": duration,
-            "characters_count": len(self._input_text),
-            "audio_duration": audio_duration,
-            "cancelled": self._task.cancelled(),
-            "label": self._tts._label,
-            "streamed": False,
-        }
+        metrics = TTSMetrics(
+            timestamp=time.time(),
+            request_id=request_id,
+            ttfb=ttfb,
+            duration=duration,
+            characters_count=len(self._input_text),
+            audio_duration=audio_duration,
+            cancelled=self._task.cancelled(),
+            label=self._tts._label,
+            streamed=False,
+            error=None,
+        )
         self._tts.emit("metrics_collected", metrics)
 
     async def collect(self) -> rtc.AudioFrame:
@@ -174,17 +175,18 @@ class SynthesizeStream(ABC):
             if not text:
                 return
 
-            metrics: TTSMetrics = {
-                "timestamp": time.time(),
-                "request_id": request_id,
-                "ttfb": ttfb,
-                "duration": duration,
-                "characters_count": len(text),
-                "audio_duration": audio_duration,
-                "cancelled": self._task.cancelled(),
-                "label": self._tts._label,
-                "streamed": True,
-            }
+            metrics = TTSMetrics(
+                timestamp=time.time(),
+                request_id=request_id,
+                ttfb=ttfb,
+                duration=duration,
+                characters_count=len(text),
+                audio_duration=audio_duration,
+                cancelled=self._task.cancelled(),
+                label=self._tts._label,
+                streamed=True,
+                error=None,
+            )
             self._tts.emit("metrics_collected", metrics)
 
             audio_duration = 0.0

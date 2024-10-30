@@ -6,9 +6,7 @@ from typing import Union
 
 @dataclass
 class Error:
-    reason: str
-    message: str
-    status_code: int | None
+    pass
 
 
 @dataclass

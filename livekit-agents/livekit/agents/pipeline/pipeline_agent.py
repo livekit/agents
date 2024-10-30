@@ -325,45 +325,45 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         @self._stt.on("metrics_collected")
         def _on_stt_metrics(stt_metrics: metrics.STTMetrics) -> None:
-            pipeline_metrics: metrics.AgentMetrics = {
-                "type": "stt_metrics",
-                **stt_metrics,
-            }
-            self.emit("metrics_collected", pipeline_metrics)
+            self.emit(
+                "metrics_collected",
+                metrics.PipelineSTTMetrics(
+                    **stt_metrics.__dict__,
+                ),
+            )
 
         @self._tts.on("metrics_collected")
         def _on_tts_metrics(tts_metrics: metrics.TTSMetrics) -> None:
-            speech_data = metrics.SpeechDataContextVar.get(None)
+            speech_data = SpeechDataContextVar.get(None)
             if speech_data is None:
                 return
 
-            pipeline_metrics: metrics.AgentMetrics = {
-                "type": "tts_metrics",
-                "sequence_id": speech_data.sequence_id,
-                **tts_metrics,
-            }
-            self.emit("metrics_collected", pipeline_metrics)
+            self.emit(
+                "metrics_collected",
+                metrics.PipelineTTSMetrics(
+                    **tts_metrics.__dict__,
+                    sequence_id=speech_data.sequence_id,
+                ),
+            )
 
         @self._llm.on("metrics_collected")
         def _on_llm_metrics(llm_metrics: metrics.LLMMetrics) -> None:
-            speech_data = metrics.SpeechDataContextVar.get(None)
+            speech_data = SpeechDataContextVar.get(None)
             if speech_data is None:
                 return
-
-            pipeline_metrics: metrics.AgentMetrics = {
-                "type": "llm_metrics",
-                "sequence_id": speech_data.sequence_id,
-                **llm_metrics,
-            }
-            self.emit("metrics_collected", pipeline_metrics)
+            self.emit(
+                "metrics_collected",
+                metrics.PipelineLLMMetrics(
+                    **llm_metrics.__dict__,
+                    sequence_id=speech_data.sequence_id,
+                ),
+            )
 
         @self._vad.on("metrics_collected")
         def _on_vad_metrics(vad_metrics: vad.VADMetrics) -> None:
-            pipeline_metrics: metrics.AgentMetrics = {
-                "type": "vad_metrics",
-                **vad_metrics,
-            }
-            self.emit("metrics_collected", pipeline_metrics)
+            self.emit(
+                "metrics_collected", metrics.PipelineVADMetrics(**vad_metrics.__dict__)
+            )
 
         room.on("participant_connected", self._on_participant_connected)
         self._room, self._participant = room, participant
