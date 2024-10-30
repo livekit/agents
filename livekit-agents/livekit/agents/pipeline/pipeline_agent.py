@@ -17,7 +17,7 @@ from typing import (
 
 from livekit import rtc
 
-from .. import llm, metrics, stt, tokenize, tts, utils, vad
+from .. import metrics, stt, tokenize, tts, utils, vad
 from .._constants import ATTRIBUTE_AGENT_STATE
 from .._types import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
