@@ -208,10 +208,15 @@ class SpeechStream(ABC):
             await self._metrics_task
 
     async def __anext__(self) -> SpeechEvent:
-        if self._task.done() and (exc := self._task.exception()):
-            raise exc
+        try:
+            val = await self._event_aiter.__anext__()
+        except StopAsyncIteration:
+            if self._task.done() and (exc := self._task.exception()):
+                raise exc from None
 
-        return await self._event_aiter.__anext__()
+            raise StopAsyncIteration
+
+        return val
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
         return self
