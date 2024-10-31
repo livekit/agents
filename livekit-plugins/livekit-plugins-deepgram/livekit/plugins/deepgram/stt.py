@@ -192,6 +192,7 @@ class STT(stt.STT):
             "smart_format": config.smart_format,
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
+            **config.additional_config,
         }
         if config.language:
             recognize_config["language"] = config.language
@@ -309,6 +310,7 @@ class SpeechStream(stt.SpeechStream):
                     "filler_words": self._opts.filler_words,
                     "keywords": self._opts.keywords,
                     "profanity_filter": self._opts.profanity_filter,
+                    **self._opts.additional_config,
                 }
 
                 if self._opts.language:
@@ -555,5 +557,6 @@ def _to_deepgram_url(opts: dict, *, websocket: bool = False) -> str:
 
     # lowercase bools
     opts = {k: str(v).lower() if isinstance(v, bool) else v for k, v in opts.items()}
+    logger.info(f"Connecting to Deepgram with configs: {opts}")
     base_url = BASE_URL_WS if websocket else BASE_URL
     return f"{base_url}?{urlencode(opts, doseq=True)}"
