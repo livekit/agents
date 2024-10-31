@@ -67,6 +67,10 @@ async def entrypoint(ctx: JobContext):
     #     fnc_ctx=fnc_ctx,
     # )
 
+    # create a chat context with chat history
+    chat_ctx = llm.ChatContext()
+    # chat_ctx.append(text="Hello, my name is John.", role="user")
+
     agent = multimodal.MultimodalAgent(
         model=openai.realtime.RealtimeModel(
             voice="alloy",
@@ -77,6 +81,7 @@ async def entrypoint(ctx: JobContext):
             ),
         ),
         fnc_ctx=fnc_ctx,
+        chat_ctx=chat_ctx,
     )
     agent.start(ctx.room, participant)
 

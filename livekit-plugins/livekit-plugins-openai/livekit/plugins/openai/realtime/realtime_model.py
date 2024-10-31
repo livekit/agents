@@ -649,6 +649,11 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._session_id = "not-connected"
         self.session_update()  # initial session init
 
+        # update the chat context to the session
+        # TODO: add method to sync the chat context between the session and the agent
+        for msg in self._chat_ctx.messages:
+            self.conversation.item.create(msg)
+
         self._fnc_tasks = utils.aio.TaskSet()
 
     async def aclose(self) -> None:

@@ -108,6 +108,10 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def chat_ctx(self) -> llm.ChatContext:
         return self._session.chat_ctx
 
+    @chat_ctx.setter
+    def chat_ctx(self, value: llm.ChatContext | None) -> None:
+        self._session.chat_ctx = value
+
     @fnc_ctx.setter
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
         self._session.fnc_ctx = value
