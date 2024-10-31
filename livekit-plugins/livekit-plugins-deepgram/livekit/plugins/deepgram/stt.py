@@ -98,6 +98,7 @@ class STTOptions:
     num_channels: int
     keywords: list[Tuple[str, float]]
     profanity_filter: bool
+    additional_config: dict = dataclasses.field(default_factory=dict)
 
 
 class STT(stt.STT):
@@ -118,6 +119,7 @@ class STT(stt.STT):
         profanity_filter: bool = False,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        additional_config: dict | None = None,
     ) -> None:
         """
         Create a new instance of Deepgram STT.
@@ -168,6 +170,7 @@ class STT(stt.STT):
             num_channels=1,
             keywords=keywords,
             profanity_filter=profanity_filter,
+            additional_config=additional_config or {},
         )
         self._session = http_session
 
@@ -242,6 +245,9 @@ class STT(stt.STT):
 
         if config.detect_language:
             config.language = None
+
+        for key, value in self._opts.additional_config.items():
+            setattr(config, key, value)
 
         return config
 
