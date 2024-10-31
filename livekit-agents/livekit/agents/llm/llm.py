@@ -9,6 +9,7 @@ from typing import Any, AsyncIterable, AsyncIterator, Literal
 from livekit import rtc
 
 from .. import utils
+from ..log import logger
 from ..metrics import LLMMetrics
 from ..utils import aio
 from . import function_context
@@ -86,6 +87,7 @@ class LLMStream(ABC):
     @abstractmethod
     async def _main_task(self) -> None: ...
 
+    @utils.log_exceptions(logger=logger)
     async def _metrics_monitor_task(
         self, event_aiter: AsyncIterable[ChatChunk]
     ) -> None:
@@ -150,10 +152,15 @@ class LLMStream(ABC):
         await self._metrics_task
 
     async def __anext__(self) -> ChatChunk:
-        if self._task.done() and (exc := self._task.exception()):
-            raise exc
+        try:
+            val = await self._event_aiter.__anext__()
+        except StopAsyncIteration:
+            if self._task.done() and (exc := self._task.exception()):
+                raise exc from None
 
-        return await self._event_aiter.__anext__()
+            raise StopAsyncIteration
+
+        return val
 
     def __aiter__(self) -> AsyncIterator[ChatChunk]:
         return self
