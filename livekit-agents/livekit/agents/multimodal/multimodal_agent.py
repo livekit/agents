@@ -75,7 +75,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         self._model = model
         self._vad = vad
-        self._chat_ctx = chat_ctx
+        self._chat_ctx = chat_ctx or llm.ChatContext()
         self._fnc_ctx = fnc_ctx
 
         self._opts = _ImplOptions(
@@ -103,6 +103,10 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
         return self._session.fnc_ctx
+
+    @property
+    def chat_ctx(self) -> llm.ChatContext:
+        return self._session.chat_ctx
 
     @fnc_ctx.setter
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
@@ -177,6 +181,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 )
             )
             user_msg = ChatMessage.create(text=ev.transcript, role="user")
+            self._chat_ctx.messages.append(user_msg)
+
             self.emit("user_speech_committed", user_msg)
             logger.debug(
                 "committed user speech",
@@ -239,6 +245,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     collected_text += "..."
 
                 msg = ChatMessage.create(text=collected_text, role="assistant")
+                self._chat_ctx.messages.append(msg)
+
                 if interrupted:
                     self.emit("agent_speech_interrupted", msg)
                 else:
