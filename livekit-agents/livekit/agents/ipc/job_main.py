@@ -208,7 +208,11 @@ async def _async_main(
     async def _read_ipc_task():
         nonlocal job_task
         while True:
-            msg = await channel.arecv_message(cch, proto.IPC_MESSAGES)
+            try:
+                msg = await channel.arecv_message(cch, proto.IPC_MESSAGES)
+            except duplex_unix.DuplexClosed:
+                break
+
             with contextlib.suppress(utils.aio.SleepFinished):
                 no_msg_timeout.reset()
 
