@@ -47,7 +47,7 @@ class AssistantFnc(llm.FunctionContext):
 
         logger.info(f"checking reservation on {date}")
 
-        df = pd.read_csv("dates.csv")
+        df = pd.read_csv("availability.csv")
 
         # formatting datetime to query csv
         parsed_datetime = datetime.fromisoformat(date)
@@ -96,7 +96,7 @@ class AssistantFnc(llm.FunctionContext):
 
         logger.info(f"creating reservation on {date}")
 
-        df = pd.read_csv("dates.csv")
+        df = pd.read_csv("availability.csv")
 
         parsed_datetime = datetime.fromisoformat(date)
         date_to_check = parsed_datetime.strftime("%Y-%m-%d")
