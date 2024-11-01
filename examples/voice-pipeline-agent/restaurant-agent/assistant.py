@@ -21,7 +21,7 @@ load_dotenv()
 logger = logging.getLogger("weather-demo")
 logger.setLevel(logging.INFO)
 
-annoy_index = rag.annoy.AnnoyIndex.load("vdb_data")  # see build_data.py
+annoy_index = rag.annoy.AnnoyIndex.load("rag/vdb_data")  # see build_data.py
 
 embeddings_dimension = 1536
 with open("my_data.pkl", "rb") as f:
