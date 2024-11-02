@@ -141,9 +141,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 break
 
         self._session = self._model.session(chat_ctx=None, fnc_ctx=self._fnc_ctx)
-        # sync the chat context to the session
-        self._session.chat_ctx = self._chat_ctx
-        self._main_atask = asyncio.create_task(self._main_task())
 
         from livekit.plugins.openai import realtime
 
@@ -192,8 +189,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
             self.emit("user_speech_committed", user_msg)
             logger.debug(
-                "committed user speech",
-                extra={"user_transcript": ev.transcript, "ctx": user_msg},
+                "committed user speech", extra={"user_transcript": ev.transcript}
             )
 
         @self._session.on("input_speech_started")
@@ -212,6 +208,19 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         @self._session.on("input_speech_stopped")
         def _input_speech_stopped():
             self.emit("user_stopped_speaking")
+
+        @self._session.on("conversation_item_created")
+        def _conversation_item_created(ev: realtime.ConversationItemCreated):
+            # TODO (long): delete the log after debugging
+            logger.debug("conversation item created", extra={"ev": ev})
+
+        @self._session.on("conversation_item_deleted")
+        def _conversation_item_deleted(ev: realtime.ConversationItemDeleted):
+            logger.debug("conversation item deleted", extra={"ev": ev})
+
+        # sync the chat context to the session
+        self._session.chat_ctx = self._chat_ctx
+        self._main_atask = asyncio.create_task(self._main_task())
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -268,7 +277,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     extra={
                         "agent_transcript": collected_text,
                         "interrupted": interrupted,
-                        "ctx": msg,
                     },
                 )
 

@@ -94,6 +94,26 @@ class RealtimeToolCall:
     """id of the tool call"""
 
 
+@dataclass
+class ConversationItemCreated:
+    previous_item_id: str | None
+    """id of the previous item"""
+    item_id: str
+    """id of the item"""
+    role: api_proto.Role
+    """role of the item"""
+    status: api_proto.ResponseStatus
+    """status of the item"""
+    content: list[dict[str, str]]
+    """transcripts of the item"""
+
+
+@dataclass
+class ConversationItemDeleted:
+    item_id: str
+    """id of the item"""
+
+
 # TODO(theomonnom): add the content type directly inside RealtimeContent?
 # text/audio/transcript?
 @dataclass
@@ -893,6 +913,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                         self._handle_conversation_item_input_audio_transcription_failed(
                             data
                         )
+                    elif event == "conversation.item.created":
+                        self._handle_conversation_item_created(data)
+                    elif event == "conversation.item.deleted":
+                        self._handle_conversation_item_deleted(data)
                     elif event == "response.created":
                         self._handle_response_created(data)
                     elif event == "response.output_item.added":
@@ -985,6 +1009,31 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             InputTranscriptionFailed(
                 item_id=transcription_failed["item_id"],
                 message=error["message"],
+            ),
+        )
+
+    def _handle_conversation_item_created(
+        self, item_created: api_proto.ServerEvent.ConversationItemCreated
+    ):
+        item = item_created["item"]
+        self.emit(
+            "conversation_item_created",
+            ConversationItemCreated(
+                previous_item_id=item_created["previous_item_id"],
+                item_id=item["id"],
+                role=item["role"],
+                status=item["status"],
+                content=item["content"],
+            ),
+        )
+
+    def _handle_conversation_item_deleted(
+        self, item_deleted: api_proto.ServerEvent.ConversationItemDeleted
+    ):
+        self.emit(
+            "conversation_item_deleted",
+            ConversationItemDeleted(
+                item_id=item_deleted["item_id"],
             ),
         )
 
