@@ -1,5 +1,15 @@
 # livekit-agents
 
+## 0.11.1
+
+### Patch Changes
+
+- Fix stack dump on closed stream - [#1023](https://github.com/livekit/agents/pull/1023) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- fix: invalid request on anthropic - [#1018](https://github.com/livekit/agents/pull/1018) ([@theomonnom](https://github.com/theomonnom))
+
+- fix: IndexError on tts metrics - [#1028](https://github.com/livekit/agents/pull/1028) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.11.0
 
 ### Minor Changes
