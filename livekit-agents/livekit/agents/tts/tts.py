@@ -176,6 +176,9 @@ class SynthesizeStream(ABC):
             nonlocal start_time, audio_duration, ttfb, request_id
             duration = time.perf_counter() - start_time
 
+            if not self._mtc_pending_texts:
+                return
+
             text = self._mtc_pending_texts.pop(0)
             if not text:
                 return
