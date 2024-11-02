@@ -4,6 +4,7 @@ from . import aio, audio, codecs, http_context, hw, images
 from .audio import AudioBuffer, combine_frames, merge_frames
 from .exp_filter import ExpFilter
 from .log import log_exceptions
+from .message_change import MessageChange, compute_changes
 from .misc import shortuuid, time_ms
 from .moving_average import MovingAverage
 
@@ -25,4 +26,6 @@ __all__ = [
     "audio",
     "aio",
     "hw",
+    "compute_changes",
+    "MessageChange",
 ]

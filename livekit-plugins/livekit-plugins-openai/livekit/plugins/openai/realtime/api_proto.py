@@ -343,6 +343,7 @@ class ServerEvent:
     class ConversationItemCreated(TypedDict):
         event_id: str
         type: Literal["conversation.item.created"]
+        previous_item_id: str | None
         item: Resource.Item
 
     class ConversationItemInputAudioTranscriptionCompleted(TypedDict):

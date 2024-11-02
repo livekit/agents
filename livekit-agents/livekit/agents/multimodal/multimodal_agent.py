@@ -111,10 +111,11 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     @chat_ctx.setter
     def chat_ctx(self, value: llm.ChatContext | None) -> None:
         self._session.chat_ctx = value
+        self._chat_ctx = self._session.chat_ctx
 
     @fnc_ctx.setter
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
-        self._session.fnc_ctx = value
+        self._session.fnc_ctx = self._fnc_ctx = value
 
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
@@ -139,9 +140,9 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 self._link_participant(participant.identity)
                 break
 
-        self._session = self._model.session(
-            chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx
-        )
+        self._session = self._model.session(chat_ctx=None, fnc_ctx=self._fnc_ctx)
+        # sync the chat context to the session
+        self._session.chat_ctx = self._chat_ctx
         self._main_atask = asyncio.create_task(self._main_task())
 
         from livekit.plugins.openai import realtime
@@ -184,13 +185,15 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     alternatives=[stt.SpeechData(language="", text=ev.transcript)],
                 )
             )
-            user_msg = ChatMessage.create(text=ev.transcript, role="user")
+            user_msg = ChatMessage.create(
+                text=ev.transcript.strip(), role="user", item_id=ev.item_id
+            )
             self._chat_ctx.messages.append(user_msg)
 
             self.emit("user_speech_committed", user_msg)
             logger.debug(
                 "committed user speech",
-                extra={"user_transcript": ev.transcript},
+                extra={"user_transcript": ev.transcript, "ctx": user_msg},
             )
 
         @self._session.on("input_speech_started")
@@ -244,11 +247,15 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             self._update_state("listening")
 
             if self._playing_handle is not None:
-                collected_text = self._playing_handle._tr_fwd.played_text
+                collected_text = self._playing_handle._tr_fwd.played_text.strip()
                 if interrupted:
                     collected_text += "..."
 
-                msg = ChatMessage.create(text=collected_text, role="assistant")
+                msg = ChatMessage.create(
+                    text=collected_text,
+                    role="assistant",
+                    item_id=self._playing_handle.item_id,
+                )
                 self._chat_ctx.messages.append(msg)
 
                 if interrupted:
@@ -261,6 +268,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     extra={
                         "agent_transcript": collected_text,
                         "interrupted": interrupted,
+                        "ctx": msg,
                     },
                 )
 

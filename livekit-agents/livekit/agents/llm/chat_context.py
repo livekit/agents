@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Union
 
 from livekit import rtc
+from livekit.agents import utils
 
 from . import function_context
 
@@ -53,6 +54,10 @@ class ChatMessage:
     tool_exception: Exception | None = None
     _metadata: dict[str, Any] = field(default_factory=dict, repr=False, init=False)
 
+    def __post_init__(self):
+        if self.id is None:
+            self.id = utils.shortuuid("item_")
+
     @staticmethod
     def create_tool_from_called_function(
         called_function: function_context.CalledFunction,
@@ -86,10 +91,14 @@ class ChatMessage:
 
     @staticmethod
     def create(
-        *, text: str = "", images: list[ChatImage] = [], role: ChatRole = "system"
+        *,
+        text: str = "",
+        images: list[ChatImage] = [],
+        role: ChatRole = "system",
+        item_id: str | None = None,
     ) -> "ChatMessage":
         if len(images) == 0:
-            return ChatMessage(role=role, content=text)
+            return ChatMessage(role=role, content=text, id=item_id)
         else:
             content: list[ChatContent] = []
             if text:
@@ -98,7 +107,7 @@ class ChatMessage:
             if len(images) > 0:
                 content.extend(images)
 
-            return ChatMessage(role=role, content=content)
+            return ChatMessage(role=role, content=content, id=item_id)
 
     def copy(self):
         content = self.content

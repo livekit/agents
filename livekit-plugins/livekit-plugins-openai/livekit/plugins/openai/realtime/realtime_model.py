@@ -529,6 +529,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                         "type": "conversation.item.create",
                         "previous_item_id": previous_item_id,
                         "item": {
+                            "id": message.id,
                             "type": "message",
                             "role": "user",
                             "content": user_contents,
@@ -554,6 +555,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                         "type": "conversation.item.create",
                         "previous_item_id": previous_item_id,
                         "item": {
+                            "id": message.id,
                             "type": "message",
                             "role": "assistant",
                             "content": assistant_contents,
@@ -649,11 +651,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._session_id = "not-connected"
         self.session_update()  # initial session init
 
-        # update the chat context to the session
-        # TODO: add method to sync the chat context between the session and the agent
-        for msg in self._chat_ctx.messages:
-            self.conversation.item.create(msg)
-
         self._fnc_tasks = utils.aio.TaskSet()
 
     async def aclose(self) -> None:
@@ -666,6 +663,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     @property
     def chat_ctx(self) -> llm.ChatContext:
         return self._chat_ctx
+
+    @chat_ctx.setter
+    def chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        """Sync the ctx to the session and reset the chat context."""
+        self.sync_chat_ctx(chat_ctx)
+        self._chat_ctx = chat_ctx
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
@@ -773,6 +776,23 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 "session": session_data,
             }
         )
+
+    def sync_chat_ctx(self, ctx: llm.ChatContext) -> None:
+        """Sync the chat context with the agent's chat context.
+
+        Compute the minimum number of insertions and deletions to transform the old
+        chat context messages to the new chat context messages.
+        """
+        changes = utils.compute_changes(
+            self._chat_ctx.messages, ctx.messages, key_fnc=lambda x: x.id
+        )
+        for msg in changes.to_delete:
+            self.conversation.item.delete(item_id=msg.id)
+
+        for prev, msg in changes.to_add:
+            self.conversation.item.create(msg, prev.id if prev else None)
+
+        self._chat_ctx.messages = [msg.copy() for msg in ctx.messages]
 
     def _queue_msg(self, msg: api_proto.ClientEvents) -> None:
         self._send_ch.send_nowait(msg)
