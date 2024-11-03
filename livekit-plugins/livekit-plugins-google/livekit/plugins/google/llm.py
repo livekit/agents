@@ -14,29 +14,28 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 import typing
-from typing import Any, AsyncIterator, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Awaitable, Dict, List, Optional
 from uuid import uuid4 as uuid
 
 import vertexai
+from livekit.agents import llm
 from vertexai.generative_models import (
     Candidate,
     Content,
     FunctionCall,
     FunctionDeclaration,
-    GenerativeModel,
     GenerationConfig,
     GenerationResponse,
+    GenerativeModel,
     Part,
     Tool,
 )
 
-from livekit.agents import llm
-from .models import ChatModels
 from .log import logger
+from .models import ChatModels
 
 
 class LLM(llm.LLM):
@@ -101,7 +100,7 @@ class LLM(llm.LLM):
 
         return LLMStream(
             llm=self,
-            vai_stream= cmp,
+            vai_stream=cmp,
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
         )
@@ -182,11 +181,12 @@ class LLMStream(llm.LLMStream):
 
     async def _main_task(self) -> None:
         if not self._vai_stream:
-                self._vai_stream = await self._awaitable_vai_stream
+            self._vai_stream = await self._awaitable_vai_stream
         try:
             async for response in self._vai_stream:
                 for idx, candidate in enumerate(response.candidates):
                     chat_chunk = self._parse_candidate(candidate, idx)
+                    # logger.debug("Chat chunk: %s", chat_chunk)
                     if chat_chunk is not None:
                         self._event_ch.send_nowait(chat_chunk)
 
@@ -194,9 +194,11 @@ class LLMStream(llm.LLMStream):
             logger.error("Error during main task: %s", e)
             raise e
 
-    def _parse_candidate(self, candidate: Candidate, index: int) -> Optional[llm.ChatChunk]:
-        choice_delta = llm.ChoiceDelta(role = "assistant")
-        
+    def _parse_candidate(
+        self, candidate: Candidate, index: int
+    ) -> Optional[llm.ChatChunk]:
+        choice_delta = llm.ChoiceDelta(role="assistant")
+
         if candidate.function_calls:
             for fnc_call in candidate.function_calls:
                 function_call = self._create_function_call_info(fnc_call)
@@ -206,7 +208,7 @@ class LLMStream(llm.LLMStream):
             logger.debug("Function calls: %s", self._function_calls_info)
             logger.debug("index: %s", index)
             return llm.ChatChunk(
-                request_id= uuid(),
+                request_id=uuid(),
                 choices=[
                     llm.Choice(
                         delta=choice_delta,
@@ -218,7 +220,7 @@ class LLMStream(llm.LLMStream):
         if candidate.text:
             choice_delta.content = candidate.text
             return llm.ChatChunk(
-                request_id= uuid(),
+                request_id=uuid(),
                 choices=[
                     llm.Choice(
                         delta=choice_delta,
@@ -226,30 +228,10 @@ class LLMStream(llm.LLMStream):
                     )
                 ],
             )
-        # for part in content.parts:
-        #     part_type = part._raw_part._pb.WhichOneof("data")
-        #     if part_type == "function_call" and part.function_call and part.function_call.args:
-        #         function_call = self._create_function_call_info(part.function_call)
-        #         if function_call:
-        #             self._function_calls_info.append(function_call)
-                    
-        #     elif part_type == "text":
-        #         if part.text:
-        #             choice_delta.content = part.text
-        #             return llm.ChatChunk(
-        #                 request_id=index,
-        #                 choices=[
-        #                     llm.Choice(
-        #                         delta=choice_delta,
-        #                         index=index,
-        #                     )
-        #                 ],
-        #             )
-       
-        # return None
-    
 
-    def _create_function_call_info(self, function_call: FunctionCall) -> Optional[llm.FunctionCallInfo]:
+    def _create_function_call_info(
+        self, function_call: FunctionCall
+    ) -> Optional[llm.FunctionCallInfo]:
         if not self._fnc_ctx:
             return None
         fnc_name = function_call.name
@@ -267,8 +249,14 @@ class LLMStream(llm.LLMStream):
                 sanitized_value = _sanitize_value(arg_value, arg_info)
                 sanitized_arguments[arg_name] = sanitized_value
             elif arg_info.default is inspect.Parameter.empty:
-                logger.error("Missing required argument '%s' for function '%s'", arg_name, fnc_name)
-                raise ValueError(f"Missing required argument '{arg_name}' for function '{fnc_name}'")
+                logger.error(
+                    "Missing required argument '%s' for function '%s'",
+                    arg_name,
+                    fnc_name,
+                )
+                raise ValueError(
+                    f"Missing required argument '{arg_name}' for function '{fnc_name}'"
+                )
             else:
                 sanitized_arguments[arg_name] = arg_info.default
         return llm.FunctionCallInfo(
@@ -277,11 +265,9 @@ class LLMStream(llm.LLMStream):
             raw_arguments=raw_arguments,
             arguments=sanitized_arguments,
         )
-    
 
-def _build_vertex_context(
-    chat_ctx: llm.ChatContext, cache_key: Any
-) -> List[Content]:
+
+def _build_vertex_context(chat_ctx: llm.ChatContext, cache_key: Any) -> List[Content]:
     contents: List[Content] = []
     for msg in chat_ctx.messages:
         content = _build_content(msg, cache_key)
@@ -290,9 +276,8 @@ def _build_vertex_context(
     logger.debug("Built vertex context: %s", contents)
     return contents
 
-def _build_content(
-    msg: llm.ChatMessage, cache_key: Any
-) -> Content:
+
+def _build_content(msg: llm.ChatMessage, cache_key: Any) -> Content:
     parts: List[Part] = []
     role = msg.role
     if role == "system" or role == "assistant":
@@ -313,8 +298,7 @@ def _build_content(
             for fnc in msg.tool_calls:
                 # Construct the function call part
                 function_call = FunctionCall(
-                    name=fnc.function_info.name,
-                    args=fnc.arguments
+                    name=fnc.function_info.name, args=fnc.arguments
                 )
                 raw_function_call = function_call._raw_message
                 part = Part()
@@ -324,13 +308,13 @@ def _build_content(
         elif isinstance(msg.content, str) and msg.content.strip():
             parts.append(Part.from_text(msg.content))
     elif role == "tool":
+        # The tool's response should be represented as a function response
+        logger.debug("Tool response: %s", msg)
         role = "model"
         parts.append(
             Part.from_function_response(
                 name=msg.name,
-                response= {
-                    "content": msg.content
-                },
+                response={"content": msg.content},
             )
         )
 
@@ -350,9 +334,13 @@ def _sanitize_value(value: Any, arg_info: llm.FunctionArgInfo) -> Any:
     elif typing.get_origin(expected_type) is list and not isinstance(value, list):
         raise ValueError(f"Expected argument '{arg_info.name}' to be of type list")
     elif expected_type not in {str, int, float, bool, list}:
-        raise ValueError(f"Unsupported argument type '{expected_type}' for argument '{arg_info.name}'")
+        raise ValueError(
+            f"Unsupported argument type '{expected_type}' for argument '{arg_info.name}'"
+        )
 
     if arg_info.choices and value not in arg_info.choices:
-        raise ValueError(f"Value '{value}' for argument '{arg_info.name}' is not in allowed choices {arg_info.choices}")
+        raise ValueError(
+            f"Value '{value}' for argument '{arg_info.name}' is not in allowed choices {arg_info.choices}"
+        )
 
     return value
