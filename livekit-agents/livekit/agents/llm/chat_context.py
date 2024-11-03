@@ -120,6 +120,7 @@ class ChatMessage:
 
         copied_msg = ChatMessage(
             role=self.role,
+            id=self.id,
             name=self.name,
             content=content,
             tool_calls=tool_calls,

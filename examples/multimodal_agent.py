@@ -98,6 +98,15 @@ async def entrypoint(ctx: JobContext):
     )
     agent.start(ctx.room, participant)
 
+    @agent.on("agent_speech_committed")
+    @agent.on("agent_speech_interrupted")
+    def _on_agent_speech_created(msg: llm.ChatMessage):
+        # example of truncating the chat context
+        max_ctx_len = 10
+        if len(agent.chat_ctx.messages) > max_ctx_len:
+            messages = agent.chat_ctx.messages[-max_ctx_len:]
+            agent.sync_chat_ctx(llm.ChatContext(messages=messages))
+
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, worker_type=WorkerType.ROOM))

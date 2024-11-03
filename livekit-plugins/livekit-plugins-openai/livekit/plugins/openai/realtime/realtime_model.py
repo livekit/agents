@@ -806,6 +806,15 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         changes = utils.compute_changes(
             self._chat_ctx.messages, ctx.messages, key_fnc=lambda x: x.id
         )
+        logger.debug(
+            "sync chat context",
+            extra={
+                "to_delete": [msg.id for msg in changes.to_delete],
+                "to_add": [
+                    (prev.id if prev else None, msg.id) for prev, msg in changes.to_add
+                ],
+            },
+        )
         for msg in changes.to_delete:
             self.conversation.item.delete(item_id=msg.id)
 

@@ -117,6 +117,9 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
         self._session.fnc_ctx = self._fnc_ctx = value
 
+    def sync_chat_ctx(self, ctx: llm.ChatContext) -> None:
+        self._session.sync_chat_ctx(ctx)
+
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
     ) -> None:
