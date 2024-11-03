@@ -1,5 +1,9 @@
 from typing import Literal
 
+ChatModels = Literal[ 
+    "gemini-pro"
+]
+
 # Speech to Text v2
 
 SpeechModels = Literal[
