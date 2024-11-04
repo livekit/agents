@@ -100,10 +100,8 @@ class ConversationItemCreated:
     """id of the previous item"""
     item_id: str
     """id of the item"""
-    role: api_proto.Role
+    role: api_proto.Role | None
     """role of the item"""
-    status: api_proto.ResponseStatus
-    """status of the item"""
     content: list[dict[str, str]]
     """transcripts of the item"""
 
@@ -673,6 +671,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._session_id = "not-connected"
         self.session_update()  # initial session init
 
+        # sync the chat context to the session
+        self._sync_chat_ctx_to_session(None, self._chat_ctx)
+
         self._fnc_tasks = utils.aio.TaskSet()
 
     async def aclose(self) -> None:
@@ -689,7 +690,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     @chat_ctx.setter
     def chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         """Sync the ctx to the session and reset the chat context."""
-        self.sync_chat_ctx(chat_ctx)
+        self._sync_chat_ctx_to_session(self._chat_ctx, chat_ctx)
         self._chat_ctx = chat_ctx
 
     @property
@@ -799,14 +800,19 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             }
         )
 
-    def sync_chat_ctx(self, ctx: llm.ChatContext) -> None:
+    def _sync_chat_ctx_to_session(
+        self, original_ctx: llm.ChatContext | None, new_ctx: llm.ChatContext | None
+    ) -> None:
         """Sync the chat context with the agent's chat context.
 
         Compute the minimum number of insertions and deletions to transform the old
         chat context messages to the new chat context messages.
         """
+        original_ctx = original_ctx or llm.ChatContext()
+        new_ctx = new_ctx or llm.ChatContext()
+
         changes = utils.compute_changes(
-            self._chat_ctx.messages, ctx.messages, key_fnc=lambda x: x.id
+            original_ctx.messages, new_ctx.messages, key_fnc=lambda x: x.id
         )
         logger.debug(
             "sync chat context",
@@ -822,8 +828,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         for prev, msg in changes.to_add:
             self.conversation.item.create(msg, prev.id if prev else None)
-
-        self._chat_ctx.messages = [msg.copy() for msg in ctx.messages]
 
     def _queue_msg(self, msg: api_proto.ClientEvents) -> None:
         self._send_ch.send_nowait(msg)
@@ -1032,9 +1036,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             ConversationItemCreated(
                 previous_item_id=item_created["previous_item_id"],
                 item_id=item["id"],
-                role=item["role"],
-                status=item["status"],
-                content=item["content"],
+                role=item.get("role"),
+                content=item.get("content", []),
             ),
         )
 

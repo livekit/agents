@@ -75,7 +75,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         self._model = model
         self._vad = vad
-        self._chat_ctx = chat_ctx or llm.ChatContext()
+        self._chat_ctx = chat_ctx
         self._fnc_ctx = fnc_ctx
 
         self._opts = _ImplOptions(
@@ -104,21 +104,16 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def fnc_ctx(self) -> llm.FunctionContext | None:
         return self._session.fnc_ctx
 
+    @fnc_ctx.setter
+    def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
+        self._session.fnc_ctx = value
+
     @property
     def chat_ctx(self) -> llm.ChatContext:
         return self._session.chat_ctx
 
-    @chat_ctx.setter
-    def chat_ctx(self, value: llm.ChatContext | None) -> None:
-        self._session.chat_ctx = value
-        self._chat_ctx = self._session.chat_ctx
-
-    @fnc_ctx.setter
-    def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
-        self._session.fnc_ctx = self._fnc_ctx = value
-
     def sync_chat_ctx(self, ctx: llm.ChatContext) -> None:
-        self._session.sync_chat_ctx(ctx)
+        self._session.chat_ctx = ctx
 
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
@@ -143,7 +138,10 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 self._link_participant(participant.identity)
                 break
 
-        self._session = self._model.session(chat_ctx=None, fnc_ctx=self._fnc_ctx)
+        self._session = self._model.session(
+            chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx
+        )
+        self._main_atask = asyncio.create_task(self._main_task())
 
         from livekit.plugins.openai import realtime
 
@@ -151,7 +149,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         def _on_content_added(message: realtime.RealtimeContent):
             if message.content_type == "text":
                 logger.warning(
-                    "The realtime API returned a text content part, which is not supported yet"
+                    "The realtime API returned a text content part, which is not supported"
                 )
                 return
 
@@ -192,13 +190,14 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 )
             )
             user_msg = ChatMessage.create(
-                text=ev.transcript.strip(), role="user", item_id=ev.item_id
+                text=ev.transcript, role="user", item_id=ev.item_id
             )
-            self._chat_ctx.messages.append(user_msg)
+            self.chat_ctx.messages.append(user_msg)
 
             self.emit("user_speech_committed", user_msg)
             logger.debug(
-                "committed user speech", extra={"user_transcript": ev.transcript}
+                "committed user speech",
+                extra={"user_transcript": ev.transcript},
             )
 
         @self._session.on("input_speech_started")
@@ -226,10 +225,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         @self._session.on("conversation_item_deleted")
         def _conversation_item_deleted(ev: realtime.ConversationItemDeleted):
             logger.debug("conversation item deleted", extra={"ev": ev})
-
-        # sync the chat context to the session
-        self._session.chat_ctx = self._chat_ctx
-        self._main_atask = asyncio.create_task(self._main_task())
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -265,7 +260,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             self._update_state("listening")
 
             if self._playing_handle is not None:
-                collected_text = self._playing_handle._tr_fwd.played_text.strip()
+                collected_text = self._playing_handle._tr_fwd.played_text
                 if interrupted:
                     collected_text += "..."
 
@@ -274,7 +269,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     role="assistant",
                     item_id=self._playing_handle.item_id,
                 )
-                self._chat_ctx.messages.append(msg)
+                self.chat_ctx.messages.append(msg)
 
                 if interrupted:
                     self.emit("agent_speech_interrupted", msg)
