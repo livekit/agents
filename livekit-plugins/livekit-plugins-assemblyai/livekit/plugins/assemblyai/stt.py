@@ -30,6 +30,7 @@ from livekit import rtc
 from livekit.agents import stt, utils
 from livekit.agents.utils import AudioBuffer
 
+from .log import logger
 
 ENGLISH = "en"
 
@@ -162,9 +163,11 @@ class SpeechStream(stt.SpeechStream):
 
         await self._session.close()
 
+    @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        return self._run(self._max_retry)
+        await self._run(self._max_retry)
 
+    @utils.log_exceptions(logger=logger)
     async def _run(self, max_retry: int) -> None:
         """
         Run a single websocket connection to AssemblyAI and make sure to reconnect
@@ -188,7 +191,8 @@ class SpeechStream(stt.SpeechStream):
                     }
 
                     ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
-                    url = f"{ws_url}?{urlencode(live_config).lower()}"
+                    filtered_config = {k: v for k, v in live_config.items() if v is not None}
+                    url = f"{ws_url}?{urlencode(filtered_config).lower()}"
                     ws = await self._session.ws_connect(url, headers=headers)
                     retry_count = 0  # connected successfully, reset the retry_count
 
@@ -196,7 +200,7 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     # Something went wrong, retry the connection
                     if retry_count >= max_retry:
-                        print(
+                        logger.error(
                             f"failed to connect to AssemblyAI after {max_retry} tries"
                         )
                         break
@@ -204,12 +208,10 @@ class SpeechStream(stt.SpeechStream):
                     retry_delay = min(retry_count * 2, 10)  # max 10s
                     retry_count += 1  # increment after calculating the delay, the first retry should happen directly
 
-                    print(
+                    logger.info(
                         f"AssemblyAI connection failed, retrying in {retry_delay}s",
                     )
                     await asyncio.sleep(retry_delay)
-        except Exception:
-            print("AssemblyAI task failed")
         finally:
             self._event_queue.put_nowait(None)
 
@@ -255,6 +257,8 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send_bytes(bytes(buffer))
                         buffer.clear()
                         buffer_duration = 0.0
+                elif data == END_UTTERANCE_SILENCE_THRESHOLD_MSG:
+                    await ws.send_str(data)
                 elif data == SpeechStream._CLOSE_MSG:
                     closing_ws = True
                     await ws.send_str(data)  # tell AssemblyAI we are done with inputs
@@ -279,7 +283,7 @@ class SpeechStream(stt.SpeechStream):
                     )  # this will trigger a reconnection, see the _run loop
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    print("unexpected AssemblyAI message type %s", msg.type)
+                    logger.error("unexpected AssemblyAI message type %s", msg.type)
                     continue
 
                 try:
@@ -287,13 +291,13 @@ class SpeechStream(stt.SpeechStream):
                     data = json.loads(msg.data)
                     self._process_stream_event(data)
                 except Exception:
-                    print("failed to process AssemblyAI message")
+                    logger.error("failed to process AssemblyAI message")
 
         await asyncio.gather(send_task(), recv_task())
 
     def _end_speech(self) -> None:
         if not self._speaking:
-            print(
+            logger.info(
                 "trying to commit final events without being in the speaking state",
             )
             return
@@ -359,7 +363,7 @@ class SpeechStream(stt.SpeechStream):
                 self._event_queue.put_nowait(final_event)
                 self._end_speech()
         elif data["message_type"] == "RealtimeError":
-            print("Received unexpected error from AssemblyAI %s", data)
+            logger.error("Received unexpected error from AssemblyAI %s", data)
 
     async def __anext__(self) -> stt.SpeechEvent:
         evt = await self._event_queue.get()
