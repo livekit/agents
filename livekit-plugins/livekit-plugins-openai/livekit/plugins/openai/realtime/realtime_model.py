@@ -136,6 +136,8 @@ class RealtimeContent:
     """stream of audio content"""
     tool_calls: list[RealtimeToolCall]
     """pending tool calls"""
+    content_type: api_proto.Modality
+    """type of the content"""
 
 
 @dataclass
@@ -1095,6 +1097,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         response = self._pending_responses[response_id]
         output_index = response_content_added["output_index"]
         output = response.output[output_index]
+        content_type = response_content_added["part"]["type"]
 
         text_ch = utils.aio.Chan[str]()
         audio_ch = utils.aio.Chan[rtc.AudioFrame]()
@@ -1109,6 +1112,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             text_stream=text_ch,
             audio_stream=audio_ch,
             tool_calls=[],
+            content_type=content_type,
         )
         output.content.append(new_content)
         self.emit("response_content_added", new_content)

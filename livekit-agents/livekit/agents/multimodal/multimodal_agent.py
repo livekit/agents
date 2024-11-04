@@ -149,6 +149,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         @self._session.on("response_content_added")
         def _on_content_added(message: realtime.RealtimeContent):
+            if message.content_type == "text":
+                logger.warning(
+                    "The realtime API returned a text content part, which is not supported yet"
+                )
+                return
+
             tr_fwd = transcription.TTSSegmentsForwarder(
                 room=self._room,
                 participant=self._room.local_participant,
