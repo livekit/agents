@@ -16,12 +16,15 @@ from ..worker import WorkerOptions
 class CliArgs:
     opts: WorkerOptions
     log_level: str
-    production: bool
+    devmode: bool
     asyncio_debug: bool
     watch: bool
     drain_timeout: int
     room: str = ""
     participant_identity: str = ""
+
+    # amount of time this worker has been reloaded
+    reload_count: int = 0
 
     # pipe used for the communication between the watch server and the watch client
     # when reload/dev mode is enabled
@@ -37,6 +40,7 @@ class ActiveJobsRequest:
 class ActiveJobsResponse:
     MSG_ID: ClassVar[int] = 2
     jobs: list[RunningJobInfo] = field(default_factory=list)
+    reload_count: int = 0
 
     def write(self, b: io.BytesIO) -> None:
         channel.write_int(b, len(self.jobs))
@@ -48,6 +52,8 @@ class ActiveJobsResponse:
             channel.write_string(b, accept_args.metadata)
             channel.write_string(b, running_job.url)
             channel.write_string(b, running_job.token)
+
+        channel.write_int(b, self.reload_count)
 
     def read(self, b: io.BytesIO) -> None:
         for _ in range(channel.read_int(b)):
@@ -65,6 +71,8 @@ class ActiveJobsResponse:
                     token=channel.read_string(b),
                 )
             )
+
+        self.reload_count = channel.read_int(b)
 
 
 @dataclass

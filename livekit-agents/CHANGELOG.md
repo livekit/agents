@@ -1,5 +1,201 @@
 # livekit-agents
 
+## 0.11.1
+
+### Patch Changes
+
+- Fix stack dump on closed stream - [#1023](https://github.com/livekit/agents/pull/1023) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- fix: invalid request on anthropic - [#1018](https://github.com/livekit/agents/pull/1018) ([@theomonnom](https://github.com/theomonnom))
+
+- fix: IndexError on tts metrics - [#1028](https://github.com/livekit/agents/pull/1028) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.11.0
+
+### Minor Changes
+
+- prepare for release - [#1007](https://github.com/livekit/agents/pull/1007) ([@theomonnom](https://github.com/theomonnom))
+
+### Patch Changes
+
+- Fix race in load calc initialization - [#969](https://github.com/livekit/agents/pull/969) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Fix incorrect load computation on docker instances - [#972](https://github.com/livekit/agents/pull/972) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- stt: reduce bandwidth usage by reducing sample_rate to 16khz - [#920](https://github.com/livekit/agents/pull/920) ([@theomonnom](https://github.com/theomonnom))
+
+- Reorganized metrics, added create_metrics_logger - [#1009](https://github.com/livekit/agents/pull/1009) ([@davidzhao](https://github.com/davidzhao))
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
+- Allow kind to be list or single value - [#1006](https://github.com/livekit/agents/pull/1006) ([@keepingitneil](https://github.com/keepingitneil))
+
+- fix before_llm_cb not handling coroutines returning False - [#961](https://github.com/livekit/agents/pull/961) ([@Tanesan](https://github.com/Tanesan))
+
+- expose transcriptions for multimodal agents - [#1001](https://github.com/livekit/agents/pull/1001) ([@longcw](https://github.com/longcw))
+
+- Fix stack dump on room shutdown - [#989](https://github.com/livekit/agents/pull/989) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Add exception logging for tool calls - [#923](https://github.com/livekit/agents/pull/923) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Skip egress by default in participant-related utilities on JobContext - [#1005](https://github.com/livekit/agents/pull/1005) ([@keepingitneil](https://github.com/keepingitneil))
+
+- pipeline-agent: avoid nested function calls - [#935](https://github.com/livekit/agents/pull/935) ([@theomonnom](https://github.com/theomonnom))
+
+- expose usage metrics - [#984](https://github.com/livekit/agents/pull/984) ([@theomonnom](https://github.com/theomonnom))
+
+- fix jobs never reloading - [#934](https://github.com/livekit/agents/pull/934) ([@theomonnom](https://github.com/theomonnom))
+
+- voicepipeline: support recursive/chained function calls - [#970](https://github.com/livekit/agents/pull/970) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.10.2
+
+### Patch Changes
+
+- Fix split_paragraphs and simple-rag example - [#896](https://github.com/livekit/agents/pull/896) ([@davidzhao](https://github.com/davidzhao))
+
+- Fix bug where if the tts_source was a string but before_tts_cb returned AsyncIterable[str], the transcript would not be synthesized. - [#906](https://github.com/livekit/agents/pull/906) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Allow forcing interruptions of incomplete audio - [#891](https://github.com/livekit/agents/pull/891) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Include chat context on collected tool calls - [#897](https://github.com/livekit/agents/pull/897) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+## 0.10.1
+
+### Patch Changes
+
+- use rtc.combine_audio_frames - [#841](https://github.com/livekit/agents/pull/841) ([@theomonnom](https://github.com/theomonnom))
+
+- Fix agent state to not change to listening when user speaks - [#857](https://github.com/livekit/agents/pull/857) ([@martin-purplefish](https://github.com/martin-purplefish))
+  Fixed canceling uncancelable speech
+  Fixed bug where agent would get stuck with uninterruptable speech.
+
+- Fix bug where empty audio would cause agent to get stuck. - [#836](https://github.com/livekit/agents/pull/836) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- fix: handle when STT does not return any speech - [#854](https://github.com/livekit/agents/pull/854) ([@davidzhao](https://github.com/davidzhao))
+
+- Fix watcher reloaded processes double connecting to rooms - [#822](https://github.com/livekit/agents/pull/822) ([@keepingitneil](https://github.com/keepingitneil))
+
+- voice-pipeline: avoid stacked replies when interruptions is disallowed - [#869](https://github.com/livekit/agents/pull/869) ([@theomonnom](https://github.com/theomonnom))
+
+- disable preemptive_synthesis by default - [#867](https://github.com/livekit/agents/pull/867) ([@theomonnom](https://github.com/theomonnom))
+
+- Fixed bug where agent would get stuck on non-interruptable speech - [#850](https://github.com/livekit/agents/pull/850) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- use EventEmitter from rtc - [#879](https://github.com/livekit/agents/pull/879) ([@theomonnom](https://github.com/theomonnom))
+
+- AudioByteStream: avoid empty frames on flush - [#840](https://github.com/livekit/agents/pull/840) ([@theomonnom](https://github.com/theomonnom))
+
+- improve worker logs - [#878](https://github.com/livekit/agents/pull/878) ([@theomonnom](https://github.com/theomonnom))
+
+- voice-pipeline: fix tts_forwarder not always being closed - [#871](https://github.com/livekit/agents/pull/871) ([@theomonnom](https://github.com/theomonnom))
+
+- bump livekit-rtc to v0.17.5 - [#880](https://github.com/livekit/agents/pull/880) ([@theomonnom](https://github.com/theomonnom))
+
+- Fixed bug where agent would freeze if before_llm_cb returned false - [#865](https://github.com/livekit/agents/pull/865) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+## 0.10.0
+
+### Minor Changes
+
+- OpenAI Realtime API support - [#814](https://github.com/livekit/agents/pull/814) ([@theomonnom](https://github.com/theomonnom))
+
+### Patch Changes
+
+- bump livekit to v0.17.2 - [#815](https://github.com/livekit/agents/pull/815) ([@theomonnom](https://github.com/theomonnom))
+
+- silero: support any sample rate - [#805](https://github.com/livekit/agents/pull/805) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.9.1
+
+### Patch Changes
+
+- fix VoiceAssisstant being stuck when interrupting before user speech is committed - [#790](https://github.com/livekit/agents/pull/790) ([@coderlxn](https://github.com/coderlxn))
+
+- Fix function for OpenAI Assistants - [#784](https://github.com/livekit/agents/pull/784) ([@keepingitneil](https://github.com/keepingitneil))
+
+## 0.9.0
+
+### Minor Changes
+
+- rename voice_assistant.state to lk.agent.state - [#772](https://github.com/livekit/agents/pull/772) ([@bcherry](https://github.com/bcherry))
+
+### Patch Changes
+
+- bump rtc - [#782](https://github.com/livekit/agents/pull/782) ([@nbsp](https://github.com/nbsp))
+
+- improve graceful shutdown - [#756](https://github.com/livekit/agents/pull/756) ([@theomonnom](https://github.com/theomonnom))
+
+- avoid returning tiny frames from TTS - [#747](https://github.com/livekit/agents/pull/747) ([@theomonnom](https://github.com/theomonnom))
+
+- windows: default to threaded executor & fix dev mode - [#755](https://github.com/livekit/agents/pull/755) ([@theomonnom](https://github.com/theomonnom))
+
+- 11labs: send phoneme in one entire xml chunk - [#766](https://github.com/livekit/agents/pull/766) ([@theomonnom](https://github.com/theomonnom))
+
+- fix: process not starting if num_idle_processes is zero - [#763](https://github.com/livekit/agents/pull/763) ([@theomonnom](https://github.com/theomonnom))
+
+- voiceassistant: avoid tiny frames on playout - [#750](https://github.com/livekit/agents/pull/750) ([@theomonnom](https://github.com/theomonnom))
+
+- voiceassistant: expose turn_completion_delay - [#752](https://github.com/livekit/agents/pull/752) ([@theomonnom](https://github.com/theomonnom))
+
+- limit concurrent process init to 1 - [#751](https://github.com/livekit/agents/pull/751) ([@theomonnom](https://github.com/theomonnom))
+
+- Add typing-extensions as a dependency - [#778](https://github.com/livekit/agents/pull/778) ([@keepingitneil](https://github.com/keepingitneil))
+
+- Allow setting LLM temperature with VoiceAssistant - [#741](https://github.com/livekit/agents/pull/741) ([@davidzhao](https://github.com/davidzhao))
+
+- better dev defaults - [#762](https://github.com/livekit/agents/pull/762) ([@theomonnom](https://github.com/theomonnom))
+
+- voiceassistant: allow to cancel llm generation inside before_llm_cb - [#753](https://github.com/livekit/agents/pull/753) ([@theomonnom](https://github.com/theomonnom))
+
+- use os.exit to exit forcefully - [#770](https://github.com/livekit/agents/pull/770) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.8.12
+
+### Patch Changes
+
+- tts*forwarder: don't raise inside mark*{audio,text}\_segment_end when nothing was pushed - [#730](https://github.com/livekit/agents/pull/730) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.8.11
+
+### Patch Changes
+
+- improve gracefully_cancel logic - [#720](https://github.com/livekit/agents/pull/720) ([@theomonnom](https://github.com/theomonnom))
+
+- Make ctx.room.name available prior to connection - [#716](https://github.com/livekit/agents/pull/716) ([@davidzhao](https://github.com/davidzhao))
+
+- ipc: add threaded job runner - [#684](https://github.com/livekit/agents/pull/684) ([@theomonnom](https://github.com/theomonnom))
+
+- voiceassistant: add VoiceAssistantState - [#654](https://github.com/livekit/agents/pull/654) ([@lukasIO](https://github.com/lukasIO))
+
+- add JobContext.wait_for_participant - [#712](https://github.com/livekit/agents/pull/712) ([@theomonnom](https://github.com/theomonnom))
+
+- fix non pickleable log - [#691](https://github.com/livekit/agents/pull/691) ([@theomonnom](https://github.com/theomonnom))
+
+- voiceassistant: skip speech initialization if interrupted - [#715](https://github.com/livekit/agents/pull/715) ([@theomonnom](https://github.com/theomonnom))
+
+- bump required livekit version to 0.15.2 - [#722](https://github.com/livekit/agents/pull/722) ([@theomonnom](https://github.com/theomonnom))
+
+- voiceassistant: add will_synthesize_assistant_speech - [#706](https://github.com/livekit/agents/pull/706) ([@theomonnom](https://github.com/theomonnom))
+
+- voiceassistant: fix mark_audio_segment_end with no audio data - [#719](https://github.com/livekit/agents/pull/719) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.8.10
+
+### Patch Changes
+
+- Pass JobContext to participant entrypoint function - [#694](https://github.com/livekit/agents/pull/694) ([@davidzhao](https://github.com/davidzhao))
+
+- voiceassistant: keep punctuations when sending agent transcription - [#648](https://github.com/livekit/agents/pull/648) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.8.9
+
+### Patch Changes
+
+- Introduce easy api for starting tasks for remote participants - [#679](https://github.com/livekit/agents/pull/679) ([@keepingitneil](https://github.com/keepingitneil))
+
+- update livekit to 0.14.0 and await tracksubscribed - [#678](https://github.com/livekit/agents/pull/678) ([@nbsp](https://github.com/nbsp))
+
 ## 0.8.8
 
 ### Patch Changes

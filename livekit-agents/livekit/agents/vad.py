@@ -1,11 +1,15 @@
+from __future__ import annotations
+
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterator, List, Union
+from typing import AsyncIterable, AsyncIterator, List, Literal, Union
 
 from livekit import rtc
 
+from .metrics import VADMetrics
 from .utils import aio
 
 
@@ -18,26 +22,48 @@ class VADEventType(str, Enum):
 
 @dataclass
 class VADEvent:
-    type: VADEventType
-    """type of the event"""
-    samples_index: int
-    """index of the samples when the event was fired"""
-    speech_duration: float
-    """duration of the speech in seconds"""
-    silence_duration: float
-    """duration of the silence in seconds"""
-    frames: List[rtc.AudioFrame] = field(default_factory=list)
-    """list of audio frames of the speech
-
-    start_of_speech: contains the complete audio chunks that triggered the detection)
-    end_of_speech: contains the complete user speech
     """
+    Represents an event detected by the Voice Activity Detector (VAD).
+    """
+
+    type: VADEventType
+    """Type of the VAD event (e.g., start of speech, end of speech, inference done)."""
+
+    samples_index: int
+    """Index of the audio sample where the event occurred, relative to the inference sample rate."""
+
+    timestamp: float
+    """Timestamp (in seconds) when the event was fired."""
+
+    speech_duration: float
+    """Duration of the speech segment in seconds."""
+
+    silence_duration: float
+    """Duration of the silence segment in seconds."""
+
+    frames: List[rtc.AudioFrame] = field(default_factory=list)
+    """
+    List of audio frames associated with the speech.
+
+    - For `start_of_speech` events, this contains the audio chunks that triggered the detection.
+    - For `inference_done` events, this contains the audio chunks that were processed.
+    - For `end_of_speech` events, this contains the complete user speech.
+    """
+
     probability: float = 0.0
-    """smoothed probability of the speech (only for INFERENCE_DONE event)"""
+    """Probability that speech is present (only for `INFERENCE_DONE` events)."""
+
     inference_duration: float = 0.0
-    """duration of the inference in seconds (only for INFERENCE_DONE event)"""
+    """Time taken to perform the inference, in seconds (only for `INFERENCE_DONE` events)."""
+
     speaking: bool = False
-    """whether speech was detected in the frames"""
+    """Indicates whether speech was detected in the frames."""
+
+    raw_accumulated_silence: float = 0.0
+    """Threshold used to detect silence."""
+
+    raw_accumulated_speech: float = 0.0
+    """Threshold used to detect speech."""
 
 
 @dataclass
@@ -45,31 +71,62 @@ class VADCapabilities:
     update_interval: float
 
 
-class VAD(ABC):
+class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(self, *, capabilities: VADCapabilities) -> None:
+        super().__init__()
         self._capabilities = capabilities
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
     def capabilities(self) -> VADCapabilities:
         return self._capabilities
 
     @abstractmethod
-    def stream(self) -> "VADStream":
-        pass
+    def stream(self) -> "VADStream": ...
 
 
 class VADStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self):
+    def __init__(self, vad: VAD) -> None:
+        self._vad = vad
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, VADStream._FlushSentinel]]()
         self._event_ch = aio.Chan[VADEvent]()
+
+        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
+        )
+
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @abstractmethod
-    def _main_task(self) -> None: ...
+    async def _main_task(self) -> None: ...
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[VADEvent]) -> None:
+        """Task used to collect metrics"""
+
+        inference_duration_total = 0.0
+        inference_count = 0
+
+        async for ev in event_aiter:
+            if ev.type == VADEventType.INFERENCE_DONE:
+                inference_duration_total += ev.inference_duration
+                inference_count += 1
+
+                if inference_count >= 1 / self._vad.capabilities.update_interval:
+                    vad_metrics = VADMetrics(
+                        timestamp=time.time(),
+                        inference_duration_total=inference_duration_total,
+                        inference_count=inference_count,
+                        label=self._vad._label,
+                    )
+                    self._vad.emit("metrics_collected", vad_metrics)
+
+                    inference_duration_total = 0.0
+                    inference_count = 0
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push some text to be synthesized"""
@@ -93,9 +150,18 @@ class VADStream(ABC):
         self._input_ch.close()
         await aio.gracefully_cancel(self._task)
         self._event_ch.close()
+        await self._metrics_task
 
     async def __anext__(self) -> VADEvent:
-        return await self._event_ch.__anext__()
+        try:
+            val = await self._event_aiter.__anext__()
+        except StopAsyncIteration:
+            if self._task.done() and (exc := self._task.exception()):
+                raise exc from None
+
+            raise StopAsyncIteration
+
+        return val
 
     def __aiter__(self) -> AsyncIterator[VADEvent]:
         return self

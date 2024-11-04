@@ -48,7 +48,7 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "click~=8.1",
-        "livekit~=0.14",
+        "livekit>=0.17.6",
         "livekit-api~=0.6",
         "livekit-protocol~=0.6",
         "protobuf>=3",
@@ -57,6 +57,7 @@ setuptools.setup(
         "watchfiles~=0.22",
         "psutil~=5.9",
         "aiohttp~=3.10",
+        "typing-extensions~=4.12",
     ],
     extras_require={
         ':sys_platform=="win32"': [

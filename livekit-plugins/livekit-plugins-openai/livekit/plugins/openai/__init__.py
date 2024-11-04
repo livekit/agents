@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from . import beta
+from . import beta, realtime
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
 from .models import TTSModels, TTSVoices, WhisperModels
@@ -32,6 +32,7 @@ __all__ = [
     "TTSVoices",
     "create_embeddings",
     "EmbeddingData",
+    "realtime",
     "__version__",
 ]
 
@@ -46,3 +47,12 @@ class OpenAIPlugin(Plugin):
 
 
 Plugin.register_plugin(OpenAIPlugin())
+
+# Cleanup docs of unexported modules
+_module = dir()
+NOT_IN_ALL = [m for m in _module if m not in __all__]
+
+__pdoc__ = {}
+
+for n in NOT_IN_ALL:
+    __pdoc__[n] = False

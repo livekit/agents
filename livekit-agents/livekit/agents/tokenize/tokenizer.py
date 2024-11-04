@@ -6,6 +6,12 @@ from typing import AsyncIterator
 
 from ..utils import aio
 
+# fmt: off
+PUNCTUATIONS = ['!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=', '>',
+                '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~', '±', '—', '‘', '’', '“', '”', '…']
+
+# fmt: on
+
 
 @dataclass
 class TokenData:
@@ -15,7 +21,7 @@ class TokenData:
 
 class SentenceTokenizer(ABC):
     @abstractmethod
-    def tokenize(self, *, text: str, language: str | None = None) -> list[str]:
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         pass
 
     @abstractmethod
@@ -56,7 +62,7 @@ class SentenceStream(ABC):
 
 class WordTokenizer(ABC):
     @abstractmethod
-    def tokenize(self, *, text: str, language: str | None = None) -> list[str]:
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         pass
 
     @abstractmethod

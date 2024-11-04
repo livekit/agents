@@ -1,4 +1,4 @@
-name: Tests
+name: tests
 
 on:
   push:
@@ -13,36 +13,58 @@ on:
 
 jobs:
   tests:
+    # Don't run tests for PRs on forks
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Base tests on all operating systems
           - os: macos-14-large
-            platform: macos
+            test_group: base
           - os: macos-14
-            platform: macos
+            test_group: base
           - os: windows-2019
-            platform: windows
+            test_group: base
           - os: ubuntu-20.04
-            platform: linux
+            test_group: base
           - os: namespace-profile-default-arm64
-            platform: linux
+            test_group: base
+
+          # Run llm, stt, and tts tests only on Ubuntu
+          - os: ubuntu-20.04
+            test_group: llm
+          - os: ubuntu-20.04
+            test_group: stt
+          - os: ubuntu-20.04
+            test_group: tts
 
     runs-on: ${{ matrix.os }}
-    name: Run tests (${{ matrix.os }})
+    name: ${{ matrix.test_group }} — ${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
           lfs: true
 
+      - name: Cache packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/apt/archives
+            ~/Library/Caches/Homebrew
+            C:\ProgramData\chocolatey\lib\ffmpeg
+          key: ${{ runner.os }}-cache
+          restore-keys: |
+            ${{ runner.os }}-cache
+
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
-          cache: 'pip'
+          python-version: "3.9"
+          cache: "pip"
 
       - name: Install ffmpeg (Linux)
-        if: ${{ matrix.platform == 'linux' }}
+        if: ${{ matrix.os == 'ubuntu-20.04' || matrix.os == 'namespace-profile-default-arm64' }}
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
@@ -55,11 +77,11 @@ jobs:
           sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
 
       - name: Install ffmpeg (macOS)
-        if: ${{ matrix.platform == 'macos' }}
-        run: brew update && brew install ffmpeg
+        if: ${{ startsWith(matrix.os, 'macos') }}
+        run: brew install ffmpeg
 
       - name: Install ffmpeg (Windows)
-        if: ${{ matrix.platform == 'windows' }}
+        if: ${{ matrix.os == 'windows-2019' }}
         run: choco install ffmpeg
 
       - name: Install packages
@@ -93,6 +115,28 @@ jobs:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
+          PYTEST_ADDOPTS: "--color=yes"
+        working-directory: tests
         run: |
-          echo $GOOGLE_CREDENTIALS_JSON > google.json
-          pytest --asyncio-mode=auto --timeout=60 .
+          echo "$GOOGLE_CREDENTIALS_JSON" > google.json
+
+          case "${{ matrix.test_group }}" in
+            base)
+              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py"
+              ;;
+            llm)
+              test_files="test_llm.py"
+              ;;
+            stt)
+              test_files="test_stt.py"
+              ;;
+            tts)
+              test_files="test_tts.py"
+              ;;
+            *)
+              echo "Unknown test group: ${{ matrix.test_group }}"
+              exit 1
+              ;;
+          esac
+          pytest --asyncio-mode=auto --timeout=60 $test_files
+

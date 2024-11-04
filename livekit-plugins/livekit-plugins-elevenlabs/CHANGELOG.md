@@ -1,5 +1,35 @@
 # livekit-plugins-elevenlabs
 
+## 0.7.7
+
+### Patch Changes
+
+- support language code in ElevenLabs TTS (#985) - [#1029](https://github.com/livekit/agents/pull/1029) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.7.6
+
+### Patch Changes
+
+- add update_options to TTS - [#922](https://github.com/livekit/agents/pull/922) ([@theomonnom](https://github.com/theomonnom))
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
+- expose usage metrics - [#984](https://github.com/livekit/agents/pull/984) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.7.5
+
+### Patch Changes
+
+- avoid returning tiny frames from TTS - [#747](https://github.com/livekit/agents/pull/747) ([@theomonnom](https://github.com/theomonnom))
+
+- 11labs: send phoneme in one entire xml chunk - [#766](https://github.com/livekit/agents/pull/766) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.7.4
+
+### Patch Changes
+
+- elevenlabs: expose enable_ssml_parsing - [#723](https://github.com/livekit/agents/pull/723) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.7.3
 
 ### Patch Changes

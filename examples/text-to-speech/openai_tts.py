@@ -1,9 +1,12 @@
 import asyncio
 import logging
 
+from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit.plugins import openai
+
+load_dotenv()
 
 logger = logging.getLogger("openai-tts-demo")
 logger.setLevel(logging.INFO)

@@ -1,5 +1,35 @@
 # livekit-plugins-silero
 
+## 0.7.3
+
+### Patch Changes
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.7.2
+
+### Patch Changes
+
+- silero: add update_options - [#899](https://github.com/livekit/agents/pull/899) ([@theomonnom](https://github.com/theomonnom))
+
+- silero: fix speech_buffer for END_OF_SPEECH - [#898](https://github.com/livekit/agents/pull/898) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.7.1
+
+### Patch Changes
+
+- Fix CI x LFS issue for silero plugin - [#818](https://github.com/livekit/agents/pull/818) ([@keepingitneil](https://github.com/keepingitneil))
+
+## 0.7.0
+
+### Minor Changes
+
+- silero: support any sample rate - [#805](https://github.com/livekit/agents/pull/805) ([@theomonnom](https://github.com/theomonnom))
+
+### Patch Changes
+
+- silero: add prefix_padding_duration #801 - [#805](https://github.com/livekit/agents/pull/805) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.4
 
 ### Patch Changes

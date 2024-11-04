@@ -12,13 +12,13 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: 'Name of the package to build'
+        description: "Name of the package to build"
         required: true
-        default: 'livekit-plugins-browser'
+        default: "livekit-plugins-browser"
       artifact_name:
-        description: 'Artifact name for the distribution package'
+        description: "Artifact name for the distribution package"
         required: true
-        default: 'build-artifact'
+        default: "build-artifact"
 
 jobs:
   build_plugins:
@@ -34,13 +34,18 @@ jobs:
       inputs.package == 'livekit-plugins-nltk' ||
       inputs.package == 'livekit-plugins-openai' ||
       inputs.package == 'livekit-plugins-rag' ||
-      inputs.package == 'livekit-plugins-silero'
+      inputs.package == 'livekit-plugins-silero' ||
+      inputs.package == 'livekit-plugins-anthropic' ||
+      inputs.package == 'livekit-plugins-llama-index'
 
     defaults:
       run:
         working-directory: "${{ startsWith(inputs.package, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ inputs.package }}"
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
 
       - name: Set up Python
         uses: actions/setup-python@v5

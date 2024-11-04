@@ -1,18 +1,14 @@
 # Speech-to-text
 
-This example shows how you can transcript real-time audio data into text.
+This example show realtime transcription from audio to text.
 
-It uses Deepgram's STT API to transcript the audio data. It can be switched to
-other STT providers by changing this line:
+It uses Deepgram's STT API, but supports other STT plugins by changing this line:
 
 ```python
 stt = deepgram.STT()
 ```
 
-All transcriptions are sent to clients in the room with LiveKit's transcription protocol.
-
-It's currently supported in the JS SDK and React Components. This will be made available for
-all other SDKs in the coming weeks.
+To render the transcriptions into your client application, refer to the [full documentation](https://docs.livekit.io/agents/voice-agent/transcriptions/).
 
 ## Running the example
 

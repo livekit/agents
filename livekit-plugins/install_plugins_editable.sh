@@ -17,3 +17,4 @@ pip install -e ./livekit-plugins-openai --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-rag --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-silero --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-browser --config-settings editable_mode=strict
+pip install -e ./livekit-plugins-llama-index --config-settings editable_mode=strict

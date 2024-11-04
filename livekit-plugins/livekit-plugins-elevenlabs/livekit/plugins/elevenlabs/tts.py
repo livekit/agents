@@ -24,7 +24,14 @@ from typing import Any, List, Literal
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import tokenize, tts, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    tokenize,
+    tts,
+    utils,
+)
 
 from .log import logger
 from .models import TTSEncoding, TTSModels
@@ -79,13 +86,15 @@ AUTHORIZATION_HEADER = "xi-api-key"
 class _TTSOptions:
     api_key: str
     voice: Voice
-    model_id: TTSModels
+    model: TTSModels | str
+    language: str | None
     base_url: str
     encoding: TTSEncoding
     sample_rate: int
     streaming_latency: int
     word_tokenizer: tokenize.WordTokenizer
     chunk_length_schedule: list[int]
+    enable_ssml_parsing: bool
 
 
 class TTS(tts.TTS):
@@ -93,7 +102,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: Voice = DEFAULT_VOICE,
-        model_id: TTSModels = "eleven_turbo_v2_5",
+        model: TTSModels | str = "eleven_turbo_v2_5",
         api_key: str | None = None,
         base_url: str | None = None,
         encoding: TTSEncoding = "mp3_22050_32",
@@ -101,14 +110,28 @@ class TTS(tts.TTS):
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False  # punctuation can help for intonation
         ),
+        enable_ssml_parsing: bool = False,
         chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
+        # deprecated
+        model_id: TTSModels | str | None = None,
+        language: str | None = None,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
 
-        ``api_key`` must be set to your ElevenLabs API key, either using the argument or by setting
-        the ``ELEVEN_API_KEY`` environmental variable.
+        Args:
+            voice (Voice): Voice configuration. Defaults to `DEFAULT_VOICE`.
+            model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
+            api_key (str | None): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
+            base_url (str | None): Custom base URL for the API. Optional.
+            encoding (TTSEncoding): Audio encoding format. Defaults to "mp3_22050_32".
+            streaming_latency (int): Latency in seconds for streaming. Defaults to 3.
+            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
+            enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
+            chunk_length_schedule (list[int]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
+            http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
+            language (str | None): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5". Optional.
         """
 
         super().__init__(
@@ -118,13 +141,22 @@ class TTS(tts.TTS):
             sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
         )
+
+        if model_id is not None:
+            logger.warning(
+                "model_id is deprecated and will be removed in 1.5.0, use model instead",
+            )
+            model = model_id
+
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
         if not api_key:
-            raise ValueError("ELEVEN_API_KEY must be set")
+            raise ValueError(
+                "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"
+            )
 
         self._opts = _TTSOptions(
             voice=voice,
-            model_id=model_id,
+            model=model,
             api_key=api_key,
             base_url=base_url or API_BASE_URL_V1,
             encoding=encoding,
@@ -132,6 +164,8 @@ class TTS(tts.TTS):
             streaming_latency=streaming_latency,
             word_tokenizer=word_tokenizer,
             chunk_length_schedule=chunk_length_schedule,
+            enable_ssml_parsing=enable_ssml_parsing,
+            language=language,
         )
         self._session = http_session
 
@@ -148,31 +182,43 @@ class TTS(tts.TTS):
         ) as resp:
             return _dict_to_voices_list(await resp.json())
 
+    def update_options(
+        self,
+        *,
+        voice: Voice = DEFAULT_VOICE,
+        model: TTSModels | str = "eleven_turbo_v2_5",
+    ) -> None:
+        """
+        Args:
+            voice (Voice): Voice configuration. Defaults to `DEFAULT_VOICE`.
+            model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
+        """
+        self._opts.model = model or self._opts.model
+        self._opts.voice = voice or self._opts.voice
+
     def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts, self._ensure_session())
+        return ChunkedStream(self, text, self._opts, self._ensure_session())
 
     def stream(self) -> "SynthesizeStream":
-        return SynthesizeStream(self._ensure_session(), self._opts)
+        return SynthesizeStream(self, self._ensure_session(), self._opts)
 
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
     def __init__(
-        self, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
+        self, tts: TTS, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
     ) -> None:
-        super().__init__()
-        self._text, self._opts, self._session = text, opts, session
+        super().__init__(tts, text)
+        self._opts, self._session = opts, session
         if _encoding_from_format(self._opts.encoding) == "mp3":
             self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
-    @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        request_id = utils.shortuuid()
         bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate, num_channels=1
         )
-        request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
 
         voice_settings = (
             _strip_nones(dataclasses.asdict(self._opts.voice.settings))
@@ -180,48 +226,59 @@ class ChunkedStream(tts.ChunkedStream):
             else None
         )
         data = {
-            "text": self._text,
-            "model_id": self._opts.model_id,
+            "text": self._input_text,
+            "model_id": self._opts.model,
             "voice_settings": voice_settings,
         }
 
-        async with self._session.post(
-            _synthesize_url(self._opts),
-            headers={AUTHORIZATION_HEADER: self._opts.api_key},
-            json=data,
-        ) as resp:
-            if not resp.content_type.startswith("audio/"):
-                content = await resp.text()
-                logger.error("11labs returned non-audio data: %s", content)
-                return
-            encoding = _encoding_from_format(self._opts.encoding)
-            if encoding == "mp3":
-                async for bytes_data, _ in resp.content.iter_chunks():
-                    for frame in self._mp3_decoder.decode_chunk(bytes_data):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                request_id=request_id,
-                                segment_id=segment_id,
-                                frame=frame,
+        try:
+            async with self._session.post(
+                _synthesize_url(self._opts),
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                json=data,
+            ) as resp:
+                if not resp.content_type.startswith("audio/"):
+                    content = await resp.text()
+                    logger.error("11labs returned non-audio data: %s", content)
+                    return
+
+                encoding = _encoding_from_format(self._opts.encoding)
+                if encoding == "mp3":
+                    async for bytes_data, _ in resp.content.iter_chunks():
+                        for frame in self._mp3_decoder.decode_chunk(bytes_data):
+                            for frame in bstream.write(frame.data.tobytes()):
+                                self._event_ch.send_nowait(
+                                    tts.SynthesizedAudio(
+                                        request_id=request_id,
+                                        frame=frame,
+                                    )
+                                )
+                else:
+                    async for bytes_data, _ in resp.content.iter_chunks():
+                        for frame in bstream.write(bytes_data):
+                            self._event_ch.send_nowait(
+                                tts.SynthesizedAudio(
+                                    request_id=request_id,
+                                    frame=frame,
+                                )
                             )
-                        )
-            else:
-                async for bytes_data, _ in resp.content.iter_chunks():
-                    for frame in bstream.write(bytes_data):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                request_id=request_id,
-                                segment_id=segment_id,
-                                frame=frame,
-                            )
-                        )
 
                 for frame in bstream.flush():
                     self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id, segment_id=segment_id, frame=frame
-                        )
+                        tts.SynthesizedAudio(request_id=request_id, frame=frame)
                     )
+
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError() from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -229,10 +286,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     def __init__(
         self,
+        tts: TTS,
         session: aiohttp.ClientSession,
         opts: _TTSOptions,
     ):
-        super().__init__()
+        super().__init__(tts)
         self._opts, self._session = opts, session
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
@@ -320,14 +378,33 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def send_task():
             nonlocal eos_sent
 
+            xml_content = []
             async for data in word_stream:
+                text = data.token
+
+                # send the xml phoneme in one go
+                if (
+                    self._opts.enable_ssml_parsing
+                    and data.token.startswith("<phoneme")
+                    or xml_content
+                ):
+                    xml_content.append(text)
+                    if data.token.find("</phoneme>") > -1:
+                        text = self._opts.word_tokenizer.format_words(xml_content)
+                        xml_content = []
+                    else:
+                        continue
+
                 # try_trigger_generation=True is a bad practice, we expose
                 # chunk_length_schedule instead
                 data_pkt = dict(
-                    text=f"{data.token} ",  # must always end with a space
+                    text=f"{text} ",  # must always end with a space
                     try_trigger_generation=False,
                 )
                 await ws_conn.send_str(json.dumps(data_pkt))
+
+            if xml_content:
+                logger.warning("11labs stream ended with incomplete xml content")
 
             # no more token, mark eos
             eos_pkt = dict(text="")
@@ -336,6 +413,26 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def recv_task():
             nonlocal eos_sent
+            audio_bstream = utils.audio.AudioByteStream(
+                sample_rate=self._opts.sample_rate,
+                num_channels=1,
+            )
+
+            last_frame: rtc.AudioFrame | None = None
+
+            def _send_last_frame(*, segment_id: str, is_final: bool) -> None:
+                nonlocal last_frame
+                if last_frame is not None:
+                    self._event_ch.send_nowait(
+                        tts.SynthesizedAudio(
+                            request_id=request_id,
+                            segment_id=segment_id,
+                            frame=last_frame,
+                            is_final=is_final,
+                        )
+                    )
+
+                    last_frame = None
 
             while True:
                 msg = await ws_conn.receive()
@@ -354,11 +451,33 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected 11labs message type %s", msg.type)
                     continue
 
-                self._process_stream_event(
-                    data=json.loads(msg.data),
-                    request_id=request_id,
-                    segment_id=segment_id,
-                )
+                data = json.loads(msg.data)
+                encoding = _encoding_from_format(self._opts.encoding)
+                if data.get("audio"):
+                    b64data = base64.b64decode(data["audio"])
+                    if encoding == "mp3":
+                        for frame in self._mp3_decoder.decode_chunk(b64data):
+                            for frame in audio_bstream.write(frame.data.tobytes()):
+                                _send_last_frame(segment_id=segment_id, is_final=False)
+                                last_frame = frame
+
+                    else:
+                        for frame in audio_bstream.write(b64data):
+                            _send_last_frame(segment_id=segment_id, is_final=False)
+                            last_frame = frame
+
+                elif data.get("isFinal"):
+                    for frame in audio_bstream.flush():
+                        _send_last_frame(segment_id=segment_id, is_final=False)
+                        last_frame = frame
+
+                    _send_last_frame(segment_id=segment_id, is_final=True)
+
+                    pass
+                elif data.get("error"):
+                    logger.error("11labs reported an error: %s", data["error"])
+                else:
+                    logger.error("unexpected 11labs message %s", data)
 
         tasks = [
             asyncio.create_task(send_task()),
@@ -369,40 +488,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
-
-    def _process_stream_event(
-        self, *, data: dict, request_id: str, segment_id: str
-    ) -> None:
-        encoding = _encoding_from_format(self._opts.encoding)
-        if data.get("audio"):
-            b64data = base64.b64decode(data["audio"])
-            if encoding == "mp3":
-                for frame in self._mp3_decoder.decode_chunk(b64data):
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id,
-                            segment_id=segment_id,
-                            frame=frame,
-                        )
-                    )
-            else:
-                chunk_frame = rtc.AudioFrame(
-                    data=b64data,
-                    sample_rate=self._opts.sample_rate,
-                    num_channels=1,
-                    samples_per_channel=len(b64data) // 2,
-                )
-                self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(
-                        request_id=request_id,
-                        segment_id=segment_id,
-                        frame=chunk_frame,
-                    )
-                )
-        elif data.get("error"):
-            logger.error("11labs reported an error: %s", data["error"])
-        elif not data.get("isFinal"):
-            logger.error("unexpected 11labs message %s", data)
 
 
 def _dict_to_voices_list(data: dict[str, Any]):
@@ -426,7 +511,7 @@ def _strip_nones(data: dict[str, Any]):
 def _synthesize_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
     voice_id = opts.voice.id
-    model_id = opts.model_id
+    model_id = opts.model
     output_format = opts.encoding
     latency = opts.streaming_latency
     return (
@@ -438,10 +523,16 @@ def _synthesize_url(opts: _TTSOptions) -> str:
 def _stream_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
     voice_id = opts.voice.id
-    model_id = opts.model_id
+    model_id = opts.model
     output_format = opts.encoding
     latency = opts.streaming_latency
-    return (
+    enable_ssml = str(opts.enable_ssml_parsing).lower()
+    language = opts.language
+    url = (
         f"{base_url}/text-to-speech/{voice_id}/stream-input?"
-        f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}"
+        f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}&"
+        f"enable_ssml_parsing={enable_ssml}"
     )
+    if language is not None:
+        url += f"&language_code={language}"
+    return url

@@ -12,8 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import ipc, llm, stt, tokenize, transcription, tts, utils, vad, voice_assistant
-from .job import AutoSubscribe, JobContext, JobProcess, JobRequest
+from . import (
+    cli,
+    ipc,
+    llm,
+    metrics,
+    multimodal,
+    pipeline,
+    stt,
+    tokenize,
+    transcription,
+    tts,
+    utils,
+    vad,
+    voice_assistant,
+)
+from ._constants import ATTRIBUTE_AGENT_STATE
+from ._exceptions import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    AssignmentTimeoutError,
+)
+from ._types import AgentState
+from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequest
 from .plugin import Plugin
 from .version import __version__
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
@@ -27,7 +50,9 @@ __all__ = [
     "JobProcess",
     "JobContext",
     "JobRequest",
+    "JobExecutorType",
     "AutoSubscribe",
+    "AgentState",
     "Plugin",
     "ipc",
     "stt",
@@ -36,6 +61,26 @@ __all__ = [
     "tts",
     "tokenize",
     "llm",
-    "voice_assistant",
+    "metrics",
     "transcription",
+    "pipeline",
+    "multimodal",
+    "voice_assistant",
+    "cli",
+    "AssignmentTimeoutError",
+    "APIConnectionError",
+    "APIError",
+    "APIStatusError",
+    "APITimeoutError",
+    "ATTRIBUTE_AGENT_STATE",
+    "AgentState",
 ]
+
+# Cleanup docs of unexported modules
+_module = dir()
+NOT_IN_ALL = [m for m in _module if m not in __all__]
+
+__pdoc__ = {}
+
+for n in NOT_IN_ALL:
+    __pdoc__[n] = False

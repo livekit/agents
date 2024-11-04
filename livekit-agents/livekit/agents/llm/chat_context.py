@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 from livekit import rtc
 
@@ -35,12 +35,22 @@ class ChatImage:
 
 
 @dataclass
+class ChatAudio:
+    frame: rtc.AudioFrame | list[rtc.AudioFrame]
+
+
+ChatContent = Union[str, ChatImage, ChatAudio]
+
+
+@dataclass
 class ChatMessage:
     role: ChatRole
+    id: str | None = None  # used by the OAI realtime API
     name: str | None = None
-    content: str | list[str | ChatImage] | None = None
+    content: ChatContent | list[ChatContent] | None = None
     tool_calls: list[function_context.FunctionCallInfo] | None = None
     tool_call_id: str | None = None
+    tool_exception: Exception | None = None
     _metadata: dict[str, Any] = field(default_factory=dict, repr=False, init=False)
 
     @staticmethod
@@ -50,9 +60,12 @@ class ChatMessage:
         if not called_function.task.done():
             raise ValueError("cannot create a tool result from a running ai function")
 
+        tool_exception: Exception | None = None
         try:
             content = called_function.task.result()
         except BaseException as e:
+            if isinstance(e, Exception):
+                tool_exception = e
             content = f"Error: {e}"
 
         return ChatMessage(
@@ -60,13 +73,16 @@ class ChatMessage:
             name=called_function.call_info.function_info.name,
             content=content,
             tool_call_id=called_function.call_info.tool_call_id,
+            tool_exception=tool_exception,
         )
 
     @staticmethod
     def create_tool_calls(
         called_functions: list[function_context.FunctionCallInfo],
+        *,
+        text: str = "",
     ) -> "ChatMessage":
-        return ChatMessage(role="assistant", tool_calls=called_functions)
+        return ChatMessage(role="assistant", tool_calls=called_functions, content=text)
 
     @staticmethod
     def create(
@@ -75,7 +91,7 @@ class ChatMessage:
         if len(images) == 0:
             return ChatMessage(role=role, content=text)
         else:
-            content: list[str | ChatImage] = []
+            content: list[ChatContent] = []
             if text:
                 content.append(text)
 
@@ -93,13 +109,15 @@ class ChatMessage:
         if tool_calls is not None:
             tool_calls = tool_calls.copy()
 
-        return ChatMessage(
+        copied_msg = ChatMessage(
             role=self.role,
             name=self.name,
             content=content,
             tool_calls=tool_calls,
             tool_call_id=self.tool_call_id,
         )
+        copied_msg._metadata = self._metadata
+        return copied_msg
 
 
 @dataclass
@@ -114,4 +132,6 @@ class ChatContext:
         return self
 
     def copy(self) -> ChatContext:
-        return ChatContext(messages=[m.copy() for m in self.messages])
+        copied_chat_ctx = ChatContext(messages=[m.copy() for m in self.messages])
+        copied_chat_ctx._metadata = self._metadata
+        return copied_chat_ctx

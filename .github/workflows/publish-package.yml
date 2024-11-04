@@ -107,38 +107,10 @@ jobs:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
 
-  docs:
-    if: ${{ fromJson(needs.bump.outputs.packages)[0] != null }}
-    needs:
-      - bump
-      - publish
-    strategy:
-      matrix:
-        package: ${{ fromJSON(needs.bump.outputs.packages) }}
-
-    runs-on: ubuntu-latest
-    env:
-      package: ${{ matrix.package.name }}
-      module: $(echo "${{ startsWith(matrix.package.name, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ matrix.package.name }}" | tr '-' '/')
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          lfs: true
-
-      - name: Install pdoc
-        run: python -m pip install --upgrade pdoc
-
-      - name: Install package
-        run: python -m pip install $package/
-
-      - name: Build Docs
-        run: python -m pdoc $module --docformat=google --output-dir docs
-
-      - name: S3 Upload
-        run: aws s3 cp docs/ s3://livekit-docs/$package --recursive
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
-          AWS_DEFAULT_REGION: "us-east-1"
+  trigger-docs-publish:
+    name: Publish Docs 
+    needs: publish
+    uses: ./.github/workflows/publish-docs.yml
+    secrets:
+        DOCS_DEPLOY_AWS_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
+        DOCS_DEPLOY_AWS_API_SECRET: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}

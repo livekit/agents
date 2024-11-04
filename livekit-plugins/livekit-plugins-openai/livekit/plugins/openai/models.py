@@ -33,9 +33,19 @@ EmbeddingModels = Literal[
     "text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large"
 ]
 
-AssistantTools = Literal["code_interpreter"]
+AssistantTools = Literal["code_interpreter", "file_search", "function"]
 
 # adapters for OpenAI-compatible LLMs
+
+TelnyxChatModels = Literal[
+    "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "meta-llama/Meta-Llama-3.1-70B-Instruct",
+]
+
+CerebrasChatModels = Literal[
+    "llama3.1-8b",
+    "llama3.1-70b",
+]
 
 PerplexityChatModels = Literal[
     "llama-3.1-sonar-small-128k-online",
@@ -58,6 +68,15 @@ GroqChatModels = Literal[
     "mixtral-8x7b-32768",
     "gemma-7b-it",
     "gemma2-9b-it",
+]
+
+GroqAudioModels = Literal[
+    "whisper-large-v3", "distil-whisper-large-v3-en", "whisper-large-v3-turbo"
+]
+
+DeepSeekChatModels = Literal[
+    "deepseek-coder",
+    "deepseek-chat",
 ]
 
 TogetherChatModels = Literal[
@@ -140,4 +159,12 @@ OctoChatModels = Literal[
     "mistral-7b-instruct",
     "mixtral-8x7b-instruct",
     "wizardlm-2-8x22bllamaguard-2-7b",
+]
+
+
+XAIChatModels = Literal[
+    "grok-2",
+    "grok-2-mini",
+    "grok-2-mini-public",
+    "grok-2-public",
 ]

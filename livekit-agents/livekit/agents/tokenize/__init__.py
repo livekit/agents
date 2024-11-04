@@ -1,4 +1,4 @@
-from . import basic
+from . import basic, utils
 from .token_stream import (
     BufferedSentenceStream,
     BufferedWordStream,
@@ -20,4 +20,5 @@ __all__ = [
     "BufferedSentenceStream",
     "BufferedWordStream",
     "basic",
+    "utils",
 ]

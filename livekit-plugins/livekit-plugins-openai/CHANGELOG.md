@@ -1,5 +1,89 @@
 # livekit-plugins-openai
 
+## 0.10.5
+
+### Patch Changes
+
+- fix: Azure realtime model does not accept null for max_response_output_tokens - [#927](https://github.com/livekit/agents/pull/927) ([@davidzhao](https://github.com/davidzhao))
+
+- add update_options to TTS - [#922](https://github.com/livekit/agents/pull/922) ([@theomonnom](https://github.com/theomonnom))
+
+- Groq integration with Whisper-compatible STT endpoints - [#986](https://github.com/livekit/agents/pull/986) ([@jayeshp19](https://github.com/jayeshp19))
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
+- openai: fix low timeouts - [#926](https://github.com/livekit/agents/pull/926) ([@theomonnom](https://github.com/theomonnom))
+
+- expose usage metrics - [#984](https://github.com/livekit/agents/pull/984) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.10.4
+
+### Patch Changes
+
+- add x.ai support - [#907](https://github.com/livekit/agents/pull/907) ([@theomonnom](https://github.com/theomonnom))
+
+- Fix functions to include content - [#897](https://github.com/livekit/agents/pull/897) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+## 0.10.3
+
+### Patch Changes
+
+- fix: handle when STT does not return any speech - [#854](https://github.com/livekit/agents/pull/854) ([@davidzhao](https://github.com/davidzhao))
+
+- Support for Realtime API with Azure OpenAI - [#848](https://github.com/livekit/agents/pull/848) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.10.2
+
+### Patch Changes
+
+- oai-realtime: fix function calls - [#826](https://github.com/livekit/agents/pull/826) ([@KillianLucas](https://github.com/KillianLucas))
+
+## 0.10.1
+
+### Patch Changes
+
+- oai-realtime: log response errors - [#819](https://github.com/livekit/agents/pull/819) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.10.0
+
+### Minor Changes
+
+- OpenAI Realtime API support - [#814](https://github.com/livekit/agents/pull/814) ([@theomonnom](https://github.com/theomonnom))
+
+### Patch Changes
+
+- Add Telnyx integration for LLM - [#803](https://github.com/livekit/agents/pull/803) ([@jamestwhedbee](https://github.com/jamestwhedbee))
+
+## 0.8.5
+
+### Patch Changes
+
+- Fix function for OpenAI Assistants - [#784](https://github.com/livekit/agents/pull/784) ([@keepingitneil](https://github.com/keepingitneil))
+
+## 0.8.4
+
+### Patch Changes
+
+- avoid returning tiny frames from TTS - [#747](https://github.com/livekit/agents/pull/747) ([@theomonnom](https://github.com/theomonnom))
+
+- Fixing Assistant API Vision Capabilities - [#771](https://github.com/livekit/agents/pull/771) ([@keepingitneil](https://github.com/keepingitneil))
+
+## 0.8.3
+
+### Patch Changes
+
+- Introduce function calling to OpenAI Assistants - [#710](https://github.com/livekit/agents/pull/710) ([@keepingitneil](https://github.com/keepingitneil))
+
+- Add Cerebras to OpenAI Plugin - [#731](https://github.com/livekit/agents/pull/731) ([@henrytwo](https://github.com/henrytwo))
+
+## 0.8.2
+
+### Patch Changes
+
+- Add deepseek LLMs at OpenAI plugin - [#714](https://github.com/livekit/agents/pull/714) ([@lenage](https://github.com/lenage))
+
+- skip processing of choice.delta when it is None - [#705](https://github.com/livekit/agents/pull/705) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.8.1
 
 ### Patch Changes
