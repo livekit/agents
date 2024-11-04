@@ -60,6 +60,8 @@ class RealtimeResponse:
     """details of the status (only with "incomplete, cancelled and failed")"""
     output: list[RealtimeOutput]
     """list of outputs"""
+    usage: api_proto.Usage | None
+    """usage of the response"""
     done_fut: asyncio.Future[None]
     """future that will be set when the response is completed"""
 
@@ -972,6 +974,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             status=response["status"],
             status_details=status_details,
             output=[],
+            usage=response["usage"],
             done_fut=done_fut,
         )
         self._pending_responses[new_response.id] = new_response
@@ -1117,6 +1120,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         response.status = response_data["status"]
         response.status_details = response_data.get("status_details")
+        response.usage = response_data.get("usage")
 
         if response.status == "failed":
             assert response.status_details is not None
