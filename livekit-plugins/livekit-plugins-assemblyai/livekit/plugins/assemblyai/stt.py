@@ -95,6 +95,13 @@ class STT(stt.STT):
         if not self._session:
             self._session = utils.http_context.http_session()
         return self._session
+    
+    async def _recognize_impl(
+        self,
+        *,
+        buffer: AudioBuffer,
+    ) -> stt.SpeechEvent:
+        raise NotImplementedError("Not implemented")
 
     async def recognize(
         self,
@@ -110,9 +117,10 @@ class STT(stt.STT):
     ) -> "SpeechStream":
         config = dataclasses.replace(self._opts)
         return SpeechStream(
-            config,
-            self._api_key,
-            self.session,
+            stt=self,
+            opts=config,
+            api_key=self._api_key,
+            http_session=self.session,
         )
 
 
@@ -121,13 +129,14 @@ class SpeechStream(stt.SpeechStream):
 
     def __init__(
         self,
+        stt: STT,
         opts: STTOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
-        super().__init__()
+        super().__init__(stt=stt)
 
         self._opts = opts
         self._num_channels = num_channels
