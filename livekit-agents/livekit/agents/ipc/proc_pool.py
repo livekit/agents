@@ -12,7 +12,11 @@ from . import proc_job_executor, thread_job_executor
 from .job_executor import JobExecutor
 
 EventTypes = Literal[
-    "process_created", "process_started", "process_ready", "process_closed"
+    "process_created",
+    "process_started",
+    "process_ready",
+    "process_closed",
+    "process_job_launched",
 ]
 
 MAX_CONCURRENT_INITIALIZATIONS = 1
@@ -85,6 +89,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             self._proc_needed_sem.release()  # notify that a new process can be warmed/started
 
         await proc.launch_job(info)
+        self.emit("process_job_launched", proc)
 
     @utils.log_exceptions(logger=logger)
     async def _proc_watch_task(self) -> None:
