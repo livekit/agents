@@ -974,7 +974,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             status=response["status"],
             status_details=status_details,
             output=[],
-            usage=response["usage"],
+            usage=response.get("usage"),
             done_fut=done_fut,
         )
         self._pending_responses[new_response.id] = new_response
