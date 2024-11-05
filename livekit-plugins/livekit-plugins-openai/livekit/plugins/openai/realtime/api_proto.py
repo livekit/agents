@@ -146,9 +146,11 @@ class InputTokenDetails(TypedDict):
     text_tokens: int
     audio_tokens: int
 
+
 class OutputTokenDetails(TypedDict):
     text_tokens: int
     audio_tokens: int
+
 
 class Usage(TypedDict):
     total_tokens: int
