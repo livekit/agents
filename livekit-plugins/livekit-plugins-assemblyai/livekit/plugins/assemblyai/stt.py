@@ -115,7 +115,7 @@ class STT(stt.STT):
     ) -> "SpeechStream":
         config = dataclasses.replace(self._opts)
         return SpeechStream(
-            stt=self,
+            stt_=self,
             opts=config,
             api_key=self._api_key,
             http_session=self.session,
@@ -127,14 +127,14 @@ class SpeechStream(stt.SpeechStream):
 
     def __init__(
         self,
-        stt: STT,
+        stt_: STT,
         opts: STTOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
-        super().__init__(stt=stt)
+        super().__init__(stt=stt_)
 
         self._opts = opts
         self._num_channels = num_channels
