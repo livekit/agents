@@ -1,7 +1,13 @@
 from typing import Literal
 
-ChatModels = Literal[ 
-    "gemini-pro"
+GeminiModels = Literal[
+    "gemini-1.5-flash-002",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-preview-0514",
+    "gemini-1.5-pro-002",
+    "gemini-1.5-pro",
+    "gemini-1.5-pro-preview-0514",
+    "gemini-1.5-pro-preview-0409",
 ]
 
 # Speech to Text v2

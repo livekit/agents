@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from typing import Any, AsyncIterator, Awaitable, Dict, List, Optional
 from uuid import uuid4 as uuid
 
@@ -32,7 +33,7 @@ from vertexai.generative_models import (
 )
 
 from .log import logger
-from .models import ChatModels
+from .models import GeminiModels
 
 JSON_SCHEMA_TYPE_MAP = {
     str: "string",
@@ -49,7 +50,7 @@ class LLM(llm.LLM):
         *,
         project: Optional[str] = None,
         location: Optional[str] = None,
-        model: str | ChatModels = "gemini-1.5-flash-002",
+        model: str | GeminiModels = "gemini-1.5-flash-002",
         **kwargs,
     ) -> None:
         logger.info(
@@ -63,6 +64,20 @@ class LLM(llm.LLM):
         self._location = location
         self._model_name = model
         self._kwargs = kwargs
+        self._gac = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+
+        if not self._project:
+            logger.error("Project is required for Vertex AI initialization")
+            raise ValueError
+        if not self._location:
+            logger.error("Location is required for Vertex AI initialization")
+            raise ValueError
+        if not self._gac:
+            logger.error(
+                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file."
+            )
+            raise ValueError
+
         vertexai.init(project=project, location=location)
 
     def chat(
