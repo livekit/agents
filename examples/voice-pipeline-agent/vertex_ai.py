@@ -59,7 +59,7 @@ async def entrypoint(ctx: JobContext):
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=openai.STT(),
-        llm=google.LLM(project="tribal-archery-440118-d1", location="us-central1"),
+        llm=google.LLM(project="your-project-id", location="us-central1"),
         tts=openai.TTS(),
         fnc_ctx=fnc_ctx,
         chat_ctx=initial_chat_ctx,
