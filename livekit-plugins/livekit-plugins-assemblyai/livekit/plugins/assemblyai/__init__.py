@@ -21,6 +21,7 @@ __all__ = [
 
 from livekit.agents import Plugin
 
+
 class AssemblyAIPlugin(Plugin):
     def __init__(self):
         super().__init__(__name__, __version__, __package__)
