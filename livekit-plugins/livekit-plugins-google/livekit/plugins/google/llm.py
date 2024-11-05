@@ -20,9 +20,9 @@ import os
 from typing import Any, AsyncIterator, Awaitable, Dict, List, Optional
 from uuid import uuid4 as uuid
 
-import vertexai
+import vertexai  # type: ignore
 from livekit.agents import llm
-from vertexai.generative_models import (
+from vertexai.generative_models import (  # type: ignore
     Candidate,
     FunctionCall,
     FunctionDeclaration,
@@ -87,7 +87,7 @@ class LLM(llm.LLM):
         fnc_ctx: Optional[llm.FunctionContext] = None,
         temperature: Optional[float] = None,
         n: int = 1,
-    ) -> LLMStream:
+    ) -> "LLMStream":
         logger.info(
             "Starting chat with temperature: %s, candidate count: %s", temperature, n
         )
@@ -212,7 +212,7 @@ class LLMStream(llm.LLMStream):
                     self._function_calls_info.append(function_call)
             choice_delta.tool_calls = self._function_calls_info
             return llm.ChatChunk(
-                request_id=uuid(),
+                request_id=str(uuid()),
                 choices=[
                     llm.Choice(
                         delta=choice_delta,
@@ -224,7 +224,7 @@ class LLMStream(llm.LLMStream):
         if candidate.text:
             choice_delta.content = candidate.text
             return llm.ChatChunk(
-                request_id=uuid(),
+                request_id=str(uuid()),
                 choices=[
                     llm.Choice(
                         delta=choice_delta,
@@ -306,9 +306,7 @@ def _build_vertex_context(chat_ctx: llm.ChatContext, cache_key: Any) -> List[dic
 
 
 def _build_content(msg: llm.ChatMessage, cache_key: Any) -> Optional[dict]:
-    role = msg.role
-    if role in {"system", "assistant"}:
-        role = "model"
+    role = "model" if msg.role in {"system", "assistant"} else msg.role
 
     parts: List[Dict[str, Any]] = []
 

@@ -19,7 +19,7 @@ import setuptools
 import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
-about = {} # type: ignore
+about = {}  # type: ignore
 with open(os.path.join(here, "livekit", "plugins", "google", "version.py"), "r") as f:
     exec(f.read(), about)
 
