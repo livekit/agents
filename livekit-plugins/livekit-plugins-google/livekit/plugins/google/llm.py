@@ -267,58 +267,68 @@ class LLMStream(llm.LLMStream):
         )
 
 
-def _build_vertex_context(chat_ctx: llm.ChatContext, cache_key: Any) -> List[Content]:
-    contents: List[Content] = []
+def _build_vertex_context(chat_ctx: llm.ChatContext, cache_key: Any) -> List[dict]:
+    contents = []
+    current_entry = None
+
     for msg in chat_ctx.messages:
         content = _build_content(msg, cache_key)
         if content:
-            contents.append(content)
+            if content["role"] == "model" and msg.role == "system":
+                contents.append(content)
+                continue
+            if current_entry is None or content["role"] != current_entry["role"]:
+                if current_entry:
+                    contents.append(current_entry)
+                current_entry = {"role": content["role"], "parts": content["parts"]}
+            else:
+                current_entry["parts"].extend(content["parts"])
+
+    if current_entry:
+        contents.append(current_entry)
+
     logger.debug("Built vertex context: %s", contents)
     return contents
 
-
-def _build_content(msg: llm.ChatMessage, cache_key: Any) -> Content:
-    parts: List[Part] = []
+def _build_content(msg: llm.ChatMessage, cache_key: Any) -> dict:
     role = msg.role
     if role == "system" or role == "assistant":
         role = "model"
-
+    
+    parts = []
+    
     if role == "user":
         if isinstance(msg.content, str) and msg.content.strip():
-            parts.append(Part.from_text(msg.content))
+            parts.append({"text": msg.content})
         elif isinstance(msg.content, list):
             for item in msg.content:
                 if isinstance(item, str) and item.strip():
-                    parts.append(Part.from_text(item))
-                elif isinstance(item, llm.ChatImage):
-                    pass  # Handle images if necessary
+                    parts.append({"text": item})
+    
     elif role == "model":
         if msg.tool_calls:
             logger.debug("Tool calls: %s", msg)
             for fnc in msg.tool_calls:
-                # Construct the function call part
-                function_call = FunctionCall(
-                    name=fnc.function_info.name, args=fnc.arguments
-                )
-                raw_function_call = function_call._raw_message
-                part = Part()
-                part._raw_part.function_call = raw_function_call
-                parts.append(part)
-            pass
+                function_call = {
+                    "name": fnc.function_info.name,
+                    "args": fnc.arguments
+                }
+                parts.append({"function_call": function_call})
         elif isinstance(msg.content, str) and msg.content.strip():
-            parts.append(Part.from_text(msg.content))
+            parts.append({"text": msg.content})
+    
     elif role == "tool":
-        # The tool's response should be represented as a function response
         logger.debug("Tool response: %s", msg)
-        role = "model"
-        parts.append(
-            Part.from_function_response(
-                name=msg.name,
-                response={"content": msg.content},
-            )
-        )
+        role = "user"
+        function_response = {
+            "name": msg.name, 
+            "response": {"content": msg.content}
+        }
+        parts.append({"function_response": function_response})
+    
+    return {"role": role, "parts": parts} if parts else None
 
-    return Content(parts=parts, role=role) if parts else None
+
 
 
 def _sanitize_value(value: Any, arg_info: llm.FunctionArgInfo) -> Any:
