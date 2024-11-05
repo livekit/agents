@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import typing
 from typing import Any, AsyncIterator, Awaitable, Dict, List, Optional
 from uuid import uuid4 as uuid
 
@@ -24,26 +23,32 @@ import vertexai
 from livekit.agents import llm
 from vertexai.generative_models import (
     Candidate,
-    Content,
     FunctionCall,
     FunctionDeclaration,
     GenerationConfig,
     GenerationResponse,
     GenerativeModel,
-    Part,
     Tool,
 )
 
 from .log import logger
 from .models import ChatModels
 
+JSON_SCHEMA_TYPE_MAP = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+}
+
 
 class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        project: str | None = None,
-        location: str | None = None,
+        project: Optional[str] = None,
+        location: Optional[str] = None,
         model: str | ChatModels = "gemini-1.5-flash-002",
         **kwargs,
     ) -> None:
@@ -64,22 +69,20 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
-        fnc_ctx: llm.FunctionContext | None = None,
-        temperature: float | None = None,
-        n: int | None = 1,
-    ) -> "LLMStream":
+        fnc_ctx: Optional[llm.FunctionContext] = None,
+        temperature: Optional[float] = None,
+        n: int = 1,
+    ) -> LLMStream:
         logger.info(
             "Starting chat with temperature: %s, candidate count: %s", temperature, n
         )
         system_instruction = _extract_system_instruction(chat_ctx)
 
-        tools = []
-        if fnc_ctx and fnc_ctx.ai_functions:
-            tools = _build_tools(fnc_ctx)
+        tools = _build_tools(fnc_ctx) if fnc_ctx and fnc_ctx.ai_functions else []
 
         generation_config = GenerationConfig(
             temperature=temperature,
-            candidate_count=n or 1,
+            candidate_count=n,
             max_output_tokens=1024,
         )
 
@@ -94,7 +97,7 @@ class LLM(llm.LLM):
         cmp = model.generate_content_async(
             contents=contents,
             generation_config=generation_config,
-            tools=tools if tools else None,
+            tools=tools or None,
             stream=True,
         )
 
@@ -108,60 +111,51 @@ class LLM(llm.LLM):
 
 def _extract_system_instruction(chat_ctx: llm.ChatContext) -> Optional[List[str]]:
     system_messages = [msg.content for msg in chat_ctx.messages if msg.role == "system"]
-    logger.debug("System messages: %s", system_messages)
-    return system_messages if system_messages else None
+    if system_messages:
+        logger.debug("Extracted system messages.")
+        return system_messages
+    return None
 
 
 def _build_tools(fnc_ctx: llm.FunctionContext) -> List[Tool]:
-    tools = []
-    for fnc_info in fnc_ctx.ai_functions.values():
-        func_decl = FunctionDeclaration(
-            name=fnc_info.name,
-            description=fnc_info.description,
-            parameters=_build_parameters(fnc_info.arguments),
+    tools = [
+        Tool(
+            function_declarations=[
+                FunctionDeclaration(
+                    name=fnc_info.name,
+                    description=fnc_info.description,
+                    parameters=_build_parameters(fnc_info.arguments),
+                )
+            ]
         )
-        tool = Tool(function_declarations=[func_decl])
-        tools.append(tool)
-    # logger.debug("Built tools: %s", tools)
+        for fnc_info in fnc_ctx.ai_functions.values()
+    ]
     return tools
 
 
 def _build_parameters(arguments: Dict[str, llm.FunctionArgInfo]) -> Dict[str, Any]:
-    properties = {}
-    required = []
-    for arg_name, arg_info in arguments.items():
-        param = {
-            "type": _python_type_to_jsonschema_type(arg_info.type),
+    properties = {
+        arg_name: {
+            "type": JSON_SCHEMA_TYPE_MAP.get(arg_info.type, "string"),
             "description": arg_info.description,
+            **({"enum": arg_info.choices} if arg_info.choices else {}),
         }
-        if arg_info.choices:
-            param["enum"] = arg_info.choices
-        properties[arg_name] = param
-        if arg_info.default is inspect.Parameter.empty:
-            required.append(arg_name)
-    parameters = {
+        for arg_name, arg_info in arguments.items()
+    }
+    required = [
+        arg_name
+        for arg_name, arg_info in arguments.items()
+        if arg_info.default is inspect.Parameter.empty
+    ]
+
+    parameters: Dict[str, Any] = {
         "type": "object",
         "properties": properties,
     }
     if required:
         parameters["required"] = required
-    # logger.debug("Built parameters: %s", parameters)
+
     return parameters
-
-
-def _python_type_to_jsonschema_type(py_type: type) -> str:
-    if py_type is str:
-        return "string"
-    elif py_type is int:
-        return "integer"
-    elif py_type is float:
-        return "number"
-    elif py_type is bool:
-        return "boolean"
-    elif typing.get_origin(py_type) is list:
-        return "array"
-    else:
-        raise ValueError(f"Unsupported type {py_type}")
 
 
 class LLMStream(llm.LLMStream):
@@ -171,12 +165,11 @@ class LLMStream(llm.LLMStream):
         *,
         vai_stream: Awaitable[AsyncIterator[GenerationResponse]],
         chat_ctx: llm.ChatContext,
-        fnc_ctx: llm.FunctionContext | None,
+        fnc_ctx: Optional[llm.FunctionContext],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._awaitable_vai_stream = vai_stream
-        self._vai_stream: AsyncIterator[GenerationResponse] | None = None
-
+        self._vai_stream: Optional[AsyncIterator[GenerationResponse]] = None
         self._function_calls_info: List[llm.FunctionCallInfo] = []
 
     async def _main_task(self) -> None:
@@ -186,13 +179,11 @@ class LLMStream(llm.LLMStream):
             async for response in self._vai_stream:
                 for idx, candidate in enumerate(response.candidates):
                     chat_chunk = self._parse_candidate(candidate, idx)
-                    # logger.debug("Chat chunk: %s", chat_chunk)
-                    if chat_chunk is not None:
+                    if chat_chunk:
                         self._event_ch.send_nowait(chat_chunk)
-
         except Exception as e:
             logger.error("Error during main task: %s", e)
-            raise e
+            raise
 
     def _parse_candidate(
         self, candidate: Candidate, index: int
@@ -205,8 +196,6 @@ class LLMStream(llm.LLMStream):
                 if function_call:
                     self._function_calls_info.append(function_call)
             choice_delta.tool_calls = self._function_calls_info
-            logger.debug("Function calls: %s", self._function_calls_info)
-            logger.debug("index: %s", index)
             return llm.ChatChunk(
                 request_id=uuid(),
                 choices=[
@@ -229,6 +218,8 @@ class LLMStream(llm.LLMStream):
                 ],
             )
 
+        return None
+
     def _create_function_call_info(
         self, function_call: FunctionCall
     ) -> Optional[llm.FunctionCallInfo]:
@@ -236,18 +227,19 @@ class LLMStream(llm.LLMStream):
             return None
         fnc_name = function_call.name
         raw_arguments = json.dumps(function_call.args)
-        if fnc_name not in self._fnc_ctx.ai_functions:
+
+        fnc_info = self._fnc_ctx.ai_functions.get(fnc_name)
+        if not fnc_info:
             logger.error("Function '%s' not found in function context", fnc_name)
             raise ValueError(f"Function '{fnc_name}' not found in function context")
-        fnc_info = self._fnc_ctx.ai_functions[fnc_name]
-        parsed_arguments = function_call.args
 
+        parsed_arguments = function_call.args
         sanitized_arguments = {}
+
         for arg_name, arg_info in fnc_info.arguments.items():
             if arg_name in parsed_arguments:
                 arg_value = parsed_arguments[arg_name]
-                sanitized_value = _sanitize_value(arg_value, arg_info)
-                sanitized_arguments[arg_name] = sanitized_value
+                sanitized_arguments[arg_name] = _sanitize_value(arg_value, arg_info)
             elif arg_info.default is inspect.Parameter.empty:
                 logger.error(
                     "Missing required argument '%s' for function '%s'",
@@ -259,6 +251,7 @@ class LLMStream(llm.LLMStream):
                 )
             else:
                 sanitized_arguments[arg_name] = arg_info.default
+
         return llm.FunctionCallInfo(
             tool_call_id=f"{fnc_name}_{uuid()}",
             function_info=fnc_info,
@@ -269,34 +262,41 @@ class LLMStream(llm.LLMStream):
 
 def _build_vertex_context(chat_ctx: llm.ChatContext, cache_key: Any) -> List[dict]:
     contents = []
-    current_entry = None
+    current_entry: Optional[dict] = None
 
     for msg in chat_ctx.messages:
         content = _build_content(msg, cache_key)
-        if content:
-            if content["role"] == "model" and msg.role == "system":
-                contents.append(content)
-                continue
-            if current_entry is None or content["role"] != current_entry["role"]:
-                if current_entry:
-                    contents.append(current_entry)
-                current_entry = {"role": content["role"], "parts": content["parts"]}
-            else:
-                current_entry["parts"].extend(content["parts"])
+        if not content:
+            continue
+
+        role = content["role"]
+        parts = content["parts"]
+
+        if role == "model" and msg.role == "system":
+            contents.append(content)
+            continue
+
+        if current_entry is None or role != current_entry["role"]:
+            if current_entry:
+                contents.append(current_entry)
+            current_entry = {"role": role, "parts": parts}
+        else:
+            current_entry["parts"].extend(parts)
 
     if current_entry:
         contents.append(current_entry)
 
-    logger.debug("Built vertex context: %s", contents)
+    logger.debug("Built vertex context.")
     return contents
 
-def _build_content(msg: llm.ChatMessage, cache_key: Any) -> dict:
+
+def _build_content(msg: llm.ChatMessage, cache_key: Any) -> Optional[dict]:
     role = msg.role
-    if role == "system" or role == "assistant":
+    if role in {"system", "assistant"}:
         role = "model"
-    
+
     parts = []
-    
+
     if role == "user":
         if isinstance(msg.content, str) and msg.content.strip():
             parts.append({"text": msg.content})
@@ -304,48 +304,31 @@ def _build_content(msg: llm.ChatMessage, cache_key: Any) -> dict:
             for item in msg.content:
                 if isinstance(item, str) and item.strip():
                     parts.append({"text": item})
-    
+
     elif role == "model":
         if msg.tool_calls:
-            logger.debug("Tool calls: %s", msg)
             for fnc in msg.tool_calls:
-                function_call = {
-                    "name": fnc.function_info.name,
-                    "args": fnc.arguments
-                }
+                function_call = {"name": fnc.function_info.name, "args": fnc.arguments}
                 parts.append({"function_call": function_call})
         elif isinstance(msg.content, str) and msg.content.strip():
             parts.append({"text": msg.content})
-    
+
     elif role == "tool":
-        logger.debug("Tool response: %s", msg)
         role = "user"
-        function_response = {
-            "name": msg.name, 
-            "response": {"content": msg.content}
-        }
+        function_response = {"name": msg.name, "response": {"content": msg.content}}
         parts.append({"function_response": function_response})
-    
+
     return {"role": role, "parts": parts} if parts else None
-
-
 
 
 def _sanitize_value(value: Any, arg_info: llm.FunctionArgInfo) -> Any:
     expected_type = arg_info.type
-    if expected_type is str and not isinstance(value, str):
-        raise ValueError(f"Expected argument '{arg_info.name}' to be of type str")
-    elif expected_type is int and not isinstance(value, int):
-        raise ValueError(f"Expected argument '{arg_info.name}' to be of type int")
-    elif expected_type is float and not isinstance(value, (int, float)):
-        raise ValueError(f"Expected argument '{arg_info.name}' to be of type float")
-    elif expected_type is bool and not isinstance(value, bool):
-        raise ValueError(f"Expected argument '{arg_info.name}' to be of type bool")
-    elif typing.get_origin(expected_type) is list and not isinstance(value, list):
-        raise ValueError(f"Expected argument '{arg_info.name}' to be of type list")
-    elif expected_type not in {str, int, float, bool, list}:
+
+    if not isinstance(value, expected_type) and not (
+        expected_type is float and isinstance(value, int)
+    ):
         raise ValueError(
-            f"Unsupported argument type '{expected_type}' for argument '{arg_info.name}'"
+            f"Expected argument '{arg_info.name}' to be of type {expected_type.__name__}"
         )
 
     if arg_info.choices and value not in arg_info.choices:
