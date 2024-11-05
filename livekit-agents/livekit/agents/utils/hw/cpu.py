@@ -21,7 +21,7 @@ class CPUMonitor(ABC):
 
 class DefaultCPUMonitor(CPUMonitor):
     def cpu_count(self) -> float:
-        return psutil.cpu_count()
+        return float(psutil.cpu_count())
 
     def cpu_percent(self, interval: float = 0.5) -> float:
         return psutil.cpu_percent(interval) / 100.0
