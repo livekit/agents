@@ -17,8 +17,6 @@ For credentials, you'll need a Google Cloud account and obtain the correct crede
 - project: The Google Cloud project ID to use.
 - location: The location of the Vertex AI API endpoint. i.e. 'us-central1'.
 
-### Example 
-- [vertex_ai.py](https://github.com/livekit/agents/blob/vertex-ai/examples/voice-pipeline-agent/vertex_ai.py)
 
 
 ## Authentication Guide
