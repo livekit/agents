@@ -87,6 +87,7 @@ class LLM(llm.LLM):
         fnc_ctx: Optional[llm.FunctionContext] = None,
         temperature: Optional[float] = None,
         n: int = 1,
+        **kwargs,
     ) -> "LLMStream":
         logger.info(
             "Starting chat with temperature: %s, candidate count: %s", temperature, n
