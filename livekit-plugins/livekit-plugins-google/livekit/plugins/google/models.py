@@ -1,13 +1,17 @@
 from typing import Literal
 
 GeminiModels = Literal[
-    "gemini-1.5-flash-002",
+    "gemini-1.0-pro",
+    "gemini-1.0-pro-vision",
+    "gemini-1.0-pro-vision-001",
     "gemini-1.5-flash",
+    "gemini-1.5-flash-002",
+    "gemini-1.5-flash-8b",
     "gemini-1.5-flash-preview-0514",
-    "gemini-1.5-pro-002",
     "gemini-1.5-pro",
-    "gemini-1.5-pro-preview-0514",
+    "gemini-1.5-pro-002",
     "gemini-1.5-pro-preview-0409",
+    "gemini-1.5-pro-preview-0514",
 ]
 
 # Speech to Text v2

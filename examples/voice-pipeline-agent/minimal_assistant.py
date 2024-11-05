@@ -48,6 +48,8 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model=dg_model),
         llm=openai.LLM(),
+        # To use vertex AI LLM 
+        # llm=google.LLM(project="your-project-id", location="us-central1"),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
     )
