@@ -124,7 +124,7 @@ class LLM(llm.LLM):
         )
 
 
-def _extract_system_instruction(chat_ctx: llm.ChatContext) -> Optional[List[str]]:
+def _extract_system_instruction(chat_ctx: llm.ChatContext):
     system_messages = [msg.content for msg in chat_ctx.messages if msg.role == "system"]
     if system_messages:
         logger.debug("Extracted system messages.")
@@ -185,7 +185,7 @@ class LLMStream(llm.LLMStream):
         super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._awaitable_vai_stream = vai_stream
         self._vai_stream: Optional[AsyncIterator[GenerationResponse]] = None
-        self._function_calls_info: List[llm.FunctionCallInfo] = []
+        self._function_calls_info: list[llm.FunctionCallInfo] = []  # type: ignore
 
     async def _main_task(self) -> None:
         if not self._vai_stream:
@@ -310,7 +310,7 @@ def _build_content(msg: llm.ChatMessage, cache_key: Any) -> Optional[dict]:
     if role in {"system", "assistant"}:
         role = "model"
 
-    parts = []
+    parts: List[Dict[str, Any]] = []
 
     if role == "user":
         if isinstance(msg.content, str) and msg.content.strip():
