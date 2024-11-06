@@ -784,7 +784,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         """
         original_ctx = self._conversation_items.to_chat_context()
 
-        changes = utils.compute_changes(
+        changes = utils._compute_changes(
             original_ctx.messages, new_ctx.messages, key_fnc=lambda x: x.id
         )
         logger.debug(
@@ -803,7 +803,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self.conversation.item.create(msg, prev.id if prev else None)
 
     def _update_converstation_item_content(
-        self, item_id: str, content: llm.ChatContent | list[llm.ChatContent]
+        self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
     ) -> None:
         item = self._conversation_items.get(item_id)
         if item is None:

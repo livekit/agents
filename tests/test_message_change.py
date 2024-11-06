@@ -1,6 +1,6 @@
 import pytest
 from livekit.agents.llm import ChatMessage
-from livekit.agents.utils.message_change import (
+from livekit.agents.utils._message_change import (
     _check_order_preserved,
     _compute_list_changes,
     _find_longest_increasing_subsequence,
