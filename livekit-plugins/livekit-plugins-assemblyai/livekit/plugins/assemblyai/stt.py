@@ -159,8 +159,8 @@ class SpeechStream(stt.SpeechStream):
         self._queue.put_nowait(frame)
 
     async def aclose(self, *, wait: bool = True) -> None:
+        self.push_frame(SpeechStream._CLOSE_MSG)
         self._closed = True
-        self._queue.put_nowait(SpeechStream._CLOSE_MSG)
 
         if not wait:
             self._main_task.cancel()
@@ -231,7 +231,7 @@ class SpeechStream(stt.SpeechStream):
         END_UTTERANCE_SILENCE_THRESHOLD_MSG = json.dumps(
             {"end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold }
         )
-        self._queue.put_nowait(END_UTTERANCE_SILENCE_THRESHOLD_MSG)
+        self.push_frame(END_UTTERANCE_SILENCE_THRESHOLD_MSG)
 
         # Local variables for buffering
         buffer = bytearray()
