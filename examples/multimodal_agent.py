@@ -70,19 +70,19 @@ async def entrypoint(ctx: JobContext):
     # create a chat context with chat history
     chat_ctx = llm.ChatContext()
 
-    # Add some test context to verify if the sync_chat_ctx works
-    chat_ctx.append(
-        text="Hi! I'm Alice and I love hiking in the mountains.", role="user"
-    )
-    chat_ctx.append(
-        text="Hello Alice! That's wonderful. I also enjoy outdoor activities and would be happy to discuss hiking adventures with you.",
-        role="assistant",
-    )
-    chat_ctx.append(text="I'm planning a trip to Paris next month.", role="user")
-    chat_ctx.append(
-        text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",
-        role="assistant",
-    )
+    # # Add some test context to verify if the sync_chat_ctx works
+    # chat_ctx.append(
+    #     text="Hi! I'm Alice and I love hiking in the mountains.", role="user"
+    # )
+    # chat_ctx.append(
+    #     text="Hello Alice! That's wonderful. I also enjoy outdoor activities and would be happy to discuss hiking adventures with you.",
+    #     role="assistant",
+    # )
+    # chat_ctx.append(text="I'm planning a trip to Paris next month.", role="user")
+    # chat_ctx.append(
+    #     text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",
+    #     role="assistant",
+    # )
 
     agent = multimodal.MultimodalAgent(
         model=openai.realtime.RealtimeModel(
@@ -106,6 +106,12 @@ async def entrypoint(ctx: JobContext):
         if len(agent.chat_ctx.messages) > max_ctx_len:
             messages = agent.chat_ctx.messages[-max_ctx_len:]
             agent.sync_chat_ctx(llm.ChatContext(messages=messages))
+
+    @ctx.room.on("participant_attributes_changed")
+    def _on_participant_attributes_changed(changed_attrs: dict[str, str]):
+        if "lk.agent.state" in changed_attrs:
+            agent_state = changed_attrs["lk.agent.state"]
+            logger.info("agent state changed", extra={"agent_state": agent_state})
 
 
 if __name__ == "__main__":

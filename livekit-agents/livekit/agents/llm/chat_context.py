@@ -95,10 +95,10 @@ class ChatMessage:
         text: str = "",
         images: list[ChatImage] = [],
         role: ChatRole = "system",
-        item_id: str | None = None,
+        id: str | None = None,
     ) -> "ChatMessage":
         if len(images) == 0:
-            return ChatMessage(role=role, content=text, id=item_id)
+            return ChatMessage(role=role, content=text, id=id)
         else:
             content: list[ChatContent] = []
             if text:
@@ -107,7 +107,7 @@ class ChatMessage:
             if len(images) > 0:
                 content.extend(images)
 
-            return ChatMessage(role=role, content=content, id=item_id)
+            return ChatMessage(role=role, content=content, id=id)
 
     def copy(self):
         content = self.content

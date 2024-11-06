@@ -14,7 +14,7 @@ from livekit.agents import llm, utils
 from livekit.agents.llm import _oai_api
 from typing_extensions import TypedDict
 
-from . import api_proto
+from . import api_proto, converstation_items
 from .log import logger
 
 EventTypes = Literal[
@@ -92,24 +92,6 @@ class RealtimeToolCall:
     """accumulated arguments"""
     tool_call_id: str
     """id of the tool call"""
-
-
-@dataclass
-class ConversationItemCreated:
-    previous_item_id: str | None
-    """id of the previous item"""
-    item_id: str
-    """id of the item"""
-    role: api_proto.Role | None
-    """role of the item"""
-    content: list[dict[str, str]]
-    """transcripts of the item"""
-
-
-@dataclass
-class ConversationItemDeleted:
-    item_id: str
-    """id of the item"""
 
 
 # TODO(theomonnom): add the content type directly inside RealtimeContent?
@@ -657,8 +639,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._main_atask = asyncio.create_task(
             self._main_task(), name="openai-realtime-session"
         )
-
-        self._chat_ctx = chat_ctx
+        # manage conversation items internally
+        self._conversation_items = converstation_items.ConversationItems()
         self._fnc_ctx = fnc_ctx
         self._loop = loop
 
@@ -672,7 +654,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self.session_update()  # initial session init
 
         # sync the chat context to the session
-        self._sync_chat_ctx_to_session(None, self._chat_ctx)
+        self.sync_chat_ctx(chat_ctx)
 
         self._fnc_tasks = utils.aio.TaskSet()
 
@@ -685,13 +667,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx
-
-    @chat_ctx.setter
-    def chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        """Sync the ctx to the session and reset the chat context."""
-        self._sync_chat_ctx_to_session(self._chat_ctx, chat_ctx)
-        self._chat_ctx = chat_ctx
+        return self._conversation_items.to_chat_context()
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
@@ -800,16 +776,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             }
         )
 
-    def _sync_chat_ctx_to_session(
-        self, original_ctx: llm.ChatContext | None, new_ctx: llm.ChatContext | None
-    ) -> None:
+    def sync_chat_ctx(self, new_ctx: llm.ChatContext) -> None:
         """Sync the chat context with the agent's chat context.
 
         Compute the minimum number of insertions and deletions to transform the old
         chat context messages to the new chat context messages.
         """
-        original_ctx = original_ctx or llm.ChatContext()
-        new_ctx = new_ctx or llm.ChatContext()
+        original_ctx = self._conversation_items.to_chat_context()
 
         changes = utils.compute_changes(
             original_ctx.messages, new_ctx.messages, key_fnc=lambda x: x.id
@@ -828,6 +801,18 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         for prev, msg in changes.to_add:
             self.conversation.item.create(msg, prev.id if prev else None)
+
+    def _update_converstation_item_content(
+        self, item_id: str, content: llm.ChatContent | list[llm.ChatContent]
+    ) -> None:
+        item = self._conversation_items.get(item_id)
+        if item is None:
+            logger.error(
+                "conversation item not found",
+                extra={"item_id": item_id},
+            )
+            return
+        item.content = content
 
     def _queue_msg(self, msg: api_proto.ClientEvents) -> None:
         self._send_ch.send_nowait(msg)
@@ -1030,26 +1015,49 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     def _handle_conversation_item_created(
         self, item_created: api_proto.ServerEvent.ConversationItemCreated
     ):
+        previous_item_id = item_created["previous_item_id"]
         item = item_created["item"]
-        self.emit(
-            "conversation_item_created",
-            ConversationItemCreated(
-                previous_item_id=item_created["previous_item_id"],
-                item_id=item["id"],
-                role=item.get("role"),
-                content=item.get("content", []),
-            ),
-        )
+        item_type = item["type"]
+
+        # Create message based on item type
+        if item_type == "message":
+            # Handle message items (system/user/assistant)
+            role = item["role"]
+            # Leave the content empty and fill it in later from the content parts
+            message = llm.ChatMessage(id=item["id"], role=role)
+
+        elif item_type == "function_call":
+            # Handle function call items
+            message = llm.ChatMessage(
+                id=item["id"],
+                role="assistant",
+                tool_call_id=item["call_id"],
+            )
+
+        elif item_type == "function_call_output":
+            # Handle function call output items
+            message = llm.ChatMessage(
+                id=item["id"], role="tool", tool_call_id=item["call_id"]
+            )
+
+        else:
+            logger.warning(
+                f"unknown conversation item type {item_type}",
+                extra=self.logging_extra(),
+            )
+            return
+
+        # Insert into conversation items
+        self._conversation_items.insert_after(previous_item_id, message)
+
+        logger.debug("conversation item created", extra=item_created)
 
     def _handle_conversation_item_deleted(
         self, item_deleted: api_proto.ServerEvent.ConversationItemDeleted
     ):
-        self.emit(
-            "conversation_item_deleted",
-            ConversationItemDeleted(
-                item_id=item_deleted["item_id"],
-            ),
-        )
+        # Delete from conversation items
+        self._conversation_items.delete(item_deleted["item_id"])
+        logger.debug("conversation item deleted", extra=item_deleted)
 
     def _handle_response_created(
         self, response_created: api_proto.ServerEvent.ResponseCreated
@@ -1258,7 +1266,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
 
         if called_fnc.result is not None:
-            self.conversation.item.create(tool_call, item_id)
+            self.conversation.item.create(tool_call, previous_item_id=item_id)
             self.response.create()
 
     def logging_extra(self) -> dict:

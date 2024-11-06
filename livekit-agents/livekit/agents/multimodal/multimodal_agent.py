@@ -113,7 +113,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         return self._session.chat_ctx
 
     def sync_chat_ctx(self, ctx: llm.ChatContext) -> None:
-        self._session.chat_ctx = ctx
+        self._session.sync_chat_ctx(ctx)
 
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
@@ -190,9 +190,11 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 )
             )
             user_msg = ChatMessage.create(
-                text=ev.transcript, role="user", item_id=ev.item_id
+                text=ev.transcript, role="user", id=ev.item_id
             )
-            self.chat_ctx.messages.append(user_msg)
+            self._session._update_converstation_item_content(
+                ev.item_id, user_msg.content
+            )
 
             self.emit("user_speech_committed", user_msg)
             logger.debug(
@@ -216,15 +218,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         @self._session.on("input_speech_stopped")
         def _input_speech_stopped():
             self.emit("user_stopped_speaking")
-
-        @self._session.on("conversation_item_created")
-        def _conversation_item_created(ev: realtime.ConversationItemCreated):
-            # TODO (long): delete the log after debugging
-            logger.debug("conversation item created", extra={"ev": ev})
-
-        @self._session.on("conversation_item_deleted")
-        def _conversation_item_deleted(ev: realtime.ConversationItemDeleted):
-            logger.debug("conversation item deleted", extra={"ev": ev})
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -267,9 +260,11 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 msg = ChatMessage.create(
                     text=collected_text,
                     role="assistant",
-                    item_id=self._playing_handle.item_id,
+                    id=self._playing_handle.item_id,
                 )
-                self.chat_ctx.messages.append(msg)
+                self._session._update_converstation_item_content(
+                    self._playing_handle.item_id, msg.content
+                )
 
                 if interrupted:
                     self.emit("agent_speech_interrupted", msg)

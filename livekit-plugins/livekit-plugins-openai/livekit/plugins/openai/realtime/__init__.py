@@ -2,8 +2,6 @@ from . import api_proto
 from .realtime_model import (
     DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
     DEFAULT_SERVER_VAD_OPTIONS,
-    ConversationItemCreated,
-    ConversationItemDeleted,
     InputTranscriptionCompleted,
     InputTranscriptionFailed,
     InputTranscriptionOptions,
