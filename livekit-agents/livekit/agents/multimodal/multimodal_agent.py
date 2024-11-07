@@ -143,7 +143,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         self._session = self._model.session(
             chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx
         )
-        
+
         # Create a task to wait for initialization and start the main task
         async def _init_and_start():
             try:
