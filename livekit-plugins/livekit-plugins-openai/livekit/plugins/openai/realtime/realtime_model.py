@@ -690,7 +690,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self.session_update()  # initial session init
 
         # sync the chat context to the session
-        asyncio.create_task(self.async_chat_ctx(chat_ctx))
+        self._init_sync_task = asyncio.create_task(self.async_chat_ctx(chat_ctx))
 
         self._fnc_tasks = utils.aio.TaskSet()
 
@@ -873,7 +873,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         # clean up the futures
         for msg in changes.to_delete:
             del self._item_deleted_futs[msg.id]
-        for msg in changes.to_add:
+        for _, msg in changes.to_add:
             del self._item_created_futs[msg.id]
 
     def _update_converstation_item_content(
