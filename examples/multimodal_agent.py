@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated
 
@@ -71,6 +72,7 @@ async def entrypoint(ctx: JobContext):
     chat_ctx = llm.ChatContext()
 
     # # Add some test context to verify if the sync_chat_ctx works
+    # # TODO: OAI realtime API does not support this properly yet
     # chat_ctx.append(
     #     text="Hi! I'm Alice and I love hiking in the mountains.", role="user"
     # )
@@ -105,13 +107,9 @@ async def entrypoint(ctx: JobContext):
         max_ctx_len = 10
         if len(agent.chat_ctx.messages) > max_ctx_len:
             messages = agent.chat_ctx.messages[-max_ctx_len:]
-            agent.sync_chat_ctx(llm.ChatContext(messages=messages))
-
-    @ctx.room.on("participant_attributes_changed")
-    def _on_participant_attributes_changed(changed_attrs: dict[str, str]):
-        if "lk.agent.state" in changed_attrs:
-            agent_state = changed_attrs["lk.agent.state"]
-            logger.info("agent state changed", extra={"agent_state": agent_state})
+            asyncio.create_task(
+                agent.async_chat_ctx(llm.ChatContext(messages=messages))
+            )
 
 
 if __name__ == "__main__":

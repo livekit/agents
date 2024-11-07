@@ -22,6 +22,8 @@ EventTypes = Literal[
     "user_speech_committed",
     "agent_speech_committed",
     "agent_speech_interrupted",
+    "function_calls_collected",
+    "function_calls_finished",
 ]
 
 
@@ -112,8 +114,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def chat_ctx(self) -> llm.ChatContext:
         return self._session.chat_ctx
 
-    def sync_chat_ctx(self, ctx: llm.ChatContext) -> None:
-        self._session.sync_chat_ctx(ctx)
+    async def async_chat_ctx(self, ctx: llm.ChatContext) -> None:
+        await self._session.async_chat_ctx(ctx)
 
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
@@ -218,6 +220,14 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         @self._session.on("input_speech_stopped")
         def _input_speech_stopped():
             self.emit("user_stopped_speaking")
+
+        @self._session.on("function_calls_collected")
+        def _function_calls_collected(fnc_call_infos: list[llm.FunctionCallInfo]):
+            self.emit("function_calls_collected", fnc_call_infos)
+
+        @self._session.on("function_calls_finished")
+        def _function_calls_finished(called_fncs: list[llm.CalledFunction]):
+            self.emit("function_calls_finished", called_fncs)
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
