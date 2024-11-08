@@ -800,10 +800,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 chat_ctx.messages.extend(extra_tools_messages)
 
                 answer_llm_stream = self._llm.chat(
-                    chat_ctx=chat_ctx,
-                    fnc_ctx=self.fnc_ctx
-                    if i < self._opts.max_nested_fnc_calls - 1
-                    else None,
+                    chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx
                 )
                 answer_synthesis = self._synthesize_agent_speech(
                     speech_handle.id, answer_llm_stream
