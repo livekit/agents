@@ -44,8 +44,6 @@ class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
-    tools: List[anthropic.types.ToolParam] | None = None
-    disable_parallel_tool_use: bool = False
 
 
 class LLM(llm.LLM):
@@ -94,7 +92,7 @@ class LLM(llm.LLM):
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
-        disable_parallel_tool_use: bool = False,
+        parallel_tool_calls: bool | None = None,
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
@@ -105,29 +103,24 @@ class LLM(llm.LLM):
             for fnc in fnc_ctx.ai_functions.values():
                 fncs_desc.append(_build_function_description(fnc))
 
-            self._opts.tools = fncs_desc
+            opts["tools"] = fncs_desc
 
-            if fnc_ctx and disable_parallel_tool_use is not None:
-                self._opts.disable_parallel_tool_use = disable_parallel_tool_use
+            if fnc_ctx and parallel_tool_calls is not None:
+                opts["parallel_tool_calls"] = parallel_tool_calls
 
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
-        tool_choice = {
-            "type": "auto",  # Todo : let user choose
-            "disable_parallel_tool_use": self._opts.disable_parallel_tool_use,
-        }
 
         stream = self._client.messages.create(
             max_tokens=opts.get("max_tokens", 1024),
             system=latest_system_message,
             messages=collaped_anthropic_ctx,
             model=self._opts.model,
-            tools=self._opts.tools,
-            tool_choice=tool_choice,
             temperature=temperature or anthropic.NOT_GIVEN,
             top_k=n or anthropic.NOT_GIVEN,
             stream=True,
+            **opts,
         )
 
         return LLMStream(
