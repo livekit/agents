@@ -171,10 +171,10 @@ class SpeechStream(stt.SpeechStream):
         self.push_frame(SpeechStream._CLOSE_MSG)
         self._closed = True
 
-        self._main_task.cancel()
+        self._task.cancel()
 
         with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
+            await self._task
 
         await self._session.close()
 
@@ -331,14 +331,8 @@ class SpeechStream(stt.SpeechStream):
             return
 
         # combine all final transcripts since the start of the speech
-        sentence = ""
-        confidence = 0.0
-        for f in self._final_events:
-            alt = f.alternatives[0]
-            sentence += f"{alt.text.strip()} "
-            confidence += alt.confidence
-
-        sentence = sentence.rstrip()
+        sentence = " ".join(f.alternatives[0].text for f in self._final_events)
+        confidence = sum(f.alternatives[0].confidence for f in self._final_events)
         confidence /= len(self._final_events)
 
         end_event = stt.SpeechEvent(
