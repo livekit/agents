@@ -14,7 +14,7 @@ from livekit.agents import llm, utils
 from livekit.agents.llm import _oai_api
 from typing_extensions import TypedDict
 
-from . import api_proto, converstation_items
+from . import api_proto, remote_items
 from .log import logger
 
 EventTypes = Literal[
@@ -639,6 +639,27 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 }
             )
 
+        async def acreate(
+            self,
+            message: llm.ChatMessage,
+            previous_item_id: str | None = None,
+            _on_create_callback: Callable[[], None] | None = None,
+        ) -> None:
+            fut = asyncio.Future[None]()
+            self._sess._item_created_futs[message.id] = fut
+            self.create(message, previous_item_id)
+            if _on_create_callback:
+                _on_create_callback()
+            await fut
+            del self._sess._item_created_futs[message.id]
+
+        async def adelete(self, *, item_id: str) -> None:
+            fut = asyncio.Future[None]()
+            self._sess._item_deleted_futs[item_id] = fut
+            self.delete(item_id)
+            await fut
+            del self._sess._item_deleted_futs[item_id]
+
     class Conversation:
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess
@@ -671,7 +692,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self._main_task(), name="openai-realtime-session"
         )
         # manage conversation items internally
-        self._conversation_items = converstation_items.ConversationItems()
+        self._remote_converstation_items = remote_items._RemoteConversationItems()
 
         # wait for the item to be created or deleted
         self._item_created_futs: dict[str, asyncio.Future[None]] = {}
@@ -703,7 +724,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._conversation_items.to_chat_context()
+        return self._remote_converstation_items.to_chat_context()
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
@@ -812,34 +833,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             }
         )
 
-    async def aitem_create(
-        self,
-        message: llm.ChatMessage,
-        previous_item_id: str | None = None,
-        _on_create_callback: Callable[[], None] | None = None,
-    ) -> None:
-        fut = asyncio.Future[None]()
-        self._item_created_futs[message.id] = fut
-        self.conversation.item.create(message, previous_item_id)
-        if _on_create_callback:
-            _on_create_callback()
-        await fut
-        del self._item_created_futs[message.id]
-
-    async def aitem_delete(self, item_id: str) -> None:
-        fut = asyncio.Future[None]()
-        self._item_deleted_futs[item_id] = fut
-        self.conversation.item.delete(item_id)
-        await fut
-        del self._item_deleted_futs[item_id]
-
     async def async_chat_ctx(self, new_ctx: llm.ChatContext) -> None:
         """Sync the chat context with the agent's chat context.
 
         Compute the minimum number of insertions and deletions to transform the old
         chat context messages to the new chat context messages.
         """
-        original_ctx = self._conversation_items.to_chat_context()
+        original_ctx = self._remote_converstation_items.to_chat_context()
 
         changes = utils._compute_changes(
             original_ctx.messages, new_ctx.messages, key_fnc=lambda x: x.id
@@ -879,7 +879,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     def _update_converstation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
     ) -> None:
-        item = self._conversation_items.get(item_id)
+        item = self._remote_converstation_items.get(item_id)
         if item is None:
             logger.error(
                 "conversation item not found",
@@ -1127,7 +1127,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             return
 
         # Insert into conversation items
-        self._conversation_items.insert_after(previous_item_id, message)
+        self._remote_converstation_items.insert_after(previous_item_id, message)
         if item_id in self._item_created_futs:
             self._item_created_futs[item_id].set_result(None)
         logger.debug("conversation item created", extra=item_created)
@@ -1137,7 +1137,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     ):
         # Delete from conversation items
         item_id = item_deleted["item_id"]
-        self._conversation_items.delete(item_id)
+        self._remote_converstation_items.delete(item_id)
         if item_id in self._item_deleted_futs:
             self._item_deleted_futs[item_id].set_result(None)
         logger.debug("conversation item deleted", extra=item_deleted)
@@ -1286,7 +1286,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 item["arguments"],
             )
 
-            msg = self._conversation_items.get(output.item_id)
+            msg = self._remote_converstation_items.get(output.item_id)
             if msg is not None:
                 # update the content of the message
                 assert msg.tool_call_id == item["call_id"]
@@ -1359,14 +1359,14 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
 
         if called_fnc.result is not None:
-            await self.aitem_create(
+            await self.conversation.item.acreate(
                 tool_call,
                 previous_item_id=item_id,
                 _on_create_callback=self.response.create,
             )
 
         # update the message with the tool call result
-        msg = self._conversation_items.get(tool_call.id)
+        msg = self._remote_converstation_items.get(tool_call.id)
         if msg is not None:
             assert msg.tool_call_id == tool_call.tool_call_id
             assert msg.role == "tool"

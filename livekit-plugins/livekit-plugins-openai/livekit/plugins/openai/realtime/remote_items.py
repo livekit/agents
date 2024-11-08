@@ -10,24 +10,24 @@ from .log import logger
 
 
 @dataclass
-class ConversationItem:
+class _ConversationItem:
     """A node in the conversation linked list"""
 
     message: llm.ChatMessage
-    _prev: Optional[ConversationItem] = field(default=None, repr=False)
-    _next: Optional[ConversationItem] = field(default=None, repr=False)
+    _prev: Optional[_ConversationItem] = field(default=None, repr=False)
+    _next: Optional[_ConversationItem] = field(default=None, repr=False)
 
 
-class ConversationItems:
+class _RemoteConversationItems:
     """Manages conversation items in a doubly-linked list"""
 
     def __init__(self) -> None:
-        self._head: Optional[ConversationItem] = None
-        self._tail: Optional[ConversationItem] = None
-        self._id_to_item: OrderedDict[str, ConversationItem] = OrderedDict()
+        self._head: Optional[_ConversationItem] = None
+        self._tail: Optional[_ConversationItem] = None
+        self._id_to_item: OrderedDict[str, _ConversationItem] = OrderedDict()
 
     @classmethod
-    def from_chat_context(cls, chat_ctx: llm.ChatContext) -> ConversationItems:
+    def from_chat_context(cls, chat_ctx: llm.ChatContext) -> _RemoteConversationItems:
         """Create ConversationItems from a ChatContext"""
         items = cls()
         for msg in chat_ctx.messages:
@@ -51,7 +51,7 @@ class ConversationItems:
         if message.id in self._id_to_item:
             raise ValueError(f"Message with id {message.id} already exists")
 
-        item = ConversationItem(message=message)
+        item = _ConversationItem(message=message)
         item._prev = self._tail
         item._next = None
 
@@ -85,7 +85,7 @@ class ConversationItems:
             )
             return
 
-        new_item = ConversationItem(message=message)
+        new_item = _ConversationItem(message=message)
         new_item._prev = prev_item
         new_item._next = prev_item._next
         prev_item._next = new_item
