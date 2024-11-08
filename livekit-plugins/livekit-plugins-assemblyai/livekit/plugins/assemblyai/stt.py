@@ -324,7 +324,7 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     # received a message from AssemblyAI
                     data = json.loads(msg.data)
-                    self._process_stream_event(data)
+                    self._process_stream_event(data, closing_ws)
                 except Exception:
                     logger.error("failed to process AssemblyAI message")
 
@@ -356,7 +356,7 @@ class SpeechStream(stt.SpeechStream):
         # break async iteration if speech has ended
         self._event_queue.put_nowait(None)
 
-    def _process_stream_event(self, data: dict) -> None:
+    def _process_stream_event(self, data: dict, closing_ws: bool) -> None:
         # see this page:
         # https://www.assemblyai.com/docs/api-reference/streaming/realtime
         # for more information about the different types of events
@@ -384,13 +384,19 @@ class SpeechStream(stt.SpeechStream):
                 self._event_queue.put_nowait(final_event)
 
         elif data["message_type"] == "SessionTerminated":
-            pass # TODO: log something or close any missing parts?
+            if closing_ws:
+                pass
+            else:
+                raise Exception("AssemblyAI connection closed unexpectedly")
 
         elif data["message_type"] == "SessionInformation":
-            pass # TODO: maybe log in the future?
+            logger.info("AssemblyAI Session Information: %s", str(data))
 
         elif data["message_type"] == "RealtimeError":
             logger.error("Received unexpected error from AssemblyAI %s", data)
+
+        else:
+            logger.warning("Received unexpected error from AssemblyAI %s", data["message_type"])
 
     async def __anext__(self) -> stt.SpeechEvent:
         evt = await self._event_queue.get()
