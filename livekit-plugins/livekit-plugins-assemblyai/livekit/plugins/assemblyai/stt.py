@@ -289,7 +289,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.send_str(data)  # tell AssemblyAI we are done with inputs
                     break
                 else:
-                    raise ValueError("Received unexpected data type: ", type(data))
+                    logger.error("Received unexpected data type: ", type(data))
 
         async def recv_task():
             nonlocal closing_ws
