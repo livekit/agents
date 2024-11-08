@@ -51,6 +51,10 @@ class STTOptions:
     # Buffer to collect frames until have 100ms worth of audio
     buffer_size_seconds: Optional[float] = None
 
+    def __post_init__(self):
+        if self.encoding not in (None, "pcm_s16le", "pcm_mulaw"):
+            raise ValueError(f"Invalid encoding: {self.encoding}")
+
 
 class STT(stt.STT):
     def __init__(
