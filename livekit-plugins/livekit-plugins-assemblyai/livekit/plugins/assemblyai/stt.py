@@ -171,11 +171,11 @@ class SpeechStream(stt.SpeechStream):
         self.push_frame(SpeechStream._CLOSE_MSG)
         self._closed = True
 
-        if not wait:
-            self._main_task.cancel()
+        # if not wait:
+        #     self._main_task.cancel()
 
-        with suppress(asyncio.CancelledError):
-            await self._main_task
+        # with suppress(asyncio.CancelledError):
+        #     await self._main_task
 
         await self._session.close()
 
