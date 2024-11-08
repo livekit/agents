@@ -25,7 +25,8 @@ from livekit.agents import Plugin
 
 
 class AssemblyAIPlugin(Plugin):
-    pass
+    def __init__(self):
+        super().__init__(__name__, __version__, __package__)
 
 
 Plugin.register_plugin(AssemblyAIPlugin())
