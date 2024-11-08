@@ -123,7 +123,11 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
+    # Used to close websocket
     _CLOSE_MSG: str = json.dumps({"terminate_session": True})
+    # Used to signal end of input
+    _END_OF_INPUT_MSG: str = "END_OF_INPUT"
+
 
     def __init__(
         self,
@@ -154,9 +158,14 @@ class SpeechStream(stt.SpeechStream):
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
-            raise ValueError("cannot push frame to closed stream")
+            logger.error(
+                "trying to push frames to a closed stream",
+            )
 
         self._queue.put_nowait(frame)
+    
+    def end_input(self) -> None:
+        self.push_frame(SpeechStream._END_OF_INPUT_MSG)
 
     async def aclose(self, *, wait: bool = True) -> None:
         self.push_frame(SpeechStream._CLOSE_MSG)
@@ -227,7 +236,9 @@ class SpeechStream(stt.SpeechStream):
         This method can throw ws errors, these are handled inside the _run method
         """
 
+        input_ended = False
         closing_ws = False
+
         END_UTTERANCE_SILENCE_THRESHOLD_MSG = json.dumps(
             {"end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold }
         )
@@ -238,14 +249,14 @@ class SpeechStream(stt.SpeechStream):
         buffer_duration = 0.0
 
         async def send_task():
-            nonlocal closing_ws, buffer, buffer_duration
+            nonlocal input_ended, closing_ws, buffer, buffer_duration
             # forward inputs to AssemblyAI
             # if we receive a close message, signal it to AssemblyAI and break.
             # the recv task will then make sure to process the remaining audio and stop
             while True:
                 data = await self._queue.get()
                 self._queue.task_done()
-
+                
                 if isinstance(data, rtc.AudioFrame):
                     # TODO: The remix_and_resample method is low quality
                     # and should be replaced with a continuous resampling
@@ -266,6 +277,8 @@ class SpeechStream(stt.SpeechStream):
                         buffer_duration = 0.0
                 elif data == END_UTTERANCE_SILENCE_THRESHOLD_MSG:
                     await ws.send_str(data)
+                elif data == SpeechStream._END_OF_INPUT_MSG:
+                    input_ended = True
                 elif data == SpeechStream._CLOSE_MSG:
                     closing_ws = True
                     await ws.send_str(data)  # tell AssemblyAI we are done with inputs
@@ -276,7 +289,16 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task():
             nonlocal closing_ws
             while True:
-                msg = await ws.receive()
+                try:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=10)
+                except asyncio.TimeoutError:
+                    if input_ended:
+                        # for now, end speech if haven't received anything on
+                        # on websocket for 10 seconds and input has ended
+                        self._end_speech()
+                        return
+                    continue
+
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -338,6 +360,8 @@ class SpeechStream(stt.SpeechStream):
             ],
         )
         self._event_queue.put_nowait(end_event)
+        # break async iteration if speech has ended
+        self._event_queue.put_nowait(None)
         self._final_events = []
 
     def _process_stream_event(self, data: dict) -> None:
