@@ -42,6 +42,7 @@ class AssistantFnc(llm.FunctionContext):
                     # response from the function call is returned to the LLM
                     return f"The weather in {location} is {weather_data}."
                 else:
+                    logger.error(f"Failed to get weather data, status code: {response.status}")
                     return f"Failed to get weather data, status code: {response.status}"
 
 
