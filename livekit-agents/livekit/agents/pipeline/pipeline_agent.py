@@ -968,13 +968,15 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     def _interrupt_if_possible(self) -> None:
         """Check whether the current assistant speech should be interrupted"""
-        if self._should_interrupt():
+        if self._playing_speech and self._should_interrupt():
             self._playing_speech.interrupt()
 
     def _should_interrupt(self) -> bool:
+        if self._playing_speech is None:
+            return True
+
         if (
-            self._playing_speech is None
-            or not self._playing_speech.allow_interruptions
+            not self._playing_speech.allow_interruptions
             or self._playing_speech.interrupted
         ):
             return False
@@ -984,6 +986,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             interim_words = self._opts.transcription.word_tokenizer.tokenize(text=text)
             if len(interim_words) < self._opts.int_min_words:
                 return False
+
         return True
 
     def _add_speech_for_playout(self, speech_handle: SpeechHandle) -> None:
