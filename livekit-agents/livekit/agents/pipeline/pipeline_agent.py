@@ -904,15 +904,23 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
 
-        if (
-            self._playing_speech is not None
-            and not self._playing_speech.allow_interruptions
-        ):
-            logger.debug(
-                "skipping validation, agent is speaking and does not allow interruptions",
-                extra={"speech_id": self._playing_speech.id},
-            )
-            return
+        if self._playing_speech is not None:
+            should_ignore_input = False
+            if not self._playing_speech.allow_interruptions:
+                should_ignore_input = True
+                logger.debug(
+                    "skipping validation, agent is speaking and does not allow interruptions",
+                    extra={"speech_id": self._playing_speech.id},
+                )
+            elif not self._should_interrupt():
+                should_ignore_input = True
+                logger.debug(
+                    "interrupt threshold is not met",
+                    extra={"speech_id": self._playing_speech.id},
+                )
+            if should_ignore_input:
+                self._transcribed_text = ""
+                return
 
         if self._pending_agent_reply is None:
             if self._opts.preemptive_synthesis or not self._transcribed_text:
@@ -957,23 +965,26 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     def _interrupt_if_possible(self) -> None:
         """Check whether the current assistant speech should be interrupted"""
+        if self._playing_speech and self._should_interrupt():
+            self._playing_speech.interrupt()
+
+    def _should_interrupt(self) -> bool:
+        if self._playing_speech is None:
+            return True
+
         if (
-            self._playing_speech is None
-            or not self._playing_speech.allow_interruptions
+            not self._playing_speech.allow_interruptions
             or self._playing_speech.interrupted
         ):
-            return
+            return False
 
         if self._opts.int_min_words != 0:
-            # check the final/interim transcribed text for the minimum word count
-            # to interrupt the agent speech
-            interim_words = self._opts.transcription.word_tokenizer.tokenize(
-                text=self._transcribed_interim_text
-            )
+            text = self._transcribed_interim_text or self._transcribed_text
+            interim_words = self._opts.transcription.word_tokenizer.tokenize(text=text)
             if len(interim_words) < self._opts.int_min_words:
-                return
+                return False
 
-        self._playing_speech.interrupt()
+        return True
 
     def _add_speech_for_playout(self, speech_handle: SpeechHandle) -> None:
         self._speech_q.append(speech_handle)
