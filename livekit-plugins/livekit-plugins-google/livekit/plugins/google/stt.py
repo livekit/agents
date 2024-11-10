@@ -28,7 +28,7 @@ from livekit.agents import (
     utils,
 )
 
-from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
+from google.api_core.exceptions import Aborted, DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.speech_v2 import SpeechAsyncClient
@@ -280,6 +280,9 @@ class SpeechStream(stt.SpeechStream):
                 retry_count = 0  # connection successful, reset retry count
 
                 await self._run_stream(stream)
+            except Aborted:
+                logger.error("google stt connection aborted")
+                break
             except Exception as e:
                 if retry_count >= max_retry:
                     logger.error(
