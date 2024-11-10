@@ -711,20 +711,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self.session_update()  # initial session init
 
         # sync the chat context to the session
-        chat_ctx = chat_ctx.copy()
-
-        # Patch: add an empty audio message to the chat context
-        # to set the API in audio mode
-        _sample_rate = 24000
-        _empty_audio = rtc.AudioFrame(
-            data=b"\x00\x00" * _sample_rate,
-            sample_rate=_sample_rate,
-            num_channels=1,
-            samples_per_channel=_sample_rate,
-        )
-        chat_ctx.messages.append(
-            llm.ChatMessage(role="user", content=llm.ChatAudio(frame=_empty_audio))
-        )
         self._init_sync_task = asyncio.create_task(self.set_chat_ctx(chat_ctx))
 
         self._fnc_tasks = utils.aio.TaskSet()
@@ -866,6 +852,29 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 ],
             },
         )
+
+        # append an empty audio message if all messages are text
+        if new_ctx.messages and all(
+            isinstance(msg.content, str) for msg in new_ctx.messages
+        ):
+            # Patch: add an empty audio message to the chat context
+            # to set the API in audio mode
+            _sample_rate = 24000
+            _empty_audio = rtc.AudioFrame(
+                data=b"\x00\x00" * _sample_rate,
+                sample_rate=_sample_rate,
+                num_channels=1,
+                samples_per_channel=_sample_rate,
+            )
+            changes.to_add.append(
+                (
+                    None,
+                    llm.ChatMessage(
+                        role="user", content=llm.ChatAudio(frame=_empty_audio)
+                    ),
+                )
+            )
+            logger.debug("added empty audio message to the chat context")
 
         _futs = []
         for msg in changes.to_delete:
