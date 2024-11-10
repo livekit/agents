@@ -41,6 +41,12 @@ LgType = Union[SpeechLanguages, str]
 LanguageCode = Union[LgType, List[LgType]]
 
 
+@dataclass
+class Phrase:
+    phrase: str
+    boost: float
+
+
 # This class is only be used internally to encapsulate the options
 @dataclass
 class STTOptions:
@@ -50,6 +56,25 @@ class STTOptions:
     punctuate: bool
     spoken_punctuation: bool
     model: SpeechModels
+    phrases: List[Phrase] | None
+
+    def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
+        if self.phrases:
+            return cloud_speech.SpeechAdaptation(
+                phrase_sets=[
+                    cloud_speech.SpeechAdaptation.AdaptationPhraseSet(
+                        inline_phrase_set=cloud_speech.PhraseSet(
+                            phrases=[
+                                cloud_speech.PhraseSet.Phrase(
+                                    value=ps.phrase, boost=ps.boost
+                                )
+                                for ps in self.phrases
+                            ]
+                        )
+                    )
+                ]
+            )
+        return None
 
 
 class STT(stt.STT):
@@ -64,6 +89,7 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
+        phrases: List[Phrase] | None = None,
     ):
         """
         Create a new instance of Google STT.
@@ -100,6 +126,7 @@ class STT(stt.STT):
             punctuate=punctuate,
             spoken_punctuation=spoken_punctuation,
             model=model,
+            phrases=phrases,
         )
 
     def _ensure_client(self) -> SpeechAsyncClient:
@@ -163,6 +190,7 @@ class STT(stt.STT):
                 sample_rate_hertz=frame.sample_rate,
                 audio_channel_count=frame.num_channels,
             ),
+            adaptation=config.build_adaptation(),
             features=cloud_speech.RecognitionFeatures(
                 enable_automatic_punctuation=config.punctuate,
                 enable_spoken_punctuation=config.spoken_punctuation,
@@ -228,6 +256,7 @@ class SpeechStream(stt.SpeechStream):
                     sample_rate_hertz=self._sample_rate,
                     audio_channel_count=self._num_channels,
                 ),
+                adaptation=config.build_adaptation(),
                 language_codes=self._config.languages,
                 model=self._config.model,
                 features=cloud_speech.RecognitionFeatures(
