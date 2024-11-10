@@ -89,9 +89,6 @@ class LLM(llm.LLM):
         n: Optional[int] = 1,
         **kwargs,
     ) -> "LLMStream":
-        logger.info(
-            "Starting chat with temperature: %s, candidate count: %s", temperature, n
-        )
         system_instruction = _extract_system_instruction(chat_ctx)
 
         tools = _build_tools(fnc_ctx) if fnc_ctx and fnc_ctx.ai_functions else []
