@@ -22,9 +22,11 @@ from uuid import uuid4 as uuid
 
 import vertexai  # type: ignore
 from livekit.agents import llm
+from livekit.agents.llm._oai_api import (
+    create_ai_function_info,
+)
 from vertexai.generative_models import (  # type: ignore
     Candidate,
-    FunctionCall,
     FunctionDeclaration,
     GenerationConfig,
     GenerationResponse,
@@ -125,7 +127,6 @@ class LLM(llm.LLM):
 def _extract_system_instruction(chat_ctx: llm.ChatContext):
     system_messages = [msg.content for msg in chat_ctx.messages if msg.role == "system"]
     if system_messages:
-        logger.debug("Extracted system messages.")
         return system_messages
     return None
 
@@ -204,10 +205,14 @@ class LLMStream(llm.LLMStream):
         choice_delta = llm.ChoiceDelta(role="assistant")
 
         if candidate.function_calls:
-            for fnc_call in candidate.function_calls:
-                function_call = self._create_function_call_info(fnc_call)
-                if function_call:
-                    self._function_calls_info.append(function_call)
+            for function_call in candidate.function_calls:
+                function_call_info = create_ai_function_info(
+                    fnc_ctx=self._fnc_ctx,
+                    tool_call_id=f"{function_call.name}_{uuid()}",
+                    fnc_name=function_call.name,
+                    raw_arguments=json.dumps(function_call.args),
+                )
+                self._function_calls_info.append(function_call_info)
             choice_delta.tool_calls = self._function_calls_info
             return llm.ChatChunk(
                 request_id=str(uuid()),
@@ -232,45 +237,6 @@ class LLMStream(llm.LLMStream):
             )
 
         return None
-
-    def _create_function_call_info(
-        self, function_call: FunctionCall
-    ) -> Optional[llm.FunctionCallInfo]:
-        if not self._fnc_ctx:
-            return None
-        fnc_name = function_call.name
-        raw_arguments = json.dumps(function_call.args)
-
-        fnc_info = self._fnc_ctx.ai_functions.get(fnc_name)
-        if not fnc_info:
-            logger.error("Function '%s' not found in function context", fnc_name)
-            raise ValueError(f"Function '{fnc_name}' not found in function context")
-
-        parsed_arguments = function_call.args
-        sanitized_arguments = {}
-
-        for arg_name, arg_info in fnc_info.arguments.items():
-            if arg_name in parsed_arguments:
-                arg_value = parsed_arguments[arg_name]
-                sanitized_arguments[arg_name] = _sanitize_value(arg_value, arg_info)
-            elif arg_info.default is inspect.Parameter.empty:
-                logger.error(
-                    "Missing required argument '%s' for function '%s'",
-                    arg_name,
-                    fnc_name,
-                )
-                raise ValueError(
-                    f"Missing required argument '{arg_name}' for function '{fnc_name}'"
-                )
-            else:
-                sanitized_arguments[arg_name] = arg_info.default
-
-        return llm.FunctionCallInfo(
-            tool_call_id=f"{fnc_name}_{uuid()}",
-            function_info=fnc_info,
-            raw_arguments=raw_arguments,
-            arguments=sanitized_arguments,
-        )
 
 
 def _build_vertex_context(chat_ctx: llm.ChatContext, cache_key: Any) -> List[dict]:
@@ -330,21 +296,3 @@ def _build_content(msg: llm.ChatMessage, cache_key: Any) -> Optional[dict]:
         parts.append({"function_response": function_response})
 
     return {"role": role, "parts": parts} if parts else None
-
-
-def _sanitize_value(value: Any, arg_info: llm.FunctionArgInfo) -> Any:
-    expected_type = arg_info.type
-
-    if not isinstance(value, expected_type) and not (
-        expected_type is float and isinstance(value, int)
-    ):
-        raise ValueError(
-            f"Expected argument '{arg_info.name}' to be of type {expected_type.__name__}"
-        )
-
-    if arg_info.choices and value not in arg_info.choices:
-        raise ValueError(
-            f"Value '{value}' for argument '{arg_info.name}' is not in allowed choices {arg_info.choices}"
-        )
-
-    return value
