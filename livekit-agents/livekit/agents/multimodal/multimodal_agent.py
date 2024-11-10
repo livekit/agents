@@ -110,12 +110,11 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
         self._session.fnc_ctx = value
 
-    @property
-    def chat_ctx(self) -> llm.ChatContext:
-        return self._session.chat_ctx
+    def chat_ctx_copy(self) -> llm.ChatContext:
+        return self._session.chat_ctx_copy()
 
-    async def async_chat_ctx(self, ctx: llm.ChatContext) -> None:
-        await self._session.async_chat_ctx(ctx)
+    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
+        await self._session.set_chat_ctx(ctx)
 
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None

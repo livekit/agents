@@ -711,7 +711,21 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self.session_update()  # initial session init
 
         # sync the chat context to the session
-        self._init_sync_task = asyncio.create_task(self.async_chat_ctx(chat_ctx))
+        chat_ctx = chat_ctx.copy()
+
+        # Patch: add an empty audio message to the chat context
+        # to set the API in audio mode
+        _sample_rate = 24000
+        _empty_audio = rtc.AudioFrame(
+            data=b"\x00\x00" * _sample_rate,
+            sample_rate=_sample_rate,
+            num_channels=1,
+            samples_per_channel=_sample_rate,
+        )
+        chat_ctx.messages.append(
+            llm.ChatMessage(role="user", content=llm.ChatAudio(frame=_empty_audio))
+        )
+        self._init_sync_task = asyncio.create_task(self.set_chat_ctx(chat_ctx))
 
         self._fnc_tasks = utils.aio.TaskSet()
 
@@ -721,10 +735,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         self._send_ch.close()
         await self._main_atask
-
-    @property
-    def chat_ctx(self) -> llm.ChatContext:
-        return self._remote_converstation_items.to_chat_context()
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
@@ -833,7 +843,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             }
         )
 
-    async def async_chat_ctx(self, new_ctx: llm.ChatContext) -> None:
+    def chat_ctx_copy(self) -> llm.ChatContext:
+        return self._remote_converstation_items.to_chat_context()
+
+    async def set_chat_ctx(self, new_ctx: llm.ChatContext) -> None:
         """Sync the chat context with the agent's chat context.
 
         Compute the minimum number of insertions and deletions to transform the old

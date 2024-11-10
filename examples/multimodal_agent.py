@@ -79,11 +79,11 @@ async def entrypoint(ctx: JobContext):
         text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",
         role="assistant",
     )
-    # chat_ctx.append(text="What are the must-visit places in Paris?", role="user")
-    # chat_ctx.append(
-    #     text="The must-visit places in Paris are the Eiffel Tower, Louvre Museum, Notre-Dame Cathedral, and Montmartre.",
-    #     role="assistant",
-    # )
+    chat_ctx.append(text="What are the must-visit places in Paris?", role="user")
+    chat_ctx.append(
+        text="The must-visit places in Paris are the Eiffel Tower, Louvre Museum, Notre-Dame Cathedral, and Montmartre.",
+        role="assistant",
+    )
 
     agent = multimodal.MultimodalAgent(
         model=openai.realtime.RealtimeModel(
@@ -104,11 +104,10 @@ async def entrypoint(ctx: JobContext):
     def _on_agent_speech_created(msg: llm.ChatMessage):
         # example of truncating the chat context
         max_ctx_len = 10
-        if len(agent.chat_ctx.messages) > max_ctx_len:
-            messages = agent.chat_ctx.messages[-max_ctx_len:]
-            asyncio.create_task(
-                agent.async_chat_ctx(llm.ChatContext(messages=messages))
-            )
+        chat_ctx = agent.chat_ctx_copy()
+        if len(chat_ctx.messages) > max_ctx_len:
+            chat_ctx.messages = chat_ctx.messages[-max_ctx_len:]
+            asyncio.create_task(agent.set_chat_ctx(chat_ctx))
 
 
 if __name__ == "__main__":

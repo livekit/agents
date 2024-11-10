@@ -39,7 +39,7 @@ class _RemoteConversationItems:
         chat_ctx = llm.ChatContext()
         current = self._head
         while current:
-            chat_ctx.messages.append(current.message)
+            chat_ctx.messages.append(current.message.copy())
             current = current._next
         return chat_ctx
 
