@@ -204,7 +204,7 @@ class LLMStream(llm.LLMStream):
     ) -> Optional[llm.ChatChunk]:
         choice_delta = llm.ChoiceDelta(role="assistant")
 
-        if candidate.function_calls:
+        if candidate.function_calls and self._fnc_ctx is not None:
             for function_call in candidate.function_calls:
                 function_call_info = create_ai_function_info(
                     fnc_ctx=self._fnc_ctx,
