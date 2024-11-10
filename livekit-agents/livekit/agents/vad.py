@@ -91,7 +91,7 @@ class VADStream(ABC):
 
     def __init__(self, vad: VAD) -> None:
         self._vad = vad
-        self.__last_activity_time = time.time()
+        self._last_activity_time = time.perf_counter()
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, VADStream._FlushSentinel]]()
         self._event_ch = aio.Chan[VADEvent]()
 
@@ -120,7 +120,7 @@ class VADStream(ABC):
                 if inference_count >= 1 / self._vad.capabilities.update_interval:
                     vad_metrics = VADMetrics(
                         timestamp=time.time(),
-                        idle_time=time.time() - self._last_activity_time,
+                        idle_time=time.perf_counter() - self._last_activity_time,
                         inference_duration_total=inference_duration_total,
                         inference_count=inference_count,
                         label=self._vad._label,
@@ -130,7 +130,7 @@ class VADStream(ABC):
                     inference_duration_total = 0.0
                     inference_count = 0
             elif ev.type in [VADEventType.START_OF_SPEECH, VADEventType.END_OF_SPEECH]:
-                self._last_activity_time = time.time()
+                self._last_activity_time = time.perf_counter()
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push some text to be synthesized"""
