@@ -854,17 +854,17 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         )
 
         # append an empty audio message if all messages are text
-        if new_ctx.messages and all(
-            isinstance(msg.content, str) for msg in new_ctx.messages
+        if new_ctx.messages and not any(
+            isinstance(msg.content, llm.ChatAudio) for msg in new_ctx.messages
         ):
             # Patch: add an empty audio message to the chat context
             # to set the API in audio mode
-            _sample_rate = 24000
+            data = b"\x00\x00" * api_proto.SAMPLE_RATE
             _empty_audio = rtc.AudioFrame(
-                data=b"\x00\x00" * _sample_rate,
-                sample_rate=_sample_rate,
-                num_channels=1,
-                samples_per_channel=_sample_rate,
+                data=data,
+                sample_rate=api_proto.SAMPLE_RATE,
+                num_channels=api_proto.NUM_CHANNELS,
+                samples_per_channel=len(data) // 2,
             )
             changes.to_add.append(
                 (
@@ -1122,6 +1122,20 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             # Handle message items (system/user/assistant)
             role = item["role"]
             message = llm.ChatMessage(id=item_id, role=role)
+            if item.get("content"):
+                content = item["content"][0]
+                if content["type"] in ("text", "input_text"):
+                    message.content = content["text"]
+                elif content["type"] == "input_audio" and content.get("audio"):
+                    audio_data = base64.b64decode(content["audio"])
+                    message.content = llm.ChatAudio(
+                        frame=rtc.AudioFrame(
+                            data=audio_data,
+                            sample_rate=api_proto.SAMPLE_RATE,
+                            num_channels=api_proto.NUM_CHANNELS,
+                            samples_per_channel=len(audio_data) // 2,
+                        )
+                    )
 
         elif item_type == "function_call":
             # Handle function call items
