@@ -52,6 +52,7 @@ class TTSMetrics:
 @dataclass
 class VADMetrics:
     timestamp: float
+    idle_time: float
     inference_duration_total: float
     inference_count: int
     label: str
