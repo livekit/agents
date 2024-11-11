@@ -5,7 +5,7 @@ import base64
 import os
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import AsyncIterable, Callable, Literal, cast, overload
+from typing import AsyncIterable, Callable, Literal, Union, cast, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -1135,7 +1135,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         # Leave the content empty and fill it in later from the content parts
         if item_type == "message":
             # Handle message items (system/user/assistant)
-            item = cast(api_proto.SystemItem | api_proto.UserItem, item)
+            item = cast(Union[api_proto.SystemItem, api_proto.UserItem], item)
             role = item["role"]
             message = llm.ChatMessage(id=item_id, role=role)
             if item.get("content"):

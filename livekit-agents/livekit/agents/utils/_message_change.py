@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, Generic, TypeVar
+from typing import Callable, Generic, TypeVar, Union
 
 T = TypeVar("T")
 
@@ -15,7 +15,7 @@ class MessageChange(Generic[T]):
 
     to_delete: list[T]
     """Items to delete from old list"""
-    to_add: list[tuple[T | None, T]]
+    to_add: list[tuple[Union[T, None], T]]
     """Items to add as (previous_item, new_item) pairs"""
 
 
@@ -71,8 +71,8 @@ def _compute_list_changes(old_list: list[T], new_list: list[T]) -> MessageChange
         first_idx = old_list.index(new_list[0])
     except ValueError:
         # Special case: if first item is new, delete everything
-        prev_item: T | None = None
-        to_add: list[tuple[T | None, T]] = []
+        prev_item: Union[T, None] = None
+        to_add: list[tuple[Union[T, None], T]] = []
         for x in new_list:
             to_add.append((prev_item, x))
             prev_item = x
