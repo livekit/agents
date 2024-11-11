@@ -41,7 +41,7 @@ class STT(stt.STT):
         *,
         speech_key: str | None = None,
         speech_region: str | None = None,
-        sample_rate: int = 48000,
+        sample_rate: int = 16000,
         num_channels: int = 1,
         languages: list[str] = [],  # when empty, auto-detect the language
     ):
@@ -83,7 +83,7 @@ class STT(stt.STT):
 
 class SpeechStream(stt.SpeechStream):
     def __init__(self, stt: STT, opts: STTOptions) -> None:
-        super().__init__(stt)
+        super().__init__(stt, sanple_rate=opts.sample_rate)
         self._opts = opts
         self._speaking = False
 
