@@ -528,6 +528,9 @@ class Worker(utils.EventEmitter[EventTypes]):
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
+        if not self._opts.api_secret:
+            raise RuntimeError("api_secret is required to reload jobs")
+
         for aj in jobs:
             logger.log(
                 DEV_LEVEL,
