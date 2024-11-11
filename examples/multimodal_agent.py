@@ -70,10 +70,6 @@ async def entrypoint(ctx: JobContext):
 
     # create a chat context with chat history
     chat_ctx = llm.ChatContext()
-
-    # Add some test context to verify if the sync_chat_ctx works
-    # FIXME: OAI realtime API does not support this properly when the chat context is too many
-    # It may answer with the text responses only for some cases
     chat_ctx.append(text="I'm planning a trip to Paris next month.", role="user")
     chat_ctx.append(
         text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",

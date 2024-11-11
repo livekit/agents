@@ -71,8 +71,8 @@ def _compute_list_changes(old_list: list[T], new_list: list[T]) -> MessageChange
         first_idx = old_list.index(new_list[0])
     except ValueError:
         # Special case: if first item is new, delete everything
-        prev_item = None
-        to_add = []
+        prev_item: T | None = None
+        to_add: list[tuple[T | None, T]] = []
         for x in new_list:
             to_add.append((prev_item, x))
             prev_item = x
@@ -106,7 +106,7 @@ def _compute_list_changes(old_list: list[T], new_list: list[T]) -> MessageChange
     to_delete.extend(x for x in remaining_old if x not in kept_items)
 
     # Compute items to add by following new list order
-    to_add: list[tuple[T | None, T]] = []
+    to_add = []
     prev_item = None
     for x in new_list:
         if x not in kept_items:

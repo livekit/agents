@@ -5,7 +5,7 @@ import base64
 import os
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import AsyncIterable, Callable, Literal, overload
+from typing import AsyncIterable, Callable, Literal, cast, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -31,6 +31,8 @@ EventTypes = Literal[
     "response_content_done",
     "response_output_done",
     "response_done",
+    "function_calls_collected",
+    "function_calls_finished",
 ]
 
 
@@ -507,9 +509,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     }
                 else:
                     # function_call
-                    if not message.tool_calls:
+                    if not message.tool_calls or message.name is None:
                         logger.warning(
-                            "function call message has no tool calls",
+                            "function call message has no name or tool calls: %s",
+                            message,
                             extra=self._sess.logging_extra(),
                         )
                         return
@@ -532,6 +535,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                         },
                     }
             else:
+                if message_content is None:
+                    logger.warning(
+                        "message content is None, skipping: %s",
+                        message,
+                        extra=self._sess.logging_extra(),
+                    )
+                    return
                 if not isinstance(message_content, list):
                     message_content = [message_content]
 
@@ -597,17 +607,22 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     system_contents: list[api_proto.InputTextContent] = []
                     for cnt in message_content:
                         if isinstance(cnt, str):
-                            system_contents.append(
-                                {
-                                    "id": message.id,
-                                    "type": "input_text",
-                                    "text": cnt,
-                                }
-                            )
+                            system_contents.append({"type": "input_text", "text": cnt})
                         elif isinstance(cnt, llm.ChatAudio):
                             logger.warning(
                                 "audio content in system message is not supported"
                             )
+
+                    event = {
+                        "type": "conversation.item.create",
+                        "previous_item_id": previous_item_id,
+                        "item": {
+                            "id": message.id,
+                            "type": "message",
+                            "role": "system",
+                            "content": system_contents,
+                        },
+                    }
 
             if event is None:
                 logger.warning(
@@ -656,7 +671,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         async def adelete(self, *, item_id: str) -> None:
             fut = asyncio.Future[None]()
             self._sess._item_deleted_futs[item_id] = fut
-            self.delete(item_id)
+            self.delete(item_id=item_id)
             await fut
             del self._sess._item_deleted_futs[item_id]
 
@@ -853,9 +868,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             },
         )
 
-        # append an empty audio message if all messages are text
-        if new_ctx.messages and not any(
-            isinstance(msg.content, llm.ChatAudio) for msg in new_ctx.messages
+        # append an empty audio message if all new messages are text
+        if changes.to_add and not any(
+            isinstance(msg.content, llm.ChatAudio) for _, msg in changes.to_add
         ):
             # Patch: add an empty audio message to the chat context
             # to set the API in audio mode
@@ -903,8 +918,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     ) -> None:
         item = self._remote_converstation_items.get(item_id)
         if item is None:
-            logger.error(
-                "conversation item not found",
+            logger.warning(
+                "conversation item not found, skipping update",
                 extra={"item_id": item_id},
             )
             return
@@ -1120,11 +1135,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         # Leave the content empty and fill it in later from the content parts
         if item_type == "message":
             # Handle message items (system/user/assistant)
+            item = cast(api_proto.SystemItem | api_proto.UserItem, item)
             role = item["role"]
             message = llm.ChatMessage(id=item_id, role=role)
             if item.get("content"):
                 content = item["content"][0]
                 if content["type"] in ("text", "input_text"):
+                    content = cast(api_proto.InputTextContent, content)
                     message.content = content["text"]
                 elif content["type"] == "input_audio" and content.get("audio"):
                     audio_data = base64.b64decode(content["audio"])
@@ -1139,6 +1156,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         elif item_type == "function_call":
             # Handle function call items
+            item = cast(api_proto.FunctionCallItem, item)
             message = llm.ChatMessage(
                 id=item_id,
                 role="assistant",
@@ -1148,6 +1166,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         elif item_type == "function_call_output":
             # Handle function call output items
+            item = cast(api_proto.FunctionCallOutputItem, item)
             message = llm.ChatMessage(
                 id=item_id,
                 role="tool",

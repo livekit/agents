@@ -46,17 +46,15 @@ ChatContent = Union[str, ChatImage, ChatAudio]
 @dataclass
 class ChatMessage:
     role: ChatRole
-    id: str | None = None  # used by the OAI realtime API
+    id: str = field(
+        default_factory=lambda: utils.shortuuid("item_")
+    )  # used by the OAI realtime API
     name: str | None = None
     content: ChatContent | list[ChatContent] | None = None
     tool_calls: list[function_context.FunctionCallInfo] | None = None
     tool_call_id: str | None = None
     tool_exception: Exception | None = None
     _metadata: dict[str, Any] = field(default_factory=dict, repr=False, init=False)
-
-    def __post_init__(self):
-        if self.id is None:
-            self.id = utils.shortuuid("item_")
 
     @staticmethod
     def create_tool_from_called_function(
@@ -97,6 +95,7 @@ class ChatMessage:
         role: ChatRole = "system",
         id: str | None = None,
     ) -> "ChatMessage":
+        id = id or utils.shortuuid("item_")
         if len(images) == 0:
             return ChatMessage(role=role, content=text, id=id)
         else:
