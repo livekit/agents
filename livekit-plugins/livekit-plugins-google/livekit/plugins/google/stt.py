@@ -41,12 +41,6 @@ LgType = Union[SpeechLanguages, str]
 LanguageCode = Union[LgType, List[LgType]]
 
 
-@dataclass
-class Phrase:
-    phrase: str
-    boost: float
-
-
 # This class is only be used internally to encapsulate the options
 @dataclass
 class STTOptions:
@@ -56,19 +50,19 @@ class STTOptions:
     punctuate: bool
     spoken_punctuation: bool
     model: SpeechModels
-    phrases: List[Phrase] | None
+    keywords: List[tuple[str, float]] | None
 
     def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
-        if self.phrases:
+        if self.keywords:
             return cloud_speech.SpeechAdaptation(
                 phrase_sets=[
                     cloud_speech.SpeechAdaptation.AdaptationPhraseSet(
                         inline_phrase_set=cloud_speech.PhraseSet(
                             phrases=[
                                 cloud_speech.PhraseSet.Phrase(
-                                    value=ps.phrase, boost=ps.boost
+                                    value=keyword, boost=boost
                                 )
-                                for ps in self.phrases
+                                for keyword, boost in self.keywords
                             ]
                         )
                     )
@@ -89,7 +83,7 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        phrases: List[Phrase] | None = None,
+        keywords: List[tuple[str, float]] | None = None,
     ):
         """
         Create a new instance of Google STT.
@@ -126,7 +120,7 @@ class STT(stt.STT):
             punctuate=punctuate,
             spoken_punctuation=spoken_punctuation,
             model=model,
-            phrases=phrases,
+            keywords=keywords,
         )
 
     def _ensure_client(self) -> SpeechAsyncClient:
