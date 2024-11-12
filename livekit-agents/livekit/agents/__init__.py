@@ -27,7 +27,6 @@ from . import (
     vad,
     voice_assistant,
 )
-from ._constants import ATTRIBUTE_AGENT_STATE
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -35,7 +34,15 @@ from ._exceptions import (
     APITimeoutError,
     AssignmentTimeoutError,
 )
-from ._types import AgentState
+from .types import (
+    AgentState,
+    NotGiven,
+    NOT_GIVEN,
+    NotGivenOr,
+    APIConnectOptions,
+    DEFAULT_API_CONNECT_OPTIONS,
+    ATTRIBUTE_AGENT_STATE,
+)
 from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequest
 from .plugin import Plugin
 from .version import __version__
@@ -73,7 +80,12 @@ __all__ = [
     "APIStatusError",
     "APITimeoutError",
     "ATTRIBUTE_AGENT_STATE",
+    "APIConnectOptions",
+    "DEFAULT_API_CONNECT_OPTIONS",
     "AgentState",
+    "NotGiven",
+    "NOT_GIVEN",
+    "NotGivenOr",
 ]
 
 # Cleanup docs of unexported modules

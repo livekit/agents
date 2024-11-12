@@ -6,6 +6,12 @@ from .tts import (
     SynthesizeStream,
     TTSCapabilities,
 )
+from .fallback_adapter import (
+    AvailabilityChangedEvent,
+    FallbackAdapter,
+    FallbackChunkedStream,
+    FallbackSynthesizeStream,
+)
 
 __all__ = [
     "TTS",
@@ -15,4 +21,8 @@ __all__ = [
     "StreamAdapterWrapper",
     "StreamAdapter",
     "ChunkedStream",
+    "AvailabilityChangedEvent",
+    "FallbackAdapter",
+    "FallbackChunkedStream",
+    "FallbackSynthesizeStream",
 ]

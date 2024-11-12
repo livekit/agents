@@ -24,6 +24,8 @@ from livekit.agents import (
     APITimeoutError,
     tts,
     utils,
+    APIConnectOptions,
+    DEFAULT_API_CONNECT_OPTIONS,
 )
 
 import openai
@@ -135,49 +137,61 @@ class TTS(tts.TTS):
 
         return TTS(model=model, voice=voice, speed=speed, client=azure_client)
 
-    def synthesize(self, text: str) -> "ChunkedStream":
+    def synthesize(
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> "ChunkedStream":
         return ChunkedStream(
-            self,
-            text,
-            self._client.audio.speech.with_streaming_response.create(
-                input=text,
-                model=self._opts.model,
-                voice=self._opts.voice,  # type: ignore
-                response_format="mp3",
-                speed=self._opts.speed,
-            ),
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=self._opts,
+            client=self._client,
         )
 
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
+        *,
         tts: TTS,
-        text: str,
-        oai_stream: AsyncContextManager[openai.AsyncAPIResponse[bytes]],
+        input_text: str,
+        conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        client: openai.AsyncClient,
     ) -> None:
-        super().__init__(tts, text)
-        self._oai_stream = oai_stream
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        self._client = client
+        self._opts = opts
 
-    async def _main_task(self):
+    async def _run(self):
+        oai_stream = self._client.audio.speech.with_streaming_response.create(
+            input=self.input_text,
+            model=self._opts.model,
+            voice=self._opts.voice,  # type: ignore
+            response_format="pcm",
+            speed=self._opts.speed,
+            timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
+        )
+
         request_id = utils.shortuuid()
-        decoder = utils.codecs.Mp3StreamDecoder()
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=OPENAI_TTS_SAMPLE_RATE,
             num_channels=OPENAI_TTS_CHANNELS,
         )
 
         try:
-            async with self._oai_stream as stream:
+            async with oai_stream as stream:
                 async for data in stream.iter_bytes():
-                    for frame in decoder.decode_chunk(data):
-                        for frame in audio_bstream.write(frame.data.tobytes()):
-                            self._event_ch.send_nowait(
-                                tts.SynthesizedAudio(
-                                    frame=frame,
-                                    request_id=request_id,
-                                )
+                    for frame in audio_bstream.write(data):
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                frame=frame,
+                                request_id=request_id,
                             )
+                        )
 
                 for frame in audio_bstream.flush():
                     self._event_ch.send_nowait(

@@ -9,8 +9,7 @@ from livekit import rtc
 from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 from livekit.agents.llm import ChatMessage
 
-from .._constants import ATTRIBUTE_AGENT_STATE
-from .._types import AgentState
+from ..types import AgentState, ATTRIBUTE_AGENT_STATE
 from ..log import logger
 from . import agent_playout
 

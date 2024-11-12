@@ -16,7 +16,6 @@ NOISY_LOGGERS = [
     "httpx",
     "httpcore",
     "openai",
-    "livekit",
     "watchfiles",
     "anthropic",
 ]
