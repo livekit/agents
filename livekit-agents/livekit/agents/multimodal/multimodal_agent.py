@@ -22,6 +22,8 @@ EventTypes = Literal[
     "user_speech_committed",
     "agent_speech_committed",
     "agent_speech_interrupted",
+    "function_calls_collected",
+    "function_calls_finished",
 ]
 
 
@@ -108,6 +110,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
         self._session.fnc_ctx = value
 
+    def chat_ctx_copy(self) -> llm.ChatContext:
+        return self._session.chat_ctx_copy()
+
+    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
+        await self._session.set_chat_ctx(ctx)
+
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
     ) -> None:
@@ -134,12 +142,30 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         self._session = self._model.session(
             chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx
         )
-        self._main_atask = asyncio.create_task(self._main_task())
+
+        # Create a task to wait for initialization and start the main task
+        async def _init_and_start():
+            try:
+                await self._session._init_sync_task
+                logger.info("Session initialized with chat context")
+                self._main_atask = asyncio.create_task(self._main_task())
+            except Exception as e:
+                logger.exception("Failed to initialize session")
+                raise e
+
+        # Schedule the initialization and start task
+        asyncio.create_task(_init_and_start())
 
         from livekit.plugins.openai import realtime
 
         @self._session.on("response_content_added")
         def _on_content_added(message: realtime.RealtimeContent):
+            if message.content_type == "text":
+                logger.warning(
+                    "The realtime API returned a text content part, which is not supported"
+                )
+                return
+
             tr_fwd = transcription.TTSSegmentsForwarder(
                 room=self._room,
                 participant=self._room.local_participant,
@@ -176,7 +202,13 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     alternatives=[stt.SpeechData(language="", text=ev.transcript)],
                 )
             )
-            user_msg = ChatMessage.create(text=ev.transcript, role="user")
+            user_msg = ChatMessage.create(
+                text=ev.transcript, role="user", id=ev.item_id
+            )
+            self._session._update_converstation_item_content(
+                ev.item_id, user_msg.content
+            )
+
             self.emit("user_speech_committed", user_msg)
             logger.debug(
                 "committed user speech",
@@ -199,6 +231,14 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         @self._session.on("input_speech_stopped")
         def _input_speech_stopped():
             self.emit("user_stopped_speaking")
+
+        @self._session.on("function_calls_collected")
+        def _function_calls_collected(fnc_call_infos: list[llm.FunctionCallInfo]):
+            self.emit("function_calls_collected", fnc_call_infos)
+
+        @self._session.on("function_calls_finished")
+        def _function_calls_finished(called_fncs: list[llm.CalledFunction]):
+            self.emit("function_calls_finished", called_fncs)
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -238,7 +278,15 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 if interrupted:
                     collected_text += "..."
 
-                msg = ChatMessage.create(text=collected_text, role="assistant")
+                msg = ChatMessage.create(
+                    text=collected_text,
+                    role="assistant",
+                    id=self._playing_handle.item_id,
+                )
+                self._session._update_converstation_item_content(
+                    self._playing_handle.item_id, msg.content
+                )
+
                 if interrupted:
                     self.emit("agent_speech_interrupted", msg)
                 else:

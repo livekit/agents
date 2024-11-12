@@ -1,5 +1,12 @@
 from . import _oai_api
-from .chat_context import ChatAudio, ChatContext, ChatImage, ChatMessage, ChatRole
+from .chat_context import (
+    ChatAudio,
+    ChatContent,
+    ChatContext,
+    ChatImage,
+    ChatMessage,
+    ChatRole,
+)
 from .function_context import (
     USE_DOCSTRING,
     CalledFunction,
@@ -27,6 +34,7 @@ __all__ = [
     "ChatMessage",
     "ChatAudio",
     "ChatImage",
+    "ChatContent",
     "ChatContext",
     "ChoiceDelta",
     "Choice",
