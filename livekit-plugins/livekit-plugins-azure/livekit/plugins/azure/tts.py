@@ -142,7 +142,7 @@ class TTS(tts.TTS):
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
         speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
 
-        if not speech_host and (not speech_key or not speech_region):
+        if not speech_host and not (speech_key and speech_region):
             raise ValueError(
                 "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION must be set"
             )
