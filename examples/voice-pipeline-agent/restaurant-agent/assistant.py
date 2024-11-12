@@ -3,7 +3,6 @@ import pickle
 from datetime import datetime
 from typing import Annotated
 
-import pandas as pd
 from dotenv import load_dotenv
 from livekit.agents import (
     AutoSubscribe,
@@ -23,8 +22,25 @@ logger.setLevel(logging.INFO)
 
 annoy_index = rag.annoy.AnnoyIndex.load("rag/vdb_data")  # see build_data.py
 
+availability = [
+    {"Date": "2024-12-24", "Time Slot": "14:00", "Status": "Not Reserved"},
+    {"Date": "2024-12-24", "Time Slot": "15:00", "Status": "Reserved"},
+    {"Date": "2024-12-24", "Time Slot": "16:00", "Status": "Reserved"},
+    {"Date": "2024-12-24", "Time Slot": "17:00", "Status": "Reserved"},
+    {"Date": "2024-12-24", "Time Slot": "18:00", "Status": "Not Reserved"},
+    {"Date": "2024-12-24", "Time Slot": "19:00", "Status": "Reserved"},
+    {"Date": "2024-12-24", "Time Slot": "20:00", "Status": "Reserved"},
+    {"Date": "2024-12-25", "Time Slot": "11:00", "Status": "Reserved"},
+    {"Date": "2024-12-25", "Time Slot": "12:00", "Status": "Reserved"},
+    {"Date": "2024-12-25", "Time Slot": "13:00", "Status": "Reserved"},
+    {"Date": "2024-12-25", "Time Slot": "14:00", "Status": "Not Reserved"},
+    {"Date": "2024-12-25", "Time Slot": "15:00", "Status": "Not Reserved"},
+    {"Date": "2024-12-25", "Time Slot": "16:00", "Status": "Not Reserved"},
+    {"Date": "2024-12-25", "Time Slot": "17:00", "Status": "Reserved"},
+]
+
 embeddings_dimension = 1536
-with open("my_data.pkl", "rb") as f:
+with open("rag/my_data.pkl", "rb") as f:
     paragraphs_by_uuid = pickle.load(f)
 
 
@@ -47,42 +63,20 @@ class AssistantFnc(llm.FunctionContext):
 
         logger.info(f"checking reservation on {date}")
 
-        df = pd.read_csv("availability.csv")
-
-        # formatting datetime to query csv
+        # formatting datetime
         parsed_datetime = datetime.fromisoformat(date)
         date_to_check = parsed_datetime.strftime("%Y-%m-%d")
         time_to_check = parsed_datetime.strftime("%H:%M")
 
-        result = df[(df["Date"] == date_to_check) & (df["Time Slot"] == time_to_check)]
+        for entry in availability:
+            if (
+                entry["Date"] == date_to_check
+                and entry["Time Slot"] == time_to_check
+                and entry["Status"] == "Not Reserved"
+            ):
+                return f"The reservation is available for {date}"
 
-        print("result", result)
-
-        # find other available slots on the same date
-        available_slots = df[
-            (df["Date"] == date_to_check) & (df["Is Reserved"] == "Not Reserved")
-        ]
-
-        if result.empty:
-            if not available_slots.empty:
-                print("Other available slots on this date:")
-                print(available_slots["Time Slot"].to_string(index=False))
-                return f"The reservation is not available for {date}. Other available slots on this date: {available_slots["Time Slot"].to_string(index=False)}"
-            else:
-                print("No other available slots on this date.")
-                return f"The reservation is not available for {date}, and there is no alternate options."
-        elif result["Is Reserved"].values[0] == "Reserved":
-            print(f"The slot on {date_to_check} at {time_to_check} is Reserved.")
-
-            if not available_slots.empty:
-                print("Other available slots on this date:")
-                print(available_slots["Time Slot"].to_string(index=False))
-                return f"The reservation is not available for {date}. Other available slots on this date: {available_slots["Time Slot"].to_string(index=False)}"
-            else:
-                print("No other available slots on this date.")
-                return f"The reservation is not available for {date}, and there is no alternate options."
-        else:
-            return f"The reservation is available for {date}"
+        return f"The reservation is not available for {date}"
 
     @llm.ai_callable()
     async def make_booking(
@@ -96,20 +90,16 @@ class AssistantFnc(llm.FunctionContext):
 
         logger.info(f"creating reservation on {date}")
 
-        df = pd.read_csv("availability.csv")
-
         parsed_datetime = datetime.fromisoformat(date)
-        date_to_check = parsed_datetime.strftime("%Y-%m-%d")
-        time_to_check = parsed_datetime.strftime("%H:%M")
+        date_to_update = parsed_datetime.strftime("%Y-%m-%d")
+        time_to_update = parsed_datetime.strftime("%H:%M")
 
-        # update csv to mark requested date and time reserved
-        df.loc[
-            (df["Date"] == date_to_check) & (df["Time Slot"] == time_to_check),
-            "Is Reserved",
-        ] = "Reserved"
-        df.to_csv("dates.csv", index=False)
+        for entry in availability:
+            if entry["Date"] == date_to_update and entry["Time Slot"] == time_to_update:
+                entry["Status"] = "Reserved"
+                return f"The reservation has been made for {date}."
 
-        return f"The reservation has been made for {date}."
+        return f"The specified slot on {date} is not available."
 
 
 def prewarm_process(proc: JobProcess):
@@ -121,7 +111,7 @@ PROMPT = """
 You are a supervisor agent Sphinx Restaurant. You have two assistants, Frontdesk and Booking. Each assistant is associated with a function call.
 
 Assistant responsibilities:
-- Frontdesk: Validates availability and handles customer questions related to the restaurant. Only use the provided context if the customer asks restaurant related questions. The check_reservation function will be called when a customer gives a date and time for reservation. Assume that all date is in 2024. If requested timeslot is not available but other timeslots are available, make sure to only list a maximum of two or three options from the available options, and not more than that. Only provide alternate options if provided, otherwise request for a new date and time.
+- Frontdesk: Validates availability and handles customer questions related to the restaurant. Only use the provided context if the customer asks restaurant related questions. The check_reservation function will be called when a customer gives a date and time for reservation. Assume that all date is in 2024. If requested timeslot is not available, request customer to give a different timeslot.
 - Booking: Creates final reservation booking after availability is confirmed. Before making the booking, the supervisor should get confirmation from the customer one last time by repeating the intended date and time for reservation. The make_booking function should be called when a reservation is available and is confirmed by the customer.
 
 Workflow rules:
@@ -130,6 +120,9 @@ Workflow rules:
 3. Conclude the call when:
    - Customer's request is completed or question is answered
    - Booking is successfully completed
+
+Function call rules:
+1. Make sure you tell the customer "I am taking a look" while waiting for function call results
 """
 
 
