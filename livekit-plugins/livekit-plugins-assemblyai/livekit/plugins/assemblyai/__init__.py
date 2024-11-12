@@ -10,8 +10,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .stt import STT, SpeechStream
 from .log import logger
+from .stt import STT, SpeechStream
 from .version import __version__
 
 __all__ = [
