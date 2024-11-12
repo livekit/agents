@@ -227,30 +227,42 @@ class ClientEvent:
         type: Literal["input_audio_buffer.clear"]
 
     class UserItemCreate(TypedDict):
+        id: str | None
         type: Literal["message"]
         role: Literal["user"]
         content: list[InputTextContent | InputAudioContent]
 
     class AssistantItemCreate(TypedDict):
+        id: str | None
         type: Literal["message"]
         role: Literal["assistant"]
         content: list[TextContent]
 
     class SystemItemCreate(TypedDict):
+        id: str | None
         type: Literal["message"]
         role: Literal["system"]
         content: list[InputTextContent]
 
     class FunctionCallOutputItemCreate(TypedDict):
+        id: str | None
         type: Literal["function_call_output"]
         call_id: str
         output: str
+
+    class FunctionCallItemCreate(TypedDict):
+        id: str | None
+        type: Literal["function_call"]
+        call_id: str
+        name: str
+        arguments: str
 
     ConversationItemCreateContent = Union[
         UserItemCreate,
         AssistantItemCreate,
         SystemItemCreate,
         FunctionCallOutputItemCreate,
+        FunctionCallItemCreate,
     ]
 
     class ConversationItemCreate(TypedDict):
@@ -343,6 +355,7 @@ class ServerEvent:
     class ConversationItemCreated(TypedDict):
         event_id: str
         type: Literal["conversation.item.created"]
+        previous_item_id: str | None
         item: Resource.Item
 
     class ConversationItemInputAudioTranscriptionCompleted(TypedDict):

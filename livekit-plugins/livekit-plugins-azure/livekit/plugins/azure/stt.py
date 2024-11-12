@@ -88,7 +88,7 @@ class STT(stt.STT):
 
 class SpeechStream(stt.SpeechStream):
     def __init__(self, stt: STT, opts: STTOptions) -> None:
-        super().__init__(stt)
+        super().__init__(stt, sample_rate=opts.sample_rate)
         self._opts = opts
         self._speaking = False
 
