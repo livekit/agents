@@ -779,7 +779,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
                 for called_fnc in called_fncs:
                     # ignore the function calls that returns None
-                    if called_fnc.result is None:
+                    if called_fnc.result is None and called_fnc.exception is None:
                         continue
 
                     tool_calls_info.append(called_fnc.call_info)

@@ -42,10 +42,9 @@ class AssistantFnc(llm.FunctionContext):
                     # response from the function call is returned to the LLM
                     return f"The weather in {location} is {weather_data}."
                 else:
-                    logger.error(
+                    raise Exception(
                         f"Failed to get weather data, status code: {response.status}"
                     )
-                    return f"Failed to get weather data, status code: {response.status}"
 
 
 def prewarm_process(proc: JobProcess):
