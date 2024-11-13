@@ -6,8 +6,7 @@ Features:
 
 - Customer queries regarding the restaurant are answered through RAG provided context
 - Checks availability based off of the `availability` file when a customer requests to make a reservation
-- Lists alternate options if requested timeslot is not available
-- Creates a reservation by updating the CSV file
+- Creates a reservation
 
 # Run
 
