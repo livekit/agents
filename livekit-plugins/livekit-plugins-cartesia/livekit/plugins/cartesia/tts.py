@@ -284,7 +284,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 num_channels=NUM_CHANNELS,
             )
 
-            def _send_audio_frame(frame: rtc.AudioFrame, is_final: bool):
+            def _send_audio_frame(
+                frame: rtc.AudioFrame, segment_id: str, is_final: bool
+            ):
                 self._event_ch.send_nowait(
                     tts.SynthesizedAudio(
                         request_id=request_id,
@@ -313,15 +315,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if data.get("data"):
                     b64data = base64.b64decode(data["data"])
                     for frame in audio_bstream.write(b64data):
-                        _send_audio_frame(frame, False)
+                        _send_audio_frame(frame, segment_id, False)
                 elif data.get("done"):
                     last_frame: rtc.AudioFrame | None = None
                     for frame in audio_bstream.flush():
                         if last_frame is not None:
-                            _send_audio_frame(frame, False)
+                            _send_audio_frame(frame, segment_id, False)
                         last_frame = frame
                     if last_frame is not None:
-                        _send_audio_frame(last_frame, True)
+                        _send_audio_frame(last_frame, segment_id, True)
 
                     if segment_id == request_id:
                         # we're not going to receive more frames, close the connection
