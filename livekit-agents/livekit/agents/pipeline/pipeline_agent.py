@@ -778,7 +778,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
                 for called_fnc in called_fncs:
                     # ignore the function calls that returns None
-                    if called_fnc.result is None:
+                    if called_fnc.result is None and called_fnc.exception is None:
                         continue
 
                     tool_calls_info.append(called_fnc.call_info)
@@ -1033,10 +1033,8 @@ class _DeferredReplyValidation:
             if has_recent_end_of_speech
             else self._final_transcript_delay
         )
-        delay = (
-            delay * self.PUNCTUATION_REDUCE_FACTOR
-            if self._end_with_punctuation()
-            else 1.0
+        delay = delay * (
+            self.PUNCTUATION_REDUCE_FACTOR if self._end_with_punctuation() else 1.0
         )
 
         self._run(delay)
@@ -1052,10 +1050,8 @@ class _DeferredReplyValidation:
         self._last_recv_end_of_speech_time = time.time()
 
         if self._last_final_transcript:
-            delay = (
-                self._end_of_speech_delay * self.PUNCTUATION_REDUCE_FACTOR
-                if self._end_with_punctuation()
-                else 1.0
+            delay = self._end_of_speech_delay * (
+                self.PUNCTUATION_REDUCE_FACTOR if self._end_with_punctuation() else 1.0
             )
             self._run(delay)
 

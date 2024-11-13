@@ -44,6 +44,7 @@ class JobAcceptArguments:
     name: str
     identity: str
     metadata: str
+    attributes: dict[str, str] | None = None
 
 
 @dataclass
@@ -309,6 +310,7 @@ class JobRequest:
         name: str = "",
         identity: str = "",
         metadata: str = "",
+        attributes: dict[str, str] | None = None,
     ) -> None:
         """Accept the job request, and start the job if the LiveKit SFU assigns the job to our worker."""
         if not identity:
@@ -318,6 +320,7 @@ class JobRequest:
             name=name,
             identity=identity,
             metadata=metadata,
+            attributes=attributes,
         )
 
         await self._on_accept(accept_arguments)
