@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-fix: IndexError on tts metrics
+added metrics for idle time

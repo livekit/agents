@@ -25,6 +25,8 @@ __all__ = [
     "RealtimeModel",
     "ServerVadOptions",
     "InputTranscriptionOptions",
+    "ConversationItemCreated",
+    "ConversationItemDeleted",
     "api_proto",
     "DEFAULT_INPUT_AUDIO_TRANSCRIPTION",
     "DEFAULT_SERVER_VAD_OPTIONS",

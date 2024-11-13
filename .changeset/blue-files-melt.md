@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-Fix stack dump on closed stream
+Fix interrupt_min_words handling

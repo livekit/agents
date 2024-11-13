@@ -28,7 +28,7 @@ from livekit.agents import (
     utils,
 )
 
-from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
+from google.api_core.exceptions import Aborted, DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.speech_v2 import SpeechAsyncClient
@@ -50,6 +50,25 @@ class STTOptions:
     punctuate: bool
     spoken_punctuation: bool
     model: SpeechModels
+    keywords: List[tuple[str, float]] | None
+
+    def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
+        if self.keywords:
+            return cloud_speech.SpeechAdaptation(
+                phrase_sets=[
+                    cloud_speech.SpeechAdaptation.AdaptationPhraseSet(
+                        inline_phrase_set=cloud_speech.PhraseSet(
+                            phrases=[
+                                cloud_speech.PhraseSet.Phrase(
+                                    value=keyword, boost=boost
+                                )
+                                for keyword, boost in self.keywords
+                            ]
+                        )
+                    )
+                ]
+            )
+        return None
 
 
 class STT(stt.STT):
@@ -64,6 +83,7 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
+        keywords: List[tuple[str, float]] | None = None,
     ):
         """
         Create a new instance of Google STT.
@@ -100,6 +120,7 @@ class STT(stt.STT):
             punctuate=punctuate,
             spoken_punctuation=spoken_punctuation,
             model=model,
+            keywords=keywords,
         )
 
     def _ensure_client(self) -> SpeechAsyncClient:
@@ -163,6 +184,7 @@ class STT(stt.STT):
                 sample_rate_hertz=frame.sample_rate,
                 audio_channel_count=frame.num_channels,
             ),
+            adaptation=config.build_adaptation(),
             features=cloud_speech.RecognitionFeatures(
                 enable_automatic_punctuation=config.punctuate,
                 enable_spoken_punctuation=config.spoken_punctuation,
@@ -228,6 +250,7 @@ class SpeechStream(stt.SpeechStream):
                     sample_rate_hertz=self._sample_rate,
                     audio_channel_count=self._num_channels,
                 ),
+                adaptation=config.build_adaptation(),
                 language_codes=self._config.languages,
                 model=self._config.model,
                 features=cloud_speech.RecognitionFeatures(
@@ -280,6 +303,9 @@ class SpeechStream(stt.SpeechStream):
                 retry_count = 0  # connection successful, reset retry count
 
                 await self._run_stream(stream)
+            except Aborted:
+                logger.error("google stt connection aborted")
+                break
             except Exception as e:
                 if retry_count >= max_retry:
                     logger.error(
