@@ -742,6 +742,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             llm_stream = speech_handle.source
 
+            if collected_text:
+                msg = ChatMessage.create(text=collected_text, role="assistant")
+                self._chat_ctx.messages.append(msg)
+
+                speech_handle.mark_speech_commited()
+                self.emit("agent_speech_committed", msg)
+
             # execute functions
             call_ctx = AgentCallContext(self, llm_stream)
             tk = _CallContextVar.set(call_ctx)
