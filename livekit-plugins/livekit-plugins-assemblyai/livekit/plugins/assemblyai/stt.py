@@ -48,7 +48,7 @@ class STTOptions:
     disable_partial_transcripts: bool = False
     enable_extra_session_information: bool = False
     end_utterance_silence_threshold: Optional[int] = None
-    # Buffer to collect frames until have 100ms worth of audio
+    # Buffer to collect frames to send to AssemblyAI
     buffer_size_seconds: Optional[float] = None
 
     def __post_init__(self):
@@ -66,9 +66,9 @@ class STT(stt.STT):
         encoding: Optional[str] = "pcm_s16le",
         disable_partial_transcripts: bool = False,
         enable_extra_session_information: bool = False,
-        end_utterance_silence_threshold: int = 1000,
+        end_utterance_silence_threshold: Optional[int] = 100,
         http_session: Optional[aiohttp.ClientSession] = None,
-        buffer_size_seconds: float = 0.2,
+        buffer_size_seconds: float = 0.05,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -133,8 +133,6 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     # Used to close websocket
     _CLOSE_MSG: str = json.dumps({"terminate_session": True})
-    # Used to signal end of input
-    _END_OF_INPUT_MSG: str = "END_OF_INPUT"
 
     def __init__(
         self,
@@ -151,10 +149,8 @@ class SpeechStream(stt.SpeechStream):
         self._num_channels = num_channels
         self._api_key = api_key
         self._session = http_session
-        self._queue = asyncio.Queue[Union[rtc.AudioFrame, str]]()
-        self._event_queue = asyncio.Queue[Optional[stt.SpeechEvent]]()
-        self._closed = False
         self._max_retry = max_retry
+        self._speech_duration = 0
 
         if self._num_channels != 1:
             raise ValueError(
@@ -164,27 +160,11 @@ class SpeechStream(stt.SpeechStream):
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: List[stt.SpeechEvent] = []
 
-    def push_frame(self, frame: rtc.AudioFrame) -> None:
-        if self._closed:
-            logger.error(
-                "trying to push frames to a closed stream",
-            )
-
-        self._queue.put_nowait(frame)
-
-    def end_input(self) -> None:
-        self.push_frame(SpeechStream._END_OF_INPUT_MSG)
 
     async def aclose(self) -> None:
-        self.push_frame(SpeechStream._CLOSE_MSG)
-        self._closed = True
-
-        self._task.cancel()
-
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._task
-
-        await self._session.close()
+        await super().aclose()
+        if self._session:
+            await self._session.close()
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -196,108 +176,84 @@ class SpeechStream(stt.SpeechStream):
         Run a single websocket connection to AssemblyAI and make sure to reconnect
         when something went wrong.
         """
-        try:
-            retry_count = 0
-            while not self._closed:
-                try:
-                    live_config = {
-                        "sample_rate": self._opts.sample_rate,
-                        "word_boost": self._opts.word_boost,
-                        "encoding": self._opts.encoding,
-                        "disable_partial_transcripts": self._opts.disable_partial_transcripts,
-                        "enable_extra_session_information": self._opts.enable_extra_session_information,
-                    }
+        retry_count = 0
+        while self._input_ch.qsize() or not self._input_ch.closed:
+            try:
+                live_config = {
+                    "sample_rate": self._opts.sample_rate,
+                    "word_boost": self._opts.word_boost,
+                    "encoding": self._opts.encoding,
+                    "disable_partial_transcripts": self._opts.disable_partial_transcripts,
+                    "enable_extra_session_information": self._opts.enable_extra_session_information,
+                }
 
-                    headers = {
-                        "Authorization": self._api_key,
-                        "Content-Type": "application/json",
-                    }
+                headers = {
+                    "Authorization": self._api_key,
+                    "Content-Type": "application/json",
+                }
 
-                    ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
-                    filtered_config = {
-                        k: v for k, v in live_config.items() if v is not None
-                    }
-                    url = f"{ws_url}?{urlencode(filtered_config).lower()}"
-                    ws = await self._session.ws_connect(url, headers=headers)
-                    retry_count = 0  # connected successfully, reset the retry_count
+                ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
+                filtered_config = {
+                    k: v for k, v in live_config.items() if v is not None
+                }
+                url = f"{ws_url}?{urlencode(filtered_config).lower()}"
+                ws = await self._session.ws_connect(url, headers=headers)
+                retry_count = 0  # connected successfully, reset the retry_count
 
-                    await self._run_ws(ws)
-                except Exception:
-                    # Something went wrong, retry the connection
-                    if retry_count >= max_retry:
-                        logger.error(
-                            f"failed to connect to AssemblyAI after {max_retry} tries"
-                        )
-                        break
-
-                    retry_delay = min(retry_count * 2, 10)  # max 10s
-                    retry_count += 1  # increment after calculating the delay, the first retry should happen directly
-
-                    logger.info(
-                        f"AssemblyAI connection failed, retrying in {retry_delay}s",
+                await self._run_ws(ws)
+            except Exception:
+                # Something went wrong, retry the connection
+                if retry_count >= max_retry:
+                    logger.error(
+                        f"failed to connect to AssemblyAI after {max_retry} tries"
                     )
-                    await asyncio.sleep(retry_delay)
-        finally:
-            self._event_queue.put_nowait(None)
+                    break
+
+                retry_delay = min(retry_count * 2, 10)  # max 10s
+                retry_count += 1  # increment after calculating the delay, the first retry should happen directly
+
+                logger.info(
+                    f"AssemblyAI connection failed, retrying in {retry_delay}s",
+                )
+                await asyncio.sleep(retry_delay)
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """
         This method can throw ws errors, these are handled inside the _run method
         """
-
-        input_ended = False
         closing_ws = False
-
-        END_UTTERANCE_SILENCE_THRESHOLD_MSG = json.dumps(
-            {
-                "end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold
-            }
-        )
-        if self._opts.end_utterance_silence_threshold is not None:
-            self.push_frame(END_UTTERANCE_SILENCE_THRESHOLD_MSG)
-
         async def send_task():
-            nonlocal input_ended, closing_ws
+            nonlocal closing_ws
 
-            # Local variables for buffering
-            buffer = bytearray()
-            buffer_duration = 0.0
+            if self._opts.end_utterance_silence_threshold:
+                await ws.send_str(json.dumps(
+                    {
+                        "end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold
+                    }
+                ))
+
+            samples_per_buffer = self._opts.sample_rate // int(1/self._opts.buffer_size_seconds)
+            audio_bstream = utils.audio.AudioByteStream(
+                sample_rate=self._opts.sample_rate,
+                num_channels=self._num_channels,
+                samples_per_channel=samples_per_buffer,
+            )
 
             # forward inputs to AssemblyAI
             # if we receive a close message, signal it to AssemblyAI and break.
             # the recv task will then make sure to process the remaining audio and stop
-            while True:
-                data = await self._queue.get()
-                self._queue.task_done()
-
-                if isinstance(data, rtc.AudioFrame):
-                    # TODO: The remix_and_resample method is low quality
-                    # and should be replaced with a continuous resampling
-                    frame = data.remix_and_resample(
-                        self._opts.sample_rate,
-                        self._num_channels,
-                    )
-                    buffer.extend(frame.data.tobytes())
-
-                    # Calculate buffer duration
-                    total_frames = len(buffer) / bytes_per_frame[self._opts.encoding]
-                    samples_per_second = self._opts.sample_rate * self._num_channels
-                    buffer_duration = total_frames / samples_per_second
-
-                    if buffer_duration >= self._opts.buffer_size_seconds:
-                        await ws.send_bytes(bytes(buffer))
-                        buffer.clear()
-                        buffer_duration = 0.0
-                elif data == END_UTTERANCE_SILENCE_THRESHOLD_MSG:
-                    await ws.send_str(data)
-                elif data == SpeechStream._END_OF_INPUT_MSG:
-                    input_ended = True
-                elif data == SpeechStream._CLOSE_MSG:
-                    closing_ws = True
-                    await ws.send_str(data)  # tell AssemblyAI we are done with inputs
-                    break
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    frames = audio_bstream.flush()
                 else:
-                    logger.error("Received unexpected data type: ", type(data))
+                    frames = audio_bstream.write(data.data.tobytes())
+
+                for frame in frames:
+                    self._speech_duration += frame.duration
+                    await ws.send_bytes(frame.data.tobytes())
+
+            closing_ws = True
+            await ws.send_str(SpeechStream._CLOSE_MSG)
 
         async def recv_task():
             nonlocal closing_ws
@@ -305,12 +261,6 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=10)
                 except asyncio.TimeoutError:
-                    if input_ended:
-                        # for now, end speech if haven't received anything on
-                        # on websocket for 10 seconds and input has ended
-                        self._end_speech()
-                        await self.aclose()
-                        return
                     continue
 
                 if msg.type in (
@@ -334,9 +284,17 @@ class SpeechStream(stt.SpeechStream):
                     data = json.loads(msg.data)
                     self._process_stream_event(data, closing_ws)
                 except Exception:
-                    logger.error("failed to process AssemblyAI message")
+                    logger.exception("failed to process AssemblyAI message")
 
-        await asyncio.gather(send_task(), recv_task())
+        tasks = [
+            asyncio.create_task(send_task()),
+            asyncio.create_task(recv_task()),
+        ]
+
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
 
     def _end_speech(self) -> None:
         if len(self._final_events) == 0:
@@ -360,9 +318,10 @@ class SpeechStream(stt.SpeechStream):
             ],
         )
         self._final_events = []
-        self._event_queue.put_nowait(end_event)
+        self._event_ch.send_nowait(end_event)
         # break async iteration if speech has ended
-        self._event_queue.put_nowait(None)
+        self._event_ch.send_nowait(None)
+
 
     def _process_stream_event(self, data: dict, closing_ws: bool) -> None:
         # see this page:
@@ -370,7 +329,7 @@ class SpeechStream(stt.SpeechStream):
         # for more information about the different types of events
         if data["message_type"] == "SessionBegins":
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-            self._event_queue.put_nowait(start_event)
+            self._event_ch.send_nowait(start_event)
 
         elif data["message_type"] == "PartialTranscript":
             alts = live_transcription_to_speech_data(ENGLISH, data)
@@ -379,7 +338,7 @@ class SpeechStream(stt.SpeechStream):
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=alts,
                 )
-                self._event_queue.put_nowait(interim_event)
+                self._event_ch.send_nowait(interim_event)
 
         elif data["message_type"] == "FinalTranscript":
             alts = live_transcription_to_speech_data(ENGLISH, data)
@@ -389,7 +348,20 @@ class SpeechStream(stt.SpeechStream):
                     alternatives=alts,
                 )
                 self._final_events.append(final_event)
-                self._event_queue.put_nowait(final_event)
+                self._event_ch.send_nowait(final_event)
+
+            # log metrics
+            if self._speech_duration > 0:
+                usage_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    # request_id="",
+                    alternatives=[],
+                    recognition_usage=stt.RecognitionUsage(
+                        audio_duration=self._speech_duration
+                    ),
+                )
+                self._event_ch.send_nowait(usage_event)
+                self._speech_duration = 0
 
         elif data["message_type"] == "SessionTerminated":
             if closing_ws:
@@ -398,7 +370,7 @@ class SpeechStream(stt.SpeechStream):
                 raise Exception("AssemblyAI connection closed unexpectedly")
 
         elif data["message_type"] == "SessionInformation":
-            logger.info("AssemblyAI Session Information: %s", str(data))
+            logger.debug("AssemblyAI Session Information: %s", str(data))
 
         elif data["message_type"] == "RealtimeError":
             logger.error("Received unexpected error from AssemblyAI %s", data)
@@ -407,13 +379,6 @@ class SpeechStream(stt.SpeechStream):
             logger.warning(
                 "Received unexpected error from AssemblyAI %s", data["message_type"]
             )
-
-    async def __anext__(self) -> stt.SpeechEvent:
-        evt = await self._event_queue.get()
-        if evt is None:
-            raise StopAsyncIteration
-
-        return evt
 
 
 def live_transcription_to_speech_data(

@@ -353,12 +353,12 @@ class SpeechStream(stt.SpeechStream):
         async def send_task():
             nonlocal closing_ws
 
-            # forward audio to deepgram in chunks of 100ms
-            samples_100ms = self._opts.sample_rate // 10
+            # forward audio to deepgram in chunks of 50ms
+            samples_50ms = self._opts.sample_rate // 20
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=self._opts.num_channels,
-                samples_per_channel=samples_100ms,
+                samples_per_channel=samples_50ms,
             )
 
             async for data in self._input_ch:
