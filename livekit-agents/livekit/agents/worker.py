@@ -599,7 +599,10 @@ class Worker(utils.EventEmitter[EventTypes]):
             availability_resp.availability.participant_identity = args.identity
             availability_resp.availability.participant_name = args.name
             availability_resp.availability.participant_metadata = args.metadata
-            availability_resp.availability.participant_attributes = args.attributes
+            if args.attributes:
+                availability_resp.availability.participant_attributes.update(
+                    args.attributes
+                )
             await self._queue_msg(availability_resp)
 
             wait_assignment = asyncio.Future[agent.JobAssignment]()
