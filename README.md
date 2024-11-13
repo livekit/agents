@@ -54,6 +54,7 @@ The following plugins are available today:
 | Plugin                                                                             | Features                                    |
 | ---------------------------------------------------------------------------------- | ------------------------------------------- |
 | [livekit-plugins-anthropic](https://pypi.org/project/livekit-plugins-anthropic/)   | LLM                                         |
+| [livekit-plugins-assemblyai](https://pypi.org/project/livekit-plugins-assemblyai/) | STT                                         |
 | [livekit-plugins-azure](https://pypi.org/project/livekit-plugins-azure/)           | STT, TTS                                    |
 | [livekit-plugins-deepgram](https://pypi.org/project/livekit-plugins-deepgram/)     | STT                                         |
 | [livekit-plugins-cartesia](https://pypi.org/project/livekit-plugins-cartesia/)     | TTS                                         |
@@ -64,7 +65,6 @@ The following plugins are available today:
 | [livekit-plugins-rag](https://pypi.org/project/livekit-plugins-rag/)               | Utilities for performing RAG                |
 | [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-openai/)         | LLM, STT, TTS, Assistants API, Realtime API |
 | [livekit-plugins-silero](https://pypi.org/project/livekit-plugins-silero/)         | VAD                                         |
-
 
 ## Documentation and guides
 
