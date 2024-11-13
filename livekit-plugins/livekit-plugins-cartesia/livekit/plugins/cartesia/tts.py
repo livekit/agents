@@ -284,22 +284,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 num_channels=NUM_CHANNELS,
             )
 
-            last_frame: rtc.AudioFrame | None = None
-
-            def _send_last_frame(*, segment_id: str, is_final: bool) -> None:
-                nonlocal last_frame
-                if last_frame is not None:
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id,
-                            segment_id=segment_id,
-                            frame=last_frame,
-                            is_final=is_final,
-                        )
-                    )
-
-                    last_frame = None
-
             while True:
                 msg = await ws.receive()
                 if msg.type in (
@@ -319,17 +303,26 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if data.get("data"):
                     b64data = base64.b64decode(data["data"])
                     for frame in audio_bstream.write(b64data):
-                        _send_last_frame(segment_id=segment_id, is_final=False)
-                        last_frame = frame
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
+                                is_final=False,
+                            )
+                        )
                 elif data.get("done"):
                     for frame in audio_bstream.flush():
-                        _send_last_frame(segment_id=segment_id, is_final=False)
-                        last_frame = frame
-
-                    _send_last_frame(segment_id=segment_id, is_final=True)
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=frame,
+                                is_final=True,
+                            )
+                        )
 
                     if segment_id == request_id:
-                        # we're not going to receive more frames, close the connection
                         await ws.close()
                         break
                 else:
