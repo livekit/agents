@@ -146,6 +146,25 @@ async def test_basic_fnc_calls(llm_factory: Callable[[], llm.LLM]):
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
+async def test_function_call_exception_handling(llm_factory: Callable[[], llm.LLM]):
+    input_llm = llm_factory()
+    fnc_ctx = FncCtx()
+
+    @fnc_ctx.ai_callable(description="Simulate a failure")
+    async def failing_function():
+        raise RuntimeError("Simulated failure")
+
+    stream = await _request_fnc_call(input_llm, "Call the failing function", fnc_ctx)
+    calls = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in calls], return_exceptions=True)
+    await stream.aclose()
+
+    assert len(calls) == 1
+    assert isinstance(calls[0].exception, RuntimeError)
+    assert str(calls[0].exception) == "Simulated failure"
+
+
+@pytest.mark.parametrize("llm_factory", LLMS)
 async def test_runtime_addition(llm_factory: Callable[[], llm.LLM]):
     input_llm = llm_factory()
     fnc_ctx = FncCtx()
