@@ -16,16 +16,14 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses
 import json
 import os
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional
 from urllib.parse import urlencode
 
 import aiohttp
-from livekit import rtc
 from livekit.agents import stt, utils
 from livekit.agents.utils import AudioBuffer
 
@@ -160,7 +158,6 @@ class SpeechStream(stt.SpeechStream):
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: List[stt.SpeechEvent] = []
 
-
     async def aclose(self) -> None:
         await super().aclose()
         if self._session:
@@ -222,17 +219,22 @@ class SpeechStream(stt.SpeechStream):
         This method can throw ws errors, these are handled inside the _run method
         """
         closing_ws = False
+
         async def send_task():
             nonlocal closing_ws
 
             if self._opts.end_utterance_silence_threshold:
-                await ws.send_str(json.dumps(
-                    {
-                        "end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold
-                    }
-                ))
+                await ws.send_str(
+                    json.dumps(
+                        {
+                            "end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold
+                        }
+                    )
+                )
 
-            samples_per_buffer = self._opts.sample_rate // int(1/self._opts.buffer_size_seconds)
+            samples_per_buffer = self._opts.sample_rate // int(
+                1 / self._opts.buffer_size_seconds
+            )
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=self._num_channels,
@@ -321,7 +323,6 @@ class SpeechStream(stt.SpeechStream):
         self._event_ch.send_nowait(end_event)
         # break async iteration if speech has ended
         self._event_ch.send_nowait(None)
-
 
     def _process_stream_event(self, data: dict, closing_ws: bool) -> None:
         # see this page:
