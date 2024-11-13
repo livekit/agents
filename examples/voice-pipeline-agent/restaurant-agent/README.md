@@ -17,7 +17,3 @@ Features:
 `cd ..`
 
 `python assistant.py dev`
-
-## Disclaimers
-
-- The CSV file only lists dates between November to December 2024 between 11 AM - 8 PM
