@@ -112,3 +112,28 @@ async def test_tts_recover() -> None:
 
     with pytest.raises(ChanEmpty):
         fallback_adapter.availability_changed_ch(fake2).recv_nowait()
+
+
+async def test_audio_resampled() -> None:
+    fake1 = FakeTTS(
+        sample_rate=48000, fake_exception=APIConnectionError("fake1 failed")
+    )
+    fake2 = FakeTTS(fake_audio_duration=5.0, sample_rate=16000)
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    async with fallback_adapter.synthesize("hello test") as stream:
+        frames = []
+        async for data in stream:
+            frames.append(data.frame)
+
+        fake1.synthesize_ch.recv_nowait()
+        fake2.synthesize_ch.recv_nowait()
+
+        assert (
+            not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+        )
+
+        combined_frame = rtc.combine_audio_frames(frames)
+        assert combined_frame.duration == 5.0
+        assert combined_frame.sample_rate == 48000

@@ -373,3 +373,14 @@ class SynthesizeStream(ABC):
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
         return self
+
+    async def __aenter__(self) -> SynthesizeStream:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
