@@ -73,13 +73,16 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=True,)
+                interim_results=True,
             )
+        )
         api_key = api_key or os.environ.get("ASSEMBLYAI_API_KEY")
         if api_key is None:
-            raise ValueError("AssemblyAI API key is required. " \
-                             "Pass one in via the `api_key` parameter, " \
-                             "or set it as the `ASSEMBLYAI_API_KEY` environment variable")
+            raise ValueError(
+                "AssemblyAI API key is required. "
+                "Pass one in via the `api_key` parameter, "
+                "or set it as the `ASSEMBLYAI_API_KEY` environment variable"
+            )
         self._api_key = api_key
 
         self._opts = STTOptions(
@@ -98,7 +101,7 @@ class STT(stt.STT):
         if not self._session:
             self._session = utils.http_context.http_session()
         return self._session
-    
+
     async def _recognize_impl(
         self,
         *,
@@ -133,7 +136,6 @@ class SpeechStream(stt.SpeechStream):
     # Used to signal end of input
     _END_OF_INPUT_MSG: str = "END_OF_INPUT"
 
-
     def __init__(
         self,
         stt_: STT,
@@ -155,7 +157,9 @@ class SpeechStream(stt.SpeechStream):
         self._max_retry = max_retry
 
         if self._num_channels != 1:
-            raise ValueError(f"AssemblyAI only supports mono audio, but a `num_channels` of {self._num_channels} was provided")
+            raise ValueError(
+                f"AssemblyAI only supports mono audio, but a `num_channels` of {self._num_channels} was provided"
+            )
 
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: List[stt.SpeechEvent] = []
@@ -167,7 +171,7 @@ class SpeechStream(stt.SpeechStream):
             )
 
         self._queue.put_nowait(frame)
-    
+
     def end_input(self) -> None:
         self.push_frame(SpeechStream._END_OF_INPUT_MSG)
 
@@ -210,7 +214,9 @@ class SpeechStream(stt.SpeechStream):
                     }
 
                     ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
-                    filtered_config = {k: v for k, v in live_config.items() if v is not None}
+                    filtered_config = {
+                        k: v for k, v in live_config.items() if v is not None
+                    }
                     url = f"{ws_url}?{urlencode(filtered_config).lower()}"
                     ws = await self._session.ws_connect(url, headers=headers)
                     retry_count = 0  # connected successfully, reset the retry_count
@@ -243,25 +249,27 @@ class SpeechStream(stt.SpeechStream):
         closing_ws = False
 
         END_UTTERANCE_SILENCE_THRESHOLD_MSG = json.dumps(
-            {"end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold }
+            {
+                "end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold
+            }
         )
         if self._opts.end_utterance_silence_threshold is not None:
             self.push_frame(END_UTTERANCE_SILENCE_THRESHOLD_MSG)
 
         async def send_task():
             nonlocal input_ended, closing_ws
-            
+
             # Local variables for buffering
             buffer = bytearray()
             buffer_duration = 0.0
-            
+
             # forward inputs to AssemblyAI
             # if we receive a close message, signal it to AssemblyAI and break.
             # the recv task will then make sure to process the remaining audio and stop
             while True:
                 data = await self._queue.get()
                 self._queue.task_done()
-                
+
                 if isinstance(data, rtc.AudioFrame):
                     # TODO: The remix_and_resample method is low quality
                     # and should be replaced with a continuous resampling
@@ -396,7 +404,9 @@ class SpeechStream(stt.SpeechStream):
             logger.error("Received unexpected error from AssemblyAI %s", data)
 
         else:
-            logger.warning("Received unexpected error from AssemblyAI %s", data["message_type"])
+            logger.warning(
+                "Received unexpected error from AssemblyAI %s", data["message_type"]
+            )
 
     async def __anext__(self) -> stt.SpeechEvent:
         evt = await self._event_queue.get()
