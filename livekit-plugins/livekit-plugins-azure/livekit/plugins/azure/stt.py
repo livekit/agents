@@ -30,6 +30,9 @@ class STTOptions:
     speech_region: str
     sample_rate: int
     num_channels: int
+    segmentation_silence_timeout_ms: int
+    segmentation_max_time_ms: int
+    segmentation_strategy: str
     languages: list[
         str
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
@@ -43,6 +46,9 @@ class STT(stt.STT):
         speech_region: str | None = None,
         sample_rate: int = 16000,
         num_channels: int = 1,
+        segmentation_silence_timeout_ms: int = 500,
+        segmentation_max_time_ms: int = 60000,
+        segmentation_strategy: str = "Default",
         languages: list[str] = [],  # when empty, auto-detect the language
     ):
         """
@@ -70,6 +76,9 @@ class STT(stt.STT):
             languages=languages,
             sample_rate=sample_rate,
             num_channels=num_channels,
+            segmentation_silence_timeout_ms=segmentation_silence_timeout_ms,
+            segmentation_max_time_ms=segmentation_max_time_ms,
+            segmentation_strategy=segmentation_strategy,
         )
 
     async def _recognize_impl(
@@ -182,6 +191,12 @@ def _create_speech_recognizer(
     speech_config = speechsdk.SpeechConfig(
         subscription=config.speech_key, region=config.speech_region
     )
+
+    speech_config.set_properties({
+        speechsdk.enums.PropertyId.Speech_SegmentationSilenceTimeoutMs: str(config.segmentation_silence_timeout_ms),
+        speechsdk.enums.PropertyId.Speech_SegmentationMaximumTimeMs: str(config.segmentation_max_time_ms),
+        speechsdk.enums.PropertyId.Speech_SegmentationStrategy: str(config.segmentation_strategy),
+    })
 
     auto_detect_source_language_config = None
     if config.languages:
