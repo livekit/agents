@@ -317,13 +317,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     for frame in audio_bstream.write(b64data):
                         _send_audio_frame(frame, segment_id, False)
                 elif data.get("done"):
-                    last_frame: rtc.AudioFrame | None = None
-                    for frame in audio_bstream.flush():
-                        if last_frame is not None:
-                            _send_audio_frame(frame, segment_id, False)
-                        last_frame = frame
-                    if last_frame is not None:
-                        _send_audio_frame(last_frame, segment_id, True)
+                    frames = enumerate(audio_bstream.flush())
+                    for i, frame in frames:
+                        _send_audio_frame(frame, segment_id, i == len(frames) - 1)
 
                     if segment_id == request_id:
                         # we're not going to receive more frames, close the connection
