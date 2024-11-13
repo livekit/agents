@@ -44,7 +44,7 @@ class JobAcceptArguments:
     name: str
     identity: str
     metadata: str
-    attributes: dict[str, str] | None
+    attributes: dict[str, str] | None = None
 
 
 @dataclass
