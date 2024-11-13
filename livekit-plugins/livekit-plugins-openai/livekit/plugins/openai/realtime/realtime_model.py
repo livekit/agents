@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import AsyncIterable, Callable, Literal, Union, cast, overload
@@ -12,6 +13,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm import _oai_api
+from livekit.agents.metrics import MultiModalLLMError, MultiModalLLMMetrics
 from typing_extensions import TypedDict
 
 from . import api_proto, remote_items
@@ -33,6 +35,7 @@ EventTypes = Literal[
     "response_done",
     "function_calls_collected",
     "function_calls_finished",
+    "metrics_collected",
 ]
 
 
@@ -66,6 +69,10 @@ class RealtimeResponse:
     """usage of the response"""
     done_fut: asyncio.Future[None]
     """future that will be set when the response is completed"""
+    created_timestamp: float
+    """timestamp when the response was created"""
+    first_token_timestamp: float | None = None
+    """timestamp when the first token was received"""
 
 
 @dataclass
@@ -703,6 +710,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._main_atask = asyncio.create_task(
             self._main_task(), name="openai-realtime-session"
         )
@@ -1210,6 +1218,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             output=[],
             usage=response.get("usage"),
             done_fut=done_fut,
+            created_timestamp=time.time(),
         )
         self._pending_responses[new_response.id] = new_response
         self.emit("response_created", new_response)
@@ -1264,6 +1273,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             content_type=content_type,
         )
         output.content.append(new_content)
+        response.first_token_timestamp = time.time()
         self.emit("response_content_added", new_content)
 
     def _handle_response_audio_delta(
@@ -1368,15 +1378,19 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         response.status_details = response_data.get("status_details")
         response.usage = response_data.get("usage")
 
+        metrics_error = None
+        cancelled = False
         if response.status == "failed":
             assert response.status_details is not None
 
-            error = response.status_details.get("error")
-            code: str | None = None
-            message: str | None = None
-            if error is not None:
-                code = error.get("code")  # type: ignore
-                message = error.get("message")  # type: ignore
+            error = response.status_details.get("error", {})
+            code: str | None = error.get("code")  # type: ignore
+            message: str | None = error.get("message")  # type: ignore
+            metrics_error = MultiModalLLMError(
+                type=response.status_details.get("type"),
+                code=code,
+                message=message,
+            )
 
             logger.error(
                 "response generation failed",
@@ -1386,12 +1400,56 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             assert response.status_details is not None
             reason = response.status_details.get("reason")
 
+            metrics_error = MultiModalLLMError(
+                type=response.status_details.get("type"),
+                reason=reason,  # type: ignore
+            )
+
             logger.warning(
                 "response generation incomplete",
                 extra={"reason": reason, **self.logging_extra()},
             )
+        elif response.status == "cancelled":
+            cancelled = True
 
         self.emit("response_done", response)
+
+        # calculate metrics
+        ttft = -1.0
+        if response.first_token_timestamp is not None:
+            ttft = response.first_token_timestamp - response.created_timestamp
+        duration = time.time() - response.created_timestamp
+
+        usage = response.usage or {}  # type: ignore
+        metrics = MultiModalLLMMetrics(
+            timestamp=response.created_timestamp,
+            request_id=response.id,
+            ttft=ttft,
+            duration=duration,
+            cancelled=cancelled,
+            label=self._label,
+            completion_tokens=usage.get("output_tokens", 0),
+            prompt_tokens=usage.get("input_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+            tokens_per_second=usage.get("output_tokens", 0) / duration,
+            error=metrics_error,
+            input_token_details=MultiModalLLMMetrics.InputTokenDetails(
+                cached_tokens=usage.get("input_token_details", {}).get(
+                    "cached_tokens", 0
+                ),
+                text_tokens=usage.get("input_token_details", {}).get("text_tokens", 0),
+                audio_tokens=usage.get("input_token_details", {}).get(
+                    "audio_tokens", 0
+                ),
+            ),
+            output_token_details=MultiModalLLMMetrics.OutputTokenDetails(
+                text_tokens=usage.get("output_token_details", {}).get("text_tokens", 0),
+                audio_tokens=usage.get("output_token_details", {}).get(
+                    "audio_tokens", 0
+                ),
+            ),
+        )
+        self.emit("metrics_collected", metrics)
 
     def _get_content(self, ptr: _ContentPtr) -> RealtimeContent:
         response = self._pending_responses[ptr["response_id"]]
