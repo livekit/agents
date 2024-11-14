@@ -103,6 +103,8 @@ class STT(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
 
 class SpeechStream(ABC):
     class _FlushSentinel:
+        """Sentinel to mark when it was flushed"""
+
         pass
 
     def __init__(self, stt: STT, *, sample_rate: int | None = None):

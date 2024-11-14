@@ -108,6 +108,8 @@ class _TTSOptions:
     sample_rate: int
     speech_key: str | None = None
     speech_region: str | None = None
+    # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-container-ntts?tabs=container#use-the-container
+    speech_host: str | None = None
     # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts
     voice: str | None = None
     # for using custom voices (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-speech-synthesis?tabs=browserjs%2Cterminal&pivots=programming-language-python#use-a-custom-endpoint)
@@ -128,6 +130,7 @@ class TTS(tts.TTS):
         prosody: ProsodyConfig | None = None,
         speech_key: str | None = None,
         speech_region: str | None = None,
+        speech_host: str | None = None,
         endpoint_id: str | None = None,
     ) -> None:
         """
@@ -150,13 +153,14 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
+        speech_host = speech_host or os.environ.get("AZURE_SPEECH_HOST")
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
-        if not speech_key:
-            raise ValueError("AZURE_SPEECH_KEY must be set")
-
         speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
-        if not speech_region:
-            raise ValueError("AZURE_SPEECH_REGION must be set")
+
+        if not speech_host and not (speech_key and speech_region):
+            raise ValueError(
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION must be set"
+            )
 
         if prosody:
             prosody.validate()
@@ -308,11 +312,15 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
 def _create_speech_synthesizer(
     *, config: _TTSOptions, stream: speechsdk.audio.AudioOutputStream
 ) -> speechsdk.SpeechSynthesizer:
-    speech_config = speechsdk.SpeechConfig(
-        subscription=config.speech_key,
-        region=config.speech_region,
-        speech_recognition_language=config.language or "en-US",
-    )
+    if config.speech_host:
+        speech_config = speechsdk.SpeechConfig(host=config.speech_host)
+    else:
+        speech_config = speechsdk.SpeechConfig(
+            subscription=config.speech_key,
+            region=config.speech_region,
+            speech_recognition_language=config.language or "en-US",
+        )
+
     speech_config.set_speech_synthesis_output_format(
         SUPPORTED_SAMPLE_RATE[config.sample_rate]
     )

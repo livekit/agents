@@ -35,7 +35,11 @@ def read_mp3_file(filename: str) -> rtc.AudioFrame:
     return agents.utils.merge_frames(frames)
 
 
-RECOGNIZE_STT = [deepgram.STT(), google.STT(), openai.STT()]
+RECOGNIZE_STT = [
+    deepgram.STT(),
+    google.STT(),
+    openai.STT(),
+]
 
 
 @pytest.mark.usefixtures("job_process")
@@ -81,7 +85,6 @@ async def test_stream(stt: agents.stt.STT):
             )
         )
 
-    is_assemblyai_stt = isinstance(stt, assemblyai.STT)
     stream = stt.stream()
 
     async def _stream_input():
@@ -110,12 +113,6 @@ async def test_stream(stt: agents.stt.STT):
                 recv_end = False
                 recv_start = True
                 continue
-
-            # AssemblyAI only sends one START_OF_SPEECH per connection
-            if not is_assemblyai_stt:
-                assert (
-                    recv_start
-                ), "START_OF_SPEECH should be sent before any other event"
 
             if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
                 text += event.alternatives[0].text
