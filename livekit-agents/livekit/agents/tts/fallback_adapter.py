@@ -5,7 +5,7 @@ import contextlib
 import dataclasses
 import time
 from dataclasses import dataclass
-from typing import AsyncGenerator, Literal
+from typing import AsyncGenerator, Literal, Union
 
 from livekit import rtc
 
@@ -477,7 +477,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                 if tts_status.available or all_failed:
                     audio_duration = 0.0
                     try:
-                        new_input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
+                        new_input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
 
                         for text in self._fallback_pending_texts:
                             for t in text:
@@ -576,7 +576,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
             async def _recover_tts_task(tts: TTS) -> None:
                 try:
-                    input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
+                    input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
                     for segment in segments:
                         for t in segment:
                             input_ch.send_nowait(t)
