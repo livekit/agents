@@ -1,5 +1,25 @@
 # livekit-agents
 
+## 0.11.2
+
+### Patch Changes
+
+- Fix interrupt_min_words handling - [#1062](https://github.com/livekit/agents/pull/1062) ([@davidzhao](https://github.com/davidzhao))
+
+- pipelineagent: fix speech_committed never called - [#1078](https://github.com/livekit/agents/pull/1078) ([@theomonnom](https://github.com/theomonnom))
+
+- Allow setting agent attributes when accepting job - [#1076](https://github.com/livekit/agents/pull/1076) ([@davidzhao](https://github.com/davidzhao))
+
+- handles error in function calls - [#1057](https://github.com/livekit/agents/pull/1057) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Include job count in WorkerStatus and pass in worker for load_fnc - [#1046](https://github.com/livekit/agents/pull/1046) ([@keepingitneil](https://github.com/keepingitneil))
+
+- Fix delay calculation - [#1081](https://github.com/livekit/agents/pull/1081) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- sync the Realtime API converstation items and add set_chat_ctx - [#1015](https://github.com/livekit/agents/pull/1015) ([@longcw](https://github.com/longcw))
+
+- added metrics for idle time - [#1064](https://github.com/livekit/agents/pull/1064) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.11.1
 
 ### Patch Changes

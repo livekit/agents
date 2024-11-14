@@ -1,5 +1,13 @@
 # livekit-plugins-azure
 
+## 0.4.2
+
+### Patch Changes
+
+- add support for azure speech containers - [#1043](https://github.com/livekit/agents/pull/1043) ([@longcw](https://github.com/longcw))
+
+- fix azure sample_rate parameter - [#1072](https://github.com/livekit/agents/pull/1072) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.4.1
 
 ### Patch Changes
