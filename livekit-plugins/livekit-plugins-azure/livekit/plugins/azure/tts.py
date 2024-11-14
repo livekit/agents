@@ -13,13 +13,21 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from dataclasses import dataclass
 from typing import Literal
 
-from livekit.agents import tts, utils
+from livekit.agents import (
+    APIConnectionError,
+    APITimeoutError,
+    tts,
+    utils,
+)
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
+
+from .log import logger
 
 AZURE_SAMPLE_RATE: int = 16000
 AZURE_BITS_PER_SAMPLE: int = 16
@@ -91,6 +99,8 @@ class ProsodyConfig:
 class _TTSOptions:
     speech_key: str | None = None
     speech_region: str | None = None
+    # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-container-ntts?tabs=container#use-the-container
+    speech_host: str | None = None
     # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts
     voice: str | None = None
     # for using custom voices (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-speech-synthesis?tabs=browserjs%2Cterminal&pivots=programming-language-python#use-a-custom-endpoint)
@@ -110,6 +120,7 @@ class TTS(tts.TTS):
         prosody: ProsodyConfig | None = None,
         speech_key: str | None = None,
         speech_region: str | None = None,
+        speech_host: str | None = None,
         endpoint_id: str | None = None,
     ) -> None:
         """
@@ -127,13 +138,14 @@ class TTS(tts.TTS):
             num_channels=AZURE_NUM_CHANNELS,
         )
 
+        speech_host = speech_host or os.environ.get("AZURE_SPEECH_HOST")
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
-        if not speech_key:
-            raise ValueError("AZURE_SPEECH_KEY must be set")
-
         speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
-        if not speech_region:
-            raise ValueError("AZURE_SPEECH_REGION must be set")
+
+        if not speech_host and not (speech_key and speech_region):
+            raise ValueError(
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION must be set"
+            )
 
         if prosody:
             prosody.validate()
@@ -159,15 +171,14 @@ class TTS(tts.TTS):
         self._opts.prosody = prosody or self._opts.prosody
 
     def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(text, self._opts)
+        return ChunkedStream(self, text, self._opts)
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, text: str, opts: _TTSOptions) -> None:
-        super().__init__()
-        self._text, self._opts = text, opts
+    def __init__(self, tts: TTS, text: str, opts: _TTSOptions) -> None:
+        super().__init__(tts, text)
+        self._opts = opts
 
-    @utils.log_exceptions()
     async def _main_task(self):
         stream_callback = speechsdk.audio.PushAudioOutputStream(
             _PushAudioOutputStreamCallback(asyncio.get_running_loop(), self._event_ch)
@@ -189,22 +200,24 @@ class ChunkedStream(tts.ChunkedStream):
                     prosody_ssml += f' pitch="{self._opts.prosody.pitch}"'
                 prosody_ssml += ">"
                 ssml += prosody_ssml
-                ssml += self._text
+                ssml += self._input_text
                 ssml += "</prosody></voice></speak>"
                 return synthesizer.speak_ssml_async(ssml).get()  # type: ignore
 
-            return synthesizer.speak_text_async(self._text).get()  # type: ignore
+            return synthesizer.speak_text_async(self._input_text).get()  # type: ignore
 
         result = None
         try:
             result = await asyncio.to_thread(_synthesize)
             if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
-                if result.cancellation_details:
-                    raise ValueError(
-                        f"failed to synthesize audio: {result.reason}: {result.cancellation_details.reason} ({result.cancellation_details.error_details})"
-                    )
+                if (
+                    result.cancellation_details.error_code
+                    == speechsdk.CancellationErrorCode.ServiceTimeout
+                ):
+                    raise APITimeoutError()
                 else:
-                    raise ValueError(f"failed to synthesize audio: {result.reason}")
+                    error_details = result.cancellation_details.error_details
+                    raise APIConnectionError(error_details, request_id=result.result_id)
         finally:
 
             def _cleanup() -> None:
@@ -213,9 +226,14 @@ class ChunkedStream(tts.ChunkedStream):
                 nonlocal synthesizer, stream_callback, result
                 del synthesizer
                 del stream_callback
-                del result
 
-            await asyncio.to_thread(_cleanup)
+                if result is not None:
+                    del result
+
+            try:
+                await asyncio.to_thread(_cleanup)
+            except Exception:
+                logger.exception("failed to cleanup resources")
 
 
 class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallback):
@@ -228,7 +246,6 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         self._event_ch = event_ch
         self._loop = loop
         self._request_id = utils.shortuuid()
-        self._segment_id = utils.shortuuid()
 
         self._bstream = utils.audio.AudioByteStream(
             sample_rate=AZURE_SAMPLE_RATE, num_channels=AZURE_NUM_CHANNELS
@@ -238,10 +255,10 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         for frame in self._bstream.write(audio_buffer.tobytes()):
             audio = tts.SynthesizedAudio(
                 request_id=self._request_id,
-                segment_id=self._segment_id,
                 frame=frame,
             )
-            self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
 
         return audio_buffer.nbytes
 
@@ -249,20 +266,23 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         for frame in self._bstream.flush():
             audio = tts.SynthesizedAudio(
                 request_id=self._request_id,
-                segment_id=self._segment_id,
                 frame=frame,
             )
-            self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
 
 
 def _create_speech_synthesizer(
     *, config: _TTSOptions, stream: speechsdk.audio.AudioOutputStream
 ) -> speechsdk.SpeechSynthesizer:
-    speech_config = speechsdk.SpeechConfig(
-        subscription=config.speech_key,
-        region=config.speech_region,
-        speech_recognition_language=config.language or "en-US",
-    )
+    if config.speech_host:
+        speech_config = speechsdk.SpeechConfig(host=config.speech_host)
+    else:
+        speech_config = speechsdk.SpeechConfig(
+            subscription=config.speech_key,
+            region=config.speech_region,
+            speech_recognition_language=config.language or "en-US",
+        )
     stream_config = speechsdk.audio.AudioOutputConfig(stream=stream)
     if config.voice is not None:
         speech_config.speech_synthesis_voice_name = config.voice

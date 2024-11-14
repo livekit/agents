@@ -16,6 +16,7 @@ from __future__ import annotations, print_function
 
 import asyncio
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Literal
@@ -133,8 +134,7 @@ class VAD(agents.vad.VAD):
         super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.032))
         self._onnx_session = session
         self._opts = opts
-
-        self._streams: list[VADStream] = []
+        self._streams = weakref.WeakSet[VADStream]()
 
     def stream(self) -> "VADStream":
         """
@@ -144,12 +144,13 @@ class VAD(agents.vad.VAD):
             VADStream: A stream object for processing audio input and detecting speech.
         """
         stream = VADStream(
+            self,
             self._opts,
             onnx_model.OnnxModel(
                 onnx_session=self._onnx_session, sample_rate=self._opts.sample_rate
             ),
         )
-        self._streams.append(stream)
+        self._streams.add(stream)
         return stream
 
     def update_options(
@@ -195,8 +196,10 @@ class VAD(agents.vad.VAD):
 
 
 class VADStream(agents.vad.VADStream):
-    def __init__(self, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
-        super().__init__()
+    def __init__(
+        self, vad: VAD, opts: _VADOptions, model: onnx_model.OnnxModel
+    ) -> None:
+        super().__init__(vad)
         self._opts, self._model = opts, model
         self._loop = asyncio.get_event_loop()
 
@@ -442,6 +445,8 @@ class VADStream(agents.vad.VADStream):
                             )
                         ],
                         speaking=pub_speaking,
+                        raw_accumulated_silence=silence_threshold_duration,
+                        raw_accumulated_speech=speech_threshold_duration,
                     )
                 )
 

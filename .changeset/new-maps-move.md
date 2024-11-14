@@ -2,4 +2,4 @@
 "livekit-plugins-google": patch
 ---
 
-Additional options enabled on Google TTS
+Make Google STT keywords match Deepgram

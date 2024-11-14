@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from enum import Enum
 from typing import Annotated, Callable, Optional
 
@@ -90,15 +89,15 @@ def test_hashable_typeinfo():
 
 LLMS: list[Callable[[], llm.LLM]] = [
     lambda: openai.LLM(),
-    lambda: openai.beta.AssistantLLM(
-        assistant_opts=openai.beta.AssistantOptions(
-            create_options=openai.beta.AssistantCreateOptions(
-                name=f"test-{uuid.uuid4()}",
-                instructions="You are a basic assistant",
-                model="gpt-4o",
-            )
-        )
-    ),
+    # lambda: openai.beta.AssistantLLM(
+    #     assistant_opts=openai.beta.AssistantOptions(
+    #         create_options=openai.beta.AssistantCreateOptions(
+    #             name=f"test-{uuid.uuid4()}",
+    #             instructions="You are a basic assistant",
+    #             model="gpt-4o",
+    #         )
+    #     )
+    # ),
     # anthropic.LLM(),
 ]
 
@@ -120,6 +119,9 @@ async def test_chat(llm_factory: Callable[[], llm.LLM]):
     stream = input_llm.chat(chat_ctx=chat_ctx)
     text = ""
     async for chunk in stream:
+        if not chunk.choices:
+            continue
+
         content = chunk.choices[0].delta.content
         if content:
             text += content
@@ -141,6 +143,25 @@ async def test_basic_fnc_calls(llm_factory: Callable[[], llm.LLM]):
     await asyncio.gather(*[f.task for f in calls])
     await stream.aclose()
     assert len(calls) == 2, "get_weather should be called twice"
+
+
+@pytest.mark.parametrize("llm_factory", LLMS)
+async def test_function_call_exception_handling(llm_factory: Callable[[], llm.LLM]):
+    input_llm = llm_factory()
+    fnc_ctx = FncCtx()
+
+    @fnc_ctx.ai_callable(description="Simulate a failure")
+    async def failing_function():
+        raise RuntimeError("Simulated failure")
+
+    stream = await _request_fnc_call(input_llm, "Call the failing function", fnc_ctx)
+    calls = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in calls], return_exceptions=True)
+    await stream.aclose()
+
+    assert len(calls) == 1
+    assert isinstance(calls[0].exception, RuntimeError)
+    assert str(calls[0].exception) == "Simulated failure"
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)

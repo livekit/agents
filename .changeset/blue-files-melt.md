@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-fix jobs never reloading
+Fix interrupt_min_words handling

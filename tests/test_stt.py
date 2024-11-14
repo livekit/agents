@@ -9,7 +9,7 @@ import time
 
 import pytest
 from livekit import agents, rtc
-from livekit.plugins import azure, deepgram, google, openai, silero
+from livekit.plugins import assemblyai, azure, deepgram, google, openai, silero
 
 from .utils import wer
 
@@ -35,7 +35,11 @@ def read_mp3_file(filename: str) -> rtc.AudioFrame:
     return agents.utils.merge_frames(frames)
 
 
-RECOGNIZE_STT = [deepgram.STT(), google.STT(), openai.STT()]
+RECOGNIZE_STT = [
+    deepgram.STT(),
+    google.STT(),
+    openai.STT(),
+]
 
 
 @pytest.mark.usefixtures("job_process")
@@ -55,6 +59,7 @@ async def test_recognize(stt: agents.stt.STT):
 
 STREAM_VAD = silero.VAD.load(min_silence_duration=0.75)
 STREAM_STT = [
+    assemblyai.STT(),
     deepgram.STT(),
     google.STT(),
     agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),

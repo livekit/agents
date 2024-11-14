@@ -20,8 +20,15 @@ from dataclasses import dataclass
 from typing import AsyncIterable, List, Union
 
 from livekit import agents, rtc
-from livekit.agents import stt, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+    utils,
+)
 
+from google.api_core.exceptions import Aborted, DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.speech_v2 import SpeechAsyncClient
@@ -43,6 +50,25 @@ class STTOptions:
     punctuate: bool
     spoken_punctuation: bool
     model: SpeechModels
+    keywords: List[tuple[str, float]] | None
+
+    def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
+        if self.keywords:
+            return cloud_speech.SpeechAdaptation(
+                phrase_sets=[
+                    cloud_speech.SpeechAdaptation.AdaptationPhraseSet(
+                        inline_phrase_set=cloud_speech.PhraseSet(
+                            phrases=[
+                                cloud_speech.PhraseSet.Phrase(
+                                    value=keyword, boost=boost
+                                )
+                                for keyword, boost in self.keywords
+                            ]
+                        )
+                    )
+                ]
+            )
+        return None
 
 
 class STT(stt.STT):
@@ -57,6 +83,7 @@ class STT(stt.STT):
         model: SpeechModels = "long",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
+        keywords: List[tuple[str, float]] | None = None,
     ):
         """
         Create a new instance of Google STT.
@@ -93,6 +120,7 @@ class STT(stt.STT):
             punctuate=punctuate,
             spoken_punctuation=spoken_punctuation,
             model=model,
+            keywords=keywords,
         )
 
     def _ensure_client(self) -> SpeechAsyncClient:
@@ -141,7 +169,7 @@ class STT(stt.STT):
 
         return config
 
-    async def recognize(
+    async def _recognize_impl(
         self,
         buffer: utils.AudioBuffer,
         *,
@@ -156,6 +184,7 @@ class STT(stt.STT):
                 sample_rate_hertz=frame.sample_rate,
                 audio_channel_count=frame.num_channels,
             ),
+            adaptation=config.build_adaptation(),
             features=cloud_speech.RecognitionFeatures(
                 enable_automatic_punctuation=config.punctuate,
                 enable_spoken_punctuation=config.spoken_punctuation,
@@ -165,23 +194,39 @@ class STT(stt.STT):
             language_codes=config.languages,
         )
 
-        raw = await self._ensure_client().recognize(
-            cloud_speech.RecognizeRequest(
-                recognizer=self._recognizer, config=config, content=frame.data.tobytes()
+        try:
+            raw = await self._ensure_client().recognize(
+                cloud_speech.RecognizeRequest(
+                    recognizer=self._recognizer,
+                    config=config,
+                    content=frame.data.tobytes(),
+                )
             )
-        )
-        return _recognize_response_to_speech_event(raw)
+
+            return _recognize_response_to_speech_event(raw)
+        except DeadlineExceeded:
+            raise APITimeoutError()
+        except GoogleAPICallError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.code or -1,
+                request_id=None,
+                body=None,
+            )
+        except Exception as e:
+            raise APIConnectionError() from e
 
     def stream(
         self, *, language: SpeechLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(self._ensure_client(), self._recognizer, config)
+        return SpeechStream(self, self._ensure_client(), self._recognizer, config)
 
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
         self,
+        stt: STT,
         client: SpeechAsyncClient,
         recognizer: str,
         config: STTOptions,
@@ -189,7 +234,7 @@ class SpeechStream(stt.SpeechStream):
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
-        super().__init__()
+        super().__init__(stt)
 
         self._client = client
         self._recognizer = recognizer
@@ -205,6 +250,7 @@ class SpeechStream(stt.SpeechStream):
                     sample_rate_hertz=self._sample_rate,
                     audio_channel_count=self._num_channels,
                 ),
+                adaptation=config.build_adaptation(),
                 language_codes=self._config.languages,
                 model=self._config.model,
                 features=cloud_speech.RecognitionFeatures(
@@ -257,6 +303,9 @@ class SpeechStream(stt.SpeechStream):
                 retry_count = 0  # connection successful, reset retry count
 
                 await self._run_stream(stream)
+            except Aborted:
+                logger.error("google stt connection aborted")
+                break
             except Exception as e:
                 if retry_count >= max_retry:
                     logger.error(

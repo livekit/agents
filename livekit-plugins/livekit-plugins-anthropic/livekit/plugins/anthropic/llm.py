@@ -23,7 +23,13 @@ from typing import Any, Awaitable, List, Tuple, get_args, get_origin
 
 import httpx
 from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    llm,
+    utils,
+)
 
 import anthropic
 
@@ -57,6 +63,8 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
         """
+        super().__init__()
+
         # throw an error on our end
         api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if api_key is None:
@@ -103,8 +111,9 @@ class LLM(llm.LLM):
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
+
         stream = self._client.messages.create(
-            max_tokens=opts.get("max_tokens", 1000),
+            max_tokens=opts.get("max_tokens", 1024),
             system=latest_system_message,
             messages=collaped_anthropic_ctx,
             model=self._opts.model,
@@ -114,12 +123,15 @@ class LLM(llm.LLM):
             **opts,
         )
 
-        return LLMStream(anthropic_stream=stream, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        return LLMStream(
+            self, anthropic_stream=stream, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx
+        )
 
 
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
+        llm: LLM,
         *,
         anthropic_stream: Awaitable[
             anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]
@@ -127,7 +139,7 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
     ) -> None:
-        super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._awaitable_anthropic_stream = anthropic_stream
         self._anthropic_stream: (
             anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent] | None
@@ -138,89 +150,113 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
 
-    async def aclose(self) -> None:
-        if self._anthropic_stream:
-            await self._anthropic_stream.close()
+        self._request_id: str = ""
+        self._ignoring_cot = False  # ignore chain of thought
+        self._input_tokens = 0
+        self._output_tokens = 0
 
-        return await super().aclose()
+    async def _main_task(self) -> None:
+        try:
+            if not self._anthropic_stream:
+                self._anthropic_stream = await self._awaitable_anthropic_stream
 
-    async def __anext__(self):
-        if not self._anthropic_stream:
-            self._anthropic_stream = await self._awaitable_anthropic_stream
+            async with self._anthropic_stream as stream:
+                async for event in stream:
+                    chat_chunk = self._parse_event(event)
+                    if chat_chunk is not None:
+                        self._event_ch.send_nowait(chat_chunk)
 
-        fn_calling_enabled = self._fnc_ctx is not None
-        ignore = False
-
-        async for event in self._anthropic_stream:
-            if event.type == "message_start":
-                pass
-            elif event.type == "message_delta":
-                pass
-            elif event.type == "message_stop":
-                pass
-            elif event.type == "content_block_start":
-                if event.content_block.type == "tool_use":
-                    self._tool_call_id = event.content_block.id
-                    self._fnc_raw_arguments = ""
-                    self._fnc_name = event.content_block.name
-            elif event.type == "content_block_delta":
-                delta = event.delta
-                if delta.type == "text_delta":
-                    text = delta.text
-
-                    # Anthropic seems to add a prompt when tool calling is enabled
-                    # where responses always start with a "<thinking>" block containing
-                    # the LLM's chain of thought. It's very verbose and not useful for voice
-                    # applications.
-                    if fn_calling_enabled:
-                        if text.startswith("<thinking>"):
-                            ignore = True
-
-                        if "</thinking>" in text:
-                            text = text.split("</thinking>")[-1]
-                            ignore = False
-
-                    if ignore:
-                        continue
-
-                    return llm.ChatChunk(
-                        choices=[
-                            llm.Choice(
-                                delta=llm.ChoiceDelta(content=text, role="assistant")
-                            )
-                        ]
+                self._event_ch.send_nowait(
+                    llm.ChatChunk(
+                        request_id=self._request_id,
+                        usage=llm.CompletionUsage(
+                            completion_tokens=self._output_tokens,
+                            prompt_tokens=self._input_tokens,
+                            total_tokens=self._input_tokens + self._output_tokens,
+                        ),
                     )
-                elif delta.type == "input_json_delta":
-                    assert self._fnc_raw_arguments is not None
-                    self._fnc_raw_arguments += delta.partial_json
+                )
+        except anthropic.APITimeoutError:
+            raise APITimeoutError()
+        except anthropic.APIStatusError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.request_id,
+                body=e.body,
+            )
+        except Exception as e:
+            raise APIConnectionError() from e
 
-            elif event.type == "content_block_stop":
-                if self._tool_call_id is not None and self._fnc_ctx:
-                    assert self._fnc_name is not None
-                    assert self._fnc_raw_arguments is not None
-                    fnc_info = _create_ai_function_info(
-                        self._fnc_ctx,
-                        self._tool_call_id,
-                        self._fnc_name,
-                        self._fnc_raw_arguments,
-                    )
-                    self._function_calls_info.append(fnc_info)
-                    chunk = llm.ChatChunk(
-                        choices=[
-                            llm.Choice(
-                                delta=llm.ChoiceDelta(
-                                    role="assistant", tool_calls=[fnc_info]
-                                ),
-                                index=0,
-                            )
-                        ]
-                    )
-                    self._tool_call_id = None
-                    self._fnc_raw_arguments = None
-                    self._fnc_name = None
-                    return chunk
+    def _parse_event(
+        self, event: anthropic.types.RawMessageStreamEvent
+    ) -> llm.ChatChunk | None:
+        if event.type == "message_start":
+            self._request_id = event.message.id
+            self._input_tokens = event.message.usage.input_tokens
+            self._output_tokens = event.message.usage.output_tokens
+        elif event.type == "message_delta":
+            self._output_tokens += event.usage.output_tokens
+        elif event.type == "content_block_start":
+            if event.content_block.type == "tool_use":
+                self._tool_call_id = event.content_block.id
+                self._fnc_name = event.content_block.name
+                self._fnc_raw_arguments = ""
+        elif event.type == "content_block_delta":
+            delta = event.delta
+            if delta.type == "text_delta":
+                text = delta.text
 
-        raise StopAsyncIteration
+                if self._fnc_ctx is not None:
+                    # anthropic may inject COC when using functions
+                    if text.startswith("<thinking>"):
+                        self._ignoring_cot = True
+                    elif self._ignoring_cot and "</thinking>" in text:
+                        text = text.split("</thinking>")[-1]
+                        self._ignoring_cot = False
+
+                if self._ignoring_cot:
+                    return None
+
+                return llm.ChatChunk(
+                    request_id=self._request_id,
+                    choices=[
+                        llm.Choice(
+                            delta=llm.ChoiceDelta(content=text, role="assistant")
+                        )
+                    ],
+                )
+            elif delta.type == "input_json_delta":
+                assert self._fnc_raw_arguments is not None
+                self._fnc_raw_arguments += delta.partial_json
+
+        elif event.type == "content_block_stop":
+            if self._tool_call_id is not None and self._fnc_ctx:
+                assert self._fnc_name is not None
+                assert self._fnc_raw_arguments is not None
+
+                fnc_info = _create_ai_function_info(
+                    self._fnc_ctx,
+                    self._tool_call_id,
+                    self._fnc_name,
+                    self._fnc_raw_arguments,
+                )
+                self._function_calls_info.append(fnc_info)
+
+                chat_chunk = llm.ChatChunk(
+                    request_id=self._request_id,
+                    choices=[
+                        llm.Choice(
+                            delta=llm.ChoiceDelta(
+                                role="assistant", tool_calls=[fnc_info]
+                            ),
+                        )
+                    ],
+                )
+                self._tool_call_id = self._fnc_raw_arguments = self._fnc_name = None
+                return chat_chunk
+
+        return None
 
 
 def _latest_system_message(chat_ctx: llm.ChatContext) -> str:
@@ -290,7 +326,7 @@ def _build_anthropic_message(
         a_content = a_msg["content"]
 
         # add content if provided
-        if isinstance(msg.content, str):
+        if isinstance(msg.content, str) and msg.content:
             a_msg["content"].append(
                 anthropic.types.TextBlock(
                     text=msg.content,
@@ -299,7 +335,7 @@ def _build_anthropic_message(
             )
         elif isinstance(msg.content, list):
             for cnt in msg.content:
-                if isinstance(cnt, str):
+                if isinstance(cnt, str) and cnt:
                     content: anthropic.types.TextBlock = anthropic.types.TextBlock(
                         text=cnt,
                         type="text",

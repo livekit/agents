@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import AsyncIterable
 
 from .. import utils
 from ..log import logger
@@ -17,27 +17,39 @@ class StreamAdapter(STT):
         self._vad = vad
         self._stt = stt
 
+        @self._stt.on("metrics_collected")
+        def _forward_metrics(*args, **kwargs):
+            self.emit("metrics_collected", *args, **kwargs)
+
     @property
     def wrapped_stt(self) -> STT:
         return self._stt
 
-    async def recognize(
+    async def _recognize_impl(
         self, buffer: utils.AudioBuffer, *, language: str | None = None
     ):
         return await self._stt.recognize(buffer=buffer, language=language)
 
     def stream(self, *, language: str | None = None) -> SpeechStream:
-        return StreamAdapterWrapper(self._vad, self._stt, language=language)
+        return StreamAdapterWrapper(
+            self, vad=self._vad, wrapped_stt=self._stt, language=language
+        )
 
 
 class StreamAdapterWrapper(SpeechStream):
-    def __init__(self, vad: VAD, stt: STT, *args: Any, **kwargs: Any) -> None:
-        super().__init__()
+    def __init__(
+        self, stt: STT, *, vad: VAD, wrapped_stt: STT, language: str | None
+    ) -> None:
+        super().__init__(stt)
         self._vad = vad
-        self._stt = stt
+        self._wrapped_stt = wrapped_stt
         self._vad_stream = self._vad.stream()
-        self._args = args
-        self._kwargs = kwargs
+        self._language = language
+
+    async def _metrics_monitor_task(
+        self, event_aiter: AsyncIterable[SpeechEvent]
+    ) -> None:
+        pass  # do nothing
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -66,8 +78,8 @@ class StreamAdapterWrapper(SpeechStream):
                     )
 
                     merged_frames = utils.merge_frames(event.frames)
-                    t_event = await self._stt.recognize(
-                        buffer=merged_frames, *self._args, **self._kwargs
+                    t_event = await self._wrapped_stt.recognize(
+                        buffer=merged_frames, language=self._language
                     )
 
                     if len(t_event.alternatives) == 0:

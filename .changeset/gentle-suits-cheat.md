@@ -2,4 +2,4 @@
 "livekit-plugins-openai": patch
 ---
 
-openai: fix low timeouts 
+Expose usage metrics for Realtime model
