@@ -69,7 +69,7 @@ async def _default_request_fnc(ctx: JobRequest) -> None:
 
 
 class LoadFunction(Protocol):
-    def __call__(self, *, job_cnt: int) -> float: ...
+    def __call__(self, worker: Worker) -> float: ...
 
 
 class WorkerType(Enum):
@@ -100,7 +100,7 @@ class _DefaultLoadCalc:
             return self._m_avg.get_avg()
 
     @classmethod
-    def get_load(cls, *, job_cnt: int) -> float:
+    def get_load(cls, worker: Worker) -> float:
         if cls._instance is None:
             cls._instance = _DefaultLoadCalc()
 
@@ -714,16 +714,11 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         def load_fnc():
             signature = inspect.signature(self._opts.load_fnc)
-            parameters = signature.parameters
-            accepts_kwargs = any(
-                param.kind == inspect.Parameter.VAR_KEYWORD
-                for param in parameters.values()
-            )
-            if not accepts_kwargs and "job_cnt" not in parameters:
+            parameters = list(signature.parameters.values())
+            if len(parameters) == 0:
                 return self._opts.load_fnc()  # type: ignore
 
-            job_cnt = len(self._proc_pool.get_running_jobs())
-            return self._opts.load_fnc(job_cnt=job_cnt)  # type: ignore
+            return self._opts.load_fnc(self)  # type: ignore
 
         current_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
 
