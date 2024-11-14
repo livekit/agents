@@ -1,13 +1,12 @@
 import dataclasses
-import io
 import os
-import wave
 from dataclasses import dataclass
 
 import fal_client
 from livekit.agents import stt
 from livekit.agents.stt import SpeechEventType, STTCapabilities
-from livekit.agents.utils import AudioBuffer, merge_frames
+from livekit.agents.utils import AudioBuffer
+from livekit.rtc import AudioFrame
 
 from .log import logger
 
@@ -28,19 +27,18 @@ class WizperSTT(stt.STT):
         task="transcribe",
         chunk_level="segment",
         version="3",
-        api_key=None,
     ):
         super().__init__(
             capabilities=STTCapabilities(streaming=False, interim_results=True)
         )
-        self._api_key = api_key or os.getenv("FAL_API_KEY")
+        self._api_key = os.getenv("FAL_KEY")
         self._opts = _STTOptions(
             language=language, task=task, chunk_level=chunk_level, version=version
         )
 
         if not self._api_key:
             raise ValueError(
-                "FAL AI API key is required. It should be set with env FAL_API_KEY"
+                "FAL AI API key is required. It should be set with env FAL_KEY"
             )
 
     def _sanitize_options(
@@ -58,25 +56,7 @@ class WizperSTT(stt.STT):
         config.version = version or config.version
         return config
 
-    def _convert_audio_to_wav(self, buffer: AudioBuffer) -> bytes:
-        """Convert AudioBuffer to WAV format bytes."""
-        io_buffer = io.BytesIO()
-        merged_buffer = merge_frames(buffer)
-
-        with wave.open(io_buffer, "wb") as wav:
-            wav.setnchannels(merged_buffer.num_channels)
-            wav.setsampwidth(2)  # 16-bit
-            wav.setframerate(merged_buffer.sample_rate)
-            wav.writeframes(bytes(merged_buffer.data))
-
-        return io_buffer.getvalue()
-
-    # def _create_data_uri(self, wav_bytes: bytes) -> str:
-    #     """Create a properly formatted data URI from WAV bytes."""
-    #     base64_audio = base64.b64encode(wav_bytes).decode('utf-8')
-    #     return f"data:audio/wav;base64,{base64_audio}"
-
-    async def recognize(
+    async def _recognize_impl(
         self,
         buffer: AudioBuffer,
         *,
@@ -85,7 +65,6 @@ class WizperSTT(stt.STT):
         chunk_level: str = None,
         version: str = None,
     ) -> stt.SpeechEvent:
-        logger.debug("Starting recognition process.")
         try:
             if buffer is None:
                 raise ValueError("AudioBuffer input is required")
@@ -94,20 +73,19 @@ class WizperSTT(stt.STT):
                 language=language, task=task, chunk_level=chunk_level, version=version
             )
 
-            wav_bytes = self._convert_audio_to_wav(buffer)
-            url = await fal_client.upload_async(wav_bytes, "audio/wav", "audio.wav")
-            logger.debug(f"Uploaded audio to FAL API with URL: {url}")
+            wav_bytes = AudioFrame.to_wav_bytes(buffer)
+            data_uri = fal_client.encode(wav_bytes, "audio/x-wav")
+
             handler = await fal_client.submit_async(
                 "fal-ai/wizper",
                 arguments={
-                    "audio_url": url,
+                    "audio_url": data_uri,
                     "task": config.task,
                     "language": config.language,
                     "chunk_level": config.chunk_level,
                     "version": config.version,
                 },
             )
-            logger.debug(f"Submitted request to FAL API with ID: {handler.request_id}")
 
             try:
                 result = await fal_client.result_async(
