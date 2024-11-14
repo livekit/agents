@@ -37,6 +37,7 @@ from .models import (
     CerebrasChatModels,
     ChatModels,
     DeepSeekChatModels,
+    GeminiModels,
     GroqChatModels,
     OctoChatModels,
     PerplexityChatModels,
@@ -151,6 +152,54 @@ class LLM(llm.LLM):
             raise ValueError(
                 "Cerebras API key is required, either as argument or set CEREBAAS_API_KEY environmental variable"
             )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+        )
+
+    @staticmethod
+    def with_vertexai(
+        *,
+        model: str | GeminiModels = "gemini-1.5-flash-002",
+        project_id: str,
+        location: str = "us-central1",
+        client: openai.AsyncClient | None = None,
+        user: str | None = None,
+        temperature: float | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of VertexAI LLM.
+
+        ``project_id`` must be set to your VERTEXAI PROJECT ID, either using the argument or by setting
+        the ``VERTEXAI_PROJECT_ID`` environmental variable.
+        """
+
+        project_id = project_id or os.environ.get("VERTEXAI_PROJECT_ID")
+        if project_id is None:
+            raise ValueError(
+                "VERTEXAI_PROJECT_ID is required, either set project_id argument or set VERTEXAI_PROJECT_ID environmental variable"
+            )
+        location = location or os.environ.get("VERTEXAI_LOCATION")
+        if location is None:
+            raise ValueError(
+                "VERTEXAI_LOCATION is required, either set location argument or set VERTEXAI_LOCATION environmental variable"
+            )
+
+        from google.auth import default
+        from google.auth.transport import requests
+
+        credentials, _ = default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        auth_request = requests.Request()
+        credentials.refresh(auth_request)
+        base_url = f"https://{location}-aiplatform.googleapis.com/v1beta1/projects/{project_id}/locations/{location}/endpoints/openapi"
+        api_key = credentials.token
 
         return LLM(
             model=model,
@@ -524,6 +573,7 @@ class LLMStream(llm.LLMStream):
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
+        self._tool_index: int | None = None
 
     async def _main_task(self) -> None:
         if not self._oai_stream:
@@ -577,10 +627,11 @@ class LLMStream(llm.LLMStream):
                     continue  # oai may add other tools in the future
 
                 call_chunk = None
-                if self._tool_call_id and tool.id and tool.id != self._tool_call_id:
+                if self._tool_call_id and tool.id and tool.index != self._tool_index:
                     call_chunk = self._try_build_function(id, choice)
 
                 if tool.function.name:
+                    self._tool_index = tool.index
                     self._tool_call_id = tool.id
                     self._fnc_name = tool.function.name
                     self._fnc_raw_arguments = tool.function.arguments or ""
