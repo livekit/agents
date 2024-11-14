@@ -68,10 +68,6 @@ async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
 
 
-class LoadFunction(Protocol):
-    def __call__(self, worker: Worker) -> float: ...
-
-
 class WorkerType(Enum):
     ROOM = agent.JobType.JT_ROOM
     PUBLISHER = agent.JobType.JT_PUBLISHER
@@ -150,7 +146,9 @@ class WorkerOptions:
     When left empty, all jobs are accepted."""
     prewarm_fnc: Callable[[JobProcess], Any] = _default_initialize_process_fnc
     """A function to perform any necessary initialization before the job starts."""
-    load_fnc: LoadFunction | Callable[[], float] = _DefaultLoadCalc.get_load
+    load_fnc: Callable[[Worker], float] | Callable[[], float] = (
+        _DefaultLoadCalc.get_load
+    )
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
     job_executor_type: JobExecutorType = _default_job_executor_type
     """Which executor to use to run jobs. (currently thread or process are supported)"""
