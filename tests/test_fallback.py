@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 
 from livekit.agents.utils.aio.channel import ChanEmpty
