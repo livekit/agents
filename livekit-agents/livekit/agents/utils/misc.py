@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import uuid
 from typing import TypeVar
+
 from typing_extensions import TypeGuard
 
 from ..types import NotGiven, NotGivenOr

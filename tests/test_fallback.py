@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
-from livekit.agents.utils.aio.channel import ChanEmpty
 import pytest
 from livekit import rtc
-
 from livekit.agents import APIConnectionError, utils
 from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter
+from livekit.agents.utils.aio.channel import ChanEmpty
 
 from .fake_tts import FakeTTS
 
