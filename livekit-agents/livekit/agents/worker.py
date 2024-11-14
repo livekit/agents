@@ -172,7 +172,7 @@ class WorkerOptions:
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
     agent_name: str = ""
-    """Agent name can be used when multiple agents are required to join the same room. The LiveKit SFU will dispatch jobs to unique agent_name workers independently."""
+    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API"""
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -541,6 +541,9 @@ class Worker(utils.EventEmitter[EventTypes]):
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
+        if not self._opts.api_secret:
+            raise RuntimeError("api_secret is required to reload jobs")
+
         for aj in jobs:
             logger.log(
                 DEV_LEVEL,
@@ -609,6 +612,10 @@ class Worker(utils.EventEmitter[EventTypes]):
             availability_resp.availability.participant_identity = args.identity
             availability_resp.availability.participant_name = args.name
             availability_resp.availability.participant_metadata = args.metadata
+            if args.attributes:
+                availability_resp.availability.participant_attributes.update(
+                    args.attributes
+                )
             await self._queue_msg(availability_resp)
 
             wait_assignment = asyncio.Future[agent.JobAssignment]()

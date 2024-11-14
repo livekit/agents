@@ -98,7 +98,8 @@ jobs:
                       ./livekit-plugins/livekit-plugins-elevenlabs \
                       ./livekit-plugins/livekit-plugins-cartesia \
                       ./livekit-plugins/livekit-plugins-azure \
-                      ./livekit-plugins/livekit-plugins-anthropic
+                      ./livekit-plugins/livekit-plugins-anthropic \
+                      ./livekit-plugins/livekit-plugins-assemblyai
 
       - name: Run tests
         shell: bash
@@ -114,6 +115,7 @@ jobs:
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }} # nit: doesn't have to be secret
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
         working-directory: tests
@@ -139,4 +141,3 @@ jobs:
               ;;
           esac
           pytest --asyncio-mode=auto --timeout=60 $test_files
-

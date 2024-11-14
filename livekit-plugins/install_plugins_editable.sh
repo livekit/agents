@@ -6,6 +6,7 @@ if [[ -z "$VIRTUAL_ENV" ]]; then
     exit 1
 fi
 
+pip install -e ./livekit-plugins-assemblyai --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-azure --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-cartesia --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-deepgram --config-settings editable_mode=strict
