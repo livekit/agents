@@ -118,6 +118,8 @@ class STT(stt.STT):
         profanity_filter: bool = False,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        base_url: str = BASE_URL,  
+        base_url_ws: str = BASE_URL_WS
     ) -> None:
         """
         Create a new instance of Deepgram STT.
@@ -131,6 +133,9 @@ class STT(stt.STT):
                 streaming=True, interim_results=interim_results
             )
         )
+
+        self._base_url = base_url
+        self._base_url_ws = base_url_ws
 
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
         if api_key is None:
@@ -549,5 +554,5 @@ def _to_deepgram_url(opts: dict, *, websocket: bool = False) -> str:
 
     # lowercase bools
     opts = {k: str(v).lower() if isinstance(v, bool) else v for k, v in opts.items()}
-    base_url = BASE_URL_WS if websocket else BASE_URL
+    base_url = self._base_url_ws if websocket else self._base_url
     return f"{base_url}?{urlencode(opts, doseq=True)}"
