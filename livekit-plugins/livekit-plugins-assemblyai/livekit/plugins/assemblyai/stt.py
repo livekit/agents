@@ -64,7 +64,7 @@ class STT(stt.STT):
         encoding: Optional[str] = "pcm_s16le",
         disable_partial_transcripts: bool = False,
         enable_extra_session_information: bool = False,
-        end_utterance_silence_threshold: Optional[int] = 100,
+        end_utterance_silence_threshold: Optional[int] = 500,
         http_session: Optional[aiohttp.ClientSession] = None,
         buffer_size_seconds: float = 0.05,
     ):
@@ -72,7 +72,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-            )
+            ),
         )
         api_key = api_key or os.environ.get("ASSEMBLYAI_API_KEY")
         if api_key is None:
@@ -141,7 +141,7 @@ class SpeechStream(stt.SpeechStream):
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
-        super().__init__(stt=stt_)
+        super().__init__(stt=stt_, sample_rate=opts.sample_rate)
 
         self._opts = opts
         self._num_channels = num_channels
@@ -157,11 +157,6 @@ class SpeechStream(stt.SpeechStream):
 
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: List[stt.SpeechEvent] = []
-
-    async def aclose(self) -> None:
-        await super().aclose()
-        if self._session:
-            await self._session.close()
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -232,7 +227,7 @@ class SpeechStream(stt.SpeechStream):
                     )
                 )
 
-            samples_per_buffer = self._opts.sample_rate // int(
+            samples_per_buffer = self._opts.sample_rate // round(
                 1 / self._opts.buffer_size_seconds
             )
             audio_bstream = utils.audio.AudioByteStream(
@@ -261,8 +256,10 @@ class SpeechStream(stt.SpeechStream):
             nonlocal closing_ws
             while True:
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=10)
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
                 except asyncio.TimeoutError:
+                    if closing_ws:
+                        break
                     continue
 
                 if msg.type in (
@@ -297,32 +294,6 @@ class SpeechStream(stt.SpeechStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
-
-    def _end_speech(self) -> None:
-        if len(self._final_events) == 0:
-            return
-
-        # combine all final transcripts since the start of the speech
-        sentence = " ".join(f.alternatives[0].text for f in self._final_events)
-        confidence = sum(f.alternatives[0].confidence for f in self._final_events)
-        confidence /= len(self._final_events)
-
-        end_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.END_OF_SPEECH,
-            alternatives=[
-                stt.SpeechData(
-                    language=ENGLISH,
-                    start_time=self._final_events[0].alternatives[0].start_time,
-                    end_time=self._final_events[-1].alternatives[0].end_time,
-                    confidence=confidence,
-                    text=sentence,
-                ),
-            ],
-        )
-        self._final_events = []
-        self._event_ch.send_nowait(end_event)
-        # break async iteration if speech has ended
-        self._event_ch.send_nowait(None)
 
     def _process_stream_event(self, data: dict, closing_ws: bool) -> None:
         # see this page:
