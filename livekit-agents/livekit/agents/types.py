@@ -1,12 +1,6 @@
-import asyncio
 
-from typing import Any, Awaitable, Callable, Literal, TypeVar, Union
 from dataclasses import dataclass
-
-from ._exceptions import APIConnectionError
-
-from .log import logger
-
+from typing import Literal, TypeVar, Union
 
 AgentState = Union[Literal["initializing", "listening", "thinking", "speaking"], str]
 ATTRIBUTE_AGENT_STATE = "lk.agent.state"

@@ -25,14 +25,14 @@ from typing import Any, List, Literal
 import aiohttp
 from livekit import rtc
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
+    APIConnectOptions,
     APIStatusError,
     APITimeoutError,
     tokenize,
     tts,
     utils,
-    APIConnectOptions,
-    DEFAULT_API_CONNECT_OPTIONS,
 )
 
 from .log import logger

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import time
 import uuid
+from typing import TypeGuard, TypeVar
 
-from ..types import NotGivenOr, NotGiven, APIConnectionError
-from ..log import logger
-
-from typing import TypeVar, TypeGuard, Callable, Awaitable, Any
+from ..types import NotGiven, NotGivenOr
 
 _T = TypeVar("_T")
 

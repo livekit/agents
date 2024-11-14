@@ -34,17 +34,17 @@ from ._exceptions import (
     APITimeoutError,
     AssignmentTimeoutError,
 )
-from .types import (
-    AgentState,
-    NotGiven,
-    NOT_GIVEN,
-    NotGivenOr,
-    APIConnectOptions,
-    DEFAULT_API_CONNECT_OPTIONS,
-    ATTRIBUTE_AGENT_STATE,
-)
 from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequest
 from .plugin import Plugin
+from .types import (
+    ATTRIBUTE_AGENT_STATE,
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    AgentState,
+    APIConnectOptions,
+    NotGiven,
+    NotGivenOr,
+)
 from .version import __version__
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
 

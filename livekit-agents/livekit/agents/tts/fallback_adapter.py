@@ -1,29 +1,24 @@
 import asyncio
-from typing import Literal, Union, AsyncGenerator
-from livekit import rtc
-import dataclasses
 import contextlib
+import dataclasses
+from dataclasses import dataclass
+from typing import AsyncGenerator, Literal
 
-from pydantic.type_adapter import P
+from livekit import rtc
 
+from .. import utils
+from .._exceptions import APIConnectionError, APIError
+from ..log import logger
+from ..utils import aio
 from .tts import (
+    DEFAULT_API_CONNECT_OPTIONS,
     TTS,
+    APIConnectOptions,
     ChunkedStream,
     SynthesizedAudio,
     SynthesizeStream,
     TTSCapabilities,
-    APIConnectOptions,
-    DEFAULT_API_CONNECT_OPTIONS,
 )
-
-from .. import utils
-from ..utils import aio
-from .._exceptions import APIConnectionError, APIError
-
-from ..log import logger
-
-from dataclasses import dataclass
-
 
 # don't retry when using the fallback adapter
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
@@ -116,7 +111,9 @@ class FallbackAdapter(
         )
 
     async def aclose(self) -> None:
-        pass
+        for tts_status in self._status:
+            if tts_status.recovering_task is not None:
+                await aio.gracefully_cancel(tts_status.recovering_task)
 
 
 class FallbackChunkedStream(ChunkedStream):
@@ -130,13 +127,11 @@ class FallbackChunkedStream(ChunkedStream):
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         assert isinstance(self._tts, FallbackAdapter)
 
-        # disable retry of a specific TTS when using the fallback adapter
-        req_conn_options = dataclasses.replace(self._conn_options, max_retry=0)
-
         try:
             audio_duration = 0.0
             async with tts.synthesize(
-                self._input_text, conn_options=req_conn_options
+                self._input_text,
+                conn_options=dataclasses.replace(self._conn_options, max_retry=0),
             ) as stream:
                 while True:
                     try:
@@ -194,6 +189,28 @@ class FallbackChunkedStream(ChunkedStream):
             )
             raise
 
+    def _try_recovery(self, tts: TTS) -> None:
+        assert isinstance(self._tts, FallbackAdapter)
+
+        tts_status = self._tts._status[self._tts._wrapped_tts.index(tts)]
+        if tts_status.recovering_task is None or tts_status.recovering_task.done():
+
+            async def _recover_tts_task(tts: TTS) -> None:
+                try:
+                    async for _ in self._try_synthesize(tts=tts, recovering=True):
+                        pass
+
+                    tts_status.available = True
+                    logger.info(f"tts.FallbackAdapter, {tts.label} recovered")
+                    self._tts.emit(
+                        "tts_availability_changed",
+                        AvailabilityChangedEvent(tts=tts, available=True),
+                    )
+                except Exception:
+                    return
+
+            tts_status.recovering_task = asyncio.create_task(_recover_tts_task(tts))
+
     async def _run(self) -> None:
         assert isinstance(self._tts, FallbackAdapter)
 
@@ -207,38 +224,37 @@ class FallbackChunkedStream(ChunkedStream):
                 audio_duration = 0.0
                 try:
                     request_id: str | None = None
+                    resampler = tts_status.resampler
                     async for synthesized_audio in self._try_synthesize(
                         tts=tts, recovering=False
                     ):
                         audio_duration += synthesized_audio.frame.duration
                         request_id = synthesized_audio.request_id
 
-                        if tts_status.resampler is not None:
-                            for resampled_frame in tts_status.resampler.push(
-                                synthesized_audio.frame
-                            ):
+                        if resampler is not None:
+                            for rf in resampler.push(synthesized_audio.frame):
                                 self._event_ch.send_nowait(
                                     SynthesizedAudio(
-                                        frame=resampled_frame,
+                                        frame=rf,
                                         request_id=synthesized_audio.request_id,
                                     )
                                 )
-                        else:
-                            self._event_ch.send_nowait(synthesized_audio)
 
-                    if tts_status.resampler is not None and request_id is not None:
-                        for resampled_frame in tts_status.resampler.flush():
+                            continue
+
+                        self._event_ch.send_nowait(synthesized_audio)
+
+                    if resampler is not None and request_id is not None:
+                        for rf in resampler.flush():
                             self._event_ch.send_nowait(
                                 SynthesizedAudio(
-                                    frame=resampled_frame,
+                                    frame=rf,
                                     request_id=request_id,
                                 )
                             )
 
                     return
-                except Exception:
-                    # exceptions already logged inside _try_synthesize
-
+                except Exception:  # exceptions already logged inside _try_synthesize
                     if tts_status.available:
                         tts_status.available = False
                         self._tts.emit(
@@ -252,28 +268,7 @@ class FallbackChunkedStream(ChunkedStream):
                         )
                         return
 
-            if tts_status.recovering_task is None:
-
-                async def _recover_tts_task(tts: TTS) -> None:
-                    try:
-                        async for _ in self._try_synthesize(tts=tts, recovering=True):
-                            pass
-
-                        tts_status.available = True
-                        logger.info(f"tts.FallbackAdapter, {tts.label} recovered")
-                        self._tts.emit(
-                            "tts_availability_changed",
-                            AvailabilityChangedEvent(tts=tts, available=True),
-                        )
-                    except Exception:
-                        return
-
-                tts_status.recovering_task = asyncio.create_task(_recover_tts_task(tts))
-
-                def _on_done(_: asyncio.Task) -> None:
-                    tts_status.recovering_task = None
-
-                tts_status.recovering_task.add_done_callback(_on_done)
+            self._try_recovery(tts)
 
         raise APIConnectionError(
             "all TTSs failed (%s)" % [tts.label for tts in self._tts._wrapped_tts]
@@ -289,8 +284,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
     ):
         super().__init__(tts=tts, conn_options=conn_options)
 
-        self._fallback_pending_texts: list[str] = []
-        self._fallback_text = ""
+        self._total_segments: list[list[str]] = []
+        self._fallback_pending_texts: list[list[str]] = []
+        self._fallback_text: list[str] = []
 
     async def _try_synthesize(
         self,
@@ -310,7 +306,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
             try:
                 async for data in input_ch:
-                    if isinstance(data, str) and data:
+                    if isinstance(data, str):
                         with contextlib.suppress(asyncio.InvalidStateError):
                             start_timeout_fut.set_result(None)
 
@@ -326,7 +322,6 @@ class FallbackSynthesizeStream(SynthesizeStream):
         input_task = asyncio.create_task(_input_task())
 
         try:
-            last_segment_id: str | None = None
             audio_duration = 0.0
 
             await start_timeout_fut
@@ -384,6 +379,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
         finally:
             await utils.aio.gracefully_cancel(input_task)
 
+    @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
         assert isinstance(self._tts, FallbackAdapter)
 
@@ -391,117 +387,149 @@ class FallbackSynthesizeStream(SynthesizeStream):
         if all_failed:
             logger.error("all TTSs are unavailable, retrying..")
 
-        async def _input_task():
+        new_input_ch: aio.Chan[str | SynthesizeStream._FlushSentinel] | None = None
+
+        async def _forward_input_task():
+            nonlocal new_input_ch
+
             async for data in self._input_ch:
+                if new_input_ch:
+                    new_input_ch.send_nowait(data)
+
                 if isinstance(data, str) and data:
-                    self._fallback_text += data
+                    self._fallback_text.append(data)
+
                 elif isinstance(data, self._FlushSentinel) and self._fallback_text:
+                    self._total_segments.append(self._fallback_text)
                     self._fallback_pending_texts.append(self._fallback_text)
-                    self._fallback_text = ""
+                    self._fallback_text = []
 
-        for i, tts in enumerate(self._tts._wrapped_tts):
-            tts_status = self._tts._status[i]
-            last_segment: str | None = None
-            if tts_status.available or all_failed:
-                audio_duration = 0.0
-                try:
-                    input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
-                    for text in self._fallback_pending_texts:
-                        # send the pending texts to the input channel
-                        # (segments that were not fully synthesized from the previous failed TTS)
-                        input_ch.send_nowait(text)
-                        input_ch.send_nowait(self._FlushSentinel())
+            if new_input_ch:
+                new_input_ch.close()
 
-                    input_ch.send_nowait(self._fallback_text)
-                    last_segment_id: str | None = None
+        input_task = asyncio.create_task(_forward_input_task())
 
-                    async for synthesized_audio in self._try_synthesize(
-                        tts=tts, input_ch=input_ch, recovering=False
-                    ):
-                        audio_duration += synthesized_audio.frame.duration
+        try:
+            for i, tts in enumerate(self._tts._wrapped_tts):
+                tts_status = self._tts._status[i]
+                if tts_status.available or all_failed:
+                    audio_duration = 0.0
+                    try:
+                        new_input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
 
-                        if tts_status.resampler is not None:
-                            for resampled_frame in tts_status.resampler.push(
-                                synthesized_audio.frame
-                            ):
-                                frame = dataclasses.replace(
-                                    synthesized_audio, frame=resampled_frame
-                                )
-                                self._event_ch.send_nowait(frame)
+                        for text in self._fallback_pending_texts:
+                            for t in text:
+                                new_input_ch.send_nowait(t)
 
-                            if synthesized_audio.is_final:
-                                for resampled_frame in tts_status.resampler.flush():
-                                    frame = dataclasses.replace(
-                                        synthesized_audio, frame=resampled_frame
+                            new_input_ch.send_nowait(self._FlushSentinel())
+
+                        for t in self._fallback_text:
+                            new_input_ch.send_nowait(t)
+
+                        if self._input_ch.closed:
+                            new_input_ch.close()
+
+                        last_segment_id: str | None = None
+                        resampler = tts_status.resampler
+
+                        async for synthesized_audio in self._try_synthesize(
+                            tts=tts, input_ch=new_input_ch, recovering=False
+                        ):
+                            audio_duration += synthesized_audio.frame.duration
+
+                            if resampler is not None:
+                                for resampled_frame in resampler.push(
+                                    synthesized_audio.frame
+                                ):
+                                    self._event_ch.send_nowait(
+                                        dataclasses.replace(
+                                            synthesized_audio, frame=resampled_frame
+                                        )
                                     )
-                                    self._event_ch.send_nowait(frame)
-                        else:
-                            self._event_ch.send_nowait(synthesized_audio)
+
+                                if synthesized_audio.is_final:
+                                    for resampled_frame in resampler.flush():
+                                        self._event_ch.send_nowait(
+                                            dataclasses.replace(
+                                                synthesized_audio, frame=resampled_frame
+                                            )
+                                        )
+                            else:
+                                self._event_ch.send_nowait(synthesized_audio)
+
+                            if (
+                                synthesized_audio.is_final
+                                or (
+                                    last_segment_id is not None
+                                    and synthesized_audio.segment_id != last_segment_id
+                                )
+                            ) and self._fallback_pending_texts:
+                                audio_duration = 0.0
+
+                            last_segment_id = synthesized_audio.segment_id
+
+                        return
+                    except (
+                        Exception
+                    ):  # exceptions already logged inside _try_synthesize
+                        if tts_status.available:
+                            tts_status.available = False
+                            self._tts.emit(
+                                "tts_availability_changed",
+                                AvailabilityChangedEvent(tts=tts, available=False),
+                            )
 
                         if (
-                            synthesized_audio.is_final
-                            or (
-                                last_segment_id is not None
-                                and synthesized_audio.segment_id != last_segment_id
-                            )
-                        ) and self._fallback_pending_texts:
-                            last_segment = self._fallback_pending_texts.pop(0)
-                            audio_duration = 0.0
-
-                        last_segment_id = synthesized_audio.segment_id
-
-                    return
-                except Exception:
-                    # exceptions already logged inside _try_synthesize
-                    if tts_status.available:
-                        tts_status.available = False
-                        self._tts.emit(
-                            "tts_availability_changed",
-                            AvailabilityChangedEvent(tts=tts, available=False),
-                        )
-
-                    if (
-                        audio_duration >= self._tts._no_fallback_after_audio_duration
-                        and self._fallback_pending_texts
-                    ):
-                        last_segment = self._fallback_pending_texts.pop(0)
-                        logger.warning(
-                            f"{tts.label} already synthesized {audio_duration}s of audio, ignoring the current segment for the tts fallback"
-                        )
-                        return
-
-            if tts_status.recovering_task is None and last_segment is not None:
-
-                async def _recover_tts_task(tts: TTS) -> None:
-                    assert last_segment is not None
-
-                    try:
-                        input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
-                        input_ch.send_nowait(last_segment)
-                        input_ch.send_nowait(self._FlushSentinel())
-                        input_ch.close()
-
-                        async for _ in self._try_synthesize(
-                            tts=tts, input_ch=input_ch, recovering=True
+                            audio_duration
+                            >= self._tts._no_fallback_after_audio_duration
+                            and self._fallback_pending_texts
                         ):
-                            pass
+                            logger.warning(
+                                f"{tts.label} already synthesized {audio_duration}s of audio, ignoring the current segment for the tts fallback"
+                            )
+                            return
 
-                        tts_status.available = True
-                        logger.info(f"tts.FallbackAdapter, {tts.label} recovered")
-                        self._tts.emit(
-                            "tts_availability_changed",
-                            AvailabilityChangedEvent(tts=tts, available=True),
-                        )
-                    except Exception:
-                        return
+                retry_segments: list[list[str]] = [self._fallback_text.copy()]
+                if self._total_segments:
+                    retry_segments.insert(0, self._total_segments[-1])
 
-                tts_status.recovering_task = asyncio.create_task(_recover_tts_task(tts))
+                self._try_recovery(tts, retry_segments)
 
-                def _on_done(_: asyncio.Task) -> None:
-                    tts_status.recovering_task = None
+            raise APIConnectionError(
+                "all TTSs failed (%s)" % [tts.label for tts in self._tts._wrapped_tts]
+            )
+        finally:
+            await utils.aio.gracefully_cancel(input_task)
 
-                tts_status.recovering_task.add_done_callback(_on_done)
+    def _try_recovery(self, tts: TTS, segments: list[list[str]]) -> None:
+        assert isinstance(self._tts, FallbackAdapter)
 
-        raise APIConnectionError(
-            "all TTSs failed (%s)" % [tts.label for tts in self._tts._wrapped_tts]
-        )
+        tts_status = self._tts._status[self._tts._wrapped_tts.index(tts)]
+        if tts_status.recovering_task is None or tts_status.recovering_task.done():
+
+            async def _recover_tts_task(tts: TTS) -> None:
+                try:
+                    input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
+                    for segment in segments:
+                        for t in segment:
+                            input_ch.send_nowait(t)
+
+                        input_ch.send_nowait(self._FlushSentinel())
+
+                    input_ch.close()
+
+                    async for _ in self._try_synthesize(
+                        tts=tts, input_ch=input_ch, recovering=True
+                    ):
+                        pass
+
+                    tts_status.available = True
+                    logger.info(f"tts.FallbackAdapter, {tts.label} recovered")
+                    self._tts.emit(
+                        "tts_availability_changed",
+                        AvailabilityChangedEvent(tts=tts, available=True),
+                    )
+                except Exception:
+                    return
+
+            tts_status.recovering_task = asyncio.create_task(_recover_tts_task(tts))

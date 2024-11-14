@@ -1,3 +1,9 @@
+from .fallback_adapter import (
+    AvailabilityChangedEvent,
+    FallbackAdapter,
+    FallbackChunkedStream,
+    FallbackSynthesizeStream,
+)
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .tts import (
     TTS,
@@ -5,12 +11,6 @@ from .tts import (
     SynthesizedAudio,
     SynthesizeStream,
     TTSCapabilities,
-)
-from .fallback_adapter import (
-    AvailabilityChangedEvent,
-    FallbackAdapter,
-    FallbackChunkedStream,
-    FallbackSynthesizeStream,
 )
 
 __all__ = [

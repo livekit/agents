@@ -18,13 +18,13 @@ from dataclasses import dataclass
 
 from livekit import rtc
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
+    APIConnectOptions,
     APIStatusError,
     APITimeoutError,
     tts,
     utils,
-    APIConnectOptions,
-    DEFAULT_API_CONNECT_OPTIONS,
 )
 
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError

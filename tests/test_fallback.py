@@ -1,18 +1,13 @@
-from typing import Tuple
-from livekit.agents.tts.fallback_adapter import AvailabilityChangedEvent
-from livekit.agents import utils
-from livekit.agents.utils.aio.channel import ChanEmpty
-import pytest
 import asyncio
 
-from dataclasses import dataclass
-
-from livekit.agents.tts import FallbackAdapter, AvailabilityChangedEvent, TTS
-from livekit.agents import APIError, APIConnectionError
+import pytest
 from livekit import rtc
+from livekit.agents import APIConnectionError, utils
+from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter
+from livekit.agents.tts.fallback_adapter import AvailabilityChangedEvent
+from livekit.agents.utils.aio.channel import ChanEmpty
 
-
-from .fake_tts import FakeTTS, FakeChunkedStream
+from .fake_tts import FakeTTS
 
 
 class FallbackAdapterTester(FallbackAdapter):
@@ -74,6 +69,29 @@ async def test_tts_fallback() -> None:
 
     assert not fallback_adapter.availability_changed_ch(fake2).recv_nowait().available
 
+    await fallback_adapter.aclose()
+
+
+async def test_tts_stream_fallback() -> None:
+    fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeTTS(fake_audio_duration=5.0)
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    async with fallback_adapter.stream() as stream:
+        stream.push_text("hello test")
+        stream.end_input()
+
+        async for _ in stream:
+            pass
+
+        fake1.stream_ch.recv_nowait()
+        fake2.stream_ch.recv_nowait()
+
+    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+
+    await fallback_adapter.aclose()
+
 
 async def test_tts_recover() -> None:
     fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
@@ -113,6 +131,8 @@ async def test_tts_recover() -> None:
     with pytest.raises(ChanEmpty):
         fallback_adapter.availability_changed_ch(fake2).recv_nowait()
 
+    await fallback_adapter.aclose()
+
 
 async def test_audio_resampled() -> None:
     fake1 = FakeTTS(
@@ -137,3 +157,5 @@ async def test_audio_resampled() -> None:
         combined_frame = rtc.combine_audio_frames(frames)
         assert combined_frame.duration == 5.0
         assert combined_frame.sample_rate == 48000
+
+    await fallback_adapter.aclose()

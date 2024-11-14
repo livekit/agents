@@ -1,14 +1,14 @@
 import asyncio
 
 from livekit import rtc
+from livekit.agents import NOT_GIVEN, NotGivenOr, utils
 from livekit.agents.tts import (
     TTS,
-    TTSCapabilities,
     ChunkedStream,
-    SynthesizeStream,
     SynthesizedAudio,
+    SynthesizeStream,
+    TTSCapabilities,
 )
-from livekit.agents import utils, NotGivenOr, NOT_GIVEN
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 
@@ -33,6 +33,7 @@ class FakeTTS(TTS):
         self._fake_exception = fake_exception
 
         self._synthesize_ch = utils.aio.Chan[FakeChunkedStream]()
+        self._stream_ch = utils.aio.Chan[FakeSynthesizeStream]()
 
     def update_options(
         self,
@@ -54,6 +55,10 @@ class FakeTTS(TTS):
     def synthesize_ch(self) -> utils.aio.ChanReceiver["FakeChunkedStream"]:
         return self._synthesize_ch
 
+    @property
+    def stream_ch(self) -> utils.aio.ChanReceiver["FakeSynthesizeStream"]:
+        return self._stream_ch
+
     def synthesize(
         self,
         text: str,
@@ -66,8 +71,13 @@ class FakeTTS(TTS):
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> "SynthesizeStream":
-        raise NotImplementedError("not implemented")
+    ) -> "FakeSynthesizeStream":
+        stream = FakeSynthesizeStream(
+            tts=self,
+            conn_options=conn_options,
+        )
+        self._stream_ch.send_nowait(stream)
+        return stream
 
 
 class FakeChunkedStream(ChunkedStream):
@@ -106,6 +116,56 @@ class FakeChunkedStream(ChunkedStream):
                     )
                 )
                 pushed_samples += num_samples
+
+        if self._tts._fake_exception is not None:
+            raise self._tts._fake_exception
+
+
+class FakeSynthesizeStream(SynthesizeStream):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+    ):
+        super().__init__(tts=tts, conn_options=conn_options)
+
+    async def _run(self) -> None:
+        assert isinstance(self._tts, FakeTTS)
+
+        request_id = utils.shortuuid("fake_tts_")
+        segment_id = utils.shortuuid("fake_segment_")
+
+        if self._tts._fake_connection_time is not None:
+            await asyncio.sleep(self._tts._fake_connection_time)
+
+        if self._tts._fake_audio_duration is not None:
+            pushed_samples = 0
+            max_samples = (
+                int(self._tts.sample_rate * self._tts._fake_audio_duration + 0.5)
+                * self._tts.num_channels
+            )
+            while pushed_samples < max_samples:
+                num_samples = min(
+                    self._tts.sample_rate // 100, max_samples - pushed_samples
+                )
+                self._event_ch.send_nowait(
+                    SynthesizedAudio(
+                        request_id=request_id,
+                        segment_id=segment_id,
+                        is_final=(pushed_samples + num_samples >= max_samples),
+                        frame=rtc.AudioFrame(
+                            data=b"\x00\x00" * num_samples,
+                            samples_per_channel=num_samples // self._tts.num_channels,
+                            sample_rate=self._tts.sample_rate,
+                            num_channels=self._tts.num_channels,
+                        ),
+                    )
+                )
+                pushed_samples += num_samples
+
+        async for _ in self._input_ch:
+            pass
 
         if self._tts._fake_exception is not None:
             raise self._tts._fake_exception

@@ -5,15 +5,15 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from types import TracebackType
-from typing import AsyncIterable, AsyncIterator, Literal, TypeVar, Union, Generic
+from typing import AsyncIterable, AsyncIterator, Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
-from ..metrics import TTSMetrics
-from ..utils import aio, audio, misc
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from .._exceptions import APIError, APIConnectionError
+from .._exceptions import APIConnectionError, APIError
 from ..log import logger
+from ..metrics import TTSMetrics
+from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..utils import aio
 
 
 @dataclass
@@ -167,7 +167,9 @@ class ChunkedStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
-                if i == self._conn_options.max_retry:
+                if self._conn_options.max_retry == 0:
+                    raise
+                elif i == self._conn_options.max_retry:
                     raise APIConnectionError(
                         f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",
                     ) from e
@@ -245,7 +247,9 @@ class SynthesizeStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
-                if i == self._conn_options.max_retry:
+                if self._conn_options.max_retry == 0:
+                    raise
+                elif i == self._conn_options.max_retry:
                     raise APIConnectionError(
                         f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",
                     ) from e

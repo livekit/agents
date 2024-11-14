@@ -19,18 +19,17 @@ from dataclasses import dataclass
 from typing import Literal
 
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
+    APIConnectOptions,
     APITimeoutError,
     tts,
     utils,
-    APIConnectOptions,
-    DEFAULT_API_CONNECT_OPTIONS,
 )
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 
 from .log import logger
-
 
 # only raw & pcm
 SUPPORTED_SAMPLE_RATE = {
