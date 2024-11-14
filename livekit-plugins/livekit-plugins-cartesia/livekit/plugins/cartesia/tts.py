@@ -346,7 +346,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(url, timeout=5), self._conn_options.timeout
+                self._session.ws_connect(url), self._conn_options.timeout
             )
 
             tasks = [
