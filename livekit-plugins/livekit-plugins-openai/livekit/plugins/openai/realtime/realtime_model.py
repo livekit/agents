@@ -69,9 +69,9 @@ class RealtimeResponse:
     """usage of the response"""
     done_fut: asyncio.Future[None]
     """future that will be set when the response is completed"""
-    created_timestamp: float
+    _created_timestamp: float
     """timestamp when the response was created"""
-    first_token_timestamp: float | None = None
+    _first_token_timestamp: float | None = None
     """timestamp when the first token was received"""
 
 
@@ -1218,7 +1218,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             output=[],
             usage=response.get("usage"),
             done_fut=done_fut,
-            created_timestamp=time.time(),
+            _created_timestamp=time.time(),
         )
         self._pending_responses[new_response.id] = new_response
         self.emit("response_created", new_response)
@@ -1273,7 +1273,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             content_type=content_type,
         )
         output.content.append(new_content)
-        response.first_token_timestamp = time.time()
+        response._first_token_timestamp = time.time()
         self.emit("response_content_added", new_content)
 
     def _handle_response_audio_delta(
@@ -1416,13 +1416,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         # calculate metrics
         ttft = -1.0
-        if response.first_token_timestamp is not None:
-            ttft = response.first_token_timestamp - response.created_timestamp
-        duration = time.time() - response.created_timestamp
+        if response._first_token_timestamp is not None:
+            ttft = response._first_token_timestamp - response._created_timestamp
+        duration = time.time() - response._created_timestamp
 
         usage = response.usage or {}  # type: ignore
         metrics = MultiModalLLMMetrics(
-            timestamp=response.created_timestamp,
+            timestamp=response._created_timestamp,
             request_id=response.id,
             ttft=ttft,
             duration=duration,
