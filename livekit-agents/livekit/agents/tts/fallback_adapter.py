@@ -43,14 +43,35 @@ class AvailabilityChangedEvent:
 class FallbackAdapter(
     TTS[Literal["tts_availability_changed"]],
 ):
+    """
+    Manages multiple TTS instances, providing a fallback mechanism to ensure continuous TTS service.
+    """
+
     def __init__(
         self,
         tts: list[TTS],
         *,
-        timeout: float = 10.0,
-        no_fallback_after_audio_duration: float = 3.0,
+        attempt_timeout: float = 10.0,
+        max_retry_per_tts: int = 1,  # only retry once by default
+        retry_interval: float = 0.5,
+        no_fallback_after_audio_duration: float | None = 3.0,
         sample_rate: int | None = None,
     ) -> None:
+        """
+        Initialize a FallbackAdapter that manages multiple TTS instances.
+
+        Args:
+            tts (list[TTS]): A list of TTS instances to use for fallback.
+            attempt_timeout (float, optional): Timeout for each synthesis attempt in seconds. Defaults to 10.0.
+            max_retry_per_tts (int, optional): Maximum number of retries per TTS instance. Defaults to 1.
+            no_fallback_after_audio_duration (float | None, optional): Disables fallback after this duration of audio is synthesized. Defaults to 3.0.
+            sample_rate (int | None, optional): Desired sample rate for the synthesized audio. If None, uses the maximum sample rate among the TTS instances.
+
+        Raises:
+            ValueError: If less than one TTS instance is provided.
+            ValueError: If TTS instances have different numbers of channels.
+        """
+
         if len(tts) < 1:
             raise ValueError("At least one TTS instance must be provided.")
 
@@ -71,7 +92,9 @@ class FallbackAdapter(
         )
 
         self._wrapped_tts = tts
-        self._timeout = timeout
+        self._attempt_timeout = attempt_timeout
+        self._max_retry_per_tts = max_retry_per_tts
+        self._retry_interval = retry_interval
         self._no_fallback_after_audio_duration = no_fallback_after_audio_duration
 
         self._status: list[_TTSStatus] = []
@@ -132,13 +155,20 @@ class FallbackChunkedStream(ChunkedStream):
             audio_duration = 0.0
             async with tts.synthesize(
                 self._input_text,
-                conn_options=dataclasses.replace(self._conn_options, max_retry=0),
+                conn_options=dataclasses.replace(
+                    self._conn_options,
+                    max_retry=self._tts._max_retry_per_tts,
+                    timeout=self._tts._attempt_timeout,
+                    retry_interval=self._tts._retry_interval,
+                ),
             ) as stream:
                 while True:
                     try:
                         audio = await asyncio.wait_for(
                             stream.__anext__(),
-                            self._tts._timeout if audio_duration == 0.0 else None,
+                            self._tts._attempt_timeout
+                            if audio_duration == 0.0
+                            else None,
                         )
 
                         audio_duration += audio.frame.duration
@@ -265,11 +295,15 @@ class FallbackChunkedStream(ChunkedStream):
                             AvailabilityChangedEvent(tts=tts, available=False),
                         )
 
-                    if audio_duration >= self._tts._no_fallback_after_audio_duration:
-                        logger.warning(
-                            f"{tts.label} already synthesized {audio_duration}s of audio, ignoring fallback"
-                        )
-                        return
+                    if self._tts._no_fallback_after_audio_duration is not None:
+                        if (
+                            audio_duration
+                            >= self._tts._no_fallback_after_audio_duration
+                        ):
+                            logger.warning(
+                                f"{tts.label} already synthesized {audio_duration}s of audio, ignoring fallback"
+                            )
+                            return
 
             self._try_recovery(tts)
 
@@ -303,43 +337,61 @@ class FallbackSynthesizeStream(SynthesizeStream):
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         assert isinstance(self._tts, FallbackAdapter)
 
-        req_conn_options = dataclasses.replace(self._conn_options, max_retry=0)
-        stream = tts.stream(conn_options=req_conn_options)
+        stream = tts.stream(
+            conn_options=dataclasses.replace(
+                self._conn_options,
+                max_retry=self._tts._max_retry_per_tts,
+                timeout=self._tts._attempt_timeout,
+                retry_interval=self._tts._retry_interval,
+            )
+        )
 
-        start_timeout_fut = asyncio.Future()
+        input_sent_fut = asyncio.Future()
 
         async def _input_task() -> None:
-            nonlocal start_timeout_fut
-
             try:
                 async for data in input_ch:
                     if isinstance(data, str):
-                        with contextlib.suppress(asyncio.InvalidStateError):
-                            start_timeout_fut.set_result(None)
+                        if data:
+                            with contextlib.suppress(asyncio.InvalidStateError):
+                                input_sent_fut.set_result(None)
 
                         stream.push_text(data)
                     elif isinstance(data, self._FlushSentinel):
                         stream.flush()
-
             finally:
-                stream.end_input()
+                with contextlib.suppress(RuntimeError):
+                    stream.end_input()
+
                 with contextlib.suppress(asyncio.InvalidStateError):
-                    start_timeout_fut.set_result(None)
+                    input_sent_fut.set_result(None)
 
         input_task = asyncio.create_task(_input_task())
 
         try:
             audio_duration = 0.0
 
-            await start_timeout_fut
-
             async with stream:
                 while True:
                     try:
-                        audio = await asyncio.wait_for(
-                            stream.__anext__(),
-                            self._tts._timeout if audio_duration == 0.0 else None,
-                        )
+                        if not input_sent_fut.done():
+                            next_audio_task = asyncio.ensure_future(stream.__anext__())
+                            done, _ = await asyncio.wait(
+                                [input_sent_fut, next_audio_task],
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+
+                            if next_audio_task in done:
+                                audio = next_audio_task.result()
+                            else:
+                                with contextlib.suppress(asyncio.CancelledError):
+                                    next_audio_task.cancel()
+                                    await next_audio_task
+                                continue
+                        else:
+                            audio = await asyncio.wait_for(
+                                stream.__anext__(), self._tts._attempt_timeout
+                            )
 
                         audio_duration += audio.frame.duration
                         yield audio
@@ -386,7 +438,6 @@ class FallbackSynthesizeStream(SynthesizeStream):
         finally:
             await utils.aio.gracefully_cancel(input_task)
 
-    @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
         assert isinstance(self._tts, FallbackAdapter)
 
@@ -488,15 +539,16 @@ class FallbackSynthesizeStream(SynthesizeStream):
                                 AvailabilityChangedEvent(tts=tts, available=False),
                             )
 
-                        if (
-                            audio_duration
-                            >= self._tts._no_fallback_after_audio_duration
-                            and self._fallback_pending_texts
-                        ):
-                            logger.warning(
-                                f"{tts.label} already synthesized {audio_duration}s of audio, ignoring the current segment for the tts fallback"
-                            )
-                            return
+                        if self._tts._no_fallback_after_audio_duration is not None:
+                            if (
+                                audio_duration
+                                >= self._tts._no_fallback_after_audio_duration
+                                and self._fallback_pending_texts
+                            ):
+                                logger.warning(
+                                    f"{tts.label} already synthesized {audio_duration}s of audio, ignoring the current segment for the tts fallback"
+                                )
+                                return
 
                 retry_segments: list[list[str]] = [self._fallback_text.copy()]
                 if self._total_segments:

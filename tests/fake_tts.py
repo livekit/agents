@@ -18,7 +18,7 @@ class FakeTTS(TTS):
         *,
         sample_rate: int = 24000,
         num_channels: int = 1,
-        fake_connection_time: float | None = None,
+        fake_timeout: float | None = None,
         fake_audio_duration: float | None = None,
         fake_exception: Exception | None = None,
     ) -> None:
@@ -28,7 +28,7 @@ class FakeTTS(TTS):
             num_channels=num_channels,
         )
 
-        self._fake_connection_time = fake_connection_time
+        self._fake_timeout = fake_timeout
         self._fake_audio_duration = fake_audio_duration
         self._fake_exception = fake_exception
 
@@ -38,12 +38,12 @@ class FakeTTS(TTS):
     def update_options(
         self,
         *,
-        fake_connection_time: NotGivenOr[float | None] = NOT_GIVEN,
+        fake_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         fake_audio_duration: NotGivenOr[float | None] = NOT_GIVEN,
         fake_exception: NotGivenOr[Exception | None] = NOT_GIVEN,
     ) -> None:
-        if utils.is_given(fake_connection_time):
-            self._fake_connection_time = fake_connection_time
+        if utils.is_given(fake_timeout):
+            self._fake_timeout = fake_timeout
 
         if utils.is_given(fake_audio_duration):
             self._fake_audio_duration = fake_audio_duration
@@ -91,8 +91,8 @@ class FakeChunkedStream(ChunkedStream):
 
         request_id = utils.shortuuid("fake_tts_")
 
-        if self._tts._fake_connection_time is not None:
-            await asyncio.sleep(self._tts._fake_connection_time)
+        if self._tts._fake_timeout is not None:
+            await asyncio.sleep(self._tts._fake_timeout)
 
         if self._tts._fake_audio_duration is not None:
             pushed_samples = 0
@@ -136,8 +136,8 @@ class FakeSynthesizeStream(SynthesizeStream):
         request_id = utils.shortuuid("fake_tts_")
         segment_id = utils.shortuuid("fake_segment_")
 
-        if self._tts._fake_connection_time is not None:
-            await asyncio.sleep(self._tts._fake_connection_time)
+        if self._tts._fake_timeout is not None:
+            await asyncio.sleep(self._tts._fake_timeout)
 
         if self._tts._fake_audio_duration is not None:
             pushed_samples = 0
