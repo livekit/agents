@@ -99,7 +99,7 @@ class PipelineVADMetrics(VADMetrics):
 
 
 @dataclass
-class MultiModalLLMError(Error):
+class MultimodalLLMError(Error):
     type: str | None
     reason: str | None = None
     code: str | None = None
@@ -107,7 +107,7 @@ class MultiModalLLMError(Error):
 
 
 @dataclass
-class MultiModalLLMMetrics(LLMMetrics):
+class MultimodalLLMMetrics(LLMMetrics):
     @dataclass
     class InputTokenDetails:
         cached_tokens: int
@@ -133,5 +133,5 @@ AgentMetrics = Union[
     PipelineLLMMetrics,
     PipelineTTSMetrics,
     PipelineVADMetrics,
-    MultiModalLLMMetrics,
+    MultimodalLLMMetrics,
 ]

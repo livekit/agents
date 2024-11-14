@@ -8,7 +8,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 from livekit.agents.llm import ChatMessage
-from livekit.agents.metrics import MultiModalLLMMetrics
+from livekit.agents.metrics import MultimodalLLMMetrics
 
 from .._constants import ATTRIBUTE_AGENT_STATE
 from .._types import AgentState
@@ -243,7 +243,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             self.emit("function_calls_finished", called_fncs)
 
         @self._session.on("metrics_collected")
-        def _metrics_collected(metrics: MultiModalLLMMetrics):
+        def _metrics_collected(metrics: MultimodalLLMMetrics):
             self.emit("metrics_collected", metrics)
 
     def _update_state(self, state: AgentState, delay: float = 0.0):

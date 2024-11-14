@@ -3,4 +3,4 @@
 "livekit-agents": patch
 ---
 
-expose multimodal agent metrics
+Expose multimodal agent metrics

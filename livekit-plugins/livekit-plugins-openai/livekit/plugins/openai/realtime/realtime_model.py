@@ -13,7 +13,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm import _oai_api
-from livekit.agents.metrics import MultiModalLLMError, MultiModalLLMMetrics
+from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
 from typing_extensions import TypedDict
 
 from . import api_proto, remote_items
@@ -1386,7 +1386,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             error = response.status_details.get("error", {})
             code: str | None = error.get("code")  # type: ignore
             message: str | None = error.get("message")  # type: ignore
-            metrics_error = MultiModalLLMError(
+            metrics_error = MultimodalLLMError(
                 type=response.status_details.get("type"),
                 code=code,
                 message=message,
@@ -1400,7 +1400,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             assert response.status_details is not None
             reason = response.status_details.get("reason")
 
-            metrics_error = MultiModalLLMError(
+            metrics_error = MultimodalLLMError(
                 type=response.status_details.get("type"),
                 reason=reason,  # type: ignore
             )
@@ -1421,7 +1421,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         duration = time.time() - response._created_timestamp
 
         usage = response.usage or {}  # type: ignore
-        metrics = MultiModalLLMMetrics(
+        metrics = MultimodalLLMMetrics(
             timestamp=response._created_timestamp,
             request_id=response.id,
             ttft=ttft,
@@ -1433,7 +1433,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             total_tokens=usage.get("total_tokens", 0),
             tokens_per_second=usage.get("output_tokens", 0) / duration,
             error=metrics_error,
-            input_token_details=MultiModalLLMMetrics.InputTokenDetails(
+            input_token_details=MultimodalLLMMetrics.InputTokenDetails(
                 cached_tokens=usage.get("input_token_details", {}).get(
                     "cached_tokens", 0
                 ),
@@ -1442,7 +1442,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     "audio_tokens", 0
                 ),
             ),
-            output_token_details=MultiModalLLMMetrics.OutputTokenDetails(
+            output_token_details=MultimodalLLMMetrics.OutputTokenDetails(
                 text_tokens=usage.get("output_token_details", {}).get("text_tokens", 0),
                 audio_tokens=usage.get("output_token_details", {}).get(
                     "audio_tokens", 0
