@@ -3,12 +3,13 @@ import os
 from dataclasses import dataclass
 
 import fal_client
-from livekit.agents import stt
+from livekit.agents import (
+    APIConnectionError,
+    stt,
+)
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.utils import AudioBuffer
 from livekit.rtc import AudioFrame
-
-from .log import logger
 
 
 @dataclass
@@ -75,8 +76,7 @@ class WizperSTT(stt.STT):
 
             wav_bytes = AudioFrame.to_wav_bytes(buffer)
             data_uri = fal_client.encode(wav_bytes, "audio/x-wav")
-
-            handler = await fal_client.submit_async(
+            response = await fal_client.run_async(
                 "fal-ai/wizper",
                 arguments={
                     "audio_url": data_uri,
@@ -86,20 +86,10 @@ class WizperSTT(stt.STT):
                     "version": config.version,
                 },
             )
-
-            try:
-                result = await fal_client.result_async(
-                    "fal-ai/wizper", handler.request_id
-                )
-                text = result.get("text", "")
-                return self._transcription_to_speech_event(text=text)
-            except fal_client.client.FalClientError as e:
-                logger.error(f"FAL AI API error: {e}")
-                return self._transcription_to_speech_event(text="")
-
-        except Exception as ex:
-            logger.error(f"Error during recognition: {ex}", exc_info=True)
-            return self._transcription_to_speech_event(text="")
+            text = response.get("text", "")
+            return self._transcription_to_speech_event(text=text)
+        except fal_client.client.FalClientError as e:
+            raise APIConnectionError() from e
 
     def _transcription_to_speech_event(
         self, event_type=SpeechEventType.FINAL_TRANSCRIPT, text=None
