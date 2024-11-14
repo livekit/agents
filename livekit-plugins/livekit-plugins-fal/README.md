@@ -10,4 +10,4 @@ pip install livekit-plugins-fal
 
 ## Pre-requisites
 
-You'll need an API key from FAL. It can be set as an environment variable: `FAL_API_KEY`
+You'll need an API key from FAL. It can be set as an environment variable: `FAL_KEY`
