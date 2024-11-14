@@ -5,7 +5,7 @@ import base64
 import os
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import AsyncIterable, Callable, Literal, Union, cast, overload
+from typing import AsyncIterable, Literal, Union, cast, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -485,13 +485,15 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         def create(
             self, message: llm.ChatMessage, previous_item_id: str | None = None
-        ) -> None:
+        ) -> asyncio.Future[bool]:
+            fut = asyncio.Future[bool]()
+
             message_content = message.content
             tool_call_id = message.tool_call_id
             if not tool_call_id and message_content is None:
                 # not a function call while the message content is None
-                return
-
+                fut.set_result(False)
+                return fut
             event: api_proto.ClientEvent.ConversationItemCreate | None = None
             if tool_call_id:
                 if message.role == "tool":
@@ -515,7 +517,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                             message,
                             extra=self._sess.logging_extra(),
                         )
-                        return
+                        fut.set_result(False)
+                        return fut
                     if len(message.tool_calls) > 1:
                         logger.warning(
                             "function call message has multiple tool calls, "
@@ -541,7 +544,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                         message,
                         extra=self._sess.logging_extra(),
                     )
-                    return
+                    fut.set_result(False)
+                    return fut
                 if not isinstance(message_content, list):
                     message_content = [message_content]
 
@@ -630,13 +634,18 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     message,
                     extra=self._sess.logging_extra(),
                 )
-                return
+                fut.set_result(False)
+                return fut
 
+            self._sess._item_created_futs[message.id] = fut
             self._sess._queue_msg(event)
+            return fut
 
         def truncate(
             self, *, item_id: str, content_index: int, audio_end_ms: int
-        ) -> None:
+        ) -> asyncio.Future[bool]:
+            fut = asyncio.Future[bool]()
+            self._sess._item_truncated_futs[item_id] = fut
             self._sess._queue_msg(
                 {
                     "type": "conversation.item.truncate",
@@ -645,35 +654,18 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     "audio_end_ms": audio_end_ms,
                 }
             )
+            return fut
 
-        def delete(self, *, item_id: str) -> None:
+        def delete(self, *, item_id: str) -> asyncio.Future[bool]:
+            fut = asyncio.Future[bool]()
+            self._sess._item_deleted_futs[item_id] = fut
             self._sess._queue_msg(
                 {
                     "type": "conversation.item.delete",
                     "item_id": item_id,
                 }
             )
-
-        async def acreate(
-            self,
-            message: llm.ChatMessage,
-            previous_item_id: str | None = None,
-            _on_create_callback: Callable[[], None] | None = None,
-        ) -> None:
-            fut = asyncio.Future[None]()
-            self._sess._item_created_futs[message.id] = fut
-            self.create(message, previous_item_id)
-            if _on_create_callback:
-                _on_create_callback()
-            await fut
-            del self._sess._item_created_futs[message.id]
-
-        async def adelete(self, *, item_id: str) -> None:
-            fut = asyncio.Future[None]()
-            self._sess._item_deleted_futs[item_id] = fut
-            self.delete(item_id=item_id)
-            await fut
-            del self._sess._item_deleted_futs[item_id]
+            return fut
 
     class Conversation:
         def __init__(self, sess: RealtimeSession) -> None:
@@ -710,8 +702,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._remote_converstation_items = remote_items._RemoteConversationItems()
 
         # wait for the item to be created or deleted
-        self._item_created_futs: dict[str, asyncio.Future[None]] = {}
-        self._item_deleted_futs: dict[str, asyncio.Future[None]] = {}
+        self._item_created_futs: dict[str, asyncio.Future[bool]] = {}
+        self._item_deleted_futs: dict[str, asyncio.Future[bool]] = {}
+        self._item_truncated_futs: dict[str, asyncio.Future[bool]] = {}
 
         self._fnc_ctx = fnc_ctx
         self._loop = loop
@@ -891,27 +884,15 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             )
             logger.debug("added empty audio message to the chat context")
 
-        _futs = []
-        for msg in changes.to_delete:
-            fut = asyncio.Future[None]()
-            self._item_deleted_futs[msg.id] = fut
-            self.conversation.item.delete(item_id=msg.id)
-            _futs.append(fut)
-
-        for prev, msg in changes.to_add:
-            fut = asyncio.Future[None]()
-            self._item_created_futs[msg.id] = fut
+        _futs = [
+            self.conversation.item.delete(item_id=msg.id) for msg in changes.to_delete
+        ] + [
             self.conversation.item.create(msg, prev.id if prev else None)
-            _futs.append(fut)
+            for prev, msg in changes.to_add
+        ]
 
         # wait for all the futures to complete
         await asyncio.gather(*_futs)
-
-        # clean up the futures
-        for msg in changes.to_delete:
-            del self._item_deleted_futs[msg.id]
-        for _, msg in changes.to_add:
-            del self._item_created_futs[msg.id]
 
     def _update_converstation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
@@ -1028,6 +1009,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                         self._handle_conversation_item_created(data)
                     elif event == "conversation.item.deleted":
                         self._handle_conversation_item_deleted(data)
+                    elif event == "conversation.item.truncated":
+                        self._handle_conversation_item_truncated(data)
                     elif event == "response.created":
                         self._handle_response_created(data)
                     elif event == "response.output_item.added":
@@ -1184,7 +1167,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         # Insert into conversation items
         self._remote_converstation_items.insert_after(previous_item_id, message)
         if item_id in self._item_created_futs:
-            self._item_created_futs[item_id].set_result(None)
+            self._item_created_futs[item_id].set_result(True)
+            del self._item_created_futs[item_id]
         logger.debug("conversation item created", extra=item_created)
 
     def _handle_conversation_item_deleted(
@@ -1194,8 +1178,17 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         item_id = item_deleted["item_id"]
         self._remote_converstation_items.delete(item_id)
         if item_id in self._item_deleted_futs:
-            self._item_deleted_futs[item_id].set_result(None)
+            self._item_deleted_futs[item_id].set_result(True)
+            del self._item_deleted_futs[item_id]
         logger.debug("conversation item deleted", extra=item_deleted)
+
+    def _handle_conversation_item_truncated(
+        self, item_truncated: api_proto.ServerEvent.ConversationItemTruncated
+    ):
+        item_id = item_truncated["item_id"]
+        if item_id in self._item_truncated_futs:
+            self._item_truncated_futs[item_id].set_result(True)
+            del self._item_truncated_futs[item_id]
 
     def _handle_response_created(
         self, response_created: api_proto.ServerEvent.ResponseCreated
@@ -1414,11 +1407,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
 
         if called_fnc.result is not None:
-            await self.conversation.item.acreate(
+            create_fut = self.conversation.item.create(
                 tool_call,
                 previous_item_id=item_id,
-                _on_create_callback=self.response.create,
             )
+            self.response.create()
+            await create_fut
 
         # update the message with the tool call result
         msg = self._remote_converstation_items.get(tool_call.id)
