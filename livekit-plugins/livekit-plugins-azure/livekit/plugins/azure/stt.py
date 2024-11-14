@@ -30,9 +30,9 @@ class STTOptions:
     speech_region: str
     sample_rate: int
     num_channels: int
-    segmentation_silence_timeout_ms: int
-    segmentation_max_time_ms: int
-    segmentation_strategy: str
+    segmentation_silence_timeout_ms: int | None
+    segmentation_max_time_ms: int | None
+    segmentation_strategy: str | None
     languages: list[
         str
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
@@ -46,9 +46,9 @@ class STT(stt.STT):
         speech_region: str | None = None,
         sample_rate: int = 16000,
         num_channels: int = 1,
-        segmentation_silence_timeout_ms: int = 500,
-        segmentation_max_time_ms: int = 60000,
-        segmentation_strategy: str = "Default",
+        segmentation_silence_timeout_ms: int | None = None,
+        segmentation_max_time_ms: int | None = None,
+        segmentation_strategy: str | None = None,
         languages: list[str] = [],  # when empty, auto-detect the language
     ):
         """
@@ -192,11 +192,21 @@ def _create_speech_recognizer(
         subscription=config.speech_key, region=config.speech_region
     )
 
-    speech_config.set_properties({
-        speechsdk.enums.PropertyId.Speech_SegmentationSilenceTimeoutMs: str(config.segmentation_silence_timeout_ms),
-        speechsdk.enums.PropertyId.Speech_SegmentationMaximumTimeMs: str(config.segmentation_max_time_ms),
-        speechsdk.enums.PropertyId.Speech_SegmentationStrategy: str(config.segmentation_strategy),
-    })
+    if config.segmentation_silence_timeout_ms:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.Speech_SegmentationSilenceTimeoutMs,
+            str(config.segmentation_silence_timeout_ms),
+        )
+    if config.segmentation_max_time_ms:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.Speech_SegmentationMaximumTimeMs,
+            str(config.segmentation_max_time_ms),
+        )
+    if config.segmentation_strategy:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.Speech_SegmentationStrategy,
+            str(config.segmentation_strategy),
+        )
 
     auto_detect_source_language_config = None
     if config.languages:
