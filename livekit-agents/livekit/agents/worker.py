@@ -32,7 +32,6 @@ from typing import (
     Callable,
     Generic,
     Literal,
-    Protocol,
     TypeVar,
 )
 from urllib.parse import urljoin, urlparse
