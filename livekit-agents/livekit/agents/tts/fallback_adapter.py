@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import dataclasses
+import time
 from dataclasses import dataclass
 from typing import AsyncGenerator, Literal
 
@@ -214,6 +215,8 @@ class FallbackChunkedStream(ChunkedStream):
     async def _run(self) -> None:
         assert isinstance(self._tts, FallbackAdapter)
 
+        start_time = time.time()
+
         all_failed = all(not tts_status.available for tts_status in self._tts._status)
         if all_failed:
             logger.error("all TTSs are unavailable, retrying..")
@@ -271,7 +274,11 @@ class FallbackChunkedStream(ChunkedStream):
             self._try_recovery(tts)
 
         raise APIConnectionError(
-            "all TTSs failed (%s)" % [tts.label for tts in self._tts._wrapped_tts]
+            "all TTSs failed (%s) after %s seconds"
+            % (
+                [tts.label for tts in self._tts._wrapped_tts],
+                time.time() - start_time,
+            )
         )
 
 
@@ -382,6 +389,8 @@ class FallbackSynthesizeStream(SynthesizeStream):
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
         assert isinstance(self._tts, FallbackAdapter)
+
+        start_time = time.time()
 
         all_failed = all(not tts_status.available for tts_status in self._tts._status)
         if all_failed:
@@ -496,7 +505,11 @@ class FallbackSynthesizeStream(SynthesizeStream):
                 self._try_recovery(tts, retry_segments)
 
             raise APIConnectionError(
-                "all TTSs failed (%s)" % [tts.label for tts in self._tts._wrapped_tts]
+                "all TTSs failed (%s) after %s seconds"
+                % (
+                    [tts.label for tts in self._tts._wrapped_tts],
+                    time.time() - start_time,
+                )
             )
         finally:
             await utils.aio.gracefully_cancel(input_task)

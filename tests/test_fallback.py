@@ -4,7 +4,6 @@ import pytest
 from livekit import rtc
 from livekit.agents import APIConnectionError, utils
 from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter
-from livekit.agents.tts.fallback_adapter import AvailabilityChangedEvent
 from livekit.agents.utils.aio.channel import ChanEmpty
 
 from .fake_tts import FakeTTS
