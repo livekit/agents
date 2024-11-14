@@ -25,11 +25,11 @@ class SpeechHandle:
         # is_reply is True when the speech is answering to a user question
         self._is_reply = is_reply
         self._user_question = user_question
-        self._user_commited = False
+        self._user_committed = False
 
         self._init_fut: asyncio.Future[None] = asyncio.Future()
         self._initialized = False
-        self._speech_commited = False  # speech committed (interrupted or not)
+        self._speech_committed = False  # speech committed (interrupted or not)
 
         # source and synthesis_handle are None until the speech is initialized
         self._source: str | LLMStream | AsyncIterable[str] | None = None
@@ -81,19 +81,19 @@ class SpeechHandle:
         self._initialized = True
         self._init_fut.set_result(None)
 
-    def mark_user_commited(self) -> None:
-        self._user_commited = True
+    def mark_user_committed(self) -> None:
+        self._user_committed = True
 
-    def mark_speech_commited(self) -> None:
-        self._speech_commited = True
-
-    @property
-    def user_commited(self) -> bool:
-        return self._user_commited
+    def mark_speech_committed(self) -> None:
+        self._speech_committed = True
 
     @property
-    def speech_commited(self) -> bool:
-        return self._speech_commited
+    def user_committed(self) -> bool:
+        return self._user_committed
+
+    @property
+    def speech_committed(self) -> bool:
+        return self._speech_committed
 
     @property
     def id(self) -> str:
