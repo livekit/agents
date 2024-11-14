@@ -37,12 +37,12 @@ from .models import (
     CerebrasChatModels,
     ChatModels,
     DeepSeekChatModels,
-    GeminiModels,
     GroqChatModels,
     OctoChatModels,
     PerplexityChatModels,
     TelnyxChatModels,
     TogetherChatModels,
+    VertexModels,
     XAIChatModels,
 )
 from .utils import AsyncAzureADTokenProvider, build_oai_message
@@ -165,7 +165,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_vertexai(
         *,
-        model: str | GeminiModels = "gemini-1.5-flash-002",
+        model: str | VertexModels = "google/gemini-1.5-pro",
         project_id: str | None = None,
         location: str | None = "us-central1",
         client: openai.AsyncClient | None = None,
@@ -189,27 +189,53 @@ class LLM(llm.LLM):
             raise ValueError(
                 "VERTEXAI_LOCATION is required, either set location argument or set VERTEXAI_LOCATION environmental variable"
             )
+        _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        if _gac is None:
+            raise ValueError(
+                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file."
+            )
 
         try:
-            from google.auth import default
-            from google.auth.transport import requests
+            import google.auth
+            import google.auth.transport.requests
         except ImportError:
             raise ImportError(
                 "Google Auth dependencies not found. Please install with: `pip install livekit-plugins-openai[vertex]`"
             )
 
-        credentials, _ = default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        class OpenAICredentialsRefresher:
+            def __init__(self, **kwargs: Any) -> None:
+                self.client = openai.AsyncClient(**kwargs, api_key="DUMMY")
+                self.creds, self.project = google.auth.default(
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+
+            def __getattr__(self, name: str) -> Any:
+                if not self.creds.valid:
+                    auth_req = google.auth.transport.requests.Request()
+                    self.creds.refresh(auth_req)
+
+                    if not self.creds.valid:
+                        raise RuntimeError("Unable to refresh auth")
+
+                    self.client.api_key = self.creds.token
+                return getattr(self.client, name)
+
+        client = OpenAICredentialsRefresher(
+            base_url=f"https://{location}-aiplatform.googleapis.com/v1beta1/projects/{project_id}/locations/{location}/endpoints/openapi",
+            http_client=httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=50,
+                    max_keepalive_connections=50,
+                    keepalive_expiry=120,
+                ),
+            ),
         )
-        auth_request = requests.Request()
-        credentials.refresh(auth_request)
-        base_url = f"https://{location}-aiplatform.googleapis.com/v1beta1/projects/{project_id}/locations/{location}/endpoints/openapi"
-        api_key = credentials.token
 
         return LLM(
             model=model,
-            api_key=api_key,
-            base_url=base_url,
             client=client,
             user=user,
             temperature=temperature,
