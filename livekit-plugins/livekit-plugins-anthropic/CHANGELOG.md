@@ -1,5 +1,11 @@
 # livekit-plugins-anthropic
 
+## 0.2.4
+
+### Patch Changes
+
+- anthropic tool fix - [#1051](https://github.com/livekit/agents/pull/1051) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.2.3
 
 ### Patch Changes
