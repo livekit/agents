@@ -348,7 +348,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
             )
         )
 
-        input_sent_fut = asyncio.Future[None]()
+        input_sent_fut = asyncio.Future() # type: ignore
 
         async def _input_task() -> None:
             try:
