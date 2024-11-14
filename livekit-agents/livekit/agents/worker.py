@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import inspect
 import math
 import multiprocessing as mp
 import os
@@ -25,7 +26,14 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import reduce
-from typing import Any, Awaitable, Callable, Generic, Literal, TypeVar
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Generic,
+    Literal,
+    TypeVar,
+)
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -87,7 +95,7 @@ class _DefaultLoadCalc:
             return self._m_avg.get_avg()
 
     @classmethod
-    def get_load(cls) -> float:
+    def get_load(cls, worker: Worker) -> float:
         if cls._instance is None:
             cls._instance = _DefaultLoadCalc()
 
@@ -137,7 +145,9 @@ class WorkerOptions:
     When left empty, all jobs are accepted."""
     prewarm_fnc: Callable[[JobProcess], Any] = _default_initialize_process_fnc
     """A function to perform any necessary initialization before the job starts."""
-    load_fnc: Callable[[], float] = _DefaultLoadCalc.get_load
+    load_fnc: Callable[[Worker], float] | Callable[[], float] = (
+        _DefaultLoadCalc.get_load
+    )
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
     job_executor_type: JobExecutorType = _default_job_executor_type
     """Which executor to use to run jobs. (currently thread or process are supported)"""
@@ -690,15 +700,24 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._update_job_status_sync(proc)
 
     async def _update_worker_status(self):
+        job_cnt = len(self.active_jobs)
         if self._draining:
-            update = agent.UpdateWorkerStatus(status=agent.WorkerStatus.WS_FULL)
+            update = agent.UpdateWorkerStatus(
+                status=agent.WorkerStatus.WS_FULL, job_count=job_cnt
+            )
             msg = agent.WorkerMessage(update_worker=update)
             await self._queue_msg(msg)
             return
 
-        current_load = await asyncio.get_event_loop().run_in_executor(
-            None, self._opts.load_fnc
-        )
+        def load_fnc():
+            signature = inspect.signature(self._opts.load_fnc)
+            parameters = list(signature.parameters.values())
+            if len(parameters) == 0:
+                return self._opts.load_fnc()  # type: ignore
+
+            return self._opts.load_fnc(self)  # type: ignore
+
+        current_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
 
         is_full = current_load >= _WorkerEnvOption.getvalue(
             self._opts.load_threshold, self._devmode
@@ -711,7 +730,9 @@ class Worker(utils.EventEmitter[EventTypes]):
             else agent.WorkerStatus.WS_FULL
         )
 
-        update = agent.UpdateWorkerStatus(load=current_load, status=status)
+        update = agent.UpdateWorkerStatus(
+            load=current_load, status=status, job_count=job_cnt
+        )
 
         # only log if status has changed
         if self._previous_status != status and not self._draining:
@@ -743,7 +764,6 @@ class Worker(utils.EventEmitter[EventTypes]):
     async def _update_job_status(self, proc: ipc.job_executor.JobExecutor) -> None:
         job_info = proc.running_job
         if not job_info:
-            logger.error("job_info not found for process")
             return
         status: agent.JobStatus = agent.JobStatus.JS_RUNNING
         if proc.run_status == ipc.job_executor.RunStatus.FINISHED_FAILED:
