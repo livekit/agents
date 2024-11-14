@@ -166,8 +166,8 @@ class LLM(llm.LLM):
     def with_vertexai(
         *,
         model: str | GeminiModels = "gemini-1.5-flash-002",
-        project_id: str,
-        location: str = "us-central1",
+        project_id: str | None = None,
+        location: str | None = "us-central1",
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
@@ -541,6 +541,7 @@ class LLM(llm.LLM):
             temperature = self._opts.temperature
 
         messages = _build_oai_context(chat_ctx, id(self))
+        logger.info(f"messages: {messages}")
 
         cmp = self._client.chat.completions.create(
             messages=messages,
