@@ -377,7 +377,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                 while True:
                     try:
                         if not input_sent_fut.done():
-                            next_audio_task = asyncio.ensure_future(stream.__anext__())
+                            next_audio_task = asyncio.create_task(stream.__anext__())
                             done, _ = await asyncio.wait(
                                 [input_sent_fut, next_audio_task],
                                 return_when=asyncio.FIRST_COMPLETED,
