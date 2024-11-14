@@ -701,7 +701,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._update_job_status_sync(proc)
 
     async def _update_worker_status(self):
-        job_cnt = len(self._proc_pool.get_running_jobs())
+        job_cnt = len(self._proc_pool.active_jobs())
         if self._draining:
             update = agent.UpdateWorkerStatus(
                 status=agent.WorkerStatus.WS_FULL, job_count=job_cnt
