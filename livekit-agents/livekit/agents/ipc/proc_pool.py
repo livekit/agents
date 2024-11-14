@@ -66,9 +66,6 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             None,
         )
 
-    def active_jobs(self) -> list[RunningJobInfo]:
-        return [x.running_job for x in self._executors if x.running_job]
-
     def start(self) -> None:
         if self._started:
             return
