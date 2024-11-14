@@ -477,7 +477,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
                 if tts_status.available or all_failed:
                     audio_duration = 0.0
                     try:
-                        new_input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+                        new_input_ch = aio.Chan[
+                            Union[str, SynthesizeStream._FlushSentinel]
+                        ]()
 
                         for text in self._fallback_pending_texts:
                             for t in text:
