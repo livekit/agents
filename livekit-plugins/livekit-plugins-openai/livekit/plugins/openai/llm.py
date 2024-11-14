@@ -175,8 +175,8 @@ class LLM(llm.LLM):
         """
         Create a new instance of VertexAI LLM.
 
-        ``project_id`` must be set to your VERTEXAI PROJECT ID, either using the argument or by setting
-        the ``VERTEXAI_PROJECT_ID`` environmental variable.
+        `project_id` must be set to your VERTEXAI PROJECT ID, either using the argument or by setting
+        the `VERTEXAI_PROJECT_ID` environmental variable.
         """
 
         project_id = project_id or os.environ.get("VERTEXAI_PROJECT_ID")
@@ -190,8 +190,13 @@ class LLM(llm.LLM):
                 "VERTEXAI_LOCATION is required, either set location argument or set VERTEXAI_LOCATION environmental variable"
             )
 
-        from google.auth import default
-        from google.auth.transport import requests
+        try:
+            from google.auth import default
+            from google.auth.transport import requests
+        except ImportError:
+            raise ImportError(
+                "Google Auth dependencies not found. Please install with: `pip install livekit-plugins-openai[vertex]`"
+            )
 
         credentials, _ = default(
             scopes=["https://www.googleapis.com/auth/cloud-platform"]

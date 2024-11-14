@@ -50,8 +50,10 @@ setuptools.setup(
     install_requires=[
         "livekit-agents[codecs, images]>=0.11",
         "openai>=1.50",
-        "google-auth",
     ],
+    extras_require={
+        "vertex": ["google-auth"],
+    },
     package_data={"livekit.plugins.openai": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
