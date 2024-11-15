@@ -1,6 +1,7 @@
 import dataclasses
 import os
 from dataclasses import dataclass
+from typing import Optional, Union
 
 import fal_client
 from livekit.agents import (
@@ -26,10 +27,10 @@ class WizperSTT(stt.STT):
     def __init__(
         self,
         *,
-        language: WhizperLanguages | None = "en",
-        task: WhizperTasks | None = "transcribe",
-        chunk_level: WhizperChunkLevels | None = "segment",
-        version: WhizperVersion | None = "3",
+        language: Union[WhizperLanguages, None] = "en",
+        task: Union[WhizperTasks, None] = "transcribe",
+        chunk_level: Union[WhizperChunkLevels, None] = "segment",
+        version: Union[WhizperVersion, None] = "3",
     ):
         super().__init__(
             capabilities=STTCapabilities(streaming=False, interim_results=True)
@@ -49,10 +50,10 @@ class WizperSTT(stt.STT):
     def _sanitize_options(
         self,
         *,
-        language: WhizperLanguages | None = None,
-        task: WhizperTasks | None = None,
-        chunk_level: WhizperChunkLevels | None = None,
-        version: WhizperVersion | None = None,
+        language: Optional[WhizperLanguages] = None,
+        task: Optional[WhizperTasks] = None,
+        chunk_level: Optional[WhizperChunkLevels] = None,
+        version: Optional[WhizperVersion] = None,
     ) -> _STTOptions:
         config = dataclasses.replace(self._opts)
         config.language = language or config.language
@@ -65,10 +66,10 @@ class WizperSTT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: WhizperLanguages | None = None,
-        task: WhizperTasks | None = None,
-        chunk_level: WhizperChunkLevels | None = None,
-        version: WhizperVersion | None = None,
+        language: Optional[WhizperLanguages] = None,
+        task: Optional[WhizperTasks] = None,
+        chunk_level: Optional[WhizperChunkLevels] = None,
+        version: Optional[WhizperVersion] = None,
     ) -> stt.SpeechEvent:
         try:
             if buffer is None:
