@@ -11,7 +11,7 @@ from livekit.agents import (
     stt,
     transcription,
 )
-from livekit.plugins import openai, silero
+from livekit.plugins import deepgram, silero
 
 load_dotenv()
 
@@ -34,8 +34,10 @@ async def _forward_transcription(
 
 async def entrypoint(ctx: JobContext):
     logger.info(f"starting transcriber (speech to text) example, room: {ctx.room.name}")
-    # this example uses OpenAI Whisper, but you can use assemblyai,deepgram, google, azure, etc.
-    stt_impl = openai.STT()
+    # this example uses OpenAI Whisper, but you can use assemblyai, deepgram, google, azure, etc.
+    stt_impl = deepgram.STT(
+        energy_filter=True,
+    )
 
     if not stt_impl.capabilities.streaming:
         # wrap with a stream adapter to use streaming semantics
