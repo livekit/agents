@@ -118,8 +118,8 @@ class STT(stt.STT):
         profanity_filter: bool = False,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        base_url: str = BASE_URL,  
-        base_url_ws: str = BASE_URL_WS
+        base_url: str = BASE_URL,
+        base_url_ws: str = BASE_URL_WS,
     ) -> None:
         """
         Create a new instance of Deepgram STT.
@@ -195,7 +195,7 @@ class STT(stt.STT):
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
             "base_url": self._base_url,
-            "base_url_ws": self._base_url_ws
+            "base_url_ws": self._base_url_ws,
         }
         if config.language:
             recognize_config["language"] = config.language
@@ -311,7 +311,7 @@ class SpeechStream(stt.SpeechStream):
                     "keywords": self._opts.keywords,
                     "profanity_filter": self._opts.profanity_filter,
                     "base_url": self._base_url,
-                    "base_url_ws": self._base_url_ws
+                    "base_url_ws": self._base_url_ws,
                 }
 
                 if self._opts.language:
