@@ -8,7 +8,7 @@ from livekit.agents import (
     stt,
 )
 from livekit.agents.stt import SpeechEventType, STTCapabilities
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.rtc import AudioFrame
 
 
@@ -45,10 +45,10 @@ class WizperSTT(stt.STT):
     def _sanitize_options(
         self,
         *,
-        language: str = None,
-        task: str = None,
-        chunk_level: str = None,
-        version: str = None,
+        language: str | None = None,
+        task: str | None = None,
+        chunk_level: str | None = None,
+        version: str | None = None,
     ) -> _STTOptions:
         config = dataclasses.replace(self._opts)
         config.language = language or config.language
@@ -61,10 +61,10 @@ class WizperSTT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: str = None,
-        task: str = None,
-        chunk_level: str = None,
-        version: str = None,
+        language: str | None = None,
+        task: str | None = None,
+        chunk_level: str | None = None,
+        version: str | None = None,
     ) -> stt.SpeechEvent:
         try:
             if buffer is None:
@@ -73,7 +73,7 @@ class WizperSTT(stt.STT):
             config = self._sanitize_options(
                 language=language, task=task, chunk_level=chunk_level, version=version
             )
-
+            buffer = merge_frames(buffer)
             wav_bytes = AudioFrame.to_wav_bytes(buffer)
             data_uri = fal_client.encode(wav_bytes, "audio/x-wav")
             response = await fal_client.run_async(
