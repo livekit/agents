@@ -134,9 +134,6 @@ class STT(stt.STT):
             )
         )
 
-        self._base_url = base_url
-        self._base_url_ws = base_url_ws
-
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
         if api_key is None:
             raise ValueError("Deepgram API key is required")
@@ -194,8 +191,8 @@ class STT(stt.STT):
             "smart_format": config.smart_format,
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
-            "base_url": self._base_url,
-            "base_url_ws": self._base_url_ws,
+            "base_url": base_url,
+            "base_url_ws": base_url_ws,
         }
         if config.language:
             recognize_config["language"] = config.language
@@ -310,8 +307,8 @@ class SpeechStream(stt.SpeechStream):
                     "filler_words": self._opts.filler_words,
                     "keywords": self._opts.keywords,
                     "profanity_filter": self._opts.profanity_filter,
-                    "base_url": self._base_url,
-                    "base_url_ws": self._base_url_ws,
+                    "base_url": base_url,
+                    "base_url_ws": base_url_ws,
                 }
 
                 if self._opts.language:
