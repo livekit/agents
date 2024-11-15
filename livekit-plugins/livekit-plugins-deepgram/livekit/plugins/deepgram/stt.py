@@ -191,8 +191,8 @@ class STT(stt.STT):
             "smart_format": config.smart_format,
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
-            "base_url": base_url,
-            "base_url_ws": base_url_ws,
+            "base_url": self.base_url,
+            "base_url_ws": self.base_url_ws,
         }
         if config.language:
             recognize_config["language"] = config.language
@@ -307,8 +307,8 @@ class SpeechStream(stt.SpeechStream):
                     "filler_words": self._opts.filler_words,
                     "keywords": self._opts.keywords,
                     "profanity_filter": self._opts.profanity_filter,
-                    "base_url": base_url,
-                    "base_url_ws": base_url_ws,
+                    "base_url": self.base_url,
+                    "base_url_ws": self.base_url_ws,
                 }
 
                 if self._opts.language:
