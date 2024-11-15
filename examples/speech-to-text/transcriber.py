@@ -16,7 +16,6 @@ from livekit.plugins import openai, silero
 load_dotenv()
 
 logger = logging.getLogger("transcriber")
-logger.setLevel(logging.INFO)
 
 
 async def _forward_transcription(
@@ -29,13 +28,18 @@ async def _forward_transcription(
             pass
         elif ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             print(" -> ", ev.alternatives[0].text)
+        elif ev.type == stt.SpeechEventType.RECOGNITION_USAGE:
+            logger.debug(f"metrics: {ev.recognition_usage}")
+
         stt_forwarder.update(ev)
 
 
 async def entrypoint(ctx: JobContext):
     logger.info(f"starting transcriber (speech to text) example, room: {ctx.room.name}")
-    # this example uses OpenAI Whisper, but you can use assemblyai,deepgram, google, azure, etc.
-    stt_impl = openai.STT()
+    # this example uses OpenAI Whisper, but you can use assemblyai, deepgram, google, azure, etc.
+    stt_impl = openai.STT(
+        energy_filter=True,
+    )
 
     if not stt_impl.capabilities.streaming:
         # wrap with a stream adapter to use streaming semantics
