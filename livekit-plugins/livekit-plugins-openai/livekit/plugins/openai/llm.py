@@ -168,7 +168,7 @@ class LLM(llm.LLM):
         model: str | VertexModels = "google/gemini-1.5-pro",
         project_id: str | None = None,
         location: str | None = "us-central1",
-        client: openai.AsyncClient | None = None,
+        client: Any | None = None,
         user: str | None = None,
         temperature: float | None = None,
     ) -> LLM:
