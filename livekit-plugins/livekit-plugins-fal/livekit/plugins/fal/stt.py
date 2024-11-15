@@ -11,23 +11,25 @@ from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.rtc import AudioFrame
 
+from .model import WhizperChunkLevels, WhizperLanguages, WhizperTasks, WhizperVersion
+
 
 @dataclass
 class _STTOptions:
-    language: str
-    task: str
-    chunk_level: str
-    version: str
+    language: WhizperLanguages
+    task: WhizperTasks
+    chunk_level: WhizperChunkLevels
+    version: WhizperVersion
 
 
 class WizperSTT(stt.STT):
     def __init__(
         self,
         *,
-        language="en",
-        task="transcribe",
-        chunk_level="segment",
-        version="3",
+        language: WhizperLanguages | None = "en",
+        task: WhizperTasks | None = "transcribe",
+        chunk_level: WhizperChunkLevels | None = "segment",
+        version: WhizperVersion | None = "3",
     ):
         super().__init__(
             capabilities=STTCapabilities(streaming=False, interim_results=True)
@@ -41,14 +43,16 @@ class WizperSTT(stt.STT):
             raise ValueError(
                 "FAL AI API key is required. It should be set with env FAL_KEY"
             )
+        if language not in WhizperLanguages:
+            raise ValueError(f"Invalid default language: {language}")
 
     def _sanitize_options(
         self,
         *,
-        language: str | None = None,
-        task: str | None = None,
-        chunk_level: str | None = None,
-        version: str | None = None,
+        language: WhizperLanguages | None = None,
+        task: WhizperTasks | None = None,
+        chunk_level: WhizperChunkLevels | None = None,
+        version: WhizperVersion | None = None,
     ) -> _STTOptions:
         config = dataclasses.replace(self._opts)
         config.language = language or config.language
@@ -61,10 +65,10 @@ class WizperSTT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: str | None = None,
-        task: str | None = None,
-        chunk_level: str | None = None,
-        version: str | None = None,
+        language: WhizperLanguages | None = None,
+        task: WhizperTasks | None = None,
+        chunk_level: WhizperChunkLevels | None = None,
+        version: WhizperVersion | None = None,
     ) -> stt.SpeechEvent:
         try:
             if buffer is None:
