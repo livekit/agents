@@ -572,7 +572,6 @@ class LLM(llm.LLM):
             temperature = self._opts.temperature
 
         messages = _build_oai_context(chat_ctx, id(self))
-        logger.info(f"messages: {messages}")
 
         cmp = self._client.chat.completions.create(
             messages=messages,
