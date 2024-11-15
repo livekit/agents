@@ -9,7 +9,7 @@ import time
 
 import pytest
 from livekit import agents, rtc
-from livekit.plugins import assemblyai, azure, deepgram, google, openai, silero
+from livekit.plugins import assemblyai, azure, deepgram, fal, google, openai, silero
 
 from .utils import wer
 
@@ -39,6 +39,7 @@ RECOGNIZE_STT = [
     deepgram.STT(),
     google.STT(),
     openai.STT(),
+    fal.WizperSTT(),
 ]
 
 
