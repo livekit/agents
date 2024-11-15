@@ -35,7 +35,10 @@ class WizperSTT(stt.STT):
         )
         self._api_key = os.getenv("FAL_KEY")
         self._opts = _STTOptions(
-            language=language, task=task, chunk_level=chunk_level, version=version
+            language=language or "en",
+            task=task or "transcribe",
+            chunk_level=chunk_level or "segment",
+            version=version or "3",
         )
 
         if not self._api_key:
