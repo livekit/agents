@@ -32,6 +32,7 @@ from livekit.agents import (
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
+    metrics,
     stt,
     utils,
 )
@@ -105,6 +106,8 @@ class STTOptions:
     keywords: list[Tuple[str, float]]
     profanity_filter: bool
     energy_filter: AudioEnergyFilter | bool = False
+    # whether energy filter is used before sending to deepgram, or just for metrics events
+    use_energy_filter: bool = False
 
 
 class STT(stt.STT):
@@ -278,6 +281,10 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._speaking = False
         self._max_retry = max_retry
+        self._audio_duration_collector = metrics.PeriodicCollector(
+            callback=self._on_audio_duration_report,
+            duration=5.0,
+        )
 
         self._audio_energy_filter: Optional[AudioEnergyFilter] = None
         if opts.energy_filter:
@@ -405,23 +412,13 @@ class SpeechStream(stt.SpeechStream):
                     has_ended = True
 
                 for frame in frames:
-                    self._pushed_audio_duration += frame.duration
+                    self._audio_duration_collector.push(frame.duration)
                     await ws.send_bytes(frame.data.tobytes())
 
                     if has_ended:
+                        self._audio_duration_collector.flush()
                         await ws.send_str(SpeechStream._FINALIZE_MSG)
                         has_ended = False
-                        if self._pushed_audio_duration > 0:
-                            usage_event = stt.SpeechEvent(
-                                type=stt.SpeechEventType.RECOGNITION_USAGE,
-                                request_id=self._request_id,
-                                alternatives=[],
-                                recognition_usage=stt.RecognitionUsage(
-                                    audio_duration=self._pushed_audio_duration
-                                ),
-                            )
-                            self._pushed_audio_duration = 0.0
-                            self._event_ch.send_nowait(usage_event)
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True
@@ -466,6 +463,15 @@ class SpeechStream(stt.SpeechStream):
         if self._audio_energy_filter:
             return self._audio_energy_filter.update(frame)
         return AudioEnergyFilter.State.SPEAKING
+
+    def _on_audio_duration_report(self, duration: float) -> None:
+        usage_event = stt.SpeechEvent(
+            type=stt.SpeechEventType.RECOGNITION_USAGE,
+            request_id=self._request_id,
+            alternatives=[],
+            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
+        )
+        self._event_ch.send_nowait(usage_event)
 
     def _process_stream_event(self, data: dict) -> None:
         assert self._opts.language is not None

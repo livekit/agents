@@ -16,7 +16,6 @@ from livekit.plugins import deepgram, silero
 load_dotenv()
 
 logger = logging.getLogger("transcriber")
-logger.setLevel(logging.INFO)
 
 
 async def _forward_transcription(
@@ -29,6 +28,9 @@ async def _forward_transcription(
             pass
         elif ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             print(" -> ", ev.alternatives[0].text)
+        elif ev.type == stt.SpeechEventType.RECOGNITION_USAGE:
+            logger.debug(f"metrics: {ev.recognition_usage}")
+
         stt_forwarder.update(ev)
 
 
