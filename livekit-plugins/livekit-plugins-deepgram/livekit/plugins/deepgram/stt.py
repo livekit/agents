@@ -279,13 +279,12 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = False
         self._max_retry = max_retry
 
+        self._audio_energy_filter: Optional[AudioEnergyFilter] = None
         if opts.energy_filter:
             if isinstance(opts.energy_filter, AudioEnergyFilter):
                 self._audio_energy_filter = opts.energy_filter
             else:
                 self._audio_energy_filter = AudioEnergyFilter()
-        else:
-            self._audio_energy_filter = None
 
         self._pushed_audio_duration = 0.0
         self._request_id = ""
