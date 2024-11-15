@@ -133,6 +133,8 @@ class STT(stt.STT):
                 streaming=True, interim_results=interim_results
             )
         )
+        self._base_url = base_url
+        self._base_url_ws = base_url_ws
 
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
         if api_key is None:
@@ -191,8 +193,8 @@ class STT(stt.STT):
             "smart_format": config.smart_format,
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
-            "base_url": self.base_url,
-            "base_url_ws": self.base_url_ws,
+            "base_url": self._base_url,
+            "base_url_ws": self._base_url_ws,
         }
         if config.language:
             recognize_config["language"] = config.language
@@ -238,7 +240,14 @@ class STT(stt.STT):
         self, *, language: DeepgramLanguages | str | None = None
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(self, config, self._api_key, self._ensure_session())
+        return SpeechStream(
+            self,
+            config,
+            self._api_key,
+            self._ensure_session(),
+            self._base_url,
+            self._base_url_ws,
+        )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
@@ -261,6 +270,8 @@ class SpeechStream(stt.SpeechStream):
         opts: STTOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
+        base_url: str,
+        base_url_ws: str,
         max_retry: int = 32,
     ) -> None:
         super().__init__(stt, sample_rate=opts.sample_rate)
@@ -271,6 +282,8 @@ class SpeechStream(stt.SpeechStream):
         self._opts = opts
         self._api_key = api_key
         self._session = http_session
+        self._base_url = base_url
+        self._base_url_ws = base_url_ws
         self._speaking = False
         self._max_retry = max_retry
         self._audio_energy_filter = _AudioEnergyFilter()
@@ -307,8 +320,8 @@ class SpeechStream(stt.SpeechStream):
                     "filler_words": self._opts.filler_words,
                     "keywords": self._opts.keywords,
                     "profanity_filter": self._opts.profanity_filter,
-                    "base_url": self.base_url,
-                    "base_url_ws": self.base_url_ws,
+                    "base_url": self._base_url,
+                    "base_url_ws": self._base_url_ws,
                 }
 
                 if self._opts.language:
