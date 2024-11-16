@@ -212,7 +212,7 @@ class LLM(llm.LLM):
                 )
                 self.refresh_lock = threading.Lock()
                 self.stop_event = threading.Event()
-                self.refresh_interval = 60
+                self.refresh_interval = 2700  # 45 minutes
 
                 self._refresh_credentials()  # initial refresh
 
