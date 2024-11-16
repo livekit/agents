@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.11.3
+
+### Patch Changes
+
+- add PeriodicCollector utility for metrics - [#1094](https://github.com/livekit/agents/pull/1094) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.11.2
 
 ### Patch Changes
