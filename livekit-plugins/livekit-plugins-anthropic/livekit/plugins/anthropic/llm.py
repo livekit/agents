@@ -109,8 +109,9 @@ class LLM(llm.LLM):
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
-        if parallel_tool_calls is False:
+        if parallel_tool_calls is not None and parallel_tool_calls is False:
             self._opts.disable_parallel_tool_use = True
+
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc: list[anthropic.types.ToolParam] = []
