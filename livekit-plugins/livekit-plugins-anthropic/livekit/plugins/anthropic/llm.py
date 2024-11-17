@@ -105,10 +105,12 @@ class LLM(llm.LLM):
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
+        parallel_tool_calls: bool | None = None,
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
-
+        if parallel_tool_calls is False:
+            self._opts.disable_parallel_tool_use = True
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc: list[anthropic.types.ToolParam] = []
@@ -116,7 +118,7 @@ class LLM(llm.LLM):
                 fncs_desc.append(_build_function_description(fnc))
 
             opts["tools"] = fncs_desc
-            tool_choice = {
+            tool_choice: dict[str, Any] = {
                 "type": self._opts.tool_choice_type,
                 "disable_parallel_tool_use": self._opts.disable_parallel_tool_use,
             }
