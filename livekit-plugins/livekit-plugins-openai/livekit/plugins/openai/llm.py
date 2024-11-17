@@ -77,7 +77,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         self._opts = LLMOptions(model=model, user=user, temperature=temperature)
-        self._client = client or openai.AsyncClient(
+        self._client: openai.AsyncClient = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
