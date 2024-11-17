@@ -3,7 +3,13 @@ from typing import Literal
 # Speech to Text v2
 
 SpeechModels = Literal[
-    "long", "short", "telephony", "medical_dictation", "medical_conversation", "chirp"
+    "long",
+    "short",
+    "telephony",
+    "medical_dictation",
+    "medical_conversation",
+    "chirp",
+    "chirp_2",
 ]
 
 SpeechLanguages = Literal[
