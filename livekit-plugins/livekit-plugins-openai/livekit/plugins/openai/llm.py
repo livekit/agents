@@ -209,8 +209,6 @@ class LLM(llm.LLM):
             def __init__(self, **kwargs: Any) -> None:
                 super().__init__(api_key="DUMMY", **kwargs)
                 self.refresh_threshold = 600  # 10 minutes
-                self.creds = None
-                self.project = None
                 self.creds, self.project = default_async(
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
@@ -621,6 +619,9 @@ class LLMStream(llm.LLMStream):
         self._tool_index: int | None = None
 
     async def _main_task(self) -> None:
+        if hasattr(self._llm._client, "_refresh_credentials"):
+            logger.info("Refreshing google auth credentials")
+            await self._llm._client._refresh_credentials()
         if not self._oai_stream:
             self._oai_stream = await self._awaitable_oai_stream
 
