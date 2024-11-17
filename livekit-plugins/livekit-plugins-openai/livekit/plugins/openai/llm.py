@@ -16,11 +16,12 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import os
-import threading
 from dataclasses import dataclass
 from typing import Any, Awaitable, MutableSet
 
+import aiohttp
 import httpx
 from livekit.agents import (
     APIConnectionError,
@@ -197,58 +198,42 @@ class LLM(llm.LLM):
             )
 
         try:
-            import google.auth
-            import google.auth.transport.requests
+            from google.auth._default_async import default_async
+            from google.auth.transport._aiohttp_requests import Request
         except ImportError:
             raise ImportError(
                 "Google Auth dependencies not found. Please install with: `pip install livekit-plugins-openai[vertex]`"
             )
 
-        class AuthTokenRefresher:
+        class AuthTokenRefresher(openai.AsyncClient):
             def __init__(self, **kwargs: Any) -> None:
-                self.client = openai.AsyncClient(**kwargs, api_key="DUMMY")
-                self.creds, self.project = google.auth.default(
+                super().__init__(api_key="DUMMY", **kwargs)
+                self.refresh_threshold = 600  # 10 minutes
+                self.creds = None
+                self.project = None
+                self.creds, self.project = default_async(
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
-                self.refresh_lock = threading.Lock()
-                self.stop_event = threading.Event()
-                self.refresh_interval = 2700  # 45 minutes
 
-                self._refresh_credentials()  # initial refresh
+            def _token_needs_refresh(self) -> bool:
+                if not self.creds or not self.creds.valid:
+                    return True
+                expiry = self.creds.expiry
+                if expiry is None:
+                    return True
+                remaining = (expiry - datetime.datetime.utcnow()).total_seconds()
+                return remaining < self.refresh_threshold
 
-                self.token_refresh_thread = threading.Thread(
-                    target=self._refresh_token_periodically,
-                    name="token_refresh_thread",
-                    daemon=True,
-                )
-                self.token_refresh_thread.start()
+            async def _refresh_credentials(self) -> None:
+                if self.creds and self.creds.valid and not self._token_needs_refresh():
+                    return
+                async with aiohttp.ClientSession(auto_decompress=False) as session:
+                    auth_req = Request(session=session)
+                    await self.creds.refresh(auth_req)
 
-            def __getattr__(self, name: str) -> Any:
-                return getattr(self.client, name)
-
-            def __del__(self):
-                # Clean up the background thread when the object is destroyed
-                self.stop_event.set()
-                if self.token_refresh_thread.is_alive():
-                    self.token_refresh_thread.join(timeout=1.0)
-
-            def _refresh_token_periodically(self):
-                while not self.stop_event.is_set():
-                    self.stop_event.wait(timeout=self.refresh_interval)
-                    if self.stop_event.is_set():
-                        break
-                    self._refresh_credentials()
-
-            def _refresh_credentials(self) -> None:
-                with self.refresh_lock:
-                    try:
-                        auth_req = google.auth.transport.requests.Request()
-                        self.creds.refresh(auth_req)
-                        if not self.creds.valid:
-                            raise RuntimeError("Unable to refresh auth")
-                        self.client.api_key = self.creds.token
-                    except Exception as e:
-                        raise APIConnectionError() from e
+                if not self.creds.valid:
+                    raise RuntimeError("Unable to refresh auth")
+                self.api_key = self.creds.token
 
         client = AuthTokenRefresher(
             base_url=f"https://{location}-aiplatform.googleapis.com/v1beta1/projects/{project_id}/locations/{location}/endpoints/openapi",
