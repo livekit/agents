@@ -106,8 +106,6 @@ class STTOptions:
     keywords: list[Tuple[str, float]]
     profanity_filter: bool
     energy_filter: AudioEnergyFilter | bool = False
-    # whether energy filter is used before sending to deepgram, or just for metrics events
-    use_energy_filter: bool = False
 
 
 class STT(stt.STT):
