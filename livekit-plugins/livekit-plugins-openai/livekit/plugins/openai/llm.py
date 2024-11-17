@@ -620,7 +620,6 @@ class LLMStream(llm.LLMStream):
 
     async def _main_task(self) -> None:
         if hasattr(self._llm._client, "_refresh_credentials"):
-            logger.info("Refreshing google auth credentials")
             await self._llm._client._refresh_credentials()
         if not self._oai_stream:
             self._oai_stream = await self._awaitable_oai_stream
