@@ -304,16 +304,18 @@ class SpeechStream(stt.SpeechStream):
 
                 await self._run_stream(stream)
             except (Aborted, Exception) as e:
-                logger.error(
+                error_message = (
                     "google stt connection aborted"
                     if isinstance(e, Aborted)
                     else "google stt connection error"
                 )
+                logger.error(
+                    f"{error_message}. Failed after {retry_count}/{max_retry} retries."
+                    if retry_count >= max_retry
+                    else error_message,
+                    exc_info=e if retry_count >= max_retry else None,
+                )
                 if retry_count >= max_retry:
-                    logger.error(
-                        f"failed to connect to google stt after {max_retry} tries",
-                        exc_info=e,
-                    )
                     break
 
                 retry_delay = min(retry_count * 2, 5)  # max 5s
