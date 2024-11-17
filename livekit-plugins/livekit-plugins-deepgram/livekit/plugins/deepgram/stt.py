@@ -193,8 +193,6 @@ class STT(stt.STT):
             "smart_format": config.smart_format,
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
-            "base_url": self._base_url,
-            "base_url_ws": self._base_url_ws,
         }
         if config.language:
             recognize_config["language"] = config.language
@@ -211,7 +209,9 @@ class STT(stt.STT):
 
         try:
             async with self._ensure_session().post(
-                url=_to_deepgram_url(recognize_config),
+                url=_to_deepgram_url(
+                    recognize_config, self._base_url, self._base_url_ws
+                ),
                 data=data,
                 headers={
                     "Authorization": f"Token {self._api_key}",
@@ -320,8 +320,6 @@ class SpeechStream(stt.SpeechStream):
                     "filler_words": self._opts.filler_words,
                     "keywords": self._opts.keywords,
                     "profanity_filter": self._opts.profanity_filter,
-                    "base_url": self._base_url,
-                    "base_url_ws": self._base_url_ws,
                 }
 
                 if self._opts.language:
@@ -329,7 +327,10 @@ class SpeechStream(stt.SpeechStream):
 
                 headers = {"Authorization": f"Token {self._api_key}"}
                 ws = await self._session.ws_connect(
-                    _to_deepgram_url(live_config, websocket=True), headers=headers
+                    _to_deepgram_url(
+                        live_config, self._base_url, self._base_url_ws, websocket=True
+                    ),
+                    headers=headers,
                 )
                 retry_count = 0  # connected successfully, reset the retry_count
 
@@ -559,7 +560,9 @@ def prerecorded_transcription_to_speech_event(
     )
 
 
-def _to_deepgram_url(opts: dict, *, websocket: bool = False) -> str:
+def _to_deepgram_url(
+    opts: dict, base_url: str, base_url_ws: str, *, websocket: bool = False
+) -> str:
     if opts.get("keywords"):
         # convert keywords to a list of "keyword:intensifier"
         opts["keywords"] = [
@@ -568,5 +571,5 @@ def _to_deepgram_url(opts: dict, *, websocket: bool = False) -> str:
 
     # lowercase bools
     opts = {k: str(v).lower() if isinstance(v, bool) else v for k, v in opts.items()}
-    base_url = opts.get("base_url_ws") if websocket else opts.get("base_url")
+    base_url = base_url_ws if websocket else base_url
     return f"{base_url}?{urlencode(opts, doseq=True)}"
