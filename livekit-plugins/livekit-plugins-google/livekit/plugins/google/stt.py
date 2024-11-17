@@ -127,24 +127,23 @@ class STT(stt.STT):
         )
 
     def _ensure_client(self) -> SpeechAsyncClient:
+        # Add support for passing a specific location that matches recognizer
+        # see: https://cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages
+        args = {}
+        if self._location != "global":
+            args["client_options"] = ClientOptions(
+                api_endpoint=f"{self._location}-speech.googleapis.com"
+            )
         if self._credentials_info:
             self._client = SpeechAsyncClient.from_service_account_info(
-                self._credentials_info
+                self._credentials_info, **args
             )
         elif self._credentials_file:
             self._client = SpeechAsyncClient.from_service_account_file(
-                self._credentials_file
+                self._credentials_file, **args
             )
-        elif self._location == "global":
-            self._client = SpeechAsyncClient()
         else:
-            # Add support for passing a specific location that matches recognizer
-            # see: https://cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages
-            self._client = SpeechAsyncClient(
-                client_options=ClientOptions(
-                    api_endpoint=f"{self._location}-speech.googleapis.com"
-                )
-            )
+            self._client = SpeechAsyncClient(**args)
         assert self._client is not None
         return self._client
 
