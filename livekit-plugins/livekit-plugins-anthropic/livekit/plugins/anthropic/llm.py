@@ -19,7 +19,7 @@ import inspect
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Awaitable, List, Tuple, get_args, get_origin
+from typing import Any, Awaitable, List, Literal, Tuple, get_args, get_origin
 
 import httpx
 from livekit import rtc
@@ -44,6 +44,9 @@ class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
+    tool_choice_type: Literal["auto", "any", "tool"]
+    tool_choice_name: str | None
+    disable_parallel_tool_use: bool = False
 
 
 class LLM(llm.LLM):
@@ -56,6 +59,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         client: anthropic.AsyncClient | None = None,
         temperature: float | None = None,
+        tool_choice_type: Literal["auto", "any", "tool"] = "auto",
+        tool_choice_name: str | None = None,
+        disable_parallel_tool_use: bool = False,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -70,7 +76,14 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError("Anthropic API key is required")
 
-        self._opts = LLMOptions(model=model, user=user, temperature=temperature)
+        self._opts = LLMOptions(
+            model=model,
+            user=user,
+            temperature=temperature,
+            tool_choice_type=tool_choice_type,
+            tool_choice_name=tool_choice_name,
+            disable_parallel_tool_use=disable_parallel_tool_use,
+        )
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,
             base_url=base_url,
@@ -92,7 +105,6 @@ class LLM(llm.LLM):
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
-        parallel_tool_calls: bool | None = None,
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
@@ -104,9 +116,13 @@ class LLM(llm.LLM):
                 fncs_desc.append(_build_function_description(fnc))
 
             opts["tools"] = fncs_desc
-
-            if fnc_ctx and parallel_tool_calls is not None:
-                opts["parallel_tool_calls"] = parallel_tool_calls
+            tool_choice = {
+                "type": self._opts.tool_choice_type,
+                "disable_parallel_tool_use": self._opts.disable_parallel_tool_use,
+            }
+            if self._opts.tool_choice_name:
+                tool_choice["name"] = self._opts.tool_choice_name
+            opts["tool_choice"] = tool_choice
 
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
