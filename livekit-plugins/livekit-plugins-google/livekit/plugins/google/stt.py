@@ -320,10 +320,6 @@ class SpeechStream(stt.SpeechStream):
 
                 retry_delay = min(retry_count * 2, 5)  # max 5s
                 retry_count += 1
-                logger.warning(
-                    f"google stt connection failed, retrying in {retry_delay}s",
-                    exc_info=e,
-                )
                 await asyncio.sleep(retry_delay)
 
     async def _run_stream(
