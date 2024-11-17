@@ -9,7 +9,7 @@ import time
 
 import pytest
 from livekit import agents, rtc
-from livekit.plugins import assemblyai, azure, deepgram, google, openai, silero
+from livekit.plugins import assemblyai, azure, deepgram, fal, google, openai, silero
 
 from .utils import wer
 
@@ -38,7 +38,14 @@ def read_mp3_file(filename: str) -> rtc.AudioFrame:
 RECOGNIZE_STT = [
     deepgram.STT(),
     google.STT(),
+    google.STT(
+        languages=["en-AU"],
+        model="chirp_2",
+        spoken_punctuation=False,
+        location="us-central1",
+    ),
     openai.STT(),
+    fal.WizperSTT(),
 ]
 
 
@@ -62,6 +69,12 @@ STREAM_STT = [
     assemblyai.STT(),
     deepgram.STT(),
     google.STT(),
+    google.STT(
+        languages=["en-AU"],
+        model="chirp_2",
+        spoken_punctuation=False,
+        location="us-central1",
+    ),
     agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
     azure.STT(),
 ]
