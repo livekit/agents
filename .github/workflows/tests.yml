@@ -34,7 +34,7 @@ jobs:
             test_group: tts
 
     runs-on: ${{ matrix.os }}
-    name: ${{ matrix.test_group }} — ${{ matrix.os }}) (py-v${{ matrix.python_version }})
+    name: ${{ matrix.test_group }} — ${{ matrix.os }}) (py${{ matrix.python_version }})
     steps:
       - uses: actions/checkout@v4
         with:
