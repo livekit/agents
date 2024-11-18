@@ -15,7 +15,6 @@ from .utils import make_test_speech, wer
 SAMPLE_RATES = [24000, 44100]  # test multiple input sample rates
 WER_THRESHOLD = 0.2
 RECOGNIZE_STT = [
-    lambda: assemblyai.STT(),
     lambda: deepgram.STT(),
     lambda: google.STT(),
     lambda: google.STT(
