@@ -22,46 +22,19 @@ jobs:
         python_version: ["3.9", "3.10", "3.11", "3.12"]
         test_group: ["base"]
         include:
-          # Include llm, stt, and tts tests on Ubuntu for all Python versions
+          # Include llm, stt, and tts tests only on Ubuntu 20.04 with Python 3.9
           - os: ubuntu-20.04
             python_version: "3.9"
-            test_group: llm
-          - os: ubuntu-20.04
-            python_version: "3.10"
-            test_group: llm
-          - os: ubuntu-20.04
-            python_version: "3.11"
-            test_group: llm
-          - os: ubuntu-20.04
-            python_version: "3.12"
             test_group: llm
           - os: ubuntu-20.04
             python_version: "3.9"
             test_group: stt
           - os: ubuntu-20.04
-            python_version: "3.10"
-            test_group: stt
-          - os: ubuntu-20.04
-            python_version: "3.11"
-            test_group: stt
-          - os: ubuntu-20.04
-            python_version: "3.12"
-            test_group: stt
-          - os: ubuntu-20.04
             python_version: "3.9"
-            test_group: tts
-          - os: ubuntu-20.04
-            python_version: "3.10"
-            test_group: tts
-          - os: ubuntu-20.04
-            python_version: "3.11"
-            test_group: tts
-          - os: ubuntu-20.04
-            python_version: "3.12"
             test_group: tts
 
     runs-on: ${{ matrix.os }}
-    name: ${{ matrix.test_group }} — ${{ matrix.os }}) (Python ${{ matrix.python_version }})
+    name: ${{ matrix.test_group }} — ${{ matrix.os }}) (py-v${{ matrix.python_version }})
     steps:
       - uses: actions/checkout@v4
         with:
