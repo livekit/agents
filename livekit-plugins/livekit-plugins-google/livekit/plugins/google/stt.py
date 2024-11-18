@@ -318,7 +318,6 @@ class SpeechStream(stt.SpeechStream):
                 logger.warning(
                     f"google stt connection {error_type.lower()}, retrying in {retry_delay}s",
                 )
-
                 await asyncio.sleep(retry_delay)
 
     async def _run_stream(
