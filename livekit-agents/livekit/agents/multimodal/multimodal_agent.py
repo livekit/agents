@@ -10,9 +10,8 @@ from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 from livekit.agents.llm import ChatMessage
 from livekit.agents.metrics import MultimodalLLMMetrics
 
-from .._constants import ATTRIBUTE_AGENT_STATE
-from .._types import AgentState
 from ..log import logger
+from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from . import agent_playout
 
 EventTypes = Literal[
