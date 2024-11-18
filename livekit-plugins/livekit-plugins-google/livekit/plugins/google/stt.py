@@ -316,6 +316,7 @@ class SpeechStream(stt.SpeechStream):
                 retry_count += 1
                 logger.warning(
                     f"google stt connection {error_type.lower()}, retrying in {retry_delay}s",
+                    exc_info=e,
                 )
                 await asyncio.sleep(retry_delay)
 
