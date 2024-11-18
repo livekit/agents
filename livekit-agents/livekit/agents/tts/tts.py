@@ -196,7 +196,7 @@ class ChunkedStream(ABC):
         try:
             val = await self._event_aiter.__anext__()
         except StopAsyncIteration:
-            if self._synthesize_task.done() and (
+            if not self._synthesize_task.cancelled() and (
                 exc := self._synthesize_task.exception()
             ):
                 raise exc from None
@@ -368,7 +368,9 @@ class SynthesizeStream(ABC):
         try:
             val = await self._event_aiter.__anext__()
         except StopAsyncIteration:
-            await self._task
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc from None
+
             raise StopAsyncIteration
 
         return val

@@ -155,7 +155,7 @@ class LLMStream(ABC):
         try:
             val = await self._event_aiter.__anext__()
         except StopAsyncIteration:
-            if self._task.done() and (exc := self._task.exception()):
+            if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
             raise StopAsyncIteration
