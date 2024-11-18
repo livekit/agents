@@ -52,7 +52,7 @@ setuptools.setup(
         "openai>=1.50",
     ],
     extras_require={
-        "vertex": ["google-auth"],
+        "vertex": ["google-auth>=2.0.0"],
     },
     package_data={"livekit.plugins.openai": ["py.typed"]},
     project_urls={
