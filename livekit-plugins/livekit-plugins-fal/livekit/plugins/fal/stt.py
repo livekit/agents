@@ -81,7 +81,7 @@ class WizperSTT(stt.STT):
             buffer = merge_frames(buffer)
             wav_bytes = AudioFrame.to_wav_bytes(buffer)
             data_uri = fal_client.encode(wav_bytes, "audio/x-wav")
-            response = await fal_client.run_async(
+            response = await self._fal_client.run(
                 "fal-ai/wizper",
                 arguments={
                     "audio_url": data_uri,
