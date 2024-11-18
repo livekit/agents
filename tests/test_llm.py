@@ -283,7 +283,8 @@ async def _request_fnc_call(
     stream = model.chat(
         chat_ctx=ChatContext()
         .append(
-            text="You can run multiple tools at the same time if needed", role="system"
+            text="You are an helpful assistant. Follow the instructions provided by the user. You can use multiple tool calls at once.",
+            role="system",
         )
         .append(text=request, role="user"),
         fnc_ctx=fnc_ctx,
