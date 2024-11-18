@@ -86,6 +86,17 @@ class TTS(
 
     async def aclose(self) -> None: ...
 
+    async def __aenter__(self) -> TTS:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
 
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""

@@ -33,17 +33,17 @@ RECOGNIZE_STT = [
     "stt_factory, sample_rate", product(RECOGNIZE_STT, SAMPLE_RATES)
 )
 async def test_recognize(stt_factory, sample_rate):
-    stt = stt_factory()
-    frames, transcript = make_test_speech(sample_rate=sample_rate)
+    async with stt_factory() as stt:
+        frames, transcript = make_test_speech(sample_rate=sample_rate)
 
-    start_time = time.time()
-    event = await stt.recognize(buffer=frames)
-    text = event.alternatives[0].text
-    dt = time.time() - start_time
+        start_time = time.time()
+        event = await stt.recognize(buffer=frames)
+        text = event.alternatives[0].text
+        dt = time.time() - start_time
 
-    print(f"WER: {wer(text, transcript)} for {stt} in {dt:.2f}s")
-    assert wer(text, transcript) <= WER_THRESHOLD
-    assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
+        print(f"WER: {wer(text, transcript)} for {stt} in {dt:.2f}s")
+        assert wer(text, transcript) <= WER_THRESHOLD
+        assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
 
 
 STREAM_VAD = silero.VAD.load(min_silence_duration=0.75)

@@ -5,6 +5,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
+from types import TracebackType
 from typing import AsyncIterable, AsyncIterator, List, Literal, Union
 
 from livekit import rtc
@@ -99,6 +100,17 @@ class STT(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     async def aclose(self) -> None:
         """Close the STT, and every stream/requests associated with it"""
         ...
+
+    async def __aenter__(self) -> STT:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
 
 class SpeechStream(ABC):
