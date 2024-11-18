@@ -281,7 +281,11 @@ async def _request_fnc_call(
     temperature: float | None = None,
 ) -> llm.LLMStream:
     stream = model.chat(
-        chat_ctx=ChatContext().append(text=request, role="user"),
+        chat_ctx=ChatContext()
+        .append(
+            text="You can run multiple tools at the same time if needed", role="system"
+        )
+        .append(text=request, role="user"),
         fnc_ctx=fnc_ctx,
         temperature=temperature,
     )
