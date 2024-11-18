@@ -25,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       inputs.package == 'livekit-agents' ||
+      inputs.package == 'livekit-plugins-assemblyai' ||
       inputs.package == 'livekit-plugins-azure' ||
       inputs.package == 'livekit-plugins-cartesia' ||
       inputs.package == 'livekit-plugins-deepgram' ||
