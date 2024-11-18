@@ -99,7 +99,8 @@ jobs:
                       ./livekit-plugins/livekit-plugins-cartesia \
                       ./livekit-plugins/livekit-plugins-azure \
                       ./livekit-plugins/livekit-plugins-anthropic \
-                      ./livekit-plugins/livekit-plugins-assemblyai
+                      ./livekit-plugins/livekit-plugins-assemblyai \
+                      ./livekit-plugins/livekit-plugins-fal
 
       - name: Run tests
         shell: bash
@@ -116,6 +117,7 @@ jobs:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
+          FAL_KEY: ${{ secrets.FAL_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
         working-directory: tests

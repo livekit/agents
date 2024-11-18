@@ -22,7 +22,7 @@ import os
 import wave
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from urllib.parse import urlencode
 
 import aiohttp
@@ -32,6 +32,7 @@ from livekit.agents import (
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
+    metrics,
     stt,
     utils,
 )
@@ -49,36 +50,42 @@ BASE_URL_WS = "wss://api.deepgram.com/v1/listen"
 MAGIC_NUMBER_THRESHOLD = 0.004**2
 
 
-class _AudioEnergyFilter:
-    class _State(Enum):
+class AudioEnergyFilter:
+    class State(Enum):
         START = 0
         SPEAKING = 1
         SILENCE = 2
         END = 3
 
-    def __init__(self, *, min_silence: float = 1.5):
+    def __init__(
+        self, *, min_silence: float = 1.5, rms_threshold: float = MAGIC_NUMBER_THRESHOLD
+    ):
         self._cooldown_seconds = min_silence
         self._cooldown = min_silence
-        self._state = self._State.SILENCE
+        self._state = self.State.SILENCE
+        self._rms_threshold = rms_threshold
 
-    def update(self, frame: rtc.AudioFrame) -> _State:
+    def update(self, frame: rtc.AudioFrame) -> State:
         arr = np.frombuffer(frame.data, dtype=np.int16)
         float_arr = arr.astype(np.float32) / 32768.0
         rms = np.mean(np.square(float_arr))
 
-        if rms > MAGIC_NUMBER_THRESHOLD:
+        if rms > self._rms_threshold:
             self._cooldown = self._cooldown_seconds
-            if self._state in (self._State.SILENCE, self._State.END):
-                self._state = self._State.START
+            if self._state in (self.State.SILENCE, self.State.END):
+                self._state = self.State.START
             else:
-                self._state = self._State.SPEAKING
+                self._state = self.State.SPEAKING
         else:
-            self._cooldown -= frame.duration
             if self._cooldown <= 0:
-                if self._state in (self._State.SPEAKING, self._State.START):
-                    self._state = self._State.END
-                else:
-                    self._state = self._State.SILENCE
+                if self._state in (self.State.SPEAKING, self.State.START):
+                    self._state = self.State.END
+                elif self._state == self.State.END:
+                    self._state = self.State.SILENCE
+            else:
+                # keep speaking during cooldown
+                self._cooldown -= frame.duration
+                self._state = self.State.SPEAKING
 
         return self._state
 
@@ -98,6 +105,7 @@ class STTOptions:
     num_channels: int
     keywords: list[Tuple[str, float]]
     profanity_filter: bool
+    energy_filter: AudioEnergyFilter | bool = False
 
 
 class STT(stt.STT):
@@ -118,6 +126,7 @@ class STT(stt.STT):
         profanity_filter: bool = False,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        energy_filter: AudioEnergyFilter | bool = False,
     ) -> None:
         """
         Create a new instance of Deepgram STT.
@@ -168,6 +177,7 @@ class STT(stt.STT):
             num_channels=1,
             keywords=keywords,
             profanity_filter=profanity_filter,
+            energy_filter=energy_filter,
         )
         self._session = http_session
 
@@ -269,7 +279,17 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._speaking = False
         self._max_retry = max_retry
-        self._audio_energy_filter = _AudioEnergyFilter()
+        self._audio_duration_collector = metrics.PeriodicCollector(
+            callback=self._on_audio_duration_report,
+            duration=5.0,
+        )
+
+        self._audio_energy_filter: Optional[AudioEnergyFilter] = None
+        if opts.energy_filter:
+            if isinstance(opts.energy_filter, AudioEnergyFilter):
+                self._audio_energy_filter = opts.energy_filter
+            else:
+                self._audio_energy_filter = AudioEnergyFilter()
 
         self._pushed_audio_duration = 0.0
         self._request_id = ""
@@ -361,32 +381,42 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_50ms,
             )
 
+            has_ended = False
+            last_frame: Optional[rtc.AudioFrame] = None
             async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+                frames: list[rtc.AudioFrame] = []
+                if isinstance(data, rtc.AudioFrame):
+                    state = self._check_energy_state(data)
+                    if state in (
+                        AudioEnergyFilter.State.START,
+                        AudioEnergyFilter.State.SPEAKING,
+                    ):
+                        if last_frame:
+                            frames.extend(
+                                audio_bstream.write(last_frame.data.tobytes())
+                            )
+                            last_frame = None
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif state == AudioEnergyFilter.State.END:
+                        # no need to buffer as we have cooldown period
+                        frames = audio_bstream.flush()
+                        has_ended = True
+                    elif state == AudioEnergyFilter.State.SILENCE:
+                        # buffer the last silence frame, since it could contain beginning of speech
+                        # TODO: improve accuracy by using a ring buffer with longer window
+                        last_frame = data
+                elif isinstance(data, self._FlushSentinel):
                     frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.write(data.data.tobytes())
+                    has_ended = True
 
                 for frame in frames:
-                    state = self._audio_energy_filter.update(frame)
-                    if state in (
-                        _AudioEnergyFilter._State.START,
-                        _AudioEnergyFilter._State.SPEAKING,
-                    ):
-                        self._pushed_audio_duration += frame.duration
-                        await ws.send_bytes(frame.data.tobytes())
-                    elif state == _AudioEnergyFilter._State.END:
-                        usage_event = stt.SpeechEvent(
-                            type=stt.SpeechEventType.RECOGNITION_USAGE,
-                            request_id=self._request_id,
-                            alternatives=[],
-                            recognition_usage=stt.RecognitionUsage(
-                                audio_duration=self._pushed_audio_duration
-                            ),
-                        )
-                        self._pushed_audio_duration = 0.0
-                        self._event_ch.send_nowait(usage_event)
+                    self._audio_duration_collector.push(frame.duration)
+                    await ws.send_bytes(frame.data.tobytes())
+
+                    if has_ended:
+                        self._audio_duration_collector.flush()
                         await ws.send_str(SpeechStream._FINALIZE_MSG)
+                        has_ended = False
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True
@@ -426,6 +456,20 @@ class SpeechStream(stt.SpeechStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+
+    def _check_energy_state(self, frame: rtc.AudioFrame) -> AudioEnergyFilter.State:
+        if self._audio_energy_filter:
+            return self._audio_energy_filter.update(frame)
+        return AudioEnergyFilter.State.SPEAKING
+
+    def _on_audio_duration_report(self, duration: float) -> None:
+        usage_event = stt.SpeechEvent(
+            type=stt.SpeechEventType.RECOGNITION_USAGE,
+            request_id=self._request_id,
+            alternatives=[],
+            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
+        )
+        self._event_ch.send_nowait(usage_event)
 
     def _process_stream_event(self, data: dict) -> None:
         assert self._opts.language is not None

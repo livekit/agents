@@ -103,6 +103,9 @@ async def entrypoint(ctx: JobContext):
         chat_ctx = agent.chat_ctx_copy()
         if len(chat_ctx.messages) > max_ctx_len:
             chat_ctx.messages = chat_ctx.messages[-max_ctx_len:]
+            # NOTE: The `set_chat_ctx` function will attempt to synchronize changes made
+            # to the local chat context with the server instead of completely replacing it,
+            # provided that the message IDs are consistent.
             asyncio.create_task(agent.set_chat_ctx(chat_ctx))
 
 
