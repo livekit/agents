@@ -20,14 +20,14 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, "livekit", "plugins", "deepgram", "version.py"), "r") as f:
+with open(os.path.join(here, "livekit", "plugins", "fal", "version.py"), "r") as f:
     exec(f.read(), about)
 
 
 setuptools.setup(
-    name="livekit-plugins-deepgram",
+    name="livekit-plugins-fal",
     version=about["__version__"],
-    description="Agent Framework plugin for services using Deepgram's API.",
+    description="fal plugin template for LiveKit Agents",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",
@@ -47,8 +47,8 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=["livekit-agents>=0.11.3", "numpy~=1.21"],
-    package_data={"livekit.plugins.deepgram": ["py.typed"]},
+    install_requires=["livekit-agents>=0.11", "fal_client"],
+    package_data={"livekit.plugins.fal": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

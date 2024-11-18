@@ -1,5 +1,13 @@
 # livekit-plugins-openai
 
+## 0.10.7
+
+### Patch Changes
+
+- fix realtime API audio format values - [#1092](https://github.com/livekit/agents/pull/1092) ([@longcw](https://github.com/longcw))
+
+- make ConversationItem.create and delete return a Future in Realtime model - [#1085](https://github.com/livekit/agents/pull/1085) ([@longcw](https://github.com/longcw))
+
 ## 0.10.6
 
 ### Patch Changes
