@@ -305,7 +305,6 @@ class SpeechStream(stt.SpeechStream):
                 await self._run_stream(stream)
             except Exception as e:
                 error_type = "Aborted" if isinstance(e, Aborted) else "Error"
-
                 if retry_count >= max_retry:
                     logger.error(
                         f"failed to connect to google stt after {max_retry} tries due to {error_type}",
