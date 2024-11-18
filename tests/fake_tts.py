@@ -87,8 +87,15 @@ class FakeChunkedStream(ChunkedStream):
         self, *, tts: FakeTTS, input_text: str, conn_options: APIConnectOptions
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        self._attempt = 0
+
+    @property
+    def attempt(self) -> int:
+        return self._attempt
 
     async def _run(self) -> None:
+        self._attempt += 1
+
         assert isinstance(self._tts, FakeTTS)
 
         request_id = utils.shortuuid("fake_tts_")
@@ -131,8 +138,15 @@ class FakeSynthesizeStream(SynthesizeStream):
         conn_options: APIConnectOptions,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
+        self._attempt = 0
+
+    @property
+    def attempt(self) -> int:
+        return self._attempt
 
     async def _run(self) -> None:
+        self._attempt += 1
+
         assert isinstance(self._tts, FakeTTS)
 
         request_id = utils.shortuuid("fake_tts_")

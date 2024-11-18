@@ -3,21 +3,19 @@ Check if all Text-To-Speech are producing valid audio.
 We verify the content using a good STT model
 """
 
-import os
-import pathlib
+import dataclasses
 
 import pytest
 from livekit import agents
-from livekit.agents import tokenize
+from livekit.agents import APIConnectionError, tokenize
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins import azure, cartesia, elevenlabs, google, openai
 
-from .utils import wer
+from .conftest import TEST_CONNECT_OPTIONS
+from .fake_tts import FakeTTS
+from .utils import make_test_synthesize, wer
 
-TEST_AUDIO_SYNTHESIZE = pathlib.Path(
-    os.path.dirname(__file__), "long_synthesize.txt"
-).read_text()
-SIMILARITY_THRESHOLD = 0.9
+WER_THRESHOLD = 0.2
 
 
 async def _assert_valid_synthesized_audio(
@@ -26,7 +24,7 @@ async def _assert_valid_synthesized_audio(
     # use whisper as the source of truth to verify synthesized speech (smallest WER)
     whisper_stt = openai.STT(model="whisper-1")
     res = await whisper_stt.recognize(buffer=frames)
-    assert wer(res.alternatives[0].text, text) <= 0.2
+    assert wer(res.alternatives[0].text, text) <= threshold
 
     merged_frame = merge_frames(frames)
     assert merged_frame.sample_rate == tts.sample_rate, "sample rate should be the same"
@@ -36,47 +34,57 @@ async def _assert_valid_synthesized_audio(
 
 
 SYNTHESIZE_TTS = [
-    elevenlabs.TTS(),
-    elevenlabs.TTS(encoding="pcm_44100"),
-    openai.TTS(),
-    google.TTS(),
-    azure.TTS(),
-    cartesia.TTS(),
+    lambda: elevenlabs.TTS(),
+    lambda: elevenlabs.TTS(encoding="pcm_44100"),
+    lambda: openai.TTS(),
+    lambda: google.TTS(),
+    lambda: azure.TTS(),
+    lambda: cartesia.TTS(),
 ]
 
 
 @pytest.mark.usefixtures("job_process")
-@pytest.mark.parametrize("tts", SYNTHESIZE_TTS)
-async def test_synthesize(tts: agents.tts.TTS):
+@pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
+async def test_synthesize(tts_factory):
+    tts = tts_factory()
+
+    synthesize_transcript = make_test_synthesize()
+
     frames = []
-    async for audio in tts.synthesize(text=TEST_AUDIO_SYNTHESIZE):
+    async for audio in tts.synthesize(text=synthesize_transcript):
         frames.append(audio.frame)
 
     await _assert_valid_synthesized_audio(
-        frames, tts, TEST_AUDIO_SYNTHESIZE, SIMILARITY_THRESHOLD
+        frames, tts, synthesize_transcript, WER_THRESHOLD
     )
 
 
 STREAM_SENT_TOKENIZER = tokenize.basic.SentenceTokenizer(min_sentence_len=20)
 STREAM_TTS = [
-    elevenlabs.TTS(),
-    elevenlabs.TTS(encoding="pcm_44100"),
-    cartesia.TTS(),
-    agents.tts.StreamAdapter(
+    lambda: elevenlabs.TTS(),
+    lambda: elevenlabs.TTS(encoding="pcm_44100"),
+    lambda: cartesia.TTS(),
+    lambda: agents.tts.StreamAdapter(
         tts=openai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
-    agents.tts.StreamAdapter(
+    lambda: agents.tts.StreamAdapter(
         tts=google.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
-    agents.tts.StreamAdapter(tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER),
+    lambda: agents.tts.StreamAdapter(
+        tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    ),
 ]
 
 
 @pytest.mark.usefixtures("job_process")
-@pytest.mark.parametrize("tts", STREAM_TTS)
-async def test_stream(tts: agents.tts.TTS):
+@pytest.mark.parametrize("tts_factory", STREAM_TTS)
+async def test_stream(tts_factory):
+    tts = tts_factory()
+
+    synthesize_transcript = make_test_synthesize()
+
     pattern = [1, 2, 4]
-    text = TEST_AUDIO_SYNTHESIZE
+    text = synthesize_transcript
     chunks = []
     pattern_iter = iter(pattern * (len(text) // sum(pattern) + 1))
 
@@ -100,5 +108,31 @@ async def test_stream(tts: agents.tts.TTS):
 
     await stream.aclose()
     await _assert_valid_synthesized_audio(
-        frames, tts, TEST_AUDIO_SYNTHESIZE, SIMILARITY_THRESHOLD
+        frames, tts, synthesize_transcript, WER_THRESHOLD
     )
+
+
+async def test_retry():
+    fake_tts = FakeTTS(fake_exception=APIConnectionError("fake exception"))
+
+    retry_options = dataclasses.replace(TEST_CONNECT_OPTIONS, max_retry=3)
+    stream = fake_tts.synthesize("testing", conn_options=retry_options)
+
+    with pytest.raises(APIConnectionError):
+        async for _ in stream:
+            pass
+
+    assert fake_tts.synthesize_ch.recv_nowait()
+    assert stream.attempt == 4
+
+
+async def test_close():
+    fake_tts = FakeTTS(fake_timeout=5.0)
+
+    retry_options = dataclasses.replace(TEST_CONNECT_OPTIONS, max_retry=0)
+    stream = fake_tts.synthesize("testing", conn_options=retry_options)
+
+    await stream.aclose()
+
+    async for _ in stream:
+        pass
