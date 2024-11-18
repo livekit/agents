@@ -10,7 +10,7 @@ VAD = silero.VAD.load(
 
 
 async def test_chunks_vad() -> None:
-    frames, transcript = utils.make_test_audio(chunk_duration_ms=10)
+    frames, _ = utils.make_test_audio(chunk_duration_ms=10)
     assert len(frames) > 1, "frames aren't chunked"
 
     stream = VAD.stream()
@@ -53,7 +53,7 @@ async def test_chunks_vad() -> None:
 
 
 async def test_file_vad():
-    frames, transcript = utils.make_test_audio()
+    frames, _ = utils.make_test_audio()
     assert len(frames) == 1, "one frame should be the whole audio"
 
     stream = VAD.stream()
