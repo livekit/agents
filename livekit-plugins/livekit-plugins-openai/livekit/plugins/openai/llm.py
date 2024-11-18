@@ -165,12 +165,11 @@ class LLM(llm.LLM):
         )
 
     @staticmethod
-    def with_vertexai(
+    def with_vertex(
         *,
         model: str | VertexModels = "google/gemini-1.5-pro",
         project_id: str | None = None,
         location: str | None = "us-central1",
-        client: Any | None = None,
         user: str | None = None,
         temperature: float | None = None,
     ) -> LLM:
@@ -228,9 +227,6 @@ class LLM(llm.LLM):
                 async with aiohttp.ClientSession(auto_decompress=False) as session:
                     auth_req = Request(session=session)
                     await self.creds.refresh(auth_req)
-
-                if not self.creds.valid:
-                    raise RuntimeError("Unable to refresh auth")
                 self.api_key = self.creds.token
 
         client = AuthTokenRefresher(
