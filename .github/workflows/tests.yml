@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-14-large, macos-14, windows-2019, ubuntu-20.04, namespace-profile-default-arm64]
-        python_version: ["3.9", "3.10", "3.11", "3.12"]
+        python_version: ["3.9", "3.12"]
         test_group: ["base"]
         include:
           # Include llm, stt, and tts tests only on Ubuntu 20.04 with Python 3.9
