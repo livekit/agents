@@ -1,10 +1,8 @@
 import pytest
-
 from livekit.agents import vad
 from livekit.plugins import silero
 
 from . import utils
-
 
 SAMPLE_RATES = [16000, 44100]  # test multiple input sample rates
 

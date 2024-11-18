@@ -369,30 +369,30 @@ class FallbackSynthesizeStream(SynthesizeStream):
                     input_sent_fut.set_result(None)
 
         input_task = asyncio.create_task(_input_task())
+        next_audio_task: asyncio.Future | None = None
 
         try:
             audio_duration = 0.0
 
             async with stream:
                 while True:
+                    if next_audio_task is None or next_audio_task.done():
+                        next_audio_task = asyncio.ensure_future(stream.__anext__())
+
                     try:
                         if not input_sent_fut.done():
-                            next_audio_task = asyncio.create_task(stream.__anext__())
-                            done, _ = await asyncio.wait(
+                            await asyncio.wait(
                                 [input_sent_fut, next_audio_task],
                                 return_when=asyncio.FIRST_COMPLETED,
                             )
 
-                            if next_audio_task in done:
-                                audio = next_audio_task.result()
-                            else:
-                                with contextlib.suppress(asyncio.CancelledError):
-                                    next_audio_task.cancel()
-                                    await next_audio_task
+                            if not next_audio_task.done():
                                 continue
+
+                            audio = next_audio_task.result()
                         else:
                             audio = await asyncio.wait_for(
-                                stream.__anext__(), self._tts._attempt_timeout
+                                next_audio_task, self._tts._attempt_timeout
                             )
 
                         audio_duration += audio.frame.duration
@@ -428,7 +428,8 @@ class FallbackSynthesizeStream(SynthesizeStream):
         except Exception:
             if recovering:
                 logger.exception(
-                    f"{tts.label} recovery unexpected error", extra={"streamed": True}
+                    f"{tts.label} recovery unexpected error",
+                    extra={"streamed": True},
                 )
                 raise
 
@@ -438,6 +439,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
             )
             raise
         finally:
+            if next_audio_task is not None:
+                await utils.aio.gracefully_cancel(next_audio_task)
+
             await utils.aio.gracefully_cancel(input_task)
 
     async def _run(self) -> None:

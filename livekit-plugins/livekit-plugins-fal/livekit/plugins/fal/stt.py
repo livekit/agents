@@ -72,9 +72,6 @@ class WizperSTT(stt.STT):
         version: Optional[str] = None,
     ) -> stt.SpeechEvent:
         try:
-            if buffer is None:
-                raise ValueError("AudioBuffer input is required")
-
             config = self._sanitize_options(
                 language=language, task=task, chunk_level=chunk_level, version=version
             )
