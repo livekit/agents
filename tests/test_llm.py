@@ -98,7 +98,7 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #         )
     #     )
     # ),
-    # anthropic.LLM(),
+    lambda: anthropic.LLM(),
 ]
 
 
