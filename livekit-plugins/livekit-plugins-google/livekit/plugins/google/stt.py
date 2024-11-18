@@ -28,6 +28,7 @@ from livekit.agents import (
     utils,
 )
 
+from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import Aborted, DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
@@ -81,6 +82,7 @@ class STT(stt.STT):
         punctuate: bool = True,
         spoken_punctuation: bool = True,
         model: SpeechModels = "long",
+        location: str = "global",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
         keywords: List[tuple[str, float]] | None = None,
@@ -97,6 +99,7 @@ class STT(stt.STT):
         )
 
         self._client: SpeechAsyncClient | None = None
+        self._location = location
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
 
@@ -132,9 +135,16 @@ class STT(stt.STT):
             self._client = SpeechAsyncClient.from_service_account_file(
                 self._credentials_file
             )
-        else:
+        elif self._location == "global":
             self._client = SpeechAsyncClient()
-
+        else:
+            # Add support for passing a specific location that matches recognizer
+            # see: https://cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages
+            self._client = SpeechAsyncClient(
+                client_options=ClientOptions(
+                    api_endpoint=f"{self._location}-speech.googleapis.com"
+                )
+            )
         assert self._client is not None
         return self._client
 
@@ -150,7 +160,7 @@ class STT(stt.STT):
             from google.auth import default as ga_default
 
             _, project_id = ga_default()
-        return f"projects/{project_id}/locations/global/recognizers/_"
+        return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._config)

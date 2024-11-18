@@ -4,7 +4,7 @@ import asyncio
 from typing import AsyncIterable
 
 from .. import tokenize, utils
-from ..log import logger
+from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .tts import (
     TTS,
     ChunkedStream,
@@ -35,12 +35,22 @@ class StreamAdapter(TTS):
         def _forward_metrics(*args, **kwargs):
             self.emit("metrics_collected", *args, **kwargs)
 
-    def synthesize(self, text: str) -> ChunkedStream:
-        return self._tts.synthesize(text=text)
+    def synthesize(
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> "ChunkedStream":
+        return self._tts.synthesize(text=text, conn_options=conn_options)
 
-    def stream(self) -> SynthesizeStream:
+    def stream(
+        self,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> "StreamAdapterWrapper":
         return StreamAdapterWrapper(
-            self,
+            tts=self,
+            conn_options=conn_options,
             wrapped_tts=self._tts,
             sentence_tokenizer=self._sentence_tokenizer,
         )
@@ -49,12 +59,13 @@ class StreamAdapter(TTS):
 class StreamAdapterWrapper(SynthesizeStream):
     def __init__(
         self,
-        tts: TTS,
         *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
         wrapped_tts: TTS,
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
-        super().__init__(tts)
+        super().__init__(tts=tts, conn_options=conn_options)
         self._wrapped_tts = wrapped_tts
         self._sent_stream = sentence_tokenizer.stream()
 
@@ -63,8 +74,7 @@ class StreamAdapterWrapper(SynthesizeStream):
     ) -> None:
         pass  # do nothing
 
-    @utils.log_exceptions(logger=logger)
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         async def _forward_input():
             """forward input to vad"""
             async for input in self._input_ch:

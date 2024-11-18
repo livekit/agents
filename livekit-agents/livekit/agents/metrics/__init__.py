@@ -1,6 +1,8 @@
 from .base import (
     AgentMetrics,
     LLMMetrics,
+    MultimodalLLMError,
+    MultimodalLLMMetrics,
     PipelineEOUMetrics,
     PipelineLLMMetrics,
     PipelineSTTMetrics,
@@ -16,6 +18,8 @@ from .utils import log_metrics
 
 __all__ = [
     "LLMMetrics",
+    "MultimodalLLMError",
+    "MultimodalLLMMetrics",
     "AgentMetrics",
     "PipelineEOUMetrics",
     "PipelineSTTMetrics",

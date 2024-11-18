@@ -18,7 +18,9 @@ from dataclasses import dataclass
 
 from livekit import rtc
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
+    APIConnectOptions,
     APIStatusError,
     APITimeoutError,
     tts,
@@ -134,7 +136,7 @@ class TTS(tts.TTS):
         self._opts.audio_config.speaking_rate = speaking_rate
 
     def _ensure_client(self) -> texttospeech.TextToSpeechAsyncClient:
-        if not self._client:
+        if self._client is None:
             if self._credentials_info:
                 self._client = (
                     texttospeech.TextToSpeechAsyncClient.from_service_account_info(
@@ -154,22 +156,35 @@ class TTS(tts.TTS):
         assert self._client is not None
         return self._client
 
-    def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(self, text, self._opts, self._ensure_client())
+    def synthesize(
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> "ChunkedStream":
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=self._opts,
+            client=self._ensure_client(),
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
+        *,
         tts: TTS,
-        text: str,
+        input_text: str,
+        conn_options: APIConnectOptions,
         opts: _TTSOptions,
         client: texttospeech.TextToSpeechAsyncClient,
     ) -> None:
-        super().__init__(tts, text)
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._client = opts, client
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         request_id = utils.shortuuid()
 
         try:
@@ -177,16 +192,16 @@ class ChunkedStream(tts.ChunkedStream):
                 input=texttospeech.SynthesisInput(text=self._input_text),
                 voice=self._opts.voice,
                 audio_config=self._opts.audio_config,
+                timeout=self._conn_options.timeout,
             )
 
-            data = response.audio_content
             if self._opts.audio_config.audio_encoding == "mp3":
                 decoder = utils.codecs.Mp3StreamDecoder()
                 bstream = utils.audio.AudioByteStream(
                     sample_rate=self._opts.audio_config.sample_rate_hertz,
                     num_channels=1,
                 )
-                for frame in decoder.decode_chunk(data):
+                for frame in decoder.decode_chunk(response.audio_content):
                     for frame in bstream.write(frame.data.tobytes()):
                         self._event_ch.send_nowait(
                             tts.SynthesizedAudio(request_id=request_id, frame=frame)
@@ -197,7 +212,7 @@ class ChunkedStream(tts.ChunkedStream):
                         tts.SynthesizedAudio(request_id=request_id, frame=frame)
                     )
             else:
-                data = data[44:]  # skip WAV header
+                data = response.audio_content[44:]  # skip WAV header
                 self._event_ch.send_nowait(
                     tts.SynthesizedAudio(
                         request_id=request_id,
