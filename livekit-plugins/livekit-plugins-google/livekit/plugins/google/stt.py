@@ -244,7 +244,7 @@ class SpeechStream(stt.SpeechStream):
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
-        super().__init__(stt)
+        super().__init__(stt, sample_rate=sample_rate)
 
         self._client = client
         self._recognizer = recognizer
@@ -294,9 +294,6 @@ class SpeechStream(stt.SpeechStream):
 
                         async for frame in self._input_ch:
                             if isinstance(frame, rtc.AudioFrame):
-                                frame = frame.remix_and_resample(
-                                    self._sample_rate, self._num_channels
-                                )
                                 yield cloud_speech.StreamingRecognizeRequest(
                                     audio=frame.data.tobytes()
                                 )
