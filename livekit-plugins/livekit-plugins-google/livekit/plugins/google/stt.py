@@ -240,7 +240,7 @@ class SpeechStream(stt.SpeechStream):
         client: SpeechAsyncClient,
         recognizer: str,
         config: STTOptions,
-        sample_rate: int = 48000,
+        sample_rate: int = 16000,
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
