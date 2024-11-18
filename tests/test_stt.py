@@ -7,7 +7,7 @@ import time
 from itertools import product
 
 import pytest
-from livekit import agents, rtc
+from livekit import agents
 from livekit.plugins import assemblyai, azure, deepgram, fal, google, openai, silero
 
 from .utils import make_test_speech, wer
