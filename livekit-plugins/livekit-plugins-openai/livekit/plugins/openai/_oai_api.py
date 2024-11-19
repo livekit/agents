@@ -120,7 +120,7 @@ def build_oai_function_description(
             if arg_info.choices:
                 p["enum"] = arg_info.choices
 
-            if arg_info.type is int and arg_info.choices:
+            if arg_info.type is int and arg_info.choices and model is not None:
                 if model in vertex_models_set:
                     raise ValueError(
                         f"Parameter '{arg_info.name}' uses 'choices' with 'int', which is not supported by Vertex AI."
