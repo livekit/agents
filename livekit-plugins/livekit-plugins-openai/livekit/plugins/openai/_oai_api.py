@@ -21,10 +21,6 @@ from typing import Any, get_args
 
 from livekit.agents.llm import function_context
 
-from .models import VertexModels
-
-vertex_models_set = set(get_args(VertexModels))
-
 __all__ = ["build_oai_function_description"]
 
 
@@ -121,6 +117,10 @@ def build_oai_function_description(
                 p["enum"] = arg_info.choices
 
             if arg_info.type is int and arg_info.choices and model is not None:
+                from .models import VertexModels
+
+                vertex_models_set = set(get_args(VertexModels))
+
                 if model in vertex_models_set:
                     raise ValueError(
                         f"Parameter '{arg_info.name}' uses 'choices' with 'int', which is not supported by Vertex AI."
