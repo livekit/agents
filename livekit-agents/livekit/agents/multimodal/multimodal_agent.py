@@ -8,10 +8,10 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 from livekit.agents.llm import ChatMessage
+from livekit.agents.metrics import MultimodalLLMMetrics
 
-from .._constants import ATTRIBUTE_AGENT_STATE
-from .._types import AgentState
 from ..log import logger
+from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from . import agent_playout
 
 EventTypes = Literal[
@@ -24,6 +24,7 @@ EventTypes = Literal[
     "agent_speech_interrupted",
     "function_calls_collected",
     "function_calls_finished",
+    "metrics_collected",
 ]
 
 
@@ -239,6 +240,10 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         @self._session.on("function_calls_finished")
         def _function_calls_finished(called_fncs: list[llm.CalledFunction]):
             self.emit("function_calls_finished", called_fncs)
+
+        @self._session.on("metrics_collected")
+        def _metrics_collected(metrics: MultimodalLLMMetrics):
+            self.emit("metrics_collected", metrics)
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""

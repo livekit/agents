@@ -92,7 +92,7 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #         )
     #     )
     # ),
-    # anthropic.LLM(),
+    lambda: anthropic.LLM(),
     lambda: openai.LLM.with_vertex(),
 ]
 
@@ -287,7 +287,12 @@ async def _request_fnc_call(
     temperature: float | None = None,
 ) -> llm.LLMStream:
     stream = model.chat(
-        chat_ctx=ChatContext().append(text=request, role="user"),
+        chat_ctx=ChatContext()
+        .append(
+            text="You are an helpful assistant. Follow the instructions provided by the user. You can use multiple tool calls at once.",
+            role="system",
+        )
+        .append(text=request, role="user"),
         fnc_ctx=fnc_ctx,
         temperature=temperature,
     )

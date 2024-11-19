@@ -98,6 +98,31 @@ class PipelineVADMetrics(VADMetrics):
     pass
 
 
+@dataclass
+class MultimodalLLMError(Error):
+    type: str | None
+    reason: str | None = None
+    code: str | None = None
+    message: str | None = None
+
+
+@dataclass
+class MultimodalLLMMetrics(LLMMetrics):
+    @dataclass
+    class InputTokenDetails:
+        cached_tokens: int
+        text_tokens: int
+        audio_tokens: int
+
+    @dataclass
+    class OutputTokenDetails:
+        text_tokens: int
+        audio_tokens: int
+
+    input_token_details: InputTokenDetails
+    output_token_details: OutputTokenDetails
+
+
 AgentMetrics = Union[
     STTMetrics,
     LLMMetrics,
@@ -108,4 +133,5 @@ AgentMetrics = Union[
     PipelineLLMMetrics,
     PipelineTTSMetrics,
     PipelineVADMetrics,
+    MultimodalLLMMetrics,
 ]

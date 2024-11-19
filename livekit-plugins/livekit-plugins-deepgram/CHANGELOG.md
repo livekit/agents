@@ -1,5 +1,17 @@
 # livekit-plugins-deepgram
 
+## 0.6.11
+
+### Patch Changes
+
+- add PeriodicCollector utility for metrics - [#1094](https://github.com/livekit/agents/pull/1094) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.10
+
+### Patch Changes
+
+- fix Deepgram missing first word, disabled energy filter by default - [#1090](https://github.com/livekit/agents/pull/1090) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.6.9
 
 ### Patch Changes

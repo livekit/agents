@@ -28,6 +28,7 @@ from livekit.agents import (
     utils,
 )
 
+from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import Aborted, DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
@@ -81,6 +82,7 @@ class STT(stt.STT):
         punctuate: bool = True,
         spoken_punctuation: bool = True,
         model: SpeechModels = "long",
+        location: str = "global",
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
         keywords: List[tuple[str, float]] | None = None,
@@ -97,6 +99,7 @@ class STT(stt.STT):
         )
 
         self._client: SpeechAsyncClient | None = None
+        self._location = location
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
 
@@ -132,9 +135,16 @@ class STT(stt.STT):
             self._client = SpeechAsyncClient.from_service_account_file(
                 self._credentials_file
             )
-        else:
+        elif self._location == "global":
             self._client = SpeechAsyncClient()
-
+        else:
+            # Add support for passing a specific location that matches recognizer
+            # see: https://cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages
+            self._client = SpeechAsyncClient(
+                client_options=ClientOptions(
+                    api_endpoint=f"{self._location}-speech.googleapis.com"
+                )
+            )
         assert self._client is not None
         return self._client
 
@@ -150,7 +160,7 @@ class STT(stt.STT):
             from google.auth import default as ga_default
 
             _, project_id = ga_default()
-        return f"projects/{project_id}/locations/global/recognizers/_"
+        return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._config)
@@ -230,11 +240,11 @@ class SpeechStream(stt.SpeechStream):
         client: SpeechAsyncClient,
         recognizer: str,
         config: STTOptions,
-        sample_rate: int = 48000,
+        sample_rate: int = 16000,
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
-        super().__init__(stt)
+        super().__init__(stt, sample_rate=sample_rate)
 
         self._client = client
         self._recognizer = recognizer
@@ -284,9 +294,6 @@ class SpeechStream(stt.SpeechStream):
 
                         async for frame in self._input_ch:
                             if isinstance(frame, rtc.AudioFrame):
-                                frame = frame.remix_and_resample(
-                                    self._sample_rate, self._num_channels
-                                )
                                 yield cloud_speech.StreamingRecognizeRequest(
                                     audio=frame.data.tobytes()
                                 )
@@ -303,13 +310,11 @@ class SpeechStream(stt.SpeechStream):
                 retry_count = 0  # connection successful, reset retry count
 
                 await self._run_stream(stream)
-            except Aborted:
-                logger.error("google stt connection aborted")
-                break
             except Exception as e:
+                error_type = "Aborted" if isinstance(e, Aborted) else "Error"
                 if retry_count >= max_retry:
                     logger.error(
-                        f"failed to connect to google stt after {max_retry} tries",
+                        f"failed to connect to google stt after {max_retry} tries due to {error_type}",
                         exc_info=e,
                     )
                     break
@@ -317,7 +322,7 @@ class SpeechStream(stt.SpeechStream):
                 retry_delay = min(retry_count * 2, 5)  # max 5s
                 retry_count += 1
                 logger.warning(
-                    f"google stt connection failed, retrying in {retry_delay}s",
+                    f"google stt connection {error_type.lower()}, retrying in {retry_delay}s",
                     exc_info=e,
                 )
                 await asyncio.sleep(retry_delay)
