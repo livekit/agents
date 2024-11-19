@@ -180,19 +180,19 @@ class LLM(llm.LLM):
         """
         Create a new instance of VertexAI LLM.
 
-        `project_id` must be set to your VERTEXAI PROJECT ID, either using the argument or by setting
-        the `VERTEXAI_PROJECT_ID` environmental variable.
+        `project_id` must be set to your Google Cloud PROJECT ID, either using the argument or by setting
+        the `GOOGLE_PROJECT_ID` environmental variable.
         """
 
-        project_id = project_id or os.environ.get("VERTEXAI_PROJECT_ID")
+        project_id = project_id or os.environ.get("GOOGLE_PROJECT_ID")
         if project_id is None:
             raise ValueError(
-                "VERTEXAI_PROJECT_ID is required, either set project_id argument or set VERTEXAI_PROJECT_ID environmental variable"
+                "GOOGLE_PROJECT_ID is required, either set project_id argument or set GOOGLE_PROJECT_ID environmental variable"
             )
-        location = location or os.environ.get("VERTEXAI_LOCATION")
+        location = location or os.environ.get("GOOGLE_LOCATION")
         if location is None:
             raise ValueError(
-                "VERTEXAI_LOCATION is required, either set location argument or set VERTEXAI_LOCATION environmental variable"
+                "GOOGLE_LOCATION is required, either set location argument or set GOOGLE_LOCATION environmental variable"
             )
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if _gac is None:
