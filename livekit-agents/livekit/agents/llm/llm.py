@@ -55,6 +55,8 @@ class LLM(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         chat_ctx: ChatContext,
         fnc_ctx: function_context.FunctionContext | None = None,
         temperature: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
     ) -> "LLMStream": ...
