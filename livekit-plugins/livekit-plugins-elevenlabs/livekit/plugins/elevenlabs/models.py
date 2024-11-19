@@ -18,4 +18,5 @@ TTSEncoding = Literal[
     "pcm_16000",
     "pcm_22050",
     "pcm_44100",
+    "ulaw_8000",
 ]
