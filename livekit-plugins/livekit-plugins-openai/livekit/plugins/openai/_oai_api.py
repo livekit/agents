@@ -89,7 +89,7 @@ def create_ai_function_info(
 
 def build_oai_function_description(
     fnc_info: function_context.FunctionInfo,
-    model: str,
+    model: str | None = None,
 ) -> dict[str, Any]:
     def build_oai_property(arg_info: function_context.FunctionArgInfo):
         def type2str(t: type) -> str:
