@@ -17,9 +17,13 @@ from __future__ import annotations
 import inspect
 import json
 import typing
-from typing import Any
+from typing import Any, get_args
 
-from . import function_context
+from livekit.agents.llm import function_context
+
+from .models import VertexModels
+
+vertex_models_set = set(get_args(VertexModels))
 
 __all__ = ["build_oai_function_description"]
 
@@ -85,6 +89,7 @@ def create_ai_function_info(
 
 def build_oai_function_description(
     fnc_info: function_context.FunctionInfo,
+    model: str,
 ) -> dict[str, Any]:
     def build_oai_property(arg_info: function_context.FunctionArgInfo):
         def type2str(t: type) -> str:
@@ -114,6 +119,12 @@ def build_oai_function_description(
             p["type"] = type2str(arg_info.type)
             if arg_info.choices:
                 p["enum"] = arg_info.choices
+
+            if arg_info.type is int and arg_info.choices:
+                if model in vertex_models_set:
+                    raise ValueError(
+                        f"Parameter '{arg_info.name}' uses 'choices' with 'int', which is not supported by Vertex AI."
+                    )
 
         return p
 

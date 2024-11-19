@@ -11,9 +11,9 @@ from urllib.parse import urlencode
 import aiohttp
 from livekit import rtc
 from livekit.agents import llm, utils
-from livekit.agents.llm import _oai_api
 from typing_extensions import TypedDict
 
+from .._oai_api import build_oai_function_description, create_ai_function_info
 from . import api_proto, remote_items
 from .log import logger
 
@@ -798,9 +798,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             for fnc in self._fnc_ctx.ai_functions.values():
                 # the realtime API is using internally-tagged polymorphism.
                 # build_oai_function_description was built for the ChatCompletion API
-                function_data = llm._oai_api.build_oai_function_description(fnc)[
-                    "function"
-                ]
+                function_data = build_oai_function_description(fnc)["function"]
                 function_data["type"] = "function"
                 tools.append(function_data)
 
@@ -1334,7 +1332,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             item = response_output_done["item"]
             assert item["type"] == "function_call"
 
-            fnc_call_info = _oai_api.create_ai_function_info(
+            fnc_call_info = create_ai_function_info(
                 self._fnc_ctx,
                 item["call_id"],
                 item["name"],

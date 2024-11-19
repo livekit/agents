@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Annotated, Callable, Optional
+from typing import Annotated, Callable, Optional, get_args
 
 import pytest
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
-from livekit.plugins import anthropic, openai
+from livekit.plugins import openai
+from livekit.plugins.openai import VertexModels
+
+vertex_models_set = set(get_args(VertexModels))
 
 
 class Unit(Enum):
@@ -236,16 +239,20 @@ async def test_calls_choices(llm_factory: Callable[[], llm.LLM]):
         ],
     ) -> None: ...
 
-    stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
-    calls = stream.execute_functions()
-    await asyncio.gather(*[f.task for f in calls])
-    await stream.aclose()
+    if input_llm._opts.model in vertex_models_set:
+        with pytest.raises(ValueError, match="which is not supported by Vertex AI"):
+            stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
+    else:
+        stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
+        calls = stream.execute_functions()
+        await asyncio.gather(*[f.task for f in calls])
+        await stream.aclose()
 
-    assert len(calls) == 1, "change_volume should have been called only once"
+        assert len(calls) == 1, "change_volume should have been called only once"
 
-    call = calls[0]
-    volume = call.call_info.arguments["volume"]
-    assert volume == 30, "change_volume should have been called with volume 30"
+        call = calls[0]
+        volume = call.call_info.arguments["volume"]
+        assert volume == 30, "change_volume should have been called with volume 30"
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)

@@ -34,6 +34,10 @@ import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
 
+from ._oai_api import (
+    build_oai_function_description,
+    create_ai_function_info,
+)
 from .log import logger
 from .models import (
     CerebrasChatModels,
@@ -568,7 +572,7 @@ class LLM(llm.LLM):
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
             for fnc in fnc_ctx.ai_functions.values():
-                fncs_desc.append(llm._oai_api.build_oai_function_description(fnc))
+                fncs_desc.append(build_oai_function_description(fnc, self._opts.model))
 
             opts["tools"] = fncs_desc
 
@@ -713,7 +717,7 @@ class LLMStream(llm.LLMStream):
             )
             return None
 
-        fnc_info = llm._oai_api.create_ai_function_info(
+        fnc_info = create_ai_function_info(
             self._fnc_ctx, self._tool_call_id, self._fnc_name, self._fnc_raw_arguments
         )
 
