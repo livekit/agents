@@ -21,7 +21,7 @@ from typing import Any, get_args
 
 from livekit.agents.llm import function_context
 
-__all__ = ["build_oai_function_description"]
+__all__ = ["build_oai_function_description", "create_ai_function_info"]
 
 
 def create_ai_function_info(
