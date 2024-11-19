@@ -59,15 +59,6 @@ class FncCtx(FunctionContext):
         ],
     ) -> None: ...
 
-    # test choices on int
-    @ai_callable(description="Change the volume")
-    def change_volume(
-        self,
-        volume: Annotated[
-            int, TypeInfo(description="The volume level", choices=[0, 11, 30, 83, 99])
-        ],
-    ) -> None: ...
-
     @ai_callable(description="Update user info")
     def update_user_info(
         self,
