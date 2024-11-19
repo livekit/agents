@@ -7,7 +7,7 @@ from typing import Annotated, Callable, Optional, get_args
 import pytest
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
-from livekit.plugins import openai
+from livekit.plugins import anthropic, openai
 from livekit.plugins.openai import VertexModels
 
 vertex_models_set = set(get_args(VertexModels))
