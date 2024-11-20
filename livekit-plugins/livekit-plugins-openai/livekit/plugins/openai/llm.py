@@ -612,6 +612,7 @@ class LLMStream(llm.LLMStream):
         fnc_ctx: llm.FunctionContext | None,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        self._llm: LLM = llm
         self._awaitable_oai_stream = oai_stream
         self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
 
