@@ -181,15 +181,9 @@ class LLM(llm.LLM):
         """
         Create a new instance of VertexAI LLM.
 
-        `project_id` must be set to your Google Cloud PROJECT ID, either using the argument or by setting
-        the `GOOGLE_PROJECT_ID` environmental variable.
+        `GOOGLE_APPLICATION_CREDENTIALS` environment variable must be set to the path of the service account key file.
         """
-
         project_id = project_id or os.environ.get("GOOGLE_PROJECT_ID")
-        if project_id is None:
-            raise ValueError(
-                "GOOGLE_PROJECT_ID is required, either set project_id argument or set GOOGLE_PROJECT_ID environmental variable"
-            )
         location = location or os.environ.get("GOOGLE_LOCATION")
         if location is None:
             raise ValueError(
@@ -211,11 +205,14 @@ class LLM(llm.LLM):
 
         class AuthTokenRefresher(openai.AsyncClient):
             def __init__(self, **kwargs: Any) -> None:
-                super().__init__(api_key="DUMMY", **kwargs)
-                self.refresh_threshold = 600  # 10 minutes
                 self.creds, self.project = default_async(
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
+                project = project_id or self.project
+                base_url = f"https://{location}-aiplatform.googleapis.com/v1beta1/projects/{project}/locations/{location}/endpoints/openapi"
+                kwargs.update({"base_url": base_url})
+                super().__init__(api_key="DUMMY", **kwargs)
+                self.refresh_threshold = 600  # 10 minutes
 
             def _token_needs_refresh(self) -> bool:
                 if not self.creds or not self.creds.valid:
@@ -235,7 +232,6 @@ class LLM(llm.LLM):
                 self.api_key = self.creds.token
 
         client = AuthTokenRefresher(
-            base_url=f"https://{location}-aiplatform.googleapis.com/v1beta1/projects/{project_id}/locations/{location}/endpoints/openapi",
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,

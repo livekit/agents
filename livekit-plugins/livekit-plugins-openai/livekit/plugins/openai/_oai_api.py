@@ -115,7 +115,6 @@ def build_oai_function_description(
             p["type"] = type2str(arg_info.type)
             if arg_info.choices:
                 p["enum"] = arg_info.choices
-            print(arg_info.type, arg_info.choices, capabilities)
             if arg_info.type is int and arg_info.choices and capabilities is not None:
                 if not capabilities.supports_choices_on_int:
                     raise ValueError(
