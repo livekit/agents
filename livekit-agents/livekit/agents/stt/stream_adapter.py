@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import AsyncIterable
 
-from .. import utils, APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
+from .. import utils
+from ..types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 from ..log import logger
 from ..vad import VAD, VADEventType
 from .stt import STT, SpeechEvent, SpeechEventType, SpeechStream, STTCapabilities
