@@ -192,7 +192,7 @@ class SpeechStream(stt.SpeechStream):
             )
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
-                num_channels=self._num_channels,
+                num_channels=1,
                 samples_per_channel=samples_per_buffer,
             )
 
