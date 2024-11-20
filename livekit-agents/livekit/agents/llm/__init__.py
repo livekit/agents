@@ -22,8 +22,8 @@ from .llm import (
     Choice,
     ChoiceDelta,
     CompletionUsage,
-    LLMStream,
     LLMCapabilities,
+    LLMStream,
 )
 
 __all__ = [

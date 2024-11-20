@@ -17,9 +17,9 @@ from __future__ import annotations
 import inspect
 import json
 import typing
-from typing import Any, get_args
+from typing import Any
 
-from livekit.agents.llm import function_context
+from livekit.agents.llm import function_context, llm
 
 __all__ = ["build_oai_function_description", "create_ai_function_info"]
 

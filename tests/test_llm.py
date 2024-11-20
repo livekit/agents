@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Annotated, Callable, Optional, get_args
+from typing import Annotated, Callable, Optional
 
 import pytest
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
 from livekit.plugins import anthropic, openai
-
 
 
 class Unit(Enum):

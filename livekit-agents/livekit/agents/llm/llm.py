@@ -35,9 +35,11 @@ class Choice:
     delta: ChoiceDelta
     index: int = 0
 
+
 @dataclass
 class LLMCapabilities:
     supports_choices_on_int: bool = True
+
 
 @dataclass
 class ChatChunk:
