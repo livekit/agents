@@ -24,7 +24,7 @@ from typing import List, Literal, Optional
 from urllib.parse import urlencode
 
 import aiohttp
-from livekit.agents import stt, utils
+from livekit.agents import stt, utils, DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils import AudioBuffer
 
 from .log import logger
@@ -102,15 +102,10 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        *,
         buffer: AudioBuffer,
-    ) -> stt.SpeechEvent:
-        raise NotImplementedError("Not implemented")
-
-    async def recognize(
-        self,
         *,
-        buffer: AudioBuffer,
+        language: str | None,
+        conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         raise NotImplementedError("Not implemented")
 
@@ -118,10 +113,12 @@ class STT(stt.STT):
         self,
         *,
         language: Optional[str] = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
         config = dataclasses.replace(self._opts)
         return SpeechStream(
-            stt_=self,
+            stt=self,
+            conn_options=conn_options,
             opts=config,
             api_key=self._api_key,
             http_session=self.session,
@@ -134,85 +131,48 @@ class SpeechStream(stt.SpeechStream):
 
     def __init__(
         self,
-        stt_: STT,
+        *,
+        stt: STT,
         opts: STTOptions,
+        conn_options: APIConnectOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
-        num_channels: int = 1,
-        max_retry: int = 32,
     ) -> None:
-        super().__init__(stt=stt_, sample_rate=opts.sample_rate)
+        super().__init__(
+            stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
+        )
 
         self._opts = opts
-        self._num_channels = num_channels
         self._api_key = api_key
         self._session = http_session
-        self._max_retry = max_retry
         self._speech_duration = 0
-
-        if self._num_channels != 1:
-            raise ValueError(
-                f"AssemblyAI only supports mono audio, but a `num_channels` of {self._num_channels} was provided"
-            )
 
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: List[stt.SpeechEvent] = []
 
-    @utils.log_exceptions(logger=logger)
-    async def _main_task(self) -> None:
-        await self._run(self._max_retry)
-
-    @utils.log_exceptions(logger=logger)
-    async def _run(self, max_retry: int) -> None:
+    async def _run(self) -> None:
         """
         Run a single websocket connection to AssemblyAI and make sure to reconnect
         when something went wrong.
         """
-        retry_count = 0
-        while self._input_ch.qsize() or not self._input_ch.closed:
-            try:
-                live_config = {
-                    "sample_rate": self._opts.sample_rate,
-                    "word_boost": self._opts.word_boost,
-                    "encoding": self._opts.encoding,
-                    "disable_partial_transcripts": self._opts.disable_partial_transcripts,
-                    "enable_extra_session_information": self._opts.enable_extra_session_information,
-                }
+        live_config = {
+            "sample_rate": self._opts.sample_rate,
+            "word_boost": self._opts.word_boost,
+            "encoding": self._opts.encoding,
+            "disable_partial_transcripts": self._opts.disable_partial_transcripts,
+            "enable_extra_session_information": self._opts.enable_extra_session_information,
+        }
 
-                headers = {
-                    "Authorization": self._api_key,
-                    "Content-Type": "application/json",
-                }
+        headers = {
+            "Authorization": self._api_key,
+            "Content-Type": "application/json",
+        }
 
-                ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
-                filtered_config = {
-                    k: v for k, v in live_config.items() if v is not None
-                }
-                url = f"{ws_url}?{urlencode(filtered_config).lower()}"
-                ws = await self._session.ws_connect(url, headers=headers)
-                retry_count = 0  # connected successfully, reset the retry_count
+        ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
+        filtered_config = {k: v for k, v in live_config.items() if v is not None}
+        url = f"{ws_url}?{urlencode(filtered_config).lower()}"
+        ws = await self._session.ws_connect(url, headers=headers)
 
-                await self._run_ws(ws)
-            except Exception:
-                # Something went wrong, retry the connection
-                if retry_count >= max_retry:
-                    logger.error(
-                        f"failed to connect to AssemblyAI after {max_retry} tries"
-                    )
-                    break
-
-                retry_delay = min(retry_count * 2, 10)  # max 10s
-                retry_count += 1  # increment after calculating the delay, the first retry should happen directly
-
-                logger.info(
-                    f"AssemblyAI connection failed, retrying in {retry_delay}s",
-                )
-                await asyncio.sleep(retry_delay)
-
-    async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """
-        This method can throw ws errors, these are handled inside the _run method
-        """
         closing_ws = False
 
         async def send_task():
