@@ -37,6 +37,11 @@ class Choice:
 
 
 @dataclass
+class LLMCapabilities:
+    supports_choices_on_int: bool = True
+
+
+@dataclass
 class ChatChunk:
     request_id: str
     choices: list[Choice] = field(default_factory=list)
@@ -46,6 +51,7 @@ class ChatChunk:
 class LLM(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(self) -> None:
         super().__init__()
+        self._capabilities = LLMCapabilities()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @abstractmethod
@@ -58,6 +64,10 @@ class LLM(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
     ) -> "LLMStream": ...
+
+    @property
+    def capabilities(self) -> LLMCapabilities:
+        return self._capabilities
 
 
 class LLMStream(ABC):
