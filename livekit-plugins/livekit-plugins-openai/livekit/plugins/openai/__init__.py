@@ -16,7 +16,7 @@
 from . import beta, realtime
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
-from .models import TTSModels, TTSVoices, VertexModels, WhisperModels
+from .models import TTSModels, TTSVoices, WhisperModels
 from .stt import STT
 from .tts import TTS
 from .version import __version__
@@ -34,7 +34,6 @@ __all__ = [
     "EmbeddingData",
     "realtime",
     "__version__",
-    "VertexModels",
 ]
 
 from livekit.agents import Plugin
