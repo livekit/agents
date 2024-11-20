@@ -81,7 +81,7 @@ class SpeechHandle:
             id=utils.shortuuid(),
             allow_interruptions=allow_interruptions,
             add_to_chat_ctx=add_to_chat_ctx,
-            is_reply=False,
+            is_reply=True,
             user_question="",
             extra_tools_messages=extra_tools_messages,
             fnc_nest_depth=fnc_nest_depth,

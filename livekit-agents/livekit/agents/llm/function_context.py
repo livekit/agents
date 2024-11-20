@@ -110,10 +110,14 @@ class FunctionCallsHandle:
     llm_stream: LLMStream
     nest_depth: int
     speech_id: str
+    _interrupted: bool = False
 
     async def execute(self) -> list[CalledFunction]:
         called_fncs = []
         for fnc in self.function_calls:
+            if self._interrupted:
+                break
+
             called_fnc = fnc.execute()
             called_fncs.append(called_fnc)
             logger.debug(
@@ -135,6 +139,13 @@ class FunctionCallsHandle:
                     exc_info=e,
                 )
         return called_fncs
+
+    def interrupt(self) -> None:
+        self._interrupted = True
+        logger.debug(
+            "interrupted function calls",
+            extra={"speech_id": self.speech_id},
+        )
 
 
 def ai_callable(

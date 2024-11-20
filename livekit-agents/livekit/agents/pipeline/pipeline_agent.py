@@ -608,7 +608,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     async def _function_calls_task(self) -> None:
         """Task that handles executing function calls and generating responses asynchronously"""
 
-        async def _generate_response(
+        def _prepare_response(
             fnc_handle: FunctionCallsHandle,
             tool_calls_info: list[FunctionCallInfo],
             tool_calls_results: list[ChatMessage],
@@ -627,7 +627,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 fnc_nest_depth=fnc_handle.nest_depth + 1,
             )
 
-            # TODO: remove this lines if we decided to move the llm.chat to the _play_speech
+            # TODO: remove the following lines if we decided to move the llm.chat to the _play_speech
             # chat_ctx = fnc_handle.llm_stream.chat_ctx.copy()
             # chat_ctx.messages.extend(extra_tools_messages)
 
@@ -648,6 +648,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             while self._fnc_q:
                 fnc_handle = self._fnc_q[0]
+                if (
+                    fnc_handle._interrupted
+                    or fnc_handle.nest_depth > self._opts.max_nested_fnc_calls
+                ):
+                    self._fnc_q.pop(0)
+                    continue
 
                 call_ctx = AgentCallContext(self, fnc_handle.llm_stream)
                 tk = _CallContextVar.set(call_ctx)
@@ -667,9 +673,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         ChatMessage.create_tool_from_called_function(called_fnc)
                     )
 
-                if tool_calls_info:
+                if tool_calls_info and not fnc_handle._interrupted:
                     # Generate and queue response if we have results
-                    new_handle = await _generate_response(
+                    new_handle = _prepare_response(
                         fnc_handle, tool_calls_info, tool_calls_results
                     )
                     self.emit("function_calls_finished", called_fncs)
@@ -1000,6 +1006,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """Check whether the current assistant speech should be interrupted"""
         if self._playing_speech and self._should_interrupt():
             self._playing_speech.interrupt()
+
+            # Clear function calls when interrupted
+            for fnc_handle in self._fnc_q:
+                fnc_handle.interrupt()
 
     def _should_interrupt(self) -> bool:
         if self._playing_speech is None:
