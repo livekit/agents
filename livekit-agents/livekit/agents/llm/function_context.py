@@ -20,7 +20,9 @@ import functools
 import inspect
 import typing
 from dataclasses import dataclass
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Sequence, Tuple
+
+from livekit.agents.llm.llm import LLMStream
 
 from ..log import logger
 
@@ -98,6 +100,41 @@ class CalledFunction:
     task: asyncio.Task[Any]
     result: Any | None = None
     exception: BaseException | None = None
+
+
+@dataclass
+class FunctionCallsHandle:
+    """Represents a set of function calls to be executed, along with their context"""
+
+    function_calls: Sequence[FunctionCallInfo]
+    llm_stream: LLMStream
+    nest_depth: int
+    speech_id: str
+
+    async def execute(self) -> list[CalledFunction]:
+        called_fncs = []
+        for fnc in self.function_calls:
+            called_fnc = fnc.execute()
+            called_fncs.append(called_fnc)
+            logger.debug(
+                "executing ai function",
+                extra={
+                    "function": fnc.function_info.name,
+                    "speech_id": self.speech_id,
+                },
+            )
+            try:
+                await called_fnc.task
+            except Exception as e:
+                logger.exception(
+                    "error executing ai function",
+                    extra={
+                        "function": fnc.function_info.name,
+                        "speech_id": self.speech_id,
+                    },
+                    exc_info=e,
+                )
+        return called_fncs
 
 
 def ai_callable(

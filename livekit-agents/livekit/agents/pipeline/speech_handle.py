@@ -4,7 +4,7 @@ import asyncio
 from typing import AsyncIterable
 
 from .. import utils
-from ..llm import LLMStream
+from ..llm import ChatMessage, LLMStream
 from .agent_output import SynthesisHandle
 
 
@@ -17,6 +17,8 @@ class SpeechHandle:
         add_to_chat_ctx: bool,
         is_reply: bool,
         user_question: str,
+        fnc_nest_depth: int = 0,
+        extra_tools_messages: list[ChatMessage] | None = None,
     ) -> None:
         self._id = id
         self._allow_interruptions = allow_interruptions
@@ -34,6 +36,9 @@ class SpeechHandle:
         # source and synthesis_handle are None until the speech is initialized
         self._source: str | LLMStream | AsyncIterable[str] | None = None
         self._synthesis_handle: SynthesisHandle | None = None
+
+        self._fnc_nest_depth = fnc_nest_depth
+        self._fnc_extra_tools_messages: list[ChatMessage] | None = extra_tools_messages
 
     @staticmethod
     def create_assistant_reply(
@@ -62,6 +67,24 @@ class SpeechHandle:
             add_to_chat_ctx=add_to_chat_ctx,
             is_reply=False,
             user_question="",
+        )
+
+    @staticmethod
+    def create_tool_speech(
+        *,
+        allow_interruptions: bool,
+        add_to_chat_ctx: bool,
+        extra_tools_messages: list[ChatMessage],
+        fnc_nest_depth: int,
+    ) -> SpeechHandle:
+        return SpeechHandle(
+            id=utils.shortuuid(),
+            allow_interruptions=allow_interruptions,
+            add_to_chat_ctx=add_to_chat_ctx,
+            is_reply=False,
+            user_question="",
+            extra_tools_messages=extra_tools_messages,
+            fnc_nest_depth=fnc_nest_depth,
         )
 
     async def wait_for_initialization(self) -> None:
@@ -156,3 +179,12 @@ class SpeechHandle:
 
         if self._synthesis_handle is not None:
             self._synthesis_handle.interrupt()
+
+    @property
+    def fnc_nest_depth(self) -> int:
+        """The nesting depth of function calls for this speech"""
+        return self._fnc_nest_depth
+
+    @property
+    def extra_tools_messages(self) -> list[ChatMessage] | None:
+        return self._fnc_extra_tools_messages

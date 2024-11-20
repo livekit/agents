@@ -18,7 +18,15 @@ from typing import (
 from livekit import rtc
 
 from .. import metrics, stt, tokenize, tts, utils, vad
-from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from ..llm import (
+    LLM,
+    ChatContext,
+    ChatMessage,
+    FunctionCallInfo,
+    FunctionCallsHandle,
+    FunctionContext,
+    LLMStream,
+)
 from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
@@ -276,6 +284,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._speech_q: list[SpeechHandle] = []
         self._speech_q_changed = asyncio.Event()
 
+        self._fnc_q: list[FunctionCallsHandle] = []
+        self._fnc_q_changed = asyncio.Event()
+
         self._update_state_task: asyncio.Task | None = None
 
         self._last_final_transcript_time: float | None = None
@@ -379,6 +390,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 break
 
         self._main_atask = asyncio.create_task(self._main_task())
+        self._function_calls_task = asyncio.create_task(self._function_calls_task())
 
     def on(self, event: EventTypes, callback: Callable[[Any], None] | None = None):
         """Register a callback for an event
@@ -592,6 +604,82 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             self._speech_q_changed.clear()
 
+    @utils.log_exceptions(logger=logger)
+    async def _function_calls_task(self) -> None:
+        """Task that handles executing function calls and generating responses asynchronously"""
+
+        async def _generate_response(
+            fnc_handle: FunctionCallsHandle,
+            tool_calls_info: list[FunctionCallInfo],
+            tool_calls_results: list[ChatMessage],
+        ) -> SpeechHandle:
+            """Generate response from function results and queue it for playback"""
+            # Add tool calls and results to chat context
+            extra_tools_messages = []
+            extra_tools_messages.append(ChatMessage.create_tool_calls(tool_calls_info))
+            extra_tools_messages.extend(tool_calls_results)
+
+            # Create new speech handle for the response
+            new_handle = SpeechHandle.create_tool_speech(
+                allow_interruptions=self._opts.allow_interruptions,
+                add_to_chat_ctx=True,
+                extra_tools_messages=extra_tools_messages,
+                fnc_nest_depth=fnc_handle.nest_depth + 1,
+            )
+
+            # TODO: remove this lines if we decided to move the llm.chat to the _play_speech
+            # chat_ctx = fnc_handle.llm_stream.chat_ctx.copy()
+            # chat_ctx.messages.extend(extra_tools_messages)
+
+            # Generate new response from function results
+            # answer_llm_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx)
+            # synthesis_handle = self._synthesize_agent_speech(
+            #     new_handle.id, answer_llm_stream
+            # )
+            # new_handle.initialize(
+            #     source=answer_llm_stream,
+            #     synthesis_handle=synthesis_handle,
+            #     extra_tools_messages=extra_tools_messages,
+            # )
+            return new_handle
+
+        while True:
+            await self._fnc_q_changed.wait()
+
+            while self._fnc_q:
+                fnc_handle = self._fnc_q[0]
+
+                call_ctx = AgentCallContext(self, fnc_handle.llm_stream)
+                tk = _CallContextVar.set(call_ctx)
+
+                # Execute functions and get results
+                called_fncs = await fnc_handle.execute()
+
+                tool_calls_info = []
+                tool_calls_results = []
+                for called_fnc in called_fncs:
+                    # ignore the function calls that returns None
+                    if called_fnc.result is None and called_fnc.exception is None:
+                        continue
+
+                    tool_calls_info.append(called_fnc.call_info)
+                    tool_calls_results.append(
+                        ChatMessage.create_tool_from_called_function(called_fnc)
+                    )
+
+                if tool_calls_info:
+                    # Generate and queue response if we have results
+                    new_handle = await _generate_response(
+                        fnc_handle, tool_calls_info, tool_calls_results
+                    )
+                    self.emit("function_calls_finished", called_fncs)
+                    self._add_speech_for_playout(new_handle)
+
+                _CallContextVar.reset(tk)
+                self._fnc_q.pop(0)  # Remove current handle after processing
+
+            self._fnc_q_changed.clear()
+
     def _synthesize_agent_reply(self):
         """Synthesize the agent reply to the user question, also make sure only one reply
         is synthesized/played at a time"""
@@ -660,6 +748,19 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             SpeechDataContextVar.reset(tk)
 
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
+        if speech_handle.extra_tools_messages:
+            # synthesize the tool speech with the latest chat context and the tools messages
+            chat_ctx = self._chat_ctx.copy()
+            chat_ctx.messages.extend(speech_handle.extra_tools_messages)
+            answer_llm_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx)
+
+            synthesis_handle = self._synthesize_agent_speech(
+                speech_handle.id, answer_llm_stream
+            )
+            speech_handle.initialize(
+                source=answer_llm_stream, synthesis_handle=synthesis_handle
+            )
+
         try:
             await speech_handle.wait_for_initialization()
         except asyncio.CancelledError:
@@ -729,8 +830,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
-        extra_tools_messages = []  # additional messages from the functions to add to the context if needed
-
         # if the answer is using tools, execute the functions and automatically generate
         # a response to the user question from the returned values
         if is_using_tools and not interrupted:
@@ -740,98 +839,26 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             ), "user speech should have been committed before using tools"
 
             llm_stream = speech_handle.source
+            self.emit("function_calls_collected", llm_stream.function_calls)
 
-            if collected_text:
-                msg = ChatMessage.create(text=collected_text, role="assistant")
-                self._chat_ctx.messages.append(msg)
+            # queue new function calls if any
+            new_fnc_handle = FunctionCallsHandle(
+                function_calls=llm_stream.function_calls,
+                llm_stream=llm_stream,
+                nest_depth=speech_handle.fnc_nest_depth,
+                speech_id=speech_handle.id,
+            )
+            self._fnc_q.append(new_fnc_handle)
+            self._fnc_q_changed.set()
 
-                speech_handle.mark_speech_committed()
-                self.emit("agent_speech_committed", msg)
+        if speech_handle.add_to_chat_ctx and speech_handle.extra_tools_messages:
+            self._chat_ctx.messages.extend(speech_handle.extra_tools_messages)
 
-            # execute functions
-            call_ctx = AgentCallContext(self, llm_stream)
-            tk = _CallContextVar.set(call_ctx)
-
-            new_function_calls = llm_stream.function_calls
-
-            for i in range(self._opts.max_nested_fnc_calls):
-                self.emit("function_calls_collected", new_function_calls)
-
-                called_fncs = []
-                for fnc in new_function_calls:
-                    called_fnc = fnc.execute()
-                    called_fncs.append(called_fnc)
-                    logger.debug(
-                        "executing ai function",
-                        extra={
-                            "function": fnc.function_info.name,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
-                    try:
-                        await called_fnc.task
-                    except Exception as e:
-                        logger.exception(
-                            "error executing ai function",
-                            extra={
-                                "function": fnc.function_info.name,
-                                "speech_id": speech_handle.id,
-                            },
-                            exc_info=e,
-                        )
-
-                tool_calls_info = []
-                tool_calls_results = []
-
-                for called_fnc in called_fncs:
-                    # ignore the function calls that returns None
-                    if called_fnc.result is None and called_fnc.exception is None:
-                        continue
-
-                    tool_calls_info.append(called_fnc.call_info)
-                    tool_calls_results.append(
-                        ChatMessage.create_tool_from_called_function(called_fnc)
-                    )
-
-                if not tool_calls_info:
-                    break
-
-                # generate an answer from the tool calls
-                extra_tools_messages.append(
-                    ChatMessage.create_tool_calls(tool_calls_info, text=collected_text)
-                )
-                extra_tools_messages.extend(tool_calls_results)
-
-                chat_ctx = speech_handle.source.chat_ctx.copy()
-                chat_ctx.messages.extend(extra_tools_messages)
-
-                answer_llm_stream = self._llm.chat(
-                    chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx
-                )
-                answer_synthesis = self._synthesize_agent_speech(
-                    speech_handle.id, answer_llm_stream
-                )
-                # replace the synthesis handle with the new one to allow interruption
-                speech_handle.synthesis_handle = answer_synthesis
-                play_handle = answer_synthesis.play()
-                await play_handle.join()
-
-                collected_text = answer_synthesis.tts_forwarder.played_text
-                interrupted = answer_synthesis.interrupted
-                new_function_calls = answer_llm_stream.function_calls
-
-                self.emit("function_calls_finished", called_fncs)
-
-                if not new_function_calls:
-                    break
-
-            _CallContextVar.reset(tk)
-
-        if speech_handle.add_to_chat_ctx and (
-            not user_question or speech_handle.user_committed
+        if (
+            speech_handle.add_to_chat_ctx
+            and (not user_question or speech_handle.user_committed)
+            and collected_text
         ):
-            self._chat_ctx.messages.extend(extra_tools_messages)
-
             if interrupted:
                 collected_text += "..."
 
