@@ -89,7 +89,7 @@ Documentation on the framework and how to use it can be found [here](https://doc
 
 ## Contributing
 
-The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in LiveKit's [Slack community](https://livekit.io/join-slack).
+The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. Please read the [contributing guide](https://github.com/livekit/agents/blob/main/CONTRIBUTING.md) for more information.
 
 <!--BEGIN_REPO_NAV-->
 <br/><table>

@@ -60,6 +60,13 @@ setuptools.setup(
         "typing-extensions~=4.12",
     ],
     extras_require={
+        "dev": [
+            "mypy",
+            "pytest",
+            "ruff",
+            "types-pyyaml",
+            "timeout-decorator",
+        ],
         ':sys_platform=="win32"': [
             "colorama"
         ],  # fix logs color on windows (devmode only)
