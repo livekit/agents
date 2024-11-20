@@ -79,6 +79,7 @@ class LLM(llm.LLM):
         ``OPENAI_API_KEY`` environmental variable.
         """
         super().__init__()
+        self._capabilities = llm.LLMCapabilities(supports_choices_on_int=True)
 
         self._opts = LLMOptions(model=model, user=user, temperature=temperature)
         self._client: openai.AsyncClient = client or openai.AsyncClient(
@@ -246,12 +247,14 @@ class LLM(llm.LLM):
             ),
         )
 
-        return LLM(
+        vertex_llm = LLM(
             model=model,
             client=client,
             user=user,
             temperature=temperature,
         )
+        vertex_llm._capabilities = llm.LLMCapabilities(supports_choices_on_int=False)
+        return vertex_llm
 
     @staticmethod
     def with_fireworks(
@@ -572,7 +575,7 @@ class LLM(llm.LLM):
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
             for fnc in fnc_ctx.ai_functions.values():
-                fncs_desc.append(build_oai_function_description(fnc, self._opts.model))
+                fncs_desc.append(build_oai_function_description(fnc, self.capabilities))
 
             opts["tools"] = fncs_desc
 

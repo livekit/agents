@@ -23,6 +23,7 @@ from .llm import (
     ChoiceDelta,
     CompletionUsage,
     LLMStream,
+    LLMCapabilities,
 )
 
 __all__ = [
@@ -47,4 +48,5 @@ __all__ = [
     "FunctionCallInfo",
     "CalledFunction",
     "USE_DOCSTRING",
+    "LLMCapabilities",
 ]
