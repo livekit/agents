@@ -184,11 +184,7 @@ class LLM(llm.LLM):
         `GOOGLE_APPLICATION_CREDENTIALS` environment variable must be set to the path of the service account key file.
         """
         project_id = project_id
-        location = location or os.environ.get("GOOGLE_LOCATION")
-        if location is None:
-            raise ValueError(
-                "GOOGLE_LOCATION is required, either set location argument or set GOOGLE_LOCATION environmental variable"
-            )
+        location = location
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if _gac is None:
             raise ValueError(
