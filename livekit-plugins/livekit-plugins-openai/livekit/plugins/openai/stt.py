@@ -86,6 +86,12 @@ class STT(stt.STT):
             ),
         )
 
+    def update_options(
+        self, *, model: WhisperModels | GroqAudioModels | None, language: str | None
+    ) -> None:
+        self._opts.model = model or self._opts.model
+        self._opts.language = language or self._opts.language
+
     @staticmethod
     def with_groq(
         *,
