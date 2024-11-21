@@ -326,6 +326,25 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             for f in bstream.write(frame.data.tobytes()):
                 self._session.input_audio_buffer.append(f)
 
+    def set_source_participant(self, participant_identity: str) -> None:
+        """Set the source participant for the agent."""
+        self._link_participant(participant_identity)
+
+    def pause_listening(self) -> None:
+        """Pause listening to the audio stream."""
+        if self._read_micro_atask is not None:
+            self._read_micro_atask.cancel()  # Stop the current task
+            self._read_micro_atask = None
+            logger.info("Paused listening to the audio stream.")
+
+    def resume_listening(self) -> None:
+        """Resume listening to the audio stream."""
+        if self._subscribed_track is not None and self._read_micro_atask is None:
+            self._read_micro_atask = asyncio.create_task(
+                self._micro_task(self._subscribed_track)  # Restart the task
+            )
+            logger.info("Resumed listening to the audio stream.")
+
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if self._linked_participant is None:
             return
