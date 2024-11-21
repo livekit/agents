@@ -1060,6 +1060,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._session_id = session_created["session"]["id"]
 
     def _handle_error(self, error: api_proto.ServerEvent.Error):
+        if error["error"]["code"] == "session_expired":
+            self.emit("session_expired")
         logger.error(
             "OpenAI S2S error %s",
             error,

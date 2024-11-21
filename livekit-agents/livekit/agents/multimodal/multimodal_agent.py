@@ -159,6 +159,19 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         from livekit.plugins.openai import realtime
 
+        @self._session.on("session_expired")
+        def _on_session_expired():
+            logger.warning(
+                "The realtime API session has expired. Creating a new session with existing context."
+            )
+            
+            self._session = self._model.session(
+                chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx
+            )
+            
+            # Schedule the initialization and start task
+            asyncio.create_task(_init_and_start())
+
         @self._session.on("response_content_added")
         def _on_content_added(message: realtime.RealtimeContent):
             if message.content_type == "text":
