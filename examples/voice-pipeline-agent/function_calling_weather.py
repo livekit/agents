@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Annotated
 
@@ -33,7 +34,11 @@ class AssistantFnc(llm.FunctionContext):
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
-        # Example of a filler message
+
+        # Example of a filler message while waiting for the function call to complete.
+        # NOTE: This message illustrates how the agent can engage users by using the `say()` method
+        # while awaiting the completion of the function call. To create a more dynamic and engaging
+        # interaction, consider varying the responses based on context or user input.
         agent = AgentCallContext.get_current().agent
         await agent.say(f"Let me check the weather in {location} for you.")
 

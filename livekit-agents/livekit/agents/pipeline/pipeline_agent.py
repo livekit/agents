@@ -680,6 +680,19 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     )
                     self.emit("function_calls_finished", called_fncs)
                     self._add_speech_for_playout(new_handle)
+                    logger.debug(
+                        "add speech for function call",
+                        extra={
+                            "speech_id": new_handle.id,
+                            "original_speech_id": fnc_handle.speech_id,
+                        },
+                    )
+
+                    # wait for the new handle to be initialized
+                    try:
+                        await new_handle.wait_for_initialization()
+                    except asyncio.CancelledError:
+                        pass
 
                 _CallContextVar.reset(tk)
                 self._fnc_q.pop(0)  # Remove current handle after processing
@@ -943,6 +956,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
 
+        if self._fnc_q:
+            self._transcribed_text = ""
+            logger.debug("ignoring input, function calls in progress")
+            return
+
         if self._playing_speech is not None:
             should_ignore_input = False
             if not self._playing_speech.allow_interruptions:
@@ -1007,11 +1025,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         if self._playing_speech and self._should_interrupt():
             self._playing_speech.interrupt()
 
-            # Clear function calls when interrupted
-            for fnc_handle in self._fnc_q:
-                fnc_handle.interrupt()
-
     def _should_interrupt(self) -> bool:
+        if self._fnc_q:
+            # if there are any function calls in progress, do not interrupt
+            return False
+
         if self._playing_speech is None:
             return True
 
