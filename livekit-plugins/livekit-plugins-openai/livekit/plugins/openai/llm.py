@@ -679,7 +679,7 @@ class LLM(llm.LLM):
             if fnc_ctx and parallel_tool_calls is not None:
                 opts["parallel_tool_calls"] = parallel_tool_calls
 
-                openai_tool_choice = "auto"
+                openai_tool_choice: dict[str, Any] | str = "auto"
                 if isinstance(tool_choice, dict):
                     if tool_choice["type"] == "tool":
                         openai_tool_choice = {
