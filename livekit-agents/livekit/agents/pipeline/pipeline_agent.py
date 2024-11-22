@@ -488,9 +488,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self._interrupt_if_possible()
 
         if ev.raw_accumulated_speech > 0.0:
-            self._last_speech_time = (
-                time.perf_counter() - ev.raw_accumulated_silence
-            )
+            self._last_speech_time = time.perf_counter() - ev.raw_accumulated_silence
 
     def _on_end_of_speech(self, ev: vad.VADEvent) -> None:
         self._plotter.plot_event("user_stopped_speaking")
@@ -517,17 +515,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         ) + new_transcript
 
         if self._opts.preemptive_synthesis:
-            if (
-                self._playing_speech is None
-                or self._playing_speech.allow_interruptions
-            ):
+            if self._playing_speech is None or self._playing_speech.allow_interruptions:
                 self._synthesize_agent_reply()
 
         self._deferred_validation.on_human_final_transcript(new_transcript)
 
-        words = self._opts.transcription.word_tokenizer.tokenize(
-            text=new_transcript
-        )
+        words = self._opts.transcription.word_tokenizer.tokenize(text=new_transcript)
         if len(words) >= 3:
             # VAD can sometimes not detect that the human is speaking
             # to make the interruption more reliable, we also interrupt on the final transcript.
