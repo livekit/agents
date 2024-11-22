@@ -599,8 +599,9 @@ class LLM(llm.LLM):
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
+        parallel_tool_calls: bool | None = None,
     ) -> "LLMStream":
-        parallel_tool_calls = self._opts.parallel_tool_calls
+        parallel_tool_calls = parallel_tool_calls or self._opts.parallel_tool_calls
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
