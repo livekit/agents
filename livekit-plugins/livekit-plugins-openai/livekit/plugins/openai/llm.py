@@ -59,6 +59,7 @@ class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
+    parallel_tool_calls: bool | None
 
 
 class LLM(llm.LLM):
@@ -71,6 +72,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         client: openai.AsyncClient | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -81,8 +83,13 @@ class LLM(llm.LLM):
         super().__init__()
         self._capabilities = llm.LLMCapabilities(supports_choices_on_int=True)
 
-        self._opts = LLMOptions(model=model, user=user, temperature=temperature)
-        self._client: openai.AsyncClient = client or openai.AsyncClient(
+        self._opts = LLMOptions(
+            model=model,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+        )
+        self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
@@ -112,6 +119,7 @@ class LLM(llm.LLM):
         base_url: str | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -135,7 +143,13 @@ class LLM(llm.LLM):
             base_url=base_url,
         )  # type: ignore
 
-        return LLM(model=model, client=azure_client, user=user, temperature=temperature)
+        return LLM(
+            model=model,
+            client=azure_client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+        )
 
     @staticmethod
     def with_cerebras(
@@ -146,6 +160,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         """
         Create a new instance of Cerebras LLM.
@@ -167,6 +182,7 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     @staticmethod
@@ -177,6 +193,7 @@ class LLM(llm.LLM):
         location: str = "us-central1",
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         """
         Create a new instance of VertexAI LLM.
@@ -244,6 +261,7 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
         vertex_llm._capabilities = llm.LLMCapabilities(supports_choices_on_int=False)
         return vertex_llm
@@ -257,6 +275,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         """
         Create a new instance of Fireworks LLM.
@@ -278,6 +297,7 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     @staticmethod
@@ -289,6 +309,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ):
         """
         Create a new instance of XAI LLM.
@@ -309,6 +330,7 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     @staticmethod
@@ -320,6 +342,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         """
         Create a new instance of Groq LLM.
@@ -341,6 +364,7 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     @staticmethod
@@ -352,6 +376,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         """
         Create a new instance of DeepSeek LLM.
@@ -373,6 +398,7 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     @staticmethod
@@ -384,6 +410,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         """
         Create a new instance of OctoAI LLM.
@@ -405,6 +432,7 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     @staticmethod
@@ -414,6 +442,7 @@ class LLM(llm.LLM):
         base_url: str | None = "http://localhost:11434/v1",
         client: openai.AsyncClient | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         """
         Create a new instance of Ollama LLM.
@@ -425,6 +454,7 @@ class LLM(llm.LLM):
             base_url=base_url,
             client=client,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     @staticmethod
@@ -436,6 +466,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         """
         Create a new instance of PerplexityAI LLM.
@@ -457,6 +488,7 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     @staticmethod
@@ -468,6 +500,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         """
         Create a new instance of TogetherAI LLM.
@@ -489,6 +522,7 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     @staticmethod
@@ -500,6 +534,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         """
         Create a new instance of Telnyx LLM.
@@ -521,6 +556,7 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     @staticmethod
@@ -538,6 +574,7 @@ class LLM(llm.LLM):
         base_url: str | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> LLM:
         logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
         return LLM.with_azure(
@@ -552,6 +589,7 @@ class LLM(llm.LLM):
             base_url=base_url,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
     def chat(
@@ -561,8 +599,8 @@ class LLM(llm.LLM):
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
-        parallel_tool_calls: bool | None = None,
     ) -> "LLMStream":
+        parallel_tool_calls = self._opts.parallel_tool_calls
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
@@ -573,6 +611,7 @@ class LLM(llm.LLM):
 
             if fnc_ctx and parallel_tool_calls is not None:
                 opts["parallel_tool_calls"] = parallel_tool_calls
+                logger.debug(f"parallel_tool_calls: {parallel_tool_calls}")
 
         user = self._opts.user or openai.NOT_GIVEN
         if temperature is None:
