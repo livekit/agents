@@ -4,7 +4,7 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterable, AsyncIterator, Literal
+from typing import Any, AsyncIterable, AsyncIterator, Literal, TypedDict, Union
 
 from livekit import rtc
 
@@ -48,6 +48,11 @@ class ChatChunk:
     usage: CompletionUsage | None = None
 
 
+class ToolChoice(TypedDict, total=False):
+    type: Literal["auto", "any", "tool", "none", "required"] | None
+    name: str  # Optional: only used when type is "tool"
+
+
 class LLM(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(self) -> None:
         super().__init__()
@@ -63,6 +68,8 @@ class LLM(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "any", "none", "required"]]
+        | None = None,
     ) -> "LLMStream": ...
 
     @property

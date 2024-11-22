@@ -19,7 +19,7 @@ import asyncio
 import datetime
 import os
 from dataclasses import dataclass
-from typing import Any, Awaitable, MutableSet
+from typing import Any, Awaitable, Literal, MutableSet, TypedDict, Union
 
 import aiohttp
 import httpx
@@ -54,12 +54,18 @@ from .models import (
 from .utils import AsyncAzureADTokenProvider, build_oai_message
 
 
+class ToolChoice(TypedDict, total=False):
+    type: Literal["auto", "any", "tool", "none", "required"]
+    name: str  # Optional: only used when type is "tool"
+
+
 @dataclass
 class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
     parallel_tool_calls: bool | None
+    tool_choice: Union[ToolChoice, Literal["auto", "any", "none", "required"]] | None
 
 
 class LLM(llm.LLM):
@@ -73,6 +79,9 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -88,6 +97,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
         self._client = client or openai.AsyncClient(
             api_key=api_key,
@@ -120,6 +130,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -149,6 +162,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -161,6 +175,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         """
         Create a new instance of Cerebras LLM.
@@ -183,6 +200,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -194,6 +212,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         """
         Create a new instance of VertexAI LLM.
@@ -262,6 +283,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
         vertex_llm._capabilities = llm.LLMCapabilities(supports_choices_on_int=False)
         return vertex_llm
@@ -276,6 +298,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         """
         Create a new instance of Fireworks LLM.
@@ -298,6 +323,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -310,6 +336,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ):
         """
         Create a new instance of XAI LLM.
@@ -331,6 +360,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -343,6 +373,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         """
         Create a new instance of Groq LLM.
@@ -365,6 +398,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -377,6 +411,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         """
         Create a new instance of DeepSeek LLM.
@@ -399,6 +436,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -411,6 +449,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         """
         Create a new instance of OctoAI LLM.
@@ -433,6 +474,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -443,6 +485,9 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         """
         Create a new instance of Ollama LLM.
@@ -455,6 +500,7 @@ class LLM(llm.LLM):
             client=client,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -467,6 +513,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         """
         Create a new instance of PerplexityAI LLM.
@@ -489,6 +538,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -501,6 +551,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         """
         Create a new instance of TogetherAI LLM.
@@ -523,6 +576,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -535,6 +589,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         """
         Create a new instance of Telnyx LLM.
@@ -557,6 +614,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -575,6 +633,9 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"]
+        ] = "auto",
     ) -> LLM:
         logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
         return LLM.with_azure(
@@ -590,6 +651,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     def chat(
@@ -600,8 +662,12 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, Literal["auto", "any", "none", "required"], None
+        ] = None,
     ) -> "LLMStream":
         parallel_tool_calls = parallel_tool_calls or self._opts.parallel_tool_calls
+        tool_choice = tool_choice or self._opts.tool_choice
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
@@ -613,6 +679,22 @@ class LLM(llm.LLM):
             if fnc_ctx and parallel_tool_calls is not None:
                 opts["parallel_tool_calls"] = parallel_tool_calls
                 logger.debug(f"parallel_tool_calls: {parallel_tool_calls}")
+
+                openai_tool_choice = "auto"
+                if isinstance(tool_choice, dict):
+                    if tool_choice["type"] == "tool":
+                        openai_tool_choice = {
+                            "type": "function",
+                            "function": {"name": tool_choice["name"]},
+                        }
+                    elif tool_choice["type"] == "any":
+                        openai_tool_choice = "required"
+                elif isinstance(tool_choice, str):
+                    if tool_choice == "any":
+                        openai_tool_choice = "required"
+                    else:
+                        openai_tool_choice = tool_choice
+                opts["tool_choice"] = openai_tool_choice
 
         user = self._opts.user or openai.NOT_GIVEN
         if temperature is None:
