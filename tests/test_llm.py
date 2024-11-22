@@ -344,7 +344,7 @@ async def test_tool_choice_options(
     print(calls)
 
     call_names = {call.call_info.function_info.name for call in calls}
-    if expected_calls == set() and isinstance(input_llm, anthropic.LLM):
+    if tool_choice == "none" and isinstance(input_llm, anthropic.LLM):
         assert True
     else:
         assert (
