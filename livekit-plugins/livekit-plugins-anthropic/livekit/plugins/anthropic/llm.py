@@ -50,7 +50,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "claude-3-haiku-20240307",
+        model: str | ChatModels = "claude-3-5-sonnet-20241022",
         api_key: str | None = None,
         base_url: str | None = None,
         user: str | None = None,
@@ -111,6 +111,7 @@ class LLM(llm.LLM):
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
+
         stream = self._client.messages.create(
             max_tokens=opts.get("max_tokens", 1024),
             system=latest_system_message,
@@ -155,10 +156,10 @@ class LLMStream(llm.LLMStream):
         self._output_tokens = 0
 
     async def _main_task(self) -> None:
-        if not self._anthropic_stream:
-            self._anthropic_stream = await self._awaitable_anthropic_stream
-
         try:
+            if not self._anthropic_stream:
+                self._anthropic_stream = await self._awaitable_anthropic_stream
+
             async with self._anthropic_stream as stream:
                 async for event in stream:
                     chat_chunk = self._parse_event(event)
@@ -325,7 +326,7 @@ def _build_anthropic_message(
         a_content = a_msg["content"]
 
         # add content if provided
-        if isinstance(msg.content, str):
+        if isinstance(msg.content, str) and msg.content:
             a_msg["content"].append(
                 anthropic.types.TextBlock(
                     text=msg.content,
@@ -334,7 +335,7 @@ def _build_anthropic_message(
             )
         elif isinstance(msg.content, list):
             for cnt in msg.content:
-                if isinstance(cnt, str):
+                if isinstance(cnt, str) and cnt:
                     content: anthropic.types.TextBlock = anthropic.types.TextBlock(
                         text=cnt,
                         type="text",

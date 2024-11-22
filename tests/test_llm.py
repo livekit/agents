@@ -59,15 +59,6 @@ class FncCtx(FunctionContext):
         ],
     ) -> None: ...
 
-    # test choices on int
-    @ai_callable(description="Change the volume")
-    def change_volume(
-        self,
-        volume: Annotated[
-            int, TypeInfo(description="The volume level", choices=[0, 11, 30, 83, 99])
-        ],
-    ) -> None: ...
-
     @ai_callable(description="Update user info")
     def update_user_info(
         self,
@@ -98,7 +89,8 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #         )
     #     )
     # ),
-    # anthropic.LLM(),
+    lambda: anthropic.LLM(),
+    lambda: openai.LLM.with_vertex(),
 ]
 
 
@@ -109,12 +101,11 @@ async def test_chat(llm_factory: Callable[[], llm.LLM]):
         text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.'
     )
 
-    # Anthropics LLM requires at least one message (system messages don't count)
-    if isinstance(input_llm, anthropic.LLM):
-        chat_ctx.append(
-            text="Hello",
-            role="user",
-        )
+    # Anthropic and vertex requires at least one message (system messages don't count)
+    chat_ctx.append(
+        text="Hello",
+        role="user",
+    )
 
     stream = input_llm.chat(chat_ctx=chat_ctx)
     text = ""
@@ -146,6 +137,25 @@ async def test_basic_fnc_calls(llm_factory: Callable[[], llm.LLM]):
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
+async def test_function_call_exception_handling(llm_factory: Callable[[], llm.LLM]):
+    input_llm = llm_factory()
+    fnc_ctx = FncCtx()
+
+    @fnc_ctx.ai_callable(description="Simulate a failure")
+    async def failing_function():
+        raise RuntimeError("Simulated failure")
+
+    stream = await _request_fnc_call(input_llm, "Call the failing function", fnc_ctx)
+    calls = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in calls], return_exceptions=True)
+    await stream.aclose()
+
+    assert len(calls) == 1
+    assert isinstance(calls[0].exception, RuntimeError)
+    assert str(calls[0].exception) == "Simulated failure"
+
+
+@pytest.mark.parametrize("llm_factory", LLMS)
 async def test_runtime_addition(llm_factory: Callable[[], llm.LLM]):
     input_llm = llm_factory()
     fnc_ctx = FncCtx()
@@ -174,7 +184,7 @@ async def test_cancelled_calls(llm_factory: Callable[[], llm.LLM]):
     fnc_ctx = FncCtx()
 
     stream = await _request_fnc_call(
-        input_llm, "Turn off the lights in the Theo's bedroom", fnc_ctx
+        input_llm, "Turn off the lights in the bedroom", fnc_ctx
     )
     calls = stream.execute_functions()
     await asyncio.sleep(0.2)  # wait for the loop executor to start the task
@@ -195,7 +205,7 @@ async def test_calls_arrays(llm_factory: Callable[[], llm.LLM]):
 
     stream = await _request_fnc_call(
         input_llm,
-        "Can you select all currencies in Europe at once?",
+        "Can you select all currencies in Europe at once from given choices?",
         fnc_ctx,
         temperature=0.2,
     )
@@ -218,16 +228,28 @@ async def test_calls_choices(llm_factory: Callable[[], llm.LLM]):
     input_llm = llm_factory()
     fnc_ctx = FncCtx()
 
-    stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
-    calls = stream.execute_functions()
-    await asyncio.gather(*[f.task for f in calls])
-    await stream.aclose()
+    # test choices on int
+    @fnc_ctx.ai_callable(description="Change the volume")
+    def change_volume(
+        volume: Annotated[
+            int, TypeInfo(description="The volume level", choices=[0, 11, 30, 83, 99])
+        ],
+    ) -> None: ...
 
-    assert len(calls) == 1, "change_volume should have been called only once"
+    if not input_llm.capabilities.supports_choices_on_int:
+        with pytest.raises(ValueError, match="which is not supported by this model"):
+            stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
+    else:
+        stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
+        calls = stream.execute_functions()
+        await asyncio.gather(*[f.task for f in calls])
+        await stream.aclose()
 
-    call = calls[0]
-    volume = call.call_info.arguments["volume"]
-    assert volume == 30, "change_volume should have been called with volume 30"
+        assert len(calls) == 1, "change_volume should have been called only once"
+
+        call = calls[0]
+        volume = call.call_info.arguments["volume"]
+        assert volume == 30, "change_volume should have been called with volume 30"
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
@@ -262,7 +284,12 @@ async def _request_fnc_call(
     temperature: float | None = None,
 ) -> llm.LLMStream:
     stream = model.chat(
-        chat_ctx=ChatContext().append(text=request, role="user"),
+        chat_ctx=ChatContext()
+        .append(
+            text="You are an helpful assistant. Follow the instructions provided by the user. You can use multiple tool calls at once.",
+            role="system",
+        )
+        .append(text=request, role="user"),
         fnc_ctx=fnc_ctx,
         temperature=temperature,
     )

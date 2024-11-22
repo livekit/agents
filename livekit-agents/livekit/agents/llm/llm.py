@@ -9,6 +9,7 @@ from typing import Any, AsyncIterable, AsyncIterator, Literal
 from livekit import rtc
 
 from .. import utils
+from ..log import logger
 from ..metrics import LLMMetrics
 from ..utils import aio
 from . import function_context
@@ -36,6 +37,11 @@ class Choice:
 
 
 @dataclass
+class LLMCapabilities:
+    supports_choices_on_int: bool = True
+
+
+@dataclass
 class ChatChunk:
     request_id: str
     choices: list[Choice] = field(default_factory=list)
@@ -45,6 +51,7 @@ class ChatChunk:
 class LLM(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(self) -> None:
         super().__init__()
+        self._capabilities = LLMCapabilities()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @abstractmethod
@@ -57,6 +64,10 @@ class LLM(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
     ) -> "LLMStream": ...
+
+    @property
+    def capabilities(self) -> LLMCapabilities:
+        return self._capabilities
 
 
 class LLMStream(ABC):
@@ -86,6 +97,7 @@ class LLMStream(ABC):
     @abstractmethod
     async def _main_task(self) -> None: ...
 
+    @utils.log_exceptions(logger=logger)
     async def _metrics_monitor_task(
         self, event_aiter: AsyncIterable[ChatChunk]
     ) -> None:
@@ -150,10 +162,15 @@ class LLMStream(ABC):
         await self._metrics_task
 
     async def __anext__(self) -> ChatChunk:
-        if self._task.done() and (exc := self._task.exception()):
-            raise exc
+        try:
+            val = await self._event_aiter.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc from None
 
-        return await self._event_aiter.__anext__()
+            raise StopAsyncIteration
+
+        return val
 
     def __aiter__(self) -> AsyncIterator[ChatChunk]:
         return self

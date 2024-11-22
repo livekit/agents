@@ -1,5 +1,11 @@
 # livekit-plugins-elevenlabs
 
+## 0.7.7
+
+### Patch Changes
+
+- support language code in ElevenLabs TTS (#985) - [#1029](https://github.com/livekit/agents/pull/1029) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.7.6
 
 ### Patch Changes

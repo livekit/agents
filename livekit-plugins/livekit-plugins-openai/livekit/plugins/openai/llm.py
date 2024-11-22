@@ -16,10 +16,12 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, MutableSet
 
+import aiohttp
 import httpx
 from livekit.agents import (
     APIConnectionError,
@@ -32,6 +34,10 @@ import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
 
+from ._oai_api import (
+    build_oai_function_description,
+    create_ai_function_info,
+)
 from .log import logger
 from .models import (
     CerebrasChatModels,
@@ -42,6 +48,7 @@ from .models import (
     PerplexityChatModels,
     TelnyxChatModels,
     TogetherChatModels,
+    VertexModels,
     XAIChatModels,
 )
 from .utils import AsyncAzureADTokenProvider, build_oai_message
@@ -72,9 +79,10 @@ class LLM(llm.LLM):
         ``OPENAI_API_KEY`` environmental variable.
         """
         super().__init__()
+        self._capabilities = llm.LLMCapabilities(supports_choices_on_int=True)
 
         self._opts = LLMOptions(model=model, user=user, temperature=temperature)
-        self._client = client or openai.AsyncClient(
+        self._client: openai.AsyncClient = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
@@ -160,6 +168,85 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
         )
+
+    @staticmethod
+    def with_vertex(
+        *,
+        model: str | VertexModels = "google/gemini-1.5-pro",
+        project_id: str | None = None,
+        location: str = "us-central1",
+        user: str | None = None,
+        temperature: float | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of VertexAI LLM.
+
+        `GOOGLE_APPLICATION_CREDENTIALS` environment variable must be set to the path of the service account key file.
+        """
+        project_id = project_id
+        location = location
+        _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        if _gac is None:
+            raise ValueError(
+                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file."
+            )
+
+        try:
+            from google.auth._default_async import default_async
+            from google.auth.transport._aiohttp_requests import Request
+        except ImportError:
+            raise ImportError(
+                "Google Auth dependencies not found. Please install with: `pip install livekit-plugins-openai[vertex]`"
+            )
+
+        class AuthTokenRefresher(openai.AsyncClient):
+            def __init__(self, **kwargs: Any) -> None:
+                self.creds, self.project = default_async(
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+                project = project_id or self.project
+                base_url = f"https://{location}-aiplatform.googleapis.com/v1beta1/projects/{project}/locations/{location}/endpoints/openapi"
+                kwargs.update({"base_url": base_url})
+                super().__init__(api_key="DUMMY", **kwargs)
+                self.refresh_threshold = 600  # 10 minutes
+
+            def _token_needs_refresh(self) -> bool:
+                if not self.creds or not self.creds.valid:
+                    return True
+                expiry = self.creds.expiry
+                if expiry is None:
+                    return True
+                remaining = (expiry - datetime.datetime.utcnow()).total_seconds()
+                return remaining < self.refresh_threshold
+
+            async def _refresh_credentials(self) -> None:
+                if self.creds and self.creds.valid and not self._token_needs_refresh():
+                    return
+                async with aiohttp.ClientSession(auto_decompress=False) as session:
+                    auth_req = Request(session=session)
+                    await self.creds.refresh(auth_req)
+                self.api_key = self.creds.token
+
+        client = AuthTokenRefresher(
+            http_client=httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=50,
+                    max_keepalive_connections=50,
+                    keepalive_expiry=120,
+                ),
+            ),
+        )
+
+        vertex_llm = LLM(
+            model=model,
+            client=client,
+            user=user,
+            temperature=temperature,
+        )
+        vertex_llm._capabilities = llm.LLMCapabilities(supports_choices_on_int=False)
+        return vertex_llm
 
     @staticmethod
     def with_fireworks(
@@ -480,7 +567,7 @@ class LLM(llm.LLM):
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
             for fnc in fnc_ctx.ai_functions.values():
-                fncs_desc.append(llm._oai_api.build_oai_function_description(fnc))
+                fncs_desc.append(build_oai_function_description(fnc, self.capabilities))
 
             opts["tools"] = fncs_desc
 
@@ -517,6 +604,7 @@ class LLMStream(llm.LLMStream):
         fnc_ctx: llm.FunctionContext | None,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        self._llm: LLM = llm
         self._awaitable_oai_stream = oai_stream
         self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
 
@@ -524,8 +612,11 @@ class LLMStream(llm.LLMStream):
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
+        self._tool_index: int | None = None
 
     async def _main_task(self) -> None:
+        if hasattr(self._llm._client, "_refresh_credentials"):
+            await self._llm._client._refresh_credentials()
         if not self._oai_stream:
             self._oai_stream = await self._awaitable_oai_stream
 
@@ -577,10 +668,11 @@ class LLMStream(llm.LLMStream):
                     continue  # oai may add other tools in the future
 
                 call_chunk = None
-                if self._tool_call_id and tool.id and tool.id != self._tool_call_id:
+                if self._tool_call_id and tool.id and tool.index != self._tool_index:
                     call_chunk = self._try_build_function(id, choice)
 
                 if tool.function.name:
+                    self._tool_index = tool.index
                     self._tool_call_id = tool.id
                     self._fnc_name = tool.function.name
                     self._fnc_raw_arguments = tool.function.arguments or ""
@@ -621,7 +713,7 @@ class LLMStream(llm.LLMStream):
             )
             return None
 
-        fnc_info = llm._oai_api.create_ai_function_info(
+        fnc_info = create_ai_function_info(
             self._fnc_ctx, self._tool_call_id, self._fnc_name, self._fnc_raw_arguments
         )
 

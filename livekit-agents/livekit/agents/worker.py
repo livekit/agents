@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import inspect
 import math
 import multiprocessing as mp
 import os
@@ -25,7 +26,14 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import reduce
-from typing import Any, Awaitable, Callable, Generic, Literal, TypeVar
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Generic,
+    Literal,
+    TypeVar,
+)
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -87,7 +95,7 @@ class _DefaultLoadCalc:
             return self._m_avg.get_avg()
 
     @classmethod
-    def get_load(cls) -> float:
+    def get_load(cls, worker: Worker) -> float:
         if cls._instance is None:
             cls._instance = _DefaultLoadCalc()
 
@@ -137,7 +145,9 @@ class WorkerOptions:
     When left empty, all jobs are accepted."""
     prewarm_fnc: Callable[[JobProcess], Any] = _default_initialize_process_fnc
     """A function to perform any necessary initialization before the job starts."""
-    load_fnc: Callable[[], float] = _DefaultLoadCalc.get_load
+    load_fnc: Callable[[Worker], float] | Callable[[], float] = (
+        _DefaultLoadCalc.get_load
+    )
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
     job_executor_type: JobExecutorType = _default_job_executor_type
     """Which executor to use to run jobs. (currently thread or process are supported)"""
@@ -159,7 +169,7 @@ class WorkerOptions:
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
     agent_name: str = ""
-    """Agent name can be used when multiple agents are required to join the same room. The LiveKit SFU will dispatch jobs to unique agent_name workers independently."""
+    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API"""
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -250,6 +260,11 @@ class Worker(utils.EventEmitter[EventTypes]):
             initialize_timeout=opts.initialize_process_timeout,
             close_timeout=opts.shutdown_process_timeout,
         )
+        self._proc_pool.on("process_started", self._on_process_started)
+        self._proc_pool.on("process_closed", self._on_process_closed)
+        self._proc_pool.on("process_job_launched", self._on_process_job_launched)
+
+        self._previous_status = agent.WorkerStatus.WS_AVAILABLE
 
         self._api: api.LiveKitAPI | None = None
         self._http_session: aiohttp.ClientSession | None = None
@@ -307,12 +322,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         logger.info("draining worker", extra={"id": self.id, "timeout": timeout})
         self._draining = True
-
-        # exit the queue
-        update_worker = agent.WorkerMessage(
-            update_worker=agent.UpdateWorkerStatus(status=agent.WorkerStatus.WS_FULL)
-        )
-        await self._queue_msg(update_worker)
+        await self._update_worker_status()
 
         async def _join_jobs():
             for proc in self._proc_pool.processes:
@@ -469,50 +479,9 @@ class Worker(utils.EventEmitter[EventTypes]):
         async def _load_task():
             """periodically check load and update worker status"""
             interval = utils.aio.interval(UPDATE_LOAD_INTERVAL)
-            current_status = agent.WorkerStatus.WS_AVAILABLE
             while True:
                 await interval.tick()
-
-                old_status = current_status
-                current_load = await asyncio.get_event_loop().run_in_executor(
-                    None, self._opts.load_fnc
-                )
-
-                is_full = current_load >= _WorkerEnvOption.getvalue(
-                    self._opts.load_threshold, self._devmode
-                )
-                currently_available = not is_full and not self._draining
-
-                current_status = (
-                    agent.WorkerStatus.WS_AVAILABLE
-                    if currently_available
-                    else agent.WorkerStatus.WS_FULL
-                )
-
-                update = agent.UpdateWorkerStatus(
-                    load=current_load, status=current_status
-                )
-
-                # only log if status has changed
-                if old_status != current_status and not self._draining:
-                    extra = {
-                        "load": current_load,
-                        "threshold": self._opts.load_threshold,
-                    }
-                    if is_full:
-                        logger.info(
-                            "worker is at full capacity, marking as unavailable",
-                            extra=extra,
-                        )
-                    else:
-                        logger.info(
-                            "worker is below capacity, marking as available",
-                            extra=extra,
-                        )
-
-                msg = agent.WorkerMessage(update_worker=update)
-                with contextlib.suppress(utils.aio.ChanClosed):
-                    await self._queue_msg(msg)
+                await self._update_worker_status()
 
         async def _send_task():
             nonlocal closing_ws
@@ -569,6 +538,9 @@ class Worker(utils.EventEmitter[EventTypes]):
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
+        if not self._opts.api_secret:
+            raise RuntimeError("api_secret is required to reload jobs")
+
         for aj in jobs:
             logger.log(
                 DEV_LEVEL,
@@ -637,6 +609,10 @@ class Worker(utils.EventEmitter[EventTypes]):
             availability_resp.availability.participant_identity = args.identity
             availability_resp.availability.participant_name = args.name
             availability_resp.availability.participant_metadata = args.metadata
+            if args.attributes:
+                availability_resp.availability.participant_attributes.update(
+                    args.attributes
+                )
             await self._queue_msg(availability_resp)
 
             wait_assignment = asyncio.Future[agent.JobAssignment]()
@@ -713,3 +689,95 @@ class Worker(utils.EventEmitter[EventTypes]):
             # safe to ignore
             return
         await proc.aclose()
+
+    def _on_process_closed(self, proc: ipc.job_executor.JobExecutor) -> None:
+        self._update_job_status_sync(proc)
+
+    def _on_process_started(self, proc: ipc.job_executor.JobExecutor) -> None:
+        self._update_job_status_sync(proc)
+
+    def _on_process_job_launched(self, proc: ipc.job_executor.JobExecutor) -> None:
+        self._update_job_status_sync(proc)
+
+    async def _update_worker_status(self):
+        job_cnt = len(self.active_jobs)
+        if self._draining:
+            update = agent.UpdateWorkerStatus(
+                status=agent.WorkerStatus.WS_FULL, job_count=job_cnt
+            )
+            msg = agent.WorkerMessage(update_worker=update)
+            await self._queue_msg(msg)
+            return
+
+        def load_fnc():
+            signature = inspect.signature(self._opts.load_fnc)
+            parameters = list(signature.parameters.values())
+            if len(parameters) == 0:
+                return self._opts.load_fnc()  # type: ignore
+
+            return self._opts.load_fnc(self)  # type: ignore
+
+        current_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
+
+        is_full = current_load >= _WorkerEnvOption.getvalue(
+            self._opts.load_threshold, self._devmode
+        )
+        currently_available = not is_full and not self._draining
+
+        status = (
+            agent.WorkerStatus.WS_AVAILABLE
+            if currently_available
+            else agent.WorkerStatus.WS_FULL
+        )
+
+        update = agent.UpdateWorkerStatus(
+            load=current_load, status=status, job_count=job_cnt
+        )
+
+        # only log if status has changed
+        if self._previous_status != status and not self._draining:
+            self._previous_status = status
+            extra = {
+                "load": current_load,
+                "threshold": self._opts.load_threshold,
+            }
+            if is_full:
+                logger.info(
+                    "worker is at full capacity, marking as unavailable",
+                    extra=extra,
+                )
+            else:
+                logger.info(
+                    "worker is below capacity, marking as available",
+                    extra=extra,
+                )
+
+        msg = agent.WorkerMessage(update_worker=update)
+        with contextlib.suppress(utils.aio.ChanClosed):
+            await self._queue_msg(msg)
+
+    def _update_job_status_sync(self, proc: ipc.job_executor.JobExecutor) -> None:
+        t = self._loop.create_task(self._update_job_status(proc))
+        self._tasks.add(t)
+        t.add_done_callback(self._tasks.discard)
+
+    async def _update_job_status(self, proc: ipc.job_executor.JobExecutor) -> None:
+        job_info = proc.running_job
+        if not job_info:
+            return
+        status: agent.JobStatus = agent.JobStatus.JS_RUNNING
+        if proc.run_status == ipc.job_executor.RunStatus.FINISHED_FAILED:
+            status = agent.JobStatus.JS_FAILED
+        elif proc.run_status == ipc.job_executor.RunStatus.FINISHED_CLEAN:
+            status = agent.JobStatus.JS_SUCCESS
+        elif proc.run_status == ipc.job_executor.RunStatus.STARTING:
+            status = agent.JobStatus.JS_PENDING
+
+        error: str | None = None
+        if proc.exception:
+            error = str(proc.exception)
+        update = agent.UpdateJobStatus(
+            job_id=job_info.job.id, status=status, error=error
+        )
+        msg = agent.WorkerMessage(update_job=update)
+        await self._queue_msg(msg)

@@ -26,10 +26,15 @@ from .log import logger
 
 @dataclass
 class STTOptions:
-    speech_key: str
-    speech_region: str
+    speech_key: str | None
+    speech_region: str | None
+    # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-container-stt?tabs=container#use-the-container
+    speech_host: str | None
     sample_rate: int
     num_channels: int
+    segmentation_silence_timeout_ms: int | None
+    segmentation_max_time_ms: int | None
+    segmentation_strategy: str | None
     languages: list[
         str
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
@@ -41,35 +46,44 @@ class STT(stt.STT):
         *,
         speech_key: str | None = None,
         speech_region: str | None = None,
-        sample_rate: int = 48000,
+        speech_host: str | None = None,
+        sample_rate: int = 16000,
         num_channels: int = 1,
+        segmentation_silence_timeout_ms: int | None = None,
+        segmentation_max_time_ms: int | None = None,
+        segmentation_strategy: str | None = None,
         languages: list[str] = [],  # when empty, auto-detect the language
     ):
         """
         Create a new instance of Azure STT.
 
-        ``speech_key`` and ``speech_region`` must be set, either using arguments or by setting the
-        ``AZURE_SPEECH_KEY`` and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
+        Either ``speech_host`` or ``speech_key`` and ``speech_region`` must be set,
+        either using arguments or by setting the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
+        and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
         """
 
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
         )
-
+        speech_host = speech_host or os.environ.get("AZURE_SPEECH_HOST")
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
-        if not speech_key:
-            raise ValueError("AZURE_SPEECH_KEY must be set")
-
         speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
-        if not speech_region:
-            raise ValueError("AZURE_SPEECH_REGION must be set")
+
+        if not speech_host and (not speech_key or not speech_region):
+            raise ValueError(
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION must be set"
+            )
 
         self._config = STTOptions(
             speech_key=speech_key,
             speech_region=speech_region,
+            speech_host=speech_host,
             languages=languages,
             sample_rate=sample_rate,
             num_channels=num_channels,
+            segmentation_silence_timeout_ms=segmentation_silence_timeout_ms,
+            segmentation_max_time_ms=segmentation_max_time_ms,
+            segmentation_strategy=segmentation_strategy,
         )
 
     async def _recognize_impl(
@@ -83,7 +97,7 @@ class STT(stt.STT):
 
 class SpeechStream(stt.SpeechStream):
     def __init__(self, stt: STT, opts: STTOptions) -> None:
-        super().__init__(stt)
+        super().__init__(stt, sample_rate=opts.sample_rate)
         self._opts = opts
         self._speaking = False
 
@@ -179,9 +193,28 @@ class SpeechStream(stt.SpeechStream):
 def _create_speech_recognizer(
     *, config: STTOptions, stream: speechsdk.audio.AudioInputStream
 ) -> speechsdk.SpeechRecognizer:
-    speech_config = speechsdk.SpeechConfig(
-        subscription=config.speech_key, region=config.speech_region
-    )
+    if config.speech_host:
+        speech_config = speechsdk.SpeechConfig(host=config.speech_host)
+    else:
+        speech_config = speechsdk.SpeechConfig(
+            subscription=config.speech_key, region=config.speech_region
+        )
+
+    if config.segmentation_silence_timeout_ms:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.Speech_SegmentationSilenceTimeoutMs,
+            str(config.segmentation_silence_timeout_ms),
+        )
+    if config.segmentation_max_time_ms:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.Speech_SegmentationMaximumTimeMs,
+            str(config.segmentation_max_time_ms),
+        )
+    if config.segmentation_strategy:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.Speech_SegmentationStrategy,
+            str(config.segmentation_strategy),
+        )
 
     auto_detect_source_language_config = None
     if config.languages:

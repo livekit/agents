@@ -25,7 +25,9 @@ from typing import Any, List, Literal
 import aiohttp
 from livekit import rtc
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
+    APIConnectOptions,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -87,6 +89,7 @@ class _TTSOptions:
     api_key: str
     voice: Voice
     model: TTSModels | str
+    language: str | None
     base_url: str
     encoding: TTSEncoding
     sample_rate: int
@@ -114,6 +117,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         # deprecated
         model_id: TTSModels | str | None = None,
+        language: str | None = None,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -129,6 +133,7 @@ class TTS(tts.TTS):
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             chunk_length_schedule (list[int]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
+            language (str | None): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5". Optional.
         """
 
         super().__init__(
@@ -162,6 +167,7 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
+            language=language,
         )
         self._session = http_session
 
@@ -192,25 +198,49 @@ class TTS(tts.TTS):
         self._opts.model = model or self._opts.model
         self._opts.voice = voice or self._opts.voice
 
-    def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(self, text, self._opts, self._ensure_session())
+    def synthesize(
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> "ChunkedStream":
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=self._opts,
+            session=self._ensure_session(),
+        )
 
-    def stream(self) -> "SynthesizeStream":
-        return SynthesizeStream(self, self._ensure_session(), self._opts)
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> "SynthesizeStream":
+        return SynthesizeStream(
+            tts=self,
+            conn_options=conn_options,
+            opts=self._opts,
+            session=self._ensure_session(),
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
     def __init__(
-        self, tts: TTS, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        opts: _TTSOptions,
+        conn_options: APIConnectOptions,
+        session: aiohttp.ClientSession,
     ) -> None:
-        super().__init__(tts, text)
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._session = opts, session
         if _encoding_from_format(self._opts.encoding) == "mp3":
             self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         request_id = utils.shortuuid()
         bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate, num_channels=1
@@ -282,16 +312,17 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     def __init__(
         self,
+        *,
         tts: TTS,
         session: aiohttp.ClientSession,
+        conn_options: APIConnectOptions,
         opts: _TTSOptions,
     ):
-        super().__init__(tts)
+        super().__init__(tts=tts, conn_options=conn_options)
         self._opts, self._session = opts, session
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
-    @utils.log_exceptions(logger=logger)
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
         @utils.log_exceptions(logger=logger)
@@ -523,8 +554,12 @@ def _stream_url(opts: _TTSOptions) -> str:
     output_format = opts.encoding
     latency = opts.streaming_latency
     enable_ssml = str(opts.enable_ssml_parsing).lower()
-    return (
+    language = opts.language
+    url = (
         f"{base_url}/text-to-speech/{voice_id}/stream-input?"
         f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}&"
         f"enable_ssml_parsing={enable_ssml}"
     )
+    if language is not None:
+        url += f"&language_code={language}"
+    return url

@@ -20,7 +20,7 @@ Voice = Literal["alloy", "echo", "shimmer", "ash", "ballad", "coral", "sage", "v
 ToolChoice = Union[Literal["auto", "none", "required"], FunctionToolChoice]
 Role = Literal["system", "assistant", "user", "tool"]
 GenerationFinishedReason = Literal["stop", "max_tokens", "content_filter", "interrupt"]
-AudioFormat = Literal["pcm16", "g711-ulaw", "g711-alaw"]
+AudioFormat = Literal["pcm16", "g711_ulaw", "g711_alaw"]
 InputTranscriptionModel = Literal["whisper-1"]
 Modality = Literal["text", "audio"]
 ResponseStatus = Literal[
@@ -141,10 +141,23 @@ ResponseStatusDetails = Union[
 ]
 
 
+class InputTokenDetails(TypedDict):
+    cached_tokens: int
+    text_tokens: int
+    audio_tokens: int
+
+
+class OutputTokenDetails(TypedDict):
+    text_tokens: int
+    audio_tokens: int
+
+
 class Usage(TypedDict):
     total_tokens: int
     input_tokens: int
     output_tokens: int
+    input_token_details: InputTokenDetails
+    output_token_details: OutputTokenDetails
 
 
 class Resource:
@@ -214,30 +227,42 @@ class ClientEvent:
         type: Literal["input_audio_buffer.clear"]
 
     class UserItemCreate(TypedDict):
+        id: str | None
         type: Literal["message"]
         role: Literal["user"]
         content: list[InputTextContent | InputAudioContent]
 
     class AssistantItemCreate(TypedDict):
+        id: str | None
         type: Literal["message"]
         role: Literal["assistant"]
         content: list[TextContent]
 
     class SystemItemCreate(TypedDict):
+        id: str | None
         type: Literal["message"]
         role: Literal["system"]
         content: list[InputTextContent]
 
     class FunctionCallOutputItemCreate(TypedDict):
+        id: str | None
         type: Literal["function_call_output"]
         call_id: str
         output: str
+
+    class FunctionCallItemCreate(TypedDict):
+        id: str | None
+        type: Literal["function_call"]
+        call_id: str
+        name: str
+        arguments: str
 
     ConversationItemCreateContent = Union[
         UserItemCreate,
         AssistantItemCreate,
         SystemItemCreate,
         FunctionCallOutputItemCreate,
+        FunctionCallItemCreate,
     ]
 
     class ConversationItemCreate(TypedDict):
@@ -330,6 +355,7 @@ class ServerEvent:
     class ConversationItemCreated(TypedDict):
         event_id: str
         type: Literal["conversation.item.created"]
+        previous_item_id: str | None
         item: Resource.Item
 
     class ConversationItemInputAudioTranscriptionCompleted(TypedDict):

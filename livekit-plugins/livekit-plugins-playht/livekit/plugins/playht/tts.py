@@ -7,7 +7,9 @@ from typing import Any, List, Literal
 
 import aiohttp
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
+    APIConnectOptions,
     APIStatusError,
     APITimeoutError,
     tts,
@@ -127,20 +129,36 @@ class TTS(tts.TTS):
         ) as resp:
             return _dict_to_voices_list(await resp.json())
 
-    def synthesize(self, text: str) -> "ChunkedStream":
-        return ChunkedStream(self, text, self._opts, self._ensure_session())
+    def synthesize(
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> "ChunkedStream":
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=self._opts,
+            session=self._ensure_session(),
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
     def __init__(
-        self, tts: TTS, text: str, opts: _TTSOptions, session: aiohttp.ClientSession
+        self,
+        tts: TTS,
+        input_text: str,
+        opts: _TTSOptions,
+        conn_options: APIConnectOptions,
+        session: aiohttp.ClientSession,
     ) -> None:
-        super().__init__(tts, text)
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._session = opts, session
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         stream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate, num_channels=1
         )

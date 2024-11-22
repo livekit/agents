@@ -1,5 +1,15 @@
 # livekit-plugins-google
 
+## 0.7.3
+
+### Patch Changes
+
+- added catch for aborted speech - [#1055](https://github.com/livekit/agents/pull/1055) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Make Google STT keywords match Deepgram - [#1067](https://github.com/livekit/agents/pull/1067) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Add support for boosting phrases in Google STT - [#1066](https://github.com/livekit/agents/pull/1066) ([@martin-purplefish](https://github.com/martin-purplefish))
+
 ## 0.7.2
 
 ### Patch Changes
