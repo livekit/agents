@@ -65,7 +65,7 @@ class LLMOptions:
     user: str | None
     temperature: float | None
     parallel_tool_calls: bool | None
-    tool_choice: Union[ToolChoice, Literal["auto", "any", "none", "required"]] | None
+    tool_choice: Union[ToolChoice, None, Literal["auto", "any", "none", "required"]]
 
 
 class LLM(llm.LLM):
@@ -80,7 +80,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> None:
         """
@@ -131,7 +131,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         """
@@ -176,7 +176,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         """
@@ -213,7 +213,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         """
@@ -299,7 +299,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         """
@@ -337,7 +337,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ):
         """
@@ -374,7 +374,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         """
@@ -412,7 +412,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         """
@@ -450,7 +450,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         """
@@ -486,7 +486,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         """
@@ -514,7 +514,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         """
@@ -552,7 +552,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         """
@@ -590,7 +590,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         """
@@ -634,7 +634,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"]
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = "auto",
     ) -> LLM:
         logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
@@ -663,7 +663,7 @@ class LLM(llm.LLM):
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, Literal["auto", "any", "none", "required"], None
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = None,
     ) -> "LLMStream":
         parallel_tool_calls = parallel_tool_calls or self._opts.parallel_tool_calls

@@ -68,8 +68,9 @@ class LLM(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "any", "none", "required"]]
-        | None = None,
+        tool_choice: Union[
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
+        ] = None,
     ) -> "LLMStream": ...
 
     @property
