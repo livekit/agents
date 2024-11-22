@@ -668,7 +668,6 @@ class LLM(llm.LLM):
     ) -> "LLMStream":
         if parallel_tool_calls is None:
             parallel_tool_calls = self._opts.parallel_tool_calls
-        print(parallel_tool_calls)
         if tool_choice is None:
             tool_choice = self._opts.tool_choice
         opts: dict[str, Any] = dict()
