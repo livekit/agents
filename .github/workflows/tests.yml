@@ -18,29 +18,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os: [macos-14-large, macos-14, windows-2019, ubuntu-20.04, namespace-profile-default-arm64]
+        python_version: ["3.9", "3.12"]
+        test_group: ["base"]
         include:
-          # Base tests on all operating systems
-          - os: macos-14-large
-            test_group: base
-          - os: macos-14
-            test_group: base
-          - os: windows-2019
-            test_group: base
+          # Include llm, stt, and tts tests only on Ubuntu 20.04 with Python 3.9
           - os: ubuntu-20.04
-            test_group: base
-          - os: namespace-profile-default-arm64
-            test_group: base
-
-          # Run llm, stt, and tts tests only on Ubuntu
-          - os: ubuntu-20.04
+            python_version: "3.9"
             test_group: llm
           - os: ubuntu-20.04
+            python_version: "3.9"
             test_group: stt
           - os: ubuntu-20.04
+            python_version: "3.9"
             test_group: tts
 
     runs-on: ${{ matrix.os }}
-    name: ${{ matrix.test_group }} — ${{ matrix.os }})
+    name: ${{ matrix.test_group }} — ${{ matrix.os }}) (py${{ matrix.python_version }})
     steps:
       - uses: actions/checkout@v4
         with:
@@ -126,7 +120,7 @@ jobs:
 
           case "${{ matrix.test_group }}" in
             base)
-              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py"
+              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_fallback.py"
               ;;
             llm)
               test_files="test_llm.py"

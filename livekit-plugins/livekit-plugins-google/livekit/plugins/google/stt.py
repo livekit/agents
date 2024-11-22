@@ -240,11 +240,11 @@ class SpeechStream(stt.SpeechStream):
         client: SpeechAsyncClient,
         recognizer: str,
         config: STTOptions,
-        sample_rate: int = 48000,
+        sample_rate: int = 16000,
         num_channels: int = 1,
         max_retry: int = 32,
     ) -> None:
-        super().__init__(stt)
+        super().__init__(stt, sample_rate=sample_rate)
 
         self._client = client
         self._recognizer = recognizer
@@ -294,9 +294,6 @@ class SpeechStream(stt.SpeechStream):
 
                         async for frame in self._input_ch:
                             if isinstance(frame, rtc.AudioFrame):
-                                frame = frame.remix_and_resample(
-                                    self._sample_rate, self._num_channels
-                                )
                                 yield cloud_speech.StreamingRecognizeRequest(
                                     audio=frame.data.tobytes()
                                 )
@@ -313,13 +310,11 @@ class SpeechStream(stt.SpeechStream):
                 retry_count = 0  # connection successful, reset retry count
 
                 await self._run_stream(stream)
-            except Aborted:
-                logger.error("google stt connection aborted")
-                break
             except Exception as e:
+                error_type = "Aborted" if isinstance(e, Aborted) else "Error"
                 if retry_count >= max_retry:
                     logger.error(
-                        f"failed to connect to google stt after {max_retry} tries",
+                        f"failed to connect to google stt after {max_retry} tries due to {error_type}",
                         exc_info=e,
                     )
                     break
@@ -327,7 +322,7 @@ class SpeechStream(stt.SpeechStream):
                 retry_delay = min(retry_count * 2, 5)  # max 5s
                 retry_count += 1
                 logger.warning(
-                    f"google stt connection failed, retrying in {retry_delay}s",
+                    f"google stt connection {error_type.lower()}, retrying in {retry_delay}s",
                     exc_info=e,
                 )
                 await asyncio.sleep(retry_delay)

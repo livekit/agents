@@ -40,6 +40,7 @@ class WizperSTT(stt.STT):
             chunk_level=chunk_level or "segment",
             version=version or "3",
         )
+        self._fal_client = fal_client.AsyncClient()
 
         if not self._api_key:
             raise ValueError(
@@ -71,16 +72,13 @@ class WizperSTT(stt.STT):
         version: Optional[str] = None,
     ) -> stt.SpeechEvent:
         try:
-            if buffer is None:
-                raise ValueError("AudioBuffer input is required")
-
             config = self._sanitize_options(
                 language=language, task=task, chunk_level=chunk_level, version=version
             )
             buffer = merge_frames(buffer)
             wav_bytes = AudioFrame.to_wav_bytes(buffer)
             data_uri = fal_client.encode(wav_bytes, "audio/x-wav")
-            response = await fal_client.run_async(
+            response = await self._fal_client.run(
                 "fal-ai/wizper",
                 arguments={
                     "audio_url": data_uri,
@@ -102,3 +100,6 @@ class WizperSTT(stt.STT):
             type=event_type,
             alternatives=[stt.SpeechData(text=text, language=self._opts.language)],
         )
+
+    async def aclose(self) -> None:
+        await self._fal_client._client.aclose()

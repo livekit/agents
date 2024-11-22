@@ -18,9 +18,8 @@ from typing import (
 from livekit import rtc
 
 from .. import metrics, stt, tokenize, tts, utils, vad
-from .._constants import ATTRIBUTE_AGENT_STATE
-from .._types import AgentState
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput

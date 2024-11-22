@@ -79,6 +79,16 @@ DeepSeekChatModels = Literal[
     "deepseek-chat",
 ]
 
+VertexModels = Literal[
+    "google/gemini-1.5-flash",
+    "google/gemini-1.5-pro",
+    "google/gemini-1.0-pro-vision",
+    "google/gemini-1.0-pro-vision-001",
+    "google/gemini-1.0-pro-002",
+    "google/gemini-1.0-pro-001",
+    "google/gemini-1.0-pro",
+]
+
 TogetherChatModels = Literal[
     "Austism/chronos-hermes-13b",
     "Gryphe/MythoMax-L2-13b",
