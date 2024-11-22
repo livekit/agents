@@ -49,7 +49,7 @@ class ChatChunk:
 
 
 class ToolChoice(TypedDict, total=False):
-    type: Literal["auto", "any", "tool", "none", "required"] | None
+    type: Literal["auto", "any", "tool", "none", "required"]
     name: str  # Optional: only used when type is "tool"
 
 

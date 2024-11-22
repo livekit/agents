@@ -136,7 +136,7 @@ class LLM(llm.LLM):
                 fncs_desc.append(_build_function_description(fnc))
 
             opts["tools"] = fncs_desc
-            anthropic_tool_choice = {"type": "auto"}
+            anthropic_tool_choice: dict[str, Any] = {"type": "auto"}
             if isinstance(tool_choice, dict):
                 if tool_choice["type"] == "tool":
                     anthropic_tool_choice = {
