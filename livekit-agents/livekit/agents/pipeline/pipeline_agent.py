@@ -18,10 +18,10 @@ from typing import (
 from livekit import rtc
 
 from .. import metrics, stt, tokenize, tts, utils, vad
-from ..stt import SpeechEvent
-from ..vad import VADEvent
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from ..stt import SpeechEvent
 from ..types import ATTRIBUTE_AGENT_STATE, AgentState
+from ..vad import VADEvent
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
@@ -550,7 +550,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._human_input.on("final_transcript", self._on_final_transcript)
 
     def _unlink_participant(self) -> None:
-        """Clean up participant-related resources"""
         if self._human_input is None:
             return
 
