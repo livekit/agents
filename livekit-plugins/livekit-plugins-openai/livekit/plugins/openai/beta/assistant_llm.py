@@ -18,7 +18,7 @@ import asyncio
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Literal, MutableSet
+from typing import Any, Callable, Dict, Literal, MutableSet, TypedDict, Union
 
 import httpx
 from livekit import rtc
@@ -50,6 +50,11 @@ OPENAI_FILE_ID_KEY = "__openai_file_id__"
 @dataclass
 class LLMOptions:
     model: str | ChatModels
+
+
+class ToolChoice(TypedDict, total=False):
+    type: Literal["auto", "any", "tool", "none", "required"]
+    name: str  # Optional: only used when type is "tool"
 
 
 @dataclass
@@ -170,6 +175,9 @@ class AssistantLLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
+        ] = None,
     ):
         if n is not None:
             logger.warning("OpenAI Assistants does not support the 'n' parameter")
