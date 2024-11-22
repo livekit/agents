@@ -18,6 +18,8 @@ from typing import (
 from livekit import rtc
 
 from .. import metrics, stt, tokenize, tts, utils, vad
+from ..stt import SpeechEvent
+from ..vad import VADEvent
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
 from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
@@ -462,12 +464,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._unlink_participant()
 
-    def _on_start_of_speech(self, ev: vad.VADEvent) -> None:
+    def _on_start_of_speech(self, ev: VADEvent) -> None:
         self._plotter.plot_event("user_started_speaking")
         self.emit("user_started_speaking")
         self._deferred_validation.on_human_start_of_speech(ev)
 
-    def _on_vad_inference_done(self, ev: vad.VADEvent) -> None:
+    def _on_vad_inference_done(self, ev: VADEvent) -> None:
         if not self._track_published_fut.done():
             return
 
@@ -490,15 +492,15 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         if ev.raw_accumulated_speech > 0.0:
             self._last_speech_time = time.perf_counter() - ev.raw_accumulated_silence
 
-    def _on_end_of_speech(self, ev: vad.VADEvent) -> None:
+    def _on_end_of_speech(self, ev: VADEvent) -> None:
         self._plotter.plot_event("user_stopped_speaking")
         self.emit("user_stopped_speaking")
         self._deferred_validation.on_human_end_of_speech(ev)
 
-    def _on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
+    def _on_interim_transcript(self, ev: SpeechEvent) -> None:
         self._transcribed_interim_text = ev.alternatives[0].text
 
-    def _on_final_transcript(self, ev: stt.SpeechEvent) -> None:
+    def _on_final_transcript(self, ev: SpeechEvent) -> None:
         new_transcript = ev.alternatives[0].text
         if not new_transcript:
             return
@@ -1061,13 +1063,13 @@ class _DeferredReplyValidation:
 
         self._run(delay)
 
-    def on_human_start_of_speech(self, ev: vad.VADEvent) -> None:
+    def on_human_start_of_speech(self, ev: VADEvent) -> None:
         self._speaking = True
         if self.validating:
             assert self._validating_task is not None
             self._validating_task.cancel()
 
-    def on_human_end_of_speech(self, ev: vad.VADEvent) -> None:
+    def on_human_end_of_speech(self, ev: VADEvent) -> None:
         self._speaking = False
         self._last_recv_end_of_speech_time = time.time()
 
