@@ -666,8 +666,11 @@ class LLM(llm.LLM):
             ToolChoice, None, Literal["auto", "any", "none", "required"]
         ] = None,
     ) -> "LLMStream":
-        parallel_tool_calls = parallel_tool_calls or self._opts.parallel_tool_calls
-        tool_choice = tool_choice or self._opts.tool_choice
+        if parallel_tool_calls is None:
+            parallel_tool_calls = self._opts.parallel_tool_calls
+        print(parallel_tool_calls)
+        if tool_choice is None:
+            tool_choice = self._opts.tool_choice
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc = []
@@ -679,21 +682,21 @@ class LLM(llm.LLM):
             if fnc_ctx and parallel_tool_calls is not None:
                 opts["parallel_tool_calls"] = parallel_tool_calls
 
-                openai_tool_choice: dict[str, Any] | str = "auto"
-                if isinstance(tool_choice, dict):
-                    if tool_choice["type"] == "tool":
-                        openai_tool_choice = {
-                            "type": "function",
-                            "function": {"name": tool_choice["name"]},
-                        }
-                    elif tool_choice["type"] == "any":
-                        openai_tool_choice = "required"
-                elif isinstance(tool_choice, str):
-                    if tool_choice == "any":
-                        openai_tool_choice = "required"
-                    else:
-                        openai_tool_choice = tool_choice
-                opts["tool_choice"] = openai_tool_choice
+            openai_tool_choice: dict[str, Any] | str = "auto"
+            if isinstance(tool_choice, dict):
+                if tool_choice["type"] == "tool":
+                    openai_tool_choice = {
+                        "type": "function",
+                        "function": {"name": tool_choice["name"]},
+                    }
+                elif tool_choice["type"] == "any":
+                    openai_tool_choice = "required"
+            elif isinstance(tool_choice, str):
+                if tool_choice == "any":
+                    openai_tool_choice = "required"
+                else:
+                    openai_tool_choice = tool_choice
+            opts["tool_choice"] = openai_tool_choice
 
         user = self._opts.user or openai.NOT_GIVEN
         if temperature is None:

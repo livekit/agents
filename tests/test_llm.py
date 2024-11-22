@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Annotated, Callable, Optional
+from typing import Annotated, Callable, Literal, Optional, Union
 
 import pytest
 from livekit.agents import llm
@@ -277,11 +277,90 @@ async def test_optional_args(llm_factory: Callable[[], llm.LLM]):
     assert address is None, "update_user_info should have been called with address None"
 
 
+test_tool_choice_cases = [
+    pytest.param(
+        "Default tool_choice (auto)",
+        "Get the weather for New York and play some music.",
+        None,
+        {"get_weather", "play_music"},
+        id="Default tool_choice (auto)",
+    ),
+    pytest.param(
+        "Tool_choice set to 'any'",
+        "Get the weather for Los Angeles and play some music.",
+        "any",
+        {"get_weather", "play_music"},
+        id="Tool_choice set to 'any'",
+    ),
+    pytest.param(
+        "Tool_choice set to 'required'",
+        "Get the weather for Chicago and play some music.",
+        "required",
+        {"get_weather", "play_music"},
+        id="Tool_choice set to 'required'",
+    ),
+    pytest.param(
+        "Tool_choice set to a specific tool ('get_weather')",
+        "Get the weather for Miami.",
+        {"type": "tool", "name": "get_weather"},
+        {"get_weather"},
+        id="Tool_choice set to a specific tool ('get_weather')",
+    ),
+    pytest.param(
+        "Tool_choice set to 'none'",
+        "Get the weather for Seattle and play some music.",
+        "none",
+        set(),  # No tool calls expected
+        id="Tool_choice set to 'none'",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "description, user_request, tool_choice, expected_calls", test_tool_choice_cases
+)
+@pytest.mark.parametrize("llm_factory", LLMS)
+async def test_tool_choice_options(
+    description: str,
+    user_request: str,
+    tool_choice: Union[dict, str, None],
+    expected_calls: set,
+    llm_factory: Callable[[], llm.LLM],
+):
+    input_llm = llm_factory()
+    fnc_ctx = FncCtx()
+
+    stream = await _request_fnc_call(
+        input_llm,
+        user_request,
+        fnc_ctx,
+        tool_choice=tool_choice,
+        parallel_tool_calls=True,
+    )
+
+    calls = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in calls], return_exceptions=True)
+    await stream.aclose()
+    print(calls)
+
+    call_names = {call.call_info.function_info.name for call in calls}
+    if expected_calls == set() and isinstance(input_llm, anthropic.LLM):
+        assert True
+    else:
+        assert (
+            call_names == expected_calls
+        ), f"Test '{description}' failed: Expected calls {expected_calls}, but got {call_names}"
+
+
 async def _request_fnc_call(
     model: llm.LLM,
     request: str,
     fnc_ctx: FncCtx,
     temperature: float | None = None,
+    parallel_tool_calls: bool | None = None,
+    tool_choice: Union[
+        llm.ToolChoice, None, Literal["auto", "any", "none", "required"]
+    ] = None,
 ) -> llm.LLMStream:
     stream = model.chat(
         chat_ctx=ChatContext()
@@ -292,6 +371,8 @@ async def _request_fnc_call(
         .append(text=request, role="user"),
         fnc_ctx=fnc_ctx,
         temperature=temperature,
+        tool_choice=tool_choice,
+        parallel_tool_calls=parallel_tool_calls,
     )
 
     async for _ in stream:

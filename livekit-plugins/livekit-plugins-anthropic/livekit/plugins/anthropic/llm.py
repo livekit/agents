@@ -126,8 +126,10 @@ class LLM(llm.LLM):
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
-        parallel_tool_calls = parallel_tool_calls or self._opts.parallel_tool_calls
-        tool_choice = tool_choice or self._opts.tool_choice
+        if parallel_tool_calls is None:
+            parallel_tool_calls = self._opts.parallel_tool_calls
+        if tool_choice is None:
+            tool_choice = self._opts.tool_choice
 
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
