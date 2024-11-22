@@ -19,7 +19,17 @@ import inspect
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Awaitable, List, Literal, Tuple, get_args, get_origin
+from typing import (
+    Any,
+    Awaitable,
+    List,
+    Literal,
+    Tuple,
+    TypedDict,
+    Union,
+    get_args,
+    get_origin,
+)
 
 import httpx
 from livekit import rtc
@@ -39,14 +49,18 @@ from .models import (
 )
 
 
+class ToolChoice(TypedDict, total=False):
+    type: Literal["auto", "any", "tool", "none", "required"]
+    name: str  # Optional: only used when type is "tool"
+
+
 @dataclass
 class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
-    tool_choice_type: Literal["auto", "any", "tool"]
-    tool_choice_name: str | None
-    disable_parallel_tool_use: bool = False
+    parallel_tool_calls: bool | None
+    tool_choice: Union[ToolChoice, None, Literal["auto", "any", "none", "required"]]
 
 
 class LLM(llm.LLM):
@@ -59,9 +73,10 @@ class LLM(llm.LLM):
         user: str | None = None,
         client: anthropic.AsyncClient | None = None,
         temperature: float | None = None,
-        tool_choice_type: Literal["auto", "any", "tool"] = "auto",
-        tool_choice_name: str | None = None,
-        disable_parallel_tool_use: bool = False,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
+        ] = None,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -80,9 +95,8 @@ class LLM(llm.LLM):
             model=model,
             user=user,
             temperature=temperature,
-            tool_choice_type=tool_choice_type,
-            tool_choice_name=tool_choice_name,
-            disable_parallel_tool_use=disable_parallel_tool_use,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,
@@ -106,11 +120,14 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
+        ] = None,
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
-        if parallel_tool_calls is not None and parallel_tool_calls is False:
-            self._opts.disable_parallel_tool_use = True
+        parallel_tool_calls = parallel_tool_calls or self._opts.parallel_tool_calls
+        tool_choice = tool_choice or self._opts.tool_choice
 
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
@@ -119,13 +136,23 @@ class LLM(llm.LLM):
                 fncs_desc.append(_build_function_description(fnc))
 
             opts["tools"] = fncs_desc
-            tool_choice: dict[str, Any] = {
-                "type": self._opts.tool_choice_type,
-                "disable_parallel_tool_use": self._opts.disable_parallel_tool_use,
-            }
-            if self._opts.tool_choice_name:
-                tool_choice["name"] = self._opts.tool_choice_name
-            opts["tool_choice"] = tool_choice
+            anthropic_tool_choice = {"type": "auto"}
+            if isinstance(tool_choice, dict):
+                if tool_choice["type"] == "tool":
+                    anthropic_tool_choice = {
+                        "type": "tool",
+                        "name": tool_choice["name"],
+                    }
+                elif tool_choice["type"] in ["any", "required"]:
+                    anthropic_tool_choice = {"type": "any"}
+            elif isinstance(tool_choice, str):
+                if tool_choice in ["any", "required"]:
+                    anthropic_tool_choice = {"type": "any"}
+                elif tool_choice == "none":
+                    anthropic_tool_choice = {"type": "auto"}
+            if parallel_tool_calls is not None and parallel_tool_calls is False:
+                anthropic_tool_choice["disable_parallel_tool_use"] = True
+            opts["tool_choice"] = anthropic_tool_choice
 
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
