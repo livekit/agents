@@ -97,6 +97,7 @@ class TTS(tts.TTS):
             _audio_encoding = texttospeech.AudioEncoding.LINEAR16
         elif encoding == "mp3":
             _audio_encoding = texttospeech.AudioEncoding.MP3
+            self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
         else:
             raise NotImplementedError(f"audio encoding {encoding} is not supported")
 
@@ -196,7 +197,7 @@ class ChunkedStream(tts.ChunkedStream):
             )
 
             if self._opts.audio_config.audio_encoding == "mp3":
-                decoder = utils.codecs.Mp3StreamDecoder()
+                decoder = tts._mp3_decoder
                 bstream = utils.audio.AudioByteStream(
                     sample_rate=self._opts.audio_config.sample_rate_hertz,
                     num_channels=1,

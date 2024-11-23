@@ -101,6 +101,8 @@ class TTS(tts.TTS):
         user_id = user_id or os.environ.get("PLAYHT_USER_ID")
         if not user_id:
             raise ValueError("PLAYHT_USER_ID mus be set")
+        if encoding == "mp3":
+            self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
         self._opts = _TTSOptions(
             voice=voice,
@@ -162,7 +164,6 @@ class ChunkedStream(tts.ChunkedStream):
         stream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate, num_channels=1
         )
-        self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
         request_id = utils.shortuuid()
         url = f"{API_BASE_URL_V2}/tts/stream"
         headers = {
@@ -188,7 +189,7 @@ class ChunkedStream(tts.ChunkedStream):
                 encoding = _encoding_from_format(self._opts.encoding)
                 if encoding == "mp3":
                     async for bytes_data, _ in resp.content.iter_chunks():
-                        for frame in self._mp3_decoder.decode_chunk(bytes_data):
+                        for frame in tts._mp3_decoder.decode_chunk(bytes_data):
                             self._event_ch.send_nowait(
                                 tts.SynthesizedAudio(
                                     request_id=request_id,
