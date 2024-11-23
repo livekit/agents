@@ -16,7 +16,12 @@ import ctypes
 import logging
 from typing import List
 
-import av
+try:
+    import av
+except ImportError:
+    raise ImportError(
+        "You haven't included the 'codecs' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[codecs]`"
+    )
 from livekit import rtc
 
 

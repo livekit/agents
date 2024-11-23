@@ -58,7 +58,6 @@ setuptools.setup(
         "psutil~=5.9",
         "aiohttp~=3.10",
         "typing-extensions~=4.12",
-        "av>=11.0.0",
     ],
     extras_require={
         ':sys_platform=="win32"': [
@@ -67,6 +66,7 @@ setuptools.setup(
         ':sys_platform!="win32"': [
             "aiodns~=3.2"
         ],  # use default aiohttp resolver on windows
+        "codecs": ["av>=11.0.0"],
         "images": ["pillow>=10.3.0"],
     },
     package_data={"livekit.agents": ["py.typed"]},
