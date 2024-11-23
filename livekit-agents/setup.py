@@ -67,7 +67,7 @@ setuptools.setup(
         ':sys_platform!="win32"': [
             "aiodns~=3.2"
         ],  # use default aiohttp resolver on windows
-        "images": ["pillow~=10.3.0"],
+        "images": ["pillow>=10.3.0"],
     },
     package_data={"livekit.agents": ["py.typed"]},
     project_urls={
