@@ -858,7 +858,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 self._playing_speech = speech
                 await self._play_speech(speech)
                 speech_handle.nested_speech_handles.pop(0)
-                self._playing_speech = None
+                self._playing_speech = speech_handle
 
             speech_handle.nested_speech_changed.clear()
             # break if the function calls task is done
