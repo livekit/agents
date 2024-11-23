@@ -421,7 +421,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         )
         synthesis_handle = self._synthesize_agent_speech(new_handle.id, source)
         new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
-        self._add_speech_for_playout(new_handle)
+
+        if self._playing_speech is None:
+            self._add_speech_for_playout(new_handle)
+        else:
+            self._playing_speech.add_nested_speech(new_handle)
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -660,6 +664,19 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             SpeechDataContextVar.reset(tk)
 
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
+        if speech_handle.extra_tools_messages:
+            # synthesize the tool speech with the latest chat context and the tools messages
+            chat_ctx = self._chat_ctx.copy()
+            chat_ctx.messages.extend(speech_handle.extra_tools_messages)
+            answer_llm_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx)
+
+            synthesis_handle = self._synthesize_agent_speech(
+                speech_handle.id, answer_llm_stream
+            )
+            speech_handle.initialize(
+                source=answer_llm_stream, synthesis_handle=synthesis_handle
+            )
+
         try:
             await speech_handle.wait_for_initialization()
         except asyncio.CancelledError:
@@ -729,11 +746,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
-        extra_tools_messages = []  # additional messages from the functions to add to the context if needed
+        async def _execute_function_calls() -> None:
+            nonlocal interrupted, collected_text
 
-        # if the answer is using tools, execute the functions and automatically generate
-        # a response to the user question from the returned values
-        if is_using_tools and not interrupted:
+            # if the answer is using tools, execute the functions and automatically generate
+            # a response to the user question from the returned values
+            if not is_using_tools or interrupted:
+                return
+
             assert isinstance(speech_handle.source, LLMStream)
             assert (
                 not user_question or speech_handle.user_committed
@@ -796,41 +816,79 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 if not tool_calls_info:
                     break
 
-                # generate an answer from the tool calls
-                extra_tools_messages.append(
+                # create a nested speech handle
+                extra_tools_messages = [
                     ChatMessage.create_tool_calls(tool_calls_info, text=collected_text)
-                )
+                ]
                 extra_tools_messages.extend(tool_calls_results)
 
-                chat_ctx = speech_handle.source.chat_ctx.copy()
-                chat_ctx.messages.extend(extra_tools_messages)
-
-                answer_llm_stream = self._llm.chat(
-                    chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx
+                new_speech_handle = SpeechHandle.create_tool_speech(
+                    allow_interruptions=speech_handle.allow_interruptions,
+                    add_to_chat_ctx=speech_handle.add_to_chat_ctx,
+                    extra_tools_messages=extra_tools_messages,
                 )
-                answer_synthesis = self._synthesize_agent_speech(
-                    speech_handle.id, answer_llm_stream
-                )
-                # replace the synthesis handle with the new one to allow interruption
-                speech_handle.synthesis_handle = answer_synthesis
-                play_handle = answer_synthesis.play()
-                await play_handle.join()
+                speech_handle.add_nested_speech(new_speech_handle)
 
-                collected_text = answer_synthesis.tts_forwarder.played_text
-                interrupted = answer_synthesis.interrupted
-                new_function_calls = answer_llm_stream.function_calls
+                # chat_ctx = speech_handle.source.chat_ctx.copy()
+                # chat_ctx.messages.extend(extra_tools_messages)
+
+                # answer_llm_stream = self._llm.chat(
+                #     chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx
+                # )
+                # answer_synthesis = self._synthesize_agent_speech(
+                #     speech_handle.id, answer_llm_stream
+                # )
+                # # replace the synthesis handle with the new one to allow interruption
+                # speech_handle.synthesis_handle = answer_synthesis
+                # play_handle = answer_synthesis.play()
+                # await play_handle.join()
+
+                # collected_text = answer_synthesis.tts_forwarder.played_text
+                # interrupted = answer_synthesis.interrupted
+                # new_function_calls = answer_llm_stream.function_calls
 
                 self.emit("function_calls_finished", called_fncs)
 
                 if not new_function_calls:
                     break
 
-            _CallContextVar.reset(tk)
+                _CallContextVar.reset(tk)
+
+        fnc_task = asyncio.create_task(_execute_function_calls())
+        while True:
+            # Create a task for the event wait since asyncio.wait() doesn't accept coroutines
+            event_wait_task = asyncio.create_task(
+                speech_handle.nested_speech_changed.wait()
+            )
+
+            await asyncio.wait(
+                [event_wait_task, fnc_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # Cancel the event wait task if we're done with it
+            if not event_wait_task.done():
+                event_wait_task.cancel()
+
+            while speech_handle.nested_speech_handles:
+                speech = speech_handle.nested_speech_handles[0]
+                self._playing_speech = speech
+                await self._play_speech(speech)
+                speech_handle.nested_speech_handles.pop(
+                    0
+                )  # Remove the element only after playing
+                self._playing_speech = None
+
+            speech_handle.nested_speech_changed.clear()
+            # break if the function calls task is done
+            if fnc_task.done():
+                break
 
         if speech_handle.add_to_chat_ctx and (
             not user_question or speech_handle.user_committed
         ):
-            self._chat_ctx.messages.extend(extra_tools_messages)
+            if speech_handle.extra_tools_messages:
+                self._chat_ctx.messages.extend(speech_handle.extra_tools_messages)
 
             if interrupted:
                 collected_text += "..."

@@ -11,7 +11,7 @@ from livekit.agents import (
     cli,
     llm,
 )
-from livekit.agents.pipeline import VoicePipelineAgent
+from livekit.agents.pipeline import AgentCallContext, VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
@@ -33,6 +33,14 @@ class AssistantFnc(llm.FunctionContext):
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
+
+        # Example of a filler message while waiting for the function call to complete.
+        # NOTE: This message illustrates how the agent can engage users by using the `say()` method
+        # while awaiting the completion of the function call. To create a more dynamic and engaging
+        # interaction, consider varying the responses based on context or user input.
+        agent = AgentCallContext.get_current().agent
+        await agent.say(f"Let me check the weather in {location} for you.")
+
         logger.info(f"getting weather for {location}")
         url = f"https://wttr.in/{location}?format=%C+%t"
         async with aiohttp.ClientSession() as session:

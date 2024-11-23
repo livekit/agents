@@ -4,7 +4,7 @@ import asyncio
 from typing import AsyncIterable
 
 from .. import utils
-from ..llm import LLMStream
+from ..llm import ChatMessage, LLMStream
 from .agent_output import SynthesisHandle
 
 
@@ -17,6 +17,7 @@ class SpeechHandle:
         add_to_chat_ctx: bool,
         is_reply: bool,
         user_question: str,
+        extra_tools_messages: list[ChatMessage] | None = None,
     ) -> None:
         self._id = id
         self._allow_interruptions = allow_interruptions
@@ -34,6 +35,10 @@ class SpeechHandle:
         # source and synthesis_handle are None until the speech is initialized
         self._source: str | LLMStream | AsyncIterable[str] | None = None
         self._synthesis_handle: SynthesisHandle | None = None
+
+        self._fnc_extra_tools_messages: list[ChatMessage] | None = extra_tools_messages
+        self._nested_speech_handles: list[SpeechHandle] = []
+        self._nested_speech_changed = asyncio.Event()
 
     @staticmethod
     def create_assistant_reply(
@@ -62,6 +67,22 @@ class SpeechHandle:
             add_to_chat_ctx=add_to_chat_ctx,
             is_reply=False,
             user_question="",
+        )
+
+    @staticmethod
+    def create_tool_speech(
+        *,
+        allow_interruptions: bool,
+        add_to_chat_ctx: bool,
+        extra_tools_messages: list[ChatMessage],
+    ) -> SpeechHandle:
+        return SpeechHandle(
+            id=utils.shortuuid(),
+            allow_interruptions=allow_interruptions,
+            add_to_chat_ctx=add_to_chat_ctx,
+            is_reply=False,
+            user_question="",
+            extra_tools_messages=extra_tools_messages,
         )
 
     async def wait_for_initialization(self) -> None:
@@ -156,3 +177,19 @@ class SpeechHandle:
 
         if self._synthesis_handle is not None:
             self._synthesis_handle.interrupt()
+
+    @property
+    def extra_tools_messages(self) -> list[ChatMessage] | None:
+        return self._fnc_extra_tools_messages
+
+    def add_nested_speech(self, speech_handle: SpeechHandle) -> None:
+        self._nested_speech_handles.append(speech_handle)
+        self._nested_speech_changed.set()
+
+    @property
+    def nested_speech_handles(self) -> list[SpeechHandle]:
+        return self._nested_speech_handles
+
+    @property
+    def nested_speech_changed(self) -> asyncio.Event:
+        return self._nested_speech_changed
