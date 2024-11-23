@@ -17,6 +17,7 @@ class SpeechHandle:
         add_to_chat_ctx: bool,
         is_reply: bool,
         user_question: str,
+        fnc_nested_depth: int = 0,
         extra_tools_messages: list[ChatMessage] | None = None,
     ) -> None:
         self._id = id
@@ -36,9 +37,13 @@ class SpeechHandle:
         self._source: str | LLMStream | AsyncIterable[str] | None = None
         self._synthesis_handle: SynthesisHandle | None = None
 
+        # nested speech handle and function calls
+        self._fnc_nested_depth = fnc_nested_depth
         self._fnc_extra_tools_messages: list[ChatMessage] | None = extra_tools_messages
+
         self._nested_speech_handles: list[SpeechHandle] = []
         self._nested_speech_changed = asyncio.Event()
+        self._nested_speech_finished = False
 
     @staticmethod
     def create_assistant_reply(
@@ -74,6 +79,7 @@ class SpeechHandle:
         *,
         allow_interruptions: bool,
         add_to_chat_ctx: bool,
+        fnc_nested_depth: int,
         extra_tools_messages: list[ChatMessage],
     ) -> SpeechHandle:
         return SpeechHandle(
@@ -82,6 +88,7 @@ class SpeechHandle:
             add_to_chat_ctx=add_to_chat_ctx,
             is_reply=False,
             user_question="",
+            fnc_nested_depth=fnc_nested_depth,
             extra_tools_messages=extra_tools_messages,
         )
 
@@ -179,6 +186,10 @@ class SpeechHandle:
             self._synthesis_handle.interrupt()
 
     @property
+    def fnc_nested_depth(self) -> int:
+        return self._fnc_nested_depth
+
+    @property
     def extra_tools_messages(self) -> list[ChatMessage] | None:
         return self._fnc_extra_tools_messages
 
@@ -193,3 +204,10 @@ class SpeechHandle:
     @property
     def nested_speech_changed(self) -> asyncio.Event:
         return self._nested_speech_changed
+
+    @property
+    def nested_speech_finished(self) -> bool:
+        return self._nested_speech_finished
+
+    def mark_nested_speech_finished(self) -> None:
+        self._nested_speech_finished = True

@@ -422,10 +422,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         synthesis_handle = self._synthesize_agent_speech(new_handle.id, source)
         new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
 
-        if self._playing_speech is None:
-            self._add_speech_for_playout(new_handle)
-        else:
+        if self._playing_speech and not self._playing_speech.nested_speech_finished:
             self._playing_speech.add_nested_speech(new_handle)
+        else:
+            self._add_speech_for_playout(new_handle)
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -754,6 +754,16 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if not is_using_tools or interrupted:
                 return
 
+            if speech_handle.fnc_nested_depth >= self._opts.max_nested_fnc_calls:
+                logger.warning(
+                    "max function calls nested depth reached",
+                    extra={
+                        "speech_id": speech_handle.id,
+                        "fnc_nested_depth": speech_handle.fnc_nested_depth,
+                    },
+                )
+                return
+
             assert isinstance(speech_handle.source, LLMStream)
             assert (
                 not user_question or speech_handle.user_committed
@@ -774,99 +784,72 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             new_function_calls = llm_stream.function_calls
 
-            for i in range(self._opts.max_nested_fnc_calls):
-                self.emit("function_calls_collected", new_function_calls)
+            self.emit("function_calls_collected", new_function_calls)
 
-                called_fncs = []
-                for fnc in new_function_calls:
-                    called_fnc = fnc.execute()
-                    called_fncs.append(called_fnc)
-                    logger.debug(
-                        "executing ai function",
+            called_fncs = []
+            for fnc in new_function_calls:
+                called_fnc = fnc.execute()
+                called_fncs.append(called_fnc)
+                logger.debug(
+                    "executing ai function",
+                    extra={
+                        "function": fnc.function_info.name,
+                        "speech_id": speech_handle.id,
+                    },
+                )
+                try:
+                    await called_fnc.task
+                except Exception as e:
+                    logger.exception(
+                        "error executing ai function",
                         extra={
                             "function": fnc.function_info.name,
                             "speech_id": speech_handle.id,
                         },
-                    )
-                    try:
-                        await called_fnc.task
-                    except Exception as e:
-                        logger.exception(
-                            "error executing ai function",
-                            extra={
-                                "function": fnc.function_info.name,
-                                "speech_id": speech_handle.id,
-                            },
-                            exc_info=e,
-                        )
-
-                tool_calls_info = []
-                tool_calls_results = []
-
-                for called_fnc in called_fncs:
-                    # ignore the function calls that returns None
-                    if called_fnc.result is None and called_fnc.exception is None:
-                        continue
-
-                    tool_calls_info.append(called_fnc.call_info)
-                    tool_calls_results.append(
-                        ChatMessage.create_tool_from_called_function(called_fnc)
+                        exc_info=e,
                     )
 
-                if not tool_calls_info:
-                    break
+            tool_calls_info = []
+            tool_calls_results = []
 
-                # create a nested speech handle
-                extra_tools_messages = [
-                    ChatMessage.create_tool_calls(tool_calls_info, text=collected_text)
-                ]
-                extra_tools_messages.extend(tool_calls_results)
+            for called_fnc in called_fncs:
+                # ignore the function calls that returns None
+                if called_fnc.result is None and called_fnc.exception is None:
+                    continue
 
-                new_speech_handle = SpeechHandle.create_tool_speech(
-                    allow_interruptions=speech_handle.allow_interruptions,
-                    add_to_chat_ctx=speech_handle.add_to_chat_ctx,
-                    extra_tools_messages=extra_tools_messages,
+                tool_calls_info.append(called_fnc.call_info)
+                tool_calls_results.append(
+                    ChatMessage.create_tool_from_called_function(called_fnc)
                 )
-                speech_handle.add_nested_speech(new_speech_handle)
 
-                # chat_ctx = speech_handle.source.chat_ctx.copy()
-                # chat_ctx.messages.extend(extra_tools_messages)
+            if not tool_calls_info:
+                return
 
-                # answer_llm_stream = self._llm.chat(
-                #     chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx
-                # )
-                # answer_synthesis = self._synthesize_agent_speech(
-                #     speech_handle.id, answer_llm_stream
-                # )
-                # # replace the synthesis handle with the new one to allow interruption
-                # speech_handle.synthesis_handle = answer_synthesis
-                # play_handle = answer_synthesis.play()
-                # await play_handle.join()
+            # create a nested speech handle
+            extra_tools_messages = [
+                ChatMessage.create_tool_calls(tool_calls_info, text=collected_text)
+            ]
+            extra_tools_messages.extend(tool_calls_results)
 
-                # collected_text = answer_synthesis.tts_forwarder.played_text
-                # interrupted = answer_synthesis.interrupted
-                # new_function_calls = answer_llm_stream.function_calls
+            new_speech_handle = SpeechHandle.create_tool_speech(
+                allow_interruptions=speech_handle.allow_interruptions,
+                add_to_chat_ctx=speech_handle.add_to_chat_ctx,
+                extra_tools_messages=extra_tools_messages,
+                fnc_nested_depth=speech_handle.fnc_nested_depth + 1,
+            )
+            speech_handle.add_nested_speech(new_speech_handle)
 
-                self.emit("function_calls_finished", called_fncs)
-
-                if not new_function_calls:
-                    break
-
-                _CallContextVar.reset(tk)
+            self.emit("function_calls_finished", called_fncs)
+            _CallContextVar.reset(tk)
 
         fnc_task = asyncio.create_task(_execute_function_calls())
-        while True:
-            # Create a task for the event wait since asyncio.wait() doesn't accept coroutines
+        while not speech_handle.nested_speech_finished:
             event_wait_task = asyncio.create_task(
                 speech_handle.nested_speech_changed.wait()
             )
-
             await asyncio.wait(
-                [event_wait_task, fnc_task],
-                return_when=asyncio.FIRST_COMPLETED,
+                [event_wait_task, fnc_task], return_when=asyncio.FIRST_COMPLETED
             )
-
-            # Cancel the event wait task if we're done with it
             if not event_wait_task.done():
                 event_wait_task.cancel()
 
@@ -874,15 +857,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 speech = speech_handle.nested_speech_handles[0]
                 self._playing_speech = speech
                 await self._play_speech(speech)
-                speech_handle.nested_speech_handles.pop(
-                    0
-                )  # Remove the element only after playing
+                speech_handle.nested_speech_handles.pop(0)
                 self._playing_speech = None
 
             speech_handle.nested_speech_changed.clear()
             # break if the function calls task is done
             if fnc_task.done():
-                break
+                speech_handle.mark_nested_speech_finished()
 
         if speech_handle.add_to_chat_ctx and (
             not user_question or speech_handle.user_committed
