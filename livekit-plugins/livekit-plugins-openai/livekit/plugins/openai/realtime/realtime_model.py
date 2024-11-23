@@ -887,12 +887,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         await asyncio.gather(*_futs)
 
     def _create_empty_user_audio_message(self, duration: float) -> llm.ChatMessage:
+        """Create an empty audio message with the given duration."""
         samples = int(duration * api_proto.SAMPLE_RATE)
         return llm.ChatMessage(
             role="user",
             content=llm.ChatAudio(
                 frame=rtc.AudioFrame(
-                    data=b"\x00\x00" * samples,
+                    data=b"\x00\x00" * (samples * api_proto.NUM_CHANNELS),
                     sample_rate=api_proto.SAMPLE_RATE,
                     num_channels=api_proto.NUM_CHANNELS,
                     samples_per_channel=samples,
@@ -901,6 +902,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         )
 
     def _recover_from_text_response(self, item_id: str | None = None) -> None:
+        """Try to recover from a text response to audio mode.
+
+        Sometimes the OpenAI Realtime API returns text instead of audio responses.
+        This method tries to recover from this by requesting a new response after
+        deleting the text response and creating an empty user audio message.
+        """
         if item_id:
             # remove the text response if needed
             self.conversation.item.delete(item_id=item_id)
