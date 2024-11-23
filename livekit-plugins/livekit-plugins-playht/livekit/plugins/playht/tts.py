@@ -159,6 +159,7 @@ class ChunkedStream(tts.ChunkedStream):
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._session = opts, session
+        self._tts: TTS = tts
 
     async def _run(self) -> None:
         stream = utils.audio.AudioByteStream(
@@ -189,7 +190,7 @@ class ChunkedStream(tts.ChunkedStream):
                 encoding = _encoding_from_format(self._opts.encoding)
                 if encoding == "mp3":
                     async for bytes_data, _ in resp.content.iter_chunks():
-                        for frame in tts._mp3_decoder.decode_chunk(bytes_data):
+                        for frame in self._tts._mp3_decoder.decode_chunk(bytes_data):
                             self._event_ch.send_nowait(
                                 tts.SynthesizedAudio(
                                     request_id=request_id,

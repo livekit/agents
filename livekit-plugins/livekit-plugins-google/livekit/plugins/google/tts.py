@@ -184,6 +184,7 @@ class ChunkedStream(tts.ChunkedStream):
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._client = opts, client
+        self._tts: TTS = tts
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
@@ -197,7 +198,7 @@ class ChunkedStream(tts.ChunkedStream):
             )
 
             if self._opts.audio_config.audio_encoding == "mp3":
-                decoder = tts._mp3_decoder
+                decoder = self._tts._mp3_decoder
                 bstream = utils.audio.AudioByteStream(
                     sample_rate=self._opts.audio_config.sample_rate_hertz,
                     num_channels=1,
