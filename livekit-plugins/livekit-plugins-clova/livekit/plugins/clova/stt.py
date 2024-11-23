@@ -68,6 +68,11 @@ class STT(stt.STT):
             )
         self.threshold = threshold
 
+    def update_options(self, *, language: str | None) -> None:
+        self._language = (
+            clova_languages_mapping.get(language, language) or self._language
+        )
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
