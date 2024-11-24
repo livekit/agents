@@ -72,6 +72,7 @@ class STT(stt.STT):
         )
 
         self._client = client or openai.AsyncClient(
+            max_retries=0,
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(

@@ -4,6 +4,7 @@ from livekit.agents import (
     APIConnectionError,
     llm,
 )
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from llama_index.core.chat_engine.types import (
     BaseChatEngine,
@@ -27,6 +28,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
@@ -39,6 +41,7 @@ class LLM(llm.LLM):
             self,
             chat_engine=self._chat_engine,
             chat_ctx=chat_ctx,
+            conn_options=conn_options,
         )
 
 
@@ -49,12 +52,15 @@ class LLMStream(llm.LLMStream):
         *,
         chat_engine: BaseChatEngine,
         chat_ctx: llm.ChatContext,
+        conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=None)
+        super().__init__(
+            llm, chat_ctx=chat_ctx, fnc_ctx=None, conn_options=conn_options
+        )
         self._chat_engine = chat_engine
         self._stream: StreamingAgentChatResponse | None = None
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         chat_ctx = self._chat_ctx.copy()
         user_msg = chat_ctx.messages.pop()
 
