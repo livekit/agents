@@ -136,4 +136,4 @@ jobs:
               exit 1
               ;;
           esac
-          pytest --asyncio-mode=auto --timeout=60 $test_files
+          pytest $test_files
