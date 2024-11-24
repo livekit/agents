@@ -4,10 +4,10 @@ from .stt import (
     STT,
     RecognitionUsage,
     RecognizeStream,
-    SpeechStream,
     SpeechData,
     SpeechEvent,
     SpeechEventType,
+    SpeechStream,
     STTCapabilities,
 )
 
