@@ -54,7 +54,7 @@ class LLMStream(llm.LLMStream):
         self._chat_engine = chat_engine
         self._stream: StreamingAgentChatResponse | None = None
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         chat_ctx = self._chat_ctx.copy()
         user_msg = chat_ctx.messages.pop()
 

@@ -6,6 +6,7 @@ from .chat_context import (
     ChatMessage,
     ChatRole,
 )
+from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .function_context import (
     USE_DOCSTRING,
     CalledFunction,
@@ -49,4 +50,6 @@ __all__ = [
     "CalledFunction",
     "USE_DOCSTRING",
     "LLMCapabilities",
+    "FallbackAdapter",
+    "AvailabilityChangedEvent",
 ]

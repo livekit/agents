@@ -155,7 +155,7 @@ class LLMStream(llm.LLMStream):
         self._input_tokens = 0
         self._output_tokens = 0
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         try:
             if not self._anthropic_stream:
                 self._anthropic_stream = await self._awaitable_anthropic_stream

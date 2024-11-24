@@ -85,6 +85,7 @@ class LLM(llm.LLM):
         self._client: openai.AsyncClient = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
+            max_retries=0,
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
@@ -124,6 +125,7 @@ class LLM(llm.LLM):
         """
 
         azure_client = openai.AsyncAzureOpenAI(
+            max_retries=0,
             azure_endpoint=azure_endpoint,
             azure_deployment=azure_deployment,
             api_version=api_version,
@@ -228,6 +230,7 @@ class LLM(llm.LLM):
                 self.api_key = self.creds.token
 
         client = AuthTokenRefresher(
+            max_retries=0,
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
@@ -614,7 +617,7 @@ class LLMStream(llm.LLMStream):
         self._fnc_raw_arguments: str | None = None
         self._tool_index: int | None = None
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         if hasattr(self._llm._client, "_refresh_credentials"):
             await self._llm._client._refresh_credentials()
         if not self._oai_stream:
