@@ -97,11 +97,13 @@ async def test_stream(tts_factory):
     stream = tts.stream()
 
     segments = set()
-    for _ in range(2):
+    for i in range(2):
         for chunk in chunks:
             stream.push_text(chunk)
 
         stream.flush()
+        if i == 1:
+            stream.end_input()
 
         frames = []
         is_final = False
