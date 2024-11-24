@@ -29,6 +29,7 @@ from livekit.agents import (
     APITimeoutError,
     llm,
 )
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
@@ -561,6 +562,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
@@ -594,7 +596,13 @@ class LLM(llm.LLM):
             **opts,
         )
 
-        return LLMStream(self, oai_stream=cmp, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        return LLMStream(
+            self,
+            oai_stream=cmp,
+            chat_ctx=chat_ctx,
+            fnc_ctx=fnc_ctx,
+            conn_options=conn_options,
+        )
 
 
 class LLMStream(llm.LLMStream):
@@ -605,8 +613,11 @@ class LLMStream(llm.LLMStream):
         oai_stream: Awaitable[openai.AsyncStream[ChatCompletionChunk]],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
+        conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        super().__init__(
+            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
+        )
         self._llm: LLM = llm
         self._awaitable_oai_stream = oai_stream
         self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
