@@ -171,9 +171,6 @@ class TTS(tts.TTS):
         )
         self._session = http_session
 
-        if _encoding_from_format(self._opts.encoding) == "mp3":
-            self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
-
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
