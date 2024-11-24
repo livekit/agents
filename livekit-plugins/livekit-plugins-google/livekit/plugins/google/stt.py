@@ -311,7 +311,6 @@ class SpeechStream(stt.SpeechStream):
 
         stream = await self._client.streaming_recognize(
             requests=input_generator(),
-            timeout=self._conn_options.timeout,
         )
 
         async for resp in stream:

@@ -211,6 +211,8 @@ async def test_audio_resampled() -> None:
         async for data in stream:
             frames.append(data.frame)
 
+        print(frames)
+
         assert fake2.stream_ch.recv_nowait()
 
         combined_frame = rtc.combine_audio_frames(frames)
