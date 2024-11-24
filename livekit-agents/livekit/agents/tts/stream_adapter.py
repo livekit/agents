@@ -77,18 +77,26 @@ class StreamAdapterWrapper(SynthesizeStream):
     async def _run(self) -> None:
         async def _forward_input():
             """forward input to vad"""
-            async for input in self._input_ch:
-                if isinstance(input, self._FlushSentinel):
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
                     self._sent_stream.flush()
                     continue
-                self._sent_stream.push_text(input)
+                self._sent_stream.push_text(data)
 
             self._sent_stream.end_input()
 
         async def _synthesize():
             async for ev in self._sent_stream:
+                last_audio: SynthesizedAudio | None = None
                 async for audio in self._wrapped_tts.synthesize(ev.token):
-                    self._event_ch.send_nowait(audio)
+                    if last_audio is not None:
+                        self._event_ch.send_nowait(last_audio)
+
+                    last_audio = audio
+
+                if last_audio is not None:
+                    last_audio.is_final = True
+                    self._event_ch.send_nowait(last_audio)
 
         tasks = [
             asyncio.create_task(_forward_input()),
