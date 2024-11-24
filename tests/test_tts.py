@@ -97,12 +97,12 @@ async def test_stream(tts_factory):
     stream = tts.stream()
 
     segments = set()
-    #for i in range(2): # TODO(theomonnom): we should test 2 segments
+    # for i in range(2): # TODO(theomonnom): we should test 2 segments
     for chunk in chunks:
         stream.push_text(chunk)
 
     stream.flush()
-    #if i == 1:
+    # if i == 1:
     stream.end_input()
 
     frames = []
@@ -118,7 +118,7 @@ async def test_stream(tts_factory):
         frames, tts, synthesize_transcript, WER_THRESHOLD
     )
 
-    #assert len(segments) == 2
+    # assert len(segments) == 2
     await stream.aclose()
 
 

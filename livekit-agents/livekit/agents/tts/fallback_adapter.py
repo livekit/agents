@@ -330,8 +330,8 @@ class FallbackSynthesizeStream(SynthesizeStream):
         self._fallback_adapter = tts
 
         self._total_segments: list[list[str]] = []
-        self._fallback_pending_texts: list[list[str]] = []
-        self._fallback_text: list[str] = []
+        self._pending_segments_chunks: list[list[str]] = []
+        self._current_segment_text: list[str] = []
 
     async def _try_synthesize(
         self,
@@ -344,6 +344,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
         stream = tts.stream(conn_options=conn_options)
         input_sent_fut = asyncio.Future()  # type: ignore
 
+        @utils.log_exceptions(logger=logger)
         async def _input_task() -> None:
             try:
                 segment = ""
@@ -471,12 +472,14 @@ class FallbackSynthesizeStream(SynthesizeStream):
                     new_input_ch.send_nowait(data)
 
                 if isinstance(data, str) and data:
-                    self._fallback_text.append(data)
+                    self._current_segment_text.append(data)
 
-                elif isinstance(data, self._FlushSentinel) and self._fallback_text:
-                    self._total_segments.append(self._fallback_text)
-                    self._fallback_pending_texts.append(self._fallback_text)
-                    self._fallback_text = []
+                elif (
+                    isinstance(data, self._FlushSentinel) and self._current_segment_text
+                ):
+                    self._total_segments.append(self._current_segment_text)
+                    self._pending_segments_chunks.append(self._current_segment_text)
+                    self._current_segment_text = []
 
             if new_input_ch:
                 new_input_ch.close()
@@ -493,16 +496,16 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             Union[str, SynthesizeStream._FlushSentinel]
                         ]()
 
-                        for text in self._fallback_pending_texts:
-                            for t in text:
-                                new_input_ch.send_nowait(t)
+                        for text in self._pending_segments_chunks:
+                            for chunk in text:
+                                new_input_ch.send_nowait(chunk)
 
                             new_input_ch.send_nowait(self._FlushSentinel())
 
-                        for t in self._fallback_text:
-                            new_input_ch.send_nowait(t)
+                        for chunk in self._current_segment_text:
+                            new_input_ch.send_nowait(chunk)
 
-                        if self._input_ch.closed:
+                        if input_task.done():
                             new_input_ch.close()
 
                         last_segment_id: str | None = None
@@ -547,8 +550,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
                                     last_segment_id is not None
                                     and synthesized_audio.segment_id != last_segment_id
                                 )
-                            ) and self._fallback_pending_texts:
+                            ) and self._pending_segments_chunks:
                                 audio_duration = 0.0
+                                self._pending_segments_chunks.pop(0)
 
                             last_segment_id = synthesized_audio.segment_id
 
@@ -568,7 +572,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             if (
                                 audio_duration
                                 >= self._fallback_adapter._no_fallback_after_audio_duration
-                                and self._fallback_pending_texts
+                                and self._pending_segments_chunks
                             ):
                                 logger.warning(
                                     f"{tts.label} already synthesized {audio_duration}s of audio, ignoring the current segment for the tts fallback"
@@ -590,7 +594,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
     def _try_recovery(self, tts: TTS) -> None:
         assert isinstance(self._tts, FallbackAdapter)
 
-        retry_segments = [self._fallback_text.copy()]
+        retry_segments = [self._current_segment_text.copy()]
         if self._total_segments:
             retry_segments.insert(0, self._total_segments[-1])
 
