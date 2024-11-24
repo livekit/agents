@@ -356,7 +356,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                         if segment:
                             segment = ""
                             with contextlib.suppress(asyncio.InvalidStateError):
-                                input_sent_fut.set_result(None)
+                                input_sent_fut.set_result(True)
 
                         stream.flush()
             finally:
@@ -364,7 +364,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                     stream.end_input()
 
                 with contextlib.suppress(asyncio.InvalidStateError):
-                    input_sent_fut.set_result(None)
+                    input_sent_fut.set_result(False)
 
         input_task = asyncio.create_task(_input_task())
         next_audio_task: asyncio.Future[SynthesizedAudio] | None = None
@@ -401,7 +401,11 @@ class FallbackSynthesizeStream(SynthesizeStream):
                     except StopAsyncIteration:
                         break
 
-            if audio_duration == 0.0 and input_sent_fut.done():
+            if (
+                audio_duration == 0.0
+                and input_sent_fut.done()
+                and input_sent_fut.result()
+            ):
                 raise APIConnectionError("no audio received")
 
         except asyncio.TimeoutError:
