@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 from livekit import rtc
 from livekit.agents import APIConnectionError, utils
 from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter
+from livekit.agents.tts.tts import SynthesizeStream
 from livekit.agents.utils.aio.channel import ChanEmpty
 
 from .fake_tts import FakeTTS
@@ -71,6 +73,46 @@ async def test_tts_fallback() -> None:
                 pass
 
     assert not fallback_adapter.availability_changed_ch(fake2).recv_nowait().available
+
+    await fallback_adapter.aclose()
+
+
+async def test_no_audio() -> None:
+    fake1 = FakeTTS(fake_audio_duration=0.0)
+
+    fallback_adapter = FallbackAdapterTester([fake1])
+
+    with pytest.raises(APIConnectionError):
+        async with fallback_adapter.synthesize("hello test") as stream:
+            async for _ in stream:
+                pass
+
+    # stream
+    fake1.update_options(fake_audio_duration=5.0)
+
+    async def _input_task(stream: SynthesizeStream):
+        with contextlib.suppress(RuntimeError):
+            stream.push_text("hello test")
+            stream.flush()
+            await asyncio.sleep(1.0)
+
+            fake1.update_options(fake_timeout=0.5, fake_audio_duration=None)
+
+            stream.push_text("hello test")
+            stream.end_input()
+
+    with pytest.raises(APIConnectionError):
+        async with fallback_adapter.stream() as stream:
+            input_task = asyncio.create_task(_input_task(stream))
+
+            segments = set()
+            try:
+                async for ev in stream:
+                    segments.add(ev.segment_id)
+            finally:
+                await input_task
+
+            assert len(segments) == 1
 
     await fallback_adapter.aclose()
 
@@ -197,6 +239,7 @@ async def test_timeout():
     assert await asyncio.wait_for(fake1.synthesize_ch.recv(), 1.0)
     assert await asyncio.wait_for(fake2.synthesize_ch.recv(), 1.0)
 
+    # stream
     with pytest.raises(APIConnectionError):
         async with fallback_adapter.stream() as stream:
             stream.end_input()
@@ -208,5 +251,57 @@ async def test_timeout():
 
     assert await asyncio.wait_for(fake1.stream_ch.recv(), 1.0)
     assert await asyncio.wait_for(fake2.stream_ch.recv(), 1.0)
+
+    await fallback_adapter.aclose()
+
+    # consecutive push must not timeout
+    fake1.update_options(fake_timeout=None, fake_audio_duration=5.0)
+    fallback_adapter = FallbackAdapterTester([fake1], attempt_timeout=0.25)
+
+    async def _input_task1(stream: SynthesizeStream):
+        stream.push_text("hello world")
+        stream.flush()
+        await asyncio.sleep(1.0)
+
+        stream.push_text("bye world")
+        stream.end_input()
+
+    async with fallback_adapter.stream() as stream:
+        input_task = asyncio.create_task(_input_task1(stream))
+
+        segments = set()
+        final_count = 0
+        async for ev in stream:
+            segments.add(ev.segment_id)
+            if ev.is_final:
+                final_count += 1
+
+        assert len(segments) == 2
+        assert final_count == 2
+        await input_task
+
+    async def _input_task2(stream: SynthesizeStream):
+        with contextlib.suppress(RuntimeError):
+            stream.push_text("hello test")
+            stream.flush()
+            await asyncio.sleep(1.0)
+
+            fake1.update_options(fake_timeout=0.5, fake_audio_duration=None)
+
+            stream.push_text("hello test")
+            stream.flush()
+            await asyncio.sleep(1.0)
+
+            stream.end_input()
+
+    with pytest.raises(APIConnectionError):
+        async with fallback_adapter.stream() as stream:
+            input_task = asyncio.create_task(_input_task2(stream))
+
+            try:
+                async for ev in stream:
+                    pass
+            finally:
+                await input_task
 
     await fallback_adapter.aclose()

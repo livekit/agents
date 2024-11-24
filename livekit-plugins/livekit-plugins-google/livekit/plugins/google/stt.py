@@ -14,24 +14,23 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 from dataclasses import dataclass
-from typing import AsyncIterable, List, Union
+from typing import List, Union
 
 from livekit import rtc
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
+    APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    APIConnectOptions,
-    DEFAULT_API_CONNECT_OPTIONS,
     stt,
     utils,
 )
 
 from google.api_core.client_options import ClientOptions
-from google.api_core.exceptions import Aborted, DeadlineExceeded, GoogleAPICallError
+from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.speech_v2 import SpeechAsyncClient

@@ -102,12 +102,10 @@ class STT(stt.STT):
         the ``GROQ_API_KEY`` environmental variable.
         """
 
-        # Use environment variable if API key is not provided
         api_key = api_key or os.environ.get("GROQ_API_KEY")
         if api_key is None:
             raise ValueError("Groq API key is required")
 
-        # Instantiate and return a configured STT instance
         return STT(
             model=model,
             api_key=api_key,

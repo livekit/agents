@@ -79,7 +79,7 @@ STREAM_TTS = [
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", STREAM_TTS)
 async def test_stream(tts_factory):
-    tts = tts_factory()
+    tts: agents.tts.TTS = tts_factory()
 
     synthesize_transcript = make_test_synthesize()
 
@@ -96,20 +96,28 @@ async def test_stream(tts_factory):
 
     stream = tts.stream()
 
-    for chunk in chunks:
-        stream.push_text(chunk)
+    segments = set()
+    for _ in range(2):
+        for chunk in chunks:
+            stream.push_text(chunk)
 
-    stream.flush()
-    stream.end_input()
+        stream.flush()
 
-    frames = []
-    async for audio in stream:
-        frames.append(audio.frame)
+        frames = []
+        is_final = False
+        async for audio in stream:
+            is_final = audio.is_final
+            segments.add(audio.segment_id)
+            frames.append(audio.frame)
 
+        assert is_final, "final audio should be marked as final"
+
+        await _assert_valid_synthesized_audio(
+            frames, tts, synthesize_transcript, WER_THRESHOLD
+        )
+
+    assert len(segments) == 2
     await stream.aclose()
-    await _assert_valid_synthesized_audio(
-        frames, tts, synthesize_transcript, WER_THRESHOLD
-    )
 
 
 async def test_retry():

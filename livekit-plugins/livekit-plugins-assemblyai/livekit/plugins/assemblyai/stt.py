@@ -24,7 +24,7 @@ from typing import List, Literal, Optional
 from urllib.parse import urlencode
 
 import aiohttp
-from livekit.agents import stt, utils, DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
 from livekit.agents.utils import AudioBuffer
 
 from .log import logger

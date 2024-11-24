@@ -76,6 +76,10 @@ class STT(
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
+    def label(self) -> str:
+        return self._label
+
+    @property
     def capabilities(self) -> STTCapabilities:
         return self._capabilities
 
@@ -141,7 +145,7 @@ class STT(
         *,
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> "RecognizeStream":
         raise NotImplementedError(
             "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
         )
@@ -162,7 +166,7 @@ class STT(
         await self.aclose()
 
 
-class SpeechStream(ABC):
+class RecognizeStream(ABC):
     class _FlushSentinel:
         """Sentinel to mark when it was flushed"""
 
@@ -185,7 +189,9 @@ class SpeechStream(ABC):
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[Union[rtc.AudioFrame, SpeechStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[
+            Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]
+        ]()
         self._event_ch = aio.Chan[SpeechEvent]()
 
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
@@ -324,3 +330,17 @@ class SpeechStream(ABC):
         if self._input_ch.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
+
+    async def __aenter__(self) -> RecognizeStream:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+
+SpeechStream = RecognizeStream  # deprecated alias

@@ -4,10 +4,9 @@ import asyncio
 from typing import AsyncIterable
 
 from .. import utils
-from ..types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
-from ..log import logger
+from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..vad import VAD, VADEventType
-from .stt import STT, SpeechEvent, SpeechEventType, SpeechStream, STTCapabilities
+from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
 
 class StreamAdapter(STT):
@@ -42,7 +41,7 @@ class StreamAdapter(STT):
         *,
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> SpeechStream:
+    ) -> RecognizeStream:
         return StreamAdapterWrapper(
             self,
             vad=self._vad,
@@ -52,7 +51,7 @@ class StreamAdapter(STT):
         )
 
 
-class StreamAdapterWrapper(SpeechStream):
+class StreamAdapterWrapper(RecognizeStream):
     def __init__(
         self,
         stt: STT,
