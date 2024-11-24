@@ -16,7 +16,7 @@ class FunctionToolChoice(TypedDict):
     name: str
 
 
-Voice = Literal["alloy", "echo", "shimmer"]
+Voice = Literal["alloy", "echo", "shimmer", "ash", "ballad", "coral", "sage", "verse"]
 ToolChoice = Union[Literal["auto", "none", "required"], FunctionToolChoice]
 Role = Literal["system", "assistant", "user", "tool"]
 GenerationFinishedReason = Literal["stop", "max_tokens", "content_filter", "interrupt"]

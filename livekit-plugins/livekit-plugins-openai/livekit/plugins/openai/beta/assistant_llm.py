@@ -36,6 +36,7 @@ from openai.types.beta.threads.runs import (
 )
 from openai.types.file_object import FileObject
 
+from .._oai_api import build_oai_function_description
 from ..log import logger
 from ..models import ChatModels
 
@@ -469,7 +470,7 @@ class AssistantLLMStream(llm.LLMStream):
             }
             if self._fnc_ctx:
                 kwargs["tools"] = [
-                    llm._oai_api.build_oai_function_description(f)
+                    build_oai_function_description(f)
                     for f in self._fnc_ctx.ai_functions.values()
                 ]
 
