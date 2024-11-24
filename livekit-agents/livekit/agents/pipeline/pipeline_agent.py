@@ -77,6 +77,10 @@ class AgentCallContext:
     def agent(self) -> "VoicePipelineAgent":
         return self._assistant
 
+    @property
+    def chat_ctx(self) -> ChatContext:
+        return self._llm_stream.chat_ctx
+
     def store_metadata(self, key: str, value: Any) -> None:
         self._metadata[key] = value
 
@@ -664,19 +668,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             SpeechDataContextVar.reset(tk)
 
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
-        if speech_handle.extra_tools_messages:
-            # synthesize the tool speech with the latest chat context and the tools messages
-            chat_ctx = self._chat_ctx.copy()
-            chat_ctx.messages.extend(speech_handle.extra_tools_messages)
-            answer_llm_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx)
-
-            synthesis_handle = self._synthesize_agent_speech(
-                speech_handle.id, answer_llm_stream
-            )
-            speech_handle.initialize(
-                source=answer_llm_stream, synthesis_handle=synthesis_handle
-            )
-
         try:
             await speech_handle.wait_for_initialization()
         except asyncio.CancelledError:
@@ -836,6 +827,18 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 add_to_chat_ctx=speech_handle.add_to_chat_ctx,
                 extra_tools_messages=extra_tools_messages,
                 fnc_nested_depth=speech_handle.fnc_nested_depth + 1,
+            )
+
+            # synthesize the tool speech with the chat ctx from llm_stream
+            chat_ctx = call_ctx.chat_ctx.copy()
+            chat_ctx.messages.extend(extra_tools_messages)
+            answer_llm_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx)
+
+            synthesis_handle = self._synthesize_agent_speech(
+                new_speech_handle.id, answer_llm_stream
+            )
+            new_speech_handle.initialize(
+                source=answer_llm_stream, synthesis_handle=synthesis_handle
             )
             speech_handle.add_nested_speech(new_speech_handle)
 

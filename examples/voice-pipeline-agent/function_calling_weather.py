@@ -38,8 +38,12 @@ class AssistantFnc(llm.FunctionContext):
         # NOTE: This message illustrates how the agent can engage users by using the `say()` method
         # while awaiting the completion of the function call. To create a more dynamic and engaging
         # interaction, consider varying the responses based on context or user input.
-        agent = AgentCallContext.get_current().agent
-        await agent.say(f"Let me check the weather in {location} for you.")
+        call_ctx = AgentCallContext.get_current()
+        message = f"Let me check the weather in {location} for you."
+        await call_ctx.agent.say(message)
+
+        # (optional) add the filler message to the chat context for synthesis the tool call speech
+        call_ctx.chat_ctx.append(text=message, role="assistant")
 
         logger.info(f"getting weather for {location}")
         url = f"https://wttr.in/{location}?format=%C+%t"
