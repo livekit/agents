@@ -240,7 +240,8 @@ class ChunkedStream(tts.ChunkedStream):
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._session = opts, session
-        self._tts: TTS = tts
+        if _encoding_from_format(self._opts.encoding) == "mp3":
+            self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
@@ -273,7 +274,7 @@ class ChunkedStream(tts.ChunkedStream):
                 encoding = _encoding_from_format(self._opts.encoding)
                 if encoding == "mp3":
                     async for bytes_data, _ in resp.content.iter_chunks():
-                        for frame in self._tts._mp3_decoder.decode_chunk(bytes_data):
+                        for frame in self._mp3_decoder.decode_chunk(bytes_data):
                             for frame in bstream.write(frame.data.tobytes()):
                                 self._event_ch.send_nowait(
                                     tts.SynthesizedAudio(
@@ -322,6 +323,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts, self._session = opts, session
+        self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
     async def _run(self) -> None:
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
@@ -484,7 +486,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if data.get("audio"):
                     b64data = base64.b64decode(data["audio"])
                     if encoding == "mp3":
-                        for frame in self._tts._mp3_decoder.decode_chunk(b64data):
+                        for frame in self._mp3_decoder.decode_chunk(b64data):
                             for frame in audio_bstream.write(frame.data.tobytes()):
                                 _send_last_frame(segment_id=segment_id, is_final=False)
                                 last_frame = frame
