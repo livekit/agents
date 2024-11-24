@@ -313,20 +313,20 @@ class FallbackRecognizeStream(RecognizeStream):
                             f"{stt.label} timed out, switching to next STT",
                             extra={"streamed": True},
                         )
-                        continue
+                        raise
                     except APIError as e:
                         logger.warning(
                             f"{stt.label} failed, switching to next STT",
                             exc_info=e,
                             extra={"streamed": True},
                         )
-                        continue
+                        raise
                     except Exception:
                         logger.exception(
                             f"{stt.label} unexpected error, switching to next STT",
                             extra={"streamed": True},
                         )
-                        continue
+                        raise
 
                     return
                 except Exception:

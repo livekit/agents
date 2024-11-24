@@ -83,6 +83,26 @@ async def test_stt_fallback() -> None:
     await fallback_adapter.aclose()
 
 
+async def test_stt_stream_fallback() -> None:
+    fake1 = FakeSTT(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    async with fallback_adapter.stream() as stream:
+        stream.end_input()
+
+        async for _ in stream:
+            pass
+
+        assert fake1.stream_ch.recv_nowait()
+        assert fake2.stream_ch.recv_nowait()
+
+    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+
+    await fallback_adapter.aclose()
+
+
 async def test_stt_recover() -> None:
     fake1 = FakeSTT(fake_exception=APIConnectionError("fake1 failed"))
     fake2 = FakeSTT(fake_exception=APIConnectionError("fake2 failed"), fake_timeout=0.5)
