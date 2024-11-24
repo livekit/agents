@@ -100,6 +100,7 @@ class STTOptions:
     smart_format: bool
     no_delay: bool
     endpointing_ms: int
+    utterance_end_ms: int
     filler_words: bool
     sample_rate: int
     num_channels: int
@@ -121,6 +122,7 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         no_delay: bool = True,
         endpointing_ms: int = 25,
+        utterance_end_ms: int | None,
         filler_words: bool = False,
         keywords: list[Tuple[str, float]] = [],
         profanity_filter: bool = False,
@@ -172,6 +174,7 @@ class STT(stt.STT):
             smart_format=smart_format,
             no_delay=no_delay,
             endpointing_ms=endpointing_ms,
+            utterance_end_ms=utterance_end_ms,
             filler_words=filler_words,
             sample_rate=sample_rate,
             num_channels=1,
@@ -324,6 +327,13 @@ class SpeechStream(stt.SpeechStream):
                     "keywords": self._opts.keywords,
                     "profanity_filter": self._opts.profanity_filter,
                 }
+
+                if self._opts.utterance_end_ms:
+                    if not self._opts.interim_results:
+                        logger.exception(
+                            f"interim_results must be set to True for utterance_end_ms to work."
+                        )
+                    live_config["utterance_end_ms"] = self._opts.utterance_end_ms,
 
                 if self._opts.language:
                     live_config["language"] = self._opts.language
@@ -534,6 +544,12 @@ class SpeechStream(stt.SpeechStream):
 
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
+        elif data["type"] == "UtteranceEnd":
+            if self._speaking:
+                self._speaking = False
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                )
         else:
             logger.warning("received unexpected message from deepgram %s", data)
 
