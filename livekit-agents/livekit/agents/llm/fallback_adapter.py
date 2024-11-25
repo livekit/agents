@@ -4,7 +4,7 @@ import asyncio
 import dataclasses
 import time
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal, TypedDict, Union
+from typing import AsyncIterable, Literal, Union
 
 from livekit.agents._exceptions import APIConnectionError, APIError
 
@@ -12,7 +12,7 @@ from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .chat_context import ChatContext
 from .function_context import FunctionContext
-from .llm import LLM, ChatChunk, LLMStream
+from .llm import LLM, ChatChunk, FunctionToolChoice, LLMStream
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -29,11 +29,6 @@ class _LLMStatus:
 class AvailabilityChangedEvent:
     llm: LLM
     available: bool
-
-
-class FunctionToolChoice(TypedDict):
-    type: Literal["function"]
-    name: str
 
 
 class FallbackAdapter(
