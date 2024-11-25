@@ -4,7 +4,7 @@ import asyncio
 import dataclasses
 import time
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal
+from typing import AsyncIterable, Literal, TypedDict, Union
 
 from livekit.agents._exceptions import APIConnectionError, APIError
 
@@ -29,6 +29,11 @@ class _LLMStatus:
 class AvailabilityChangedEvent:
     llm: LLM
     available: bool
+
+
+class ToolChoice(TypedDict, total=False):
+    type: Literal["auto", "any", "tool", "none", "required"]
+    name: str
 
 
 class FallbackAdapter(
@@ -66,6 +71,9 @@ class FallbackAdapter(
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[
+            ToolChoice, None, Literal["auto", "any", "none", "required"]
+        ] = None,
     ) -> "LLMStream":
         return FallbackLLMStream(
             llm=self,
