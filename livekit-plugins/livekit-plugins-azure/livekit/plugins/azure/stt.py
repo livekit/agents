@@ -60,7 +60,7 @@ class STT(stt.STT):
         """
         Create a new instance of Azure STT.
 
-        Either ``speech_host`` or ``speech_key`` and ``speech_region`` or 
+        Either ``speech_host`` or ``speech_key`` and ``speech_region`` or
         ``speech_auth_token`` and ``speech_region`` must be set using arguments.
          Alternatively,  set the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
         and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
@@ -74,7 +74,11 @@ class STT(stt.STT):
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
         speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
 
-        if not (speech_host or (speech_key and speech_region) or (speech_auth_token and speech_region)):
+        if not (
+            speech_host
+            or (speech_key and speech_region)
+            or (speech_auth_token and speech_region)
+        ):
             raise ValueError(
                 "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"
             )
@@ -202,7 +206,9 @@ def _create_speech_recognizer(
     if config.speech_host:
         speech_config = speechsdk.SpeechConfig(host=config.speech_host)
     if config.speech_auth_token:
-        speech_config = speechsdk.SpeechConfig(auth_token=config.speech_auth_token, region=config.speech_region)
+        speech_config = speechsdk.SpeechConfig(
+            auth_token=config.speech_auth_token, region=config.speech_region
+        )
     else:
         speech_config = speechsdk.SpeechConfig(
             subscription=config.speech_key, region=config.speech_region
