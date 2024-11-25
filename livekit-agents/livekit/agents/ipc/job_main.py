@@ -2,15 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import copy
-import logging
-import pickle
-import queue
 import socket
-import sys
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from livekit import rtc
 
@@ -19,62 +14,6 @@ from ..job import JobContext, JobProcess
 from ..log import logger
 from ..utils.aio import duplex_unix
 from . import channel, proto
-
-
-class LogQueueHandler(logging.Handler):
-    _sentinal = None
-
-    def __init__(self, duplex: utils.aio.duplex_unix._Duplex) -> None:
-        super().__init__()
-        self._duplex = duplex
-        self._send_q = queue.SimpleQueue[Optional[bytes]]()
-        self._send_thread = threading.Thread(
-            target=self._forward_logs, name="ipc_log_forwarder"
-        )
-        self._send_thread.start()
-
-    def _forward_logs(self):
-        while True:
-            serialized_record = self._send_q.get()
-            if serialized_record is None:
-                break
-
-            try:
-                self._duplex.send_bytes(serialized_record)
-            except duplex_unix.DuplexClosed:
-                break
-
-        self._duplex.close()
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            # Check if Python is shutting down
-            if sys.is_finalizing():
-                return
-
-            # from https://github.com/python/cpython/blob/91b7f2e7f6593acefda4fa860250dd87d6f849bf/Lib/logging/handlers.py#L1453
-            msg = self.format(record)
-            record = copy.copy(record)
-            record.message = msg
-            record.msg = msg
-            record.args = None
-            record.exc_info = None
-            record.exc_text = None
-            record.stack_info = None
-
-            # https://websockets.readthedocs.io/en/stable/topics/logging.html#logging-to-json
-            # webosckets library add "websocket" attribute to log records, which is not pickleable
-            if hasattr(record, "websocket"):
-                record.websocket = None
-
-            self._send_q.put_nowait(pickle.dumps(record))
-
-        except Exception:
-            self.handleError(record)
-
-    def close(self) -> None:
-        super().close()
-        self._send_q.put_nowait(self._sentinal)
 
 
 @dataclass
@@ -142,7 +81,7 @@ def _start_job(
         async def _warn_not_connected_task():
             await asyncio.sleep(10)
             if not ctx_connect and not ctx_shutdown:
-                logger.warn(
+                logger.warning(
                     (
                         "room not connected after job_entry was called after 10 seconds, "
                         "did you forget to call job_ctx.connect()?"
@@ -159,7 +98,7 @@ def _start_job(
                     exc_info=t.exception(),
                 )
             elif not ctx_connect and not ctx_shutdown:
-                logger.warn("job task completed without connecting or shutting down")
+                logger.warning("job task completed without connecting or shutting down")
 
         job_entry_task.add_done_callback(log_exception)
 

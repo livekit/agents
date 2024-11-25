@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import pickle
 import socket
 import sys
 import threading
@@ -22,48 +21,7 @@ from .job_executor import (
     JobExecutorError_Unresponsive,
     RunStatus,
 )
-
-
-class LogQueueListener:
-    def __init__(
-        self,
-        duplex: utils.aio.duplex_unix._Duplex,
-        prepare_fnc: Callable[[logging.LogRecord], None],
-    ):
-        self._thread: threading.Thread | None = None
-        self._duplex = duplex
-        self._prepare_fnc = prepare_fnc
-
-    def start(self) -> None:
-        self._thread = threading.Thread(target=self._monitor, name="ipc_log_listener")
-        self._thread.start()
-
-    def stop(self) -> None:
-        if self._thread is None:
-            return
-
-        self._duplex.close()
-        self._thread.join()
-        self._thread = None
-
-    def handle(self, record: logging.LogRecord) -> None:
-        self._prepare_fnc(record)
-
-        lger = logging.getLogger(record.name)
-        if not lger.isEnabledFor(record.levelno):
-            return
-
-        lger.callHandlers(record)
-
-    def _monitor(self):
-        while True:
-            try:
-                data = self._duplex.recv_bytes()
-            except utils.aio.duplex_unix.DuplexClosed:
-                break
-
-            record = pickle.loads(data)
-            self.handle(record)
+from .log_queue_listener import LogQueueListener
 
 
 @dataclass

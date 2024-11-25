@@ -1,6 +1,6 @@
-import multiprocessing
+from multiprocessing import current_process
 
-if multiprocessing.current_process().name == "job_proc":
+if current_process().name == "job_proc":
     import signal
     import sys
 
@@ -23,41 +23,45 @@ def proc_main(args) -> None:
     import asyncio
     import logging
 
-    from .. import utils
     from ..job import JobProcess
     from ..log import logger
-    from . import channel, job_main, proto
+    from ..utils import aio
+    from .channel import recv_message, send_message
+    from .log_queue import LogQueueHandler
+    from .proto import IPC_MESSAGES, InitializeRequest, InitializeResponse
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.NOTSET)
 
-    log_cch = utils.aio.duplex_unix._Duplex.open(args.log_cch)
-    log_handler = job_main.LogQueueHandler(log_cch)
+    log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
+    log_handler = LogQueueHandler(log_cch)
     root_logger.addHandler(log_handler)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.set_debug(args.asyncio_debug)
     loop.slow_callback_duration = 0.1  # 100ms
-    utils.aio.debug.hook_slow_callbacks(2.0)
+    aio.debug.hook_slow_callbacks(2.0)
 
-    cch = utils.aio.duplex_unix._Duplex.open(args.mp_cch)
+    cch = aio.duplex_unix._Duplex.open(args.mp_cch)
     try:
-        init_req = channel.recv_message(cch, proto.IPC_MESSAGES)
+        init_req = recv_message(cch, IPC_MESSAGES)
 
         assert isinstance(
-            init_req, proto.InitializeRequest
+            init_req, InitializeRequest
         ), "first message must be InitializeRequest"
 
         job_proc = JobProcess(start_arguments=args.user_arguments)
         logger.info("initializing process", extra={"pid": job_proc.pid})
         args.initialize_process_fnc(job_proc)
         logger.info("process initialized", extra={"pid": job_proc.pid})
-        channel.send_message(cch, proto.InitializeResponse())
+        send_message(cch, InitializeResponse())
+
+        from .job_main import _async_main
 
         main_task = loop.create_task(
-            job_main._async_main(job_proc, args.job_entrypoint_fnc, cch.detach()),
-            name="job_proc_main",
+            _async_main(job_proc, args.job_entrypoint_fnc, cch.detach()),
+            name="inference_proc_main",
         )
         while not main_task.done():
             try:
@@ -65,7 +69,7 @@ def proc_main(args) -> None:
             except KeyboardInterrupt:
                 # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
                 pass
-    except (utils.aio.duplex_unix.DuplexClosed, KeyboardInterrupt):
+    except (aio.duplex_unix.DuplexClosed, KeyboardInterrupt):
         pass
     finally:
         log_handler.close()
