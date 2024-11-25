@@ -25,7 +25,6 @@ from typing import (
     List,
     Literal,
     Tuple,
-    TypedDict,
     Union,
     get_args,
     get_origin,
@@ -50,18 +49,15 @@ from .models import (
 )
 
 
-class FunctionToolChoice(TypedDict):
-    type: Literal["function"]
-    name: str
-
-
 @dataclass
 class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
     parallel_tool_calls: bool | None
-    tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]] = "auto"
+    tool_choice: (
+        Union[llm.FunctionToolChoice, Literal["auto", "required", "none"]] | None
+    )
 
 
 class LLM(llm.LLM):
@@ -76,7 +72,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
+            llm.FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> None:
         """
@@ -122,7 +118,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        tool_choice: Union[llm.FunctionToolChoice, Literal["auto", "required", "none"]]
         | None = None,
     ) -> "LLMStream":
         if temperature is None:
