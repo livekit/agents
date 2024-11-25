@@ -55,13 +55,8 @@ from .models import (
 from .utils import AsyncAzureADTokenProvider, build_oai_message
 
 
-class ToolChoice(TypedDict, total=False):
-    type: Literal[
-        "auto",
-        "any",
-        "tool",
-        "none",
-    ]
+class FunctionToolChoice(TypedDict):
+    type: Literal["function"]
     name: str
 
 
@@ -71,15 +66,7 @@ class LLMOptions:
     user: str | None
     temperature: float | None
     parallel_tool_calls: bool | None
-    tool_choice: Union[
-        ToolChoice,
-        None,
-        Literal[
-            "auto",
-            "any",
-            "none",
-        ],
-    ]
+    tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]] = "auto"
 
 
 class LLM(llm.LLM):
@@ -94,13 +81,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> None:
         """
@@ -152,13 +133,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         """
@@ -204,13 +179,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         """
@@ -247,13 +216,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         """
@@ -340,13 +303,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         """
@@ -384,13 +341,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ):
         """
@@ -427,13 +378,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         """
@@ -471,13 +416,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         """
@@ -515,13 +454,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         """
@@ -557,13 +490,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         """
@@ -591,13 +518,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         """
@@ -635,13 +556,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         """
@@ -679,13 +594,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         """
@@ -729,13 +638,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> LLM:
         logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
@@ -764,7 +667,8 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, None, Literal["auto", "any", "none"]] = None,
+        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream":
         if parallel_tool_calls is None:
             parallel_tool_calls = self._opts.parallel_tool_calls
@@ -780,22 +684,15 @@ class LLM(llm.LLM):
 
             if fnc_ctx and parallel_tool_calls is not None:
                 opts["parallel_tool_calls"] = parallel_tool_calls
-
-            openai_tool_choice: dict[str, Any] | str = "auto"
-            if isinstance(tool_choice, dict):
-                if tool_choice["type"] == "tool":
-                    openai_tool_choice = {
+            if tool_choice is not None:
+                print(f"tool_choice: {tool_choice}")
+                if isinstance(tool_choice, dict):
+                    opts["tool_choice"] = {
                         "type": "function",
                         "function": {"name": tool_choice["name"]},
                     }
-                elif tool_choice["type"] == "any":
-                    openai_tool_choice = "required"
-            elif isinstance(tool_choice, str):
-                if tool_choice == "any":
-                    openai_tool_choice = "required"
                 else:
-                    openai_tool_choice = tool_choice
-            opts["tool_choice"] = openai_tool_choice
+                    opts["tool_choice"] = tool_choice
 
         user = self._opts.user or openai.NOT_GIVEN
         if temperature is None:

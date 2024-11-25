@@ -60,13 +60,8 @@ class ChatChunk:
     usage: CompletionUsage | None = None
 
 
-class ToolChoice(TypedDict, total=False):
-    type: Literal[
-        "auto",
-        "any",
-        "tool",
-        "none",
-    ]
+class FunctionToolChoice(TypedDict):
+    type: Literal["function"]
     name: str
 
 
@@ -98,14 +93,8 @@ class LLM(
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
-        ] = None,
+            FunctionToolChoice, Literal["auto", "required", "none"]
+        ] = "auto",
     ) -> "LLMStream": ...
 
     @property

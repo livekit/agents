@@ -286,13 +286,6 @@ test_tool_choice_cases = [
         id="Default tool_choice (auto)",
     ),
     pytest.param(
-        "Tool_choice set to 'any'",
-        "Get the weather for Los Angeles and play some music.",
-        "any",
-        {"get_weather", "play_music"},
-        id="Tool_choice set to 'any'",
-    ),
-    pytest.param(
         "Tool_choice set to 'required'",
         "Get the weather for Chicago and play some music.",
         "required",
@@ -302,7 +295,7 @@ test_tool_choice_cases = [
     pytest.param(
         "Tool_choice set to a specific tool ('get_weather')",
         "Get the weather for Miami.",
-        {"type": "tool", "name": "get_weather"},
+        {"type": "function", "name": "get_weather"},
         {"get_weather"},
         id="Tool_choice set to a specific tool ('get_weather')",
     ),
@@ -358,15 +351,8 @@ async def _request_fnc_call(
     fnc_ctx: FncCtx,
     temperature: float | None = None,
     parallel_tool_calls: bool | None = None,
-    tool_choice: Union[
-        llm.ToolChoice,
-        None,
-        Literal[
-            "auto",
-            "any",
-            "none",
-        ],
-    ] = None,
+    tool_choice: Union[llm.FunctionToolChoice, Literal["auto", "required", "none"]]
+    | None = None,
 ) -> llm.LLMStream:
     stream = model.chat(
         chat_ctx=ChatContext()

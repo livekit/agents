@@ -50,13 +50,8 @@ from .models import (
 )
 
 
-class ToolChoice(TypedDict, total=False):
-    type: Literal[
-        "auto",
-        "any",
-        "tool",
-        "none",
-    ]
+class FunctionToolChoice(TypedDict):
+    type: Literal["function"]
     name: str
 
 
@@ -66,15 +61,7 @@ class LLMOptions:
     user: str | None
     temperature: float | None
     parallel_tool_calls: bool | None
-    tool_choice: Union[
-        ToolChoice,
-        None,
-        Literal[
-            "auto",
-            "any",
-            "none",
-        ],
-    ]
+    tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]] = "auto"
 
 
 class LLM(llm.LLM):
@@ -89,14 +76,8 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
-        ] = None,
+            FunctionToolChoice, Literal["auto", "required", "none"]
+        ] = "auto",
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -141,15 +122,8 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
-        ] = None,
+        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
@@ -165,23 +139,24 @@ class LLM(llm.LLM):
                 fncs_desc.append(_build_function_description(fnc))
 
             opts["tools"] = fncs_desc
-            anthropic_tool_choice: dict[str, Any] = {"type": "auto"}
-            if isinstance(tool_choice, dict):
-                if tool_choice["type"] == "tool":
-                    anthropic_tool_choice = {
-                        "type": "tool",
-                        "name": tool_choice["name"],
-                    }
-                elif tool_choice["type"] == "any":
-                    anthropic_tool_choice = {"type": "any"}
-            elif isinstance(tool_choice, str):
-                if tool_choice == "any":
-                    anthropic_tool_choice = {"type": "any"}
-                elif tool_choice == "none":
-                    anthropic_tool_choice = {"type": "auto"}
-            if parallel_tool_calls is not None and parallel_tool_calls is False:
-                anthropic_tool_choice["disable_parallel_tool_use"] = True
-            opts["tool_choice"] = anthropic_tool_choice
+            if tool_choice is not None:
+                anthropic_tool_choice: dict[str, Any] = {"type": "auto"}
+                if isinstance(tool_choice, dict):
+                    if tool_choice["type"] == "function":
+                        anthropic_tool_choice = {
+                            "type": "tool",
+                            "name": tool_choice["name"],
+                        }
+                    elif tool_choice["type"] == "required":
+                        anthropic_tool_choice = {"type": "any"}
+                elif isinstance(tool_choice, str):
+                    if tool_choice == "required":
+                        anthropic_tool_choice = {"type": "any"}
+                    elif tool_choice == "none":
+                        anthropic_tool_choice = {"type": "auto"}
+                if parallel_tool_calls is not None and parallel_tool_calls is False:
+                    anthropic_tool_choice["disable_parallel_tool_use"] = True
+                opts["tool_choice"] = anthropic_tool_choice
 
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
