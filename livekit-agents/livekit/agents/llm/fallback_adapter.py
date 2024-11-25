@@ -31,13 +31,8 @@ class AvailabilityChangedEvent:
     available: bool
 
 
-class ToolChoice(TypedDict, total=False):
-    type: Literal[
-        "auto",
-        "any",
-        "tool",
-        "none",
-    ]
+class FunctionToolChoice(TypedDict):
+    type: Literal["function"]
     name: str
 
 
@@ -76,15 +71,8 @@ class FallbackAdapter(
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
-        ] = None,
+        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream":
         return FallbackLLMStream(
             llm=self,
@@ -109,15 +97,8 @@ class FallbackLLMStream(LLMStream):
         temperature: float | None,
         n: int | None,
         parallel_tool_calls: bool | None,
-        tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
-        ],
+        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> None:
         super().__init__(
             llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
