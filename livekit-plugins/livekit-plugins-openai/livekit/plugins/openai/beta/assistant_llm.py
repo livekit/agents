@@ -53,13 +53,8 @@ class LLMOptions:
     model: str | ChatModels
 
 
-class ToolChoice(TypedDict, total=False):
-    type: Literal[
-        "auto",
-        "any",
-        "tool",
-        "none",
-    ]
+class FunctionToolChoice(TypedDict):
+    type: Literal["function"]
     name: str
 
 
@@ -182,15 +177,8 @@ class AssistantLLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            ToolChoice,
-            None,
-            Literal[
-                "auto",
-                "any",
-                "none",
-            ],
-        ] = None,
+        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ):
         if n is not None:
             logger.warning("OpenAI Assistants does not support the 'n' parameter")
