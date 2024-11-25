@@ -92,9 +92,8 @@ class LLM(
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream": ...
 
     @property
