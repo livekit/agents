@@ -19,7 +19,7 @@ import asyncio
 import datetime
 import os
 from dataclasses import dataclass
-from typing import Any, Awaitable, Literal, MutableSet, TypedDict, Union
+from typing import Any, Awaitable, Literal, MutableSet, Union
 
 import aiohttp
 import httpx
@@ -29,6 +29,7 @@ from livekit.agents import (
     APITimeoutError,
     llm,
 )
+from livekit.agents.llm import FunctionToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import openai
@@ -53,11 +54,6 @@ from .models import (
     XAIChatModels,
 )
 from .utils import AsyncAzureADTokenProvider, build_oai_message
-
-
-class FunctionToolChoice(TypedDict):
-    type: Literal["function"]
-    name: str
 
 
 @dataclass

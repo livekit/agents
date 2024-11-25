@@ -39,6 +39,7 @@ from livekit.agents import (
     llm,
     utils,
 )
+from livekit.agents.llm import FunctionToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import anthropic
@@ -55,9 +56,7 @@ class LLMOptions:
     user: str | None
     temperature: float | None
     parallel_tool_calls: bool | None
-    tool_choice: (
-        Union[llm.FunctionToolChoice, Literal["auto", "required", "none"]] | None
-    )
+    tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]] | None
 
 
 class LLM(llm.LLM):
@@ -72,7 +71,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            llm.FunctionToolChoice, Literal["auto", "required", "none"]
+            FunctionToolChoice, Literal["auto", "required", "none"]
         ] = "auto",
     ) -> None:
         """
@@ -118,7 +117,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[llm.FunctionToolChoice, Literal["auto", "required", "none"]]
+        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
         | None = None,
     ) -> "LLMStream":
         if temperature is None:
