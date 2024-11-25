@@ -142,13 +142,9 @@ class LLM(llm.LLM):
                             "type": "tool",
                             "name": tool_choice["name"],
                         }
-                    elif tool_choice["type"] == "required":
-                        anthropic_tool_choice = {"type": "any"}
                 elif isinstance(tool_choice, str):
                     if tool_choice == "required":
                         anthropic_tool_choice = {"type": "any"}
-                    elif tool_choice == "none":
-                        anthropic_tool_choice = {"type": "auto"}
                 if parallel_tool_calls is not None and parallel_tool_calls is False:
                     anthropic_tool_choice["disable_parallel_tool_use"] = True
                 opts["tool_choice"] = anthropic_tool_choice
