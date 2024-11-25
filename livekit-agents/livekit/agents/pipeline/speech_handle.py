@@ -29,7 +29,8 @@ class SpeechHandle:
         self._user_question = user_question
         self._user_committed = False
 
-        self._init_fut: asyncio.Future[None] = asyncio.Future()
+        self._init_fut = asyncio.Future[None]()
+        self._done_fut = asyncio.Future[None]()
         self._initialized = False
         self._speech_committed = False  # speech committed (interrupted or not)
 
@@ -173,6 +174,12 @@ class SpeechHandle:
         return self._init_fut.cancelled() or (
             self._synthesis_handle is not None and self._synthesis_handle.interrupted
         )
+
+    def join(self) -> asyncio.Future:
+        return self._done_fut
+
+    def _set_done(self) -> None:
+        self._done_fut.set_result(None)
 
     def interrupt(self) -> None:
         if not self.allow_interruptions:

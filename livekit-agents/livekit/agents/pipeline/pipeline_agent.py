@@ -408,7 +408,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         *,
         allow_interruptions: bool = True,
         add_to_chat_ctx: bool = True,
-    ) -> None:
+    ) -> SpeechHandle:
         """
         Play a speech source through the voice assistant.
 
@@ -417,6 +417,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 It can be a string, an LLMStream, or an asynchronous iterable of strings.
             allow_interruptions: Whether to allow interruptions during the speech playback.
             add_to_chat_ctx: Whether to add the speech to the chat context.
+
+        Returns:
+            The speech handle for the speech that was played, can be used to
+            wait for the speech to finish.
         """
         await self._track_published_fut
 
@@ -430,6 +434,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self._playing_speech.add_nested_speech(new_handle)
         else:
             self._add_speech_for_playout(new_handle)
+
+        return new_handle
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -895,6 +901,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     "speech_id": speech_handle.id,
                 },
             )
+
+        # mark the speech as done
+        speech_handle._set_done()
 
     def _synthesize_agent_speech(
         self,

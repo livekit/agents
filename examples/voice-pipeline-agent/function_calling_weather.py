@@ -40,10 +40,14 @@ class AssistantFnc(llm.FunctionContext):
         # interaction, consider varying the responses based on context or user input.
         call_ctx = AgentCallContext.get_current()
         message = f"Let me check the weather in {location} for you."
-        await call_ctx.agent.say(message)
+        speech_handle = await call_ctx.agent.say(message)  # noqa: F841
 
         # (optional) add the filler message to the chat context for synthesis the tool call speech
         call_ctx.chat_ctx.append(text=message, role="assistant")
+
+        # Or wait for the speech to finish, the said message will be added to the chat context
+        # automatically when the `add_to_chat_ctx` is True (default)
+        # await speech_handle.join()
 
         logger.info(f"getting weather for {location}")
         url = f"https://wttr.in/{location}?format=%C+%t"
