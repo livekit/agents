@@ -92,9 +92,8 @@ class FallbackLLMStream(LLMStream):
         temperature: float | None,
         n: int | None,
         parallel_tool_calls: bool | None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> None:
         super().__init__(
             llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
