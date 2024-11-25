@@ -149,13 +149,25 @@ class FakeSynthesizeStream(SynthesizeStream):
 
         assert isinstance(self._tts, FakeTTS)
 
-        request_id = utils.shortuuid("fake_tts_")
-        segment_id = utils.shortuuid("fake_segment_")
-
         if self._tts._fake_timeout is not None:
             await asyncio.sleep(self._tts._fake_timeout)
 
-        if self._tts._fake_audio_duration is not None:
+        has_data = False
+        async for data in self._input_ch:
+            if isinstance(data, str):
+                has_data = True
+                continue
+            elif isinstance(data, SynthesizeStream._FlushSentinel) and not has_data:
+                continue
+
+            has_data = False
+
+            if self._tts._fake_audio_duration is None:
+                continue
+
+            request_id = utils.shortuuid("fake_tts_")
+            segment_id = utils.shortuuid("fake_segment_")
+
             pushed_samples = 0
             max_samples = (
                 int(self._tts.sample_rate * self._tts._fake_audio_duration + 0.5)
@@ -179,9 +191,6 @@ class FakeSynthesizeStream(SynthesizeStream):
                     )
                 )
                 pushed_samples += num_samples
-
-        async for _ in self._input_ch:
-            pass
 
         if self._tts._fake_exception is not None:
             raise self._tts._fake_exception

@@ -52,6 +52,7 @@ STREAM_STT = [
     lambda: deepgram.STT(),
     lambda: google.STT(),
     lambda: agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
+    lambda: agents.stt.StreamAdapter(stt=openai.STT.with_groq(), vad=STREAM_VAD),
     lambda: google.STT(
         languages=["en-AU"],
         model="chirp_2",

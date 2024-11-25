@@ -15,18 +15,17 @@
 from __future__ import annotations
 
 import dataclasses
-import io
 import os
-import wave
 from dataclasses import dataclass
 
 import httpx
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
+    APIConnectOptions,
     APIStatusError,
     APITimeoutError,
     stt,
-    utils,
 )
 from livekit.agents.utils import AudioBuffer
 
@@ -73,6 +72,7 @@ class STT(stt.STT):
         )
 
         self._client = client or openai.AsyncClient(
+            max_retries=0,
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
@@ -109,12 +109,10 @@ class STT(stt.STT):
         the ``GROQ_API_KEY`` environmental variable.
         """
 
-        # Use environment variable if API key is not provided
         api_key = api_key or os.environ.get("GROQ_API_KEY")
         if api_key is None:
             raise ValueError("Groq API key is required")
 
-        # Instantiate and return a configured STT instance
         return STT(
             model=model,
             api_key=api_key,
@@ -130,23 +128,25 @@ class STT(stt.STT):
         return config
 
     async def _recognize_impl(
-        self, buffer: AudioBuffer, *, language: str | None = None
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: str | None,
+        conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
             config = self._sanitize_options(language=language)
-            buffer = utils.merge_frames(buffer)
-            io_buffer = io.BytesIO()
-            with wave.open(io_buffer, "wb") as wav:
-                wav.setnchannels(buffer.num_channels)
-                wav.setsampwidth(2)  # 16-bit
-                wav.setframerate(buffer.sample_rate)
-                wav.writeframes(buffer.data)
-
+            data = rtc.combine_audio_frames(buffer).to_wav_bytes()
             resp = await self._client.audio.transcriptions.create(
-                file=("file.wav", io_buffer.getvalue(), "audio/wav"),
+                file=(
+                    "file.wav",
+                    data,
+                    "audio/wav",
+                ),
                 model=self._opts.model,
                 language=config.language,
                 response_format="json",
+                timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
 
             return stt.SpeechEvent(

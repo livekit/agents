@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, Literal, MutableSet
 import httpx
 from livekit import rtc
 from livekit.agents import llm, utils
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from openai import AsyncAssistantEventHandler, AsyncClient
 from openai.types.beta.threads import Text, TextDelta
@@ -166,6 +167,7 @@ class AssistantLLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = None,
@@ -190,6 +192,7 @@ class AssistantLLM(llm.LLM):
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
             on_file_uploaded=self._on_file_uploaded,
+            conn_options=conn_options,
         )
 
     async def _register_tool_call(self, tool_call_id: str, run_id: str) -> None:
@@ -301,8 +304,11 @@ class AssistantLLMStream(llm.LLMStream):
         fnc_ctx: llm.FunctionContext | None,
         temperature: float | None,
         on_file_uploaded: OnFileUploaded | None,
+        conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(assistant_llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        super().__init__(
+            assistant_llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
+        )
         self._client = client
         self._temperature = temperature
         self._on_file_uploaded = on_file_uploaded
@@ -317,7 +323,7 @@ class AssistantLLMStream(llm.LLMStream):
         # Running stream is used to ensure that we only have one stream running at a time
         self._done_future: asyncio.Future[None] = asyncio.Future()
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         assert isinstance(self._llm, AssistantLLM)
 
         # This function's complexity is due to the fact that we need to sync chat_ctx messages with OpenAI.
