@@ -29,6 +29,7 @@ from livekit.agents import (
     APITimeoutError,
     llm,
 )
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
@@ -85,6 +86,7 @@ class LLM(llm.LLM):
         self._client: openai.AsyncClient = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
+            max_retries=0,
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
@@ -124,6 +126,7 @@ class LLM(llm.LLM):
         """
 
         azure_client = openai.AsyncAzureOpenAI(
+            max_retries=0,
             azure_endpoint=azure_endpoint,
             azure_deployment=azure_deployment,
             api_version=api_version,
@@ -228,6 +231,7 @@ class LLM(llm.LLM):
                 self.api_key = self.creds.token
 
         client = AuthTokenRefresher(
+            max_retries=0,
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
@@ -558,6 +562,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
@@ -591,7 +596,13 @@ class LLM(llm.LLM):
             **opts,
         )
 
-        return LLMStream(self, oai_stream=cmp, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        return LLMStream(
+            self,
+            oai_stream=cmp,
+            chat_ctx=chat_ctx,
+            fnc_ctx=fnc_ctx,
+            conn_options=conn_options,
+        )
 
 
 class LLMStream(llm.LLMStream):
@@ -602,8 +613,11 @@ class LLMStream(llm.LLMStream):
         oai_stream: Awaitable[openai.AsyncStream[ChatCompletionChunk]],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
+        conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        super().__init__(
+            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
+        )
         self._llm: LLM = llm
         self._awaitable_oai_stream = oai_stream
         self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
@@ -614,7 +628,7 @@ class LLMStream(llm.LLMStream):
         self._fnc_raw_arguments: str | None = None
         self._tool_index: int | None = None
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         if hasattr(self._llm._client, "_refresh_credentials"):
             await self._llm._client._refresh_credentials()
         if not self._oai_stream:
