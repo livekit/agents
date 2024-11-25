@@ -19,7 +19,7 @@ from typing import List
 try:
     import av
 except ImportError:
-    pass
+    av = None
 from livekit import rtc
 
 
@@ -30,9 +30,7 @@ class Mp3StreamDecoder:
     """
 
     def __init__(self):
-        try:
-            import av
-        except ImportError:
+        if av is None:
             raise ImportError(
                 "You haven't included the 'codecs' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[codecs]`"
             )
