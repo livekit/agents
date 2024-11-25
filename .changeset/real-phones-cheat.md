@@ -4,4 +4,4 @@
 "livekit-agents": patch
 ---
 
-support for custom tool use in anthropic
+support for custom tool use in LLMs
