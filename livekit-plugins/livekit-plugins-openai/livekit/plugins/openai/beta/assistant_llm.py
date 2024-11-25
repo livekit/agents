@@ -18,11 +18,12 @@ import asyncio
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Literal, MutableSet, TypedDict, Union
+from typing import Any, Callable, Dict, Literal, MutableSet, Union
 
 import httpx
 from livekit import rtc
 from livekit.agents import llm, utils
+from livekit.agents.llm import FunctionToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from openai import AsyncAssistantEventHandler, AsyncClient
@@ -51,11 +52,6 @@ OPENAI_FILE_ID_KEY = "__openai_file_id__"
 @dataclass
 class LLMOptions:
     model: str | ChatModels
-
-
-class FunctionToolChoice(TypedDict):
-    type: Literal["function"]
-    name: str
 
 
 @dataclass
