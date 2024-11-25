@@ -8,25 +8,27 @@ from transformers import AutoTokenizer
 
 from .log import logger
 
-PUNCS = string.punctuation.replace("'","")
+PUNCS = string.punctuation.replace("'", "")
 MAX_HISTORY = 3
 
+
 class EndpointDetector:
-    def __init__(self, model_path='jeradf/opt-125m-eou'):
+    def __init__(self, model_path="jeradf/opt-125m-eou"):
         self.model = ORTModelForCausalLM.from_pretrained(model_path)
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         self._eou_index = self.tokenizer.encode("<|im_end|>")[-1]
 
     def normalize(self, text):
         def strip_puncs(text):
-            return text.translate(str.maketrans('', '', PUNCS))
+            return text.translate(str.maketrans("", "", PUNCS))
+
         return " ".join(strip_puncs(text).lower().split())
 
     def apply_chat_template(self, convo):
         for msg in convo:
-            if msg['role'] not in ['user', 'assistant']:
+            if msg["role"] not in ["user", "assistant"]:
                 continue
-            msg['content'] = self.normalize(msg['content'])
+            msg["content"] = self.normalize(msg["content"])
 
         convo_text = self.tokenizer.apply_chat_template(
             convo,
@@ -36,7 +38,7 @@ class EndpointDetector:
         )
 
         # remove the EOU token from current utterance
-        ix = convo_text.rfind('<|im_end|>')
+        ix = convo_text.rfind("<|im_end|>")
         text = convo_text[:ix]
         return text
 
@@ -44,13 +46,13 @@ class EndpointDetector:
         return self.tokenizer(
             text,
             add_special_tokens=False,
-            return_tensors='pt',
+            return_tensors="pt",
         )
 
     def predict(self, utterance, convo=[]):
         start_time = time.time()
 
-        convo.append(dict(role='user', content=utterance))
+        convo.append(dict(role="user", content=utterance))
         convo = convo[-MAX_HISTORY:]
 
         text = self.apply_chat_template(convo)
@@ -63,14 +65,13 @@ class EndpointDetector:
 
         end_time = time.time()
         latency = end_time - start_time
-        
+
         logger.debug(
-            "EndpointDetector inference", 
+            "EndpointDetector inference",
             extra={
-                "probability": round(result, 2), 
+                "probability": round(result, 2),
                 "utterance": utterance,
                 "latency": round(latency, 2),
-            }
+            },
         )
         return result
-

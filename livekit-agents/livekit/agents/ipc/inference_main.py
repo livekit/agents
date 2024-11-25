@@ -17,7 +17,6 @@ from . import channel, proto
 
 
 async def _async_main(
-    entrypoint_fnc: Callable,
     mp_cch: socket.socket,
 ) -> None:
     cch = await duplex_unix._AsyncDuplex.open(mp_cch)
@@ -69,8 +68,6 @@ async def _async_main(
 
 @dataclass
 class ProcStartArgs:
-    initialize_process_fnc: Callable
-    entrypoint_fnc: Callable
     log_cch: socket.socket
     mp_cch: socket.socket
     asyncio_debug: bool

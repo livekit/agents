@@ -121,6 +121,46 @@ class Exiting:
         self.reason = channel.read_string(b)
 
 
+@dataclass
+class InferenceRequest:
+    """sent by a subprocess to the main process to request inference"""
+
+    MSG_ID: ClassVar[int] = 7
+    method: str = ""
+    request_id: str = ""
+    data: bytes = b""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.method)
+        channel.write_string(b, self.request_id)
+        channel.write_bytes(b, self.data)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.method = channel.read_string(b)
+        self.request_id = channel.read_string(b)
+        self.data = channel.read_bytes(b)
+
+
+@dataclass
+class InferenceResponse:
+    """response to an InferenceRequest"""
+
+    MSG_ID: ClassVar[int] = 8
+    request_id: str = ""
+    data: bytes = b""
+    error: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.request_id)
+        channel.write_bytes(b, self.data)
+        channel.write_string(b, self.error)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.request_id = channel.read_string(b)
+        self.data = channel.read_bytes(b)
+        self.error = channel.read_string(b)
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -129,4 +169,6 @@ IPC_MESSAGES = {
     StartJobRequest.MSG_ID: StartJobRequest,
     ShutdownRequest.MSG_ID: ShutdownRequest,
     Exiting.MSG_ID: Exiting,
+    InferenceRequest.MSG_ID: InferenceRequest,
+    InferenceResponse.MSG_ID: InferenceResponse,
 }

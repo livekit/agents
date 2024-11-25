@@ -19,8 +19,6 @@ from .log_queue import LogQueueListener
 
 @dataclass
 class _ProcOpts:
-    initialize_process_fnc: Callable
-    entrypoint_fnc: Callable
     mp_ctx: BaseContext
     initialize_timeout: float
     close_timeout: float
@@ -30,8 +28,6 @@ class ProcJobExecutor:
     def __init__(
         self,
         *,
-        initialize_process_fnc: Callable,
-        entrypoint_fnc: Callable,
         initialize_timeout: float,
         close_timeout: float,
         mp_ctx: BaseContext,
@@ -39,8 +35,6 @@ class ProcJobExecutor:
     ) -> None:
         self._loop = loop
         self._opts = _ProcOpts(
-            initialize_process_fnc=initialize_process_fnc,
-            entrypoint_fnc=entrypoint_fnc,
             initialize_timeout=initialize_timeout,
             close_timeout=close_timeout,
             mp_ctx=mp_ctx,
@@ -101,8 +95,6 @@ class ProcJobExecutor:
             log_listener.start()
 
             self._proc_args = inference_main.ProcStartArgs(
-                initialize_process_fnc=self._opts.initialize_process_fnc,
-                entrypoint_fnc=self._opts.entrypoint_fnc,
                 log_cch=mp_log_cch,
                 mp_cch=mp_cch,
                 asyncio_debug=self._loop.get_debug(),
