@@ -3,14 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import socket
-import threading
 from dataclasses import dataclass
-from typing import Any, Callable
-
-from livekit import rtc
 
 from .. import utils
-from ..job import JobContext, JobProcess
 from ..log import logger
 from ..utils.aio import duplex_unix
 from . import channel, proto

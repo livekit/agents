@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-import string
 import json
-import torch
+import string
 
+import numpy as np
+from livekit.agents import llm
 from livekit.agents.inference_runner import _InferenceRunner
-
-from transformers import AutoTokenizer, AutoModelForCausalLM
 
 HG_MODEL = "livekit/opt-125m-endpoint-detector"
 PUNCS = string.punctuation.replace("'", "")
-MAX_HISTORY = 3
+MAX_HISTORY = 4
+
+
+def _softmax(logits: np.ndarray) -> np.ndarray:
+    exp_logits = np.exp(logits - np.max(logits))
+    return exp_logits / np.sum(exp_logits)
 
 
 class _EUORunner(_InferenceRunner):
@@ -52,7 +56,9 @@ class _EUORunner(_InferenceRunner):
         return text
 
     def initialize(self) -> None:
-        self._model = AutoModelForCausalLM.from_pretrained(HG_MODEL, from_tf=True)
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        self._model = AutoModelForCausalLM.from_pretrained(HG_MODEL)
         self._tokenizer = AutoTokenizer.from_pretrained(HG_MODEL)
         self._eou_index = self._tokenizer.encode("<|im_end|>")[-1]
 
@@ -73,12 +79,16 @@ class _EUORunner(_InferenceRunner):
         )
 
         outputs = self._model(**inputs)
-        logits = outputs.logits[0, -1, :]
-        output_probs = torch.nn.functional.softmax(logits, dim=-1)
-        eou_probability = output_probs[self._eou_index].item()
+        logits = outputs.logits[0, -1, :].detach().numpy()
+        output_probs = _softmax(logits)
+        eou_probability = output_probs[self._eou_index]
+
         return json.dumps({"eou_probability": eou_probability}).encode()
 
 
 class EOU:
-    def __init__(self) -> None:
+    def __init__(self):
+        pass
+
+    def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
         pass

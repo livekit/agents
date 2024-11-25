@@ -14,14 +14,14 @@ from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils.aio import duplex_unix
-from . import channel, job_main, proc_lazy_main, proto
+from . import channel, job_main, job_proc_lazy_main, proto
 from .job_executor import (
     JobExecutorError_Runtime,
     JobExecutorError_ShutdownTimeout,
     JobExecutorError_Unresponsive,
     RunStatus,
 )
-from .log_queue_listener import LogQueueListener
+from .log_queue import LogQueueListener
 
 
 @dataclass
@@ -153,7 +153,7 @@ class ProcJobExecutor:
             )
 
             self._proc = self._opts.mp_ctx.Process(  # type: ignore
-                target=proc_lazy_main.proc_main,
+                target=job_proc_lazy_main.proc_main,
                 args=(self._proc_args,),
                 name="job_proc",
             )

@@ -1,14 +1,8 @@
 from __future__ import annotations
 
-
-from abc import ABCMeta, abstractmethod
-
-
-from typing import Type
-
 import threading
-
-from abc import ABC, abstractmethod
+from abc import ABC, ABCMeta, abstractmethod
+from typing import Type
 
 
 class _RunnerMeta(ABCMeta):

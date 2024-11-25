@@ -13,10 +13,13 @@
 # limitations under the License.
 
 from livekit.agents import Plugin
+from livekit.agents.inference_runner import _InferenceRunner
 
+from .eou import EOU, _EUORunner
 from .log import logger
 from .version import __version__
 
+__all__ = ["EOU", "__version__"]
 
 
 class EOUPlugin(Plugin):
@@ -24,11 +27,13 @@ class EOUPlugin(Plugin):
         super().__init__(__name__, __version__, __package__, logger)
 
     def download_files(self) -> None:
-        from transformers import AutoTokenizer, AutoModelForCausalLM
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
         from .eou import HG_MODEL
 
-        AutoModelForCausalLM.from_pretrained(HG_MODEL, from_tf=True)
+        AutoModelForCausalLM.from_pretrained(HG_MODEL)
         AutoTokenizer.from_pretrained(HG_MODEL)
 
 
 Plugin.register_plugin(EOUPlugin())
+_InferenceRunner.register_runner(_EUORunner)

@@ -8,7 +8,7 @@ from .. import utils
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
-from . import proc_job_executor, thread_job_executor
+from . import job_proc_executor, job_thread_executor
 from .job_executor import JobExecutor
 
 EventTypes = Literal[
@@ -95,7 +95,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     async def _proc_watch_task(self) -> None:
         proc: JobExecutor
         if self._job_executor_type == JobExecutorType.THREAD:
-            proc = thread_job_executor.ThreadJobExecutor(
+            proc = job_thread_executor.ThreadJobExecutor(
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 initialize_timeout=self._initialize_timeout,
@@ -103,7 +103,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 loop=self._loop,
             )
         elif self._job_executor_type == JobExecutorType.PROCESS:
-            proc = proc_job_executor.ProcJobExecutor(
+            proc = job_proc_executor.ProcJobExecutor(
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 initialize_timeout=self._initialize_timeout,

@@ -8,12 +8,12 @@ import sys
 import threading
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
-from typing import Any, Callable
+from typing import Any
 
 from .. import utils
 from ..log import logger
 from ..utils.aio import duplex_unix
-from . import channel, inference_proc_lazy_main, proto, inference_main
+from . import channel, inference_main, inference_proc_lazy_main, proto
 from .log_queue import LogQueueListener
 
 
@@ -24,7 +24,7 @@ class _ProcOpts:
     close_timeout: float
 
 
-class ProcJobExecutor:
+class InferenceProcExecutor:
     def __init__(
         self,
         *,
@@ -67,7 +67,6 @@ class ProcJobExecutor:
         return self._main_atask is not None
 
     async def start(self) -> None:
-        """start the job process"""
         if self.started:
             raise RuntimeError("process already started")
 
@@ -150,7 +149,7 @@ class ProcJobExecutor:
                 asyncio.TimeoutError("process initialization timed out")
             )
             logger.error(
-                "initialization timed out, killing job", extra=self.logging_extra()
+                "initialization timed out, killing process", extra=self.logging_extra()
             )
             self._send_kill_signal()
             raise
@@ -161,7 +160,6 @@ class ProcJobExecutor:
             self._initialize_fut.set_result(None)
 
     async def aclose(self) -> None:
-        """attempt to gracefully close the job process"""
         if not self.started:
             return
 
@@ -176,7 +174,8 @@ class ProcJobExecutor:
                 )
         except asyncio.TimeoutError:
             logger.error(
-                "process did not exit in time, killing job", extra=self.logging_extra()
+                "process did not exit in time, killing process",
+                extra=self.logging_extra(),
             )
             self._send_kill_signal()
 
@@ -185,7 +184,6 @@ class ProcJobExecutor:
                 await asyncio.shield(self._main_atask)
 
     async def kill(self) -> None:
-        """forcefully kill the job process"""
         if not self.started:
             raise RuntimeError("process not started")
 
@@ -197,14 +195,13 @@ class ProcJobExecutor:
                 await asyncio.shield(self._main_atask)
 
     def _send_kill_signal(self) -> None:
-        """forcefully kill the job process"""
         try:
             if not self._proc.is_alive():
                 return
         except ValueError:
             return
 
-        logger.info("killing job process", extra=self.logging_extra())
+        logger.info("killing process", extra=self.logging_extra())
         if sys.platform == "win32":
             self._proc.terminate()
         else:
@@ -235,7 +232,7 @@ class ProcJobExecutor:
 
         if self._exitcode != 0 and not self._kill_sent:
             logger.error(
-                f"job process exited with non-zero exit code {self.exitcode}",
+                f"inference process exited with non-zero exit code {self.exitcode}",
                 extra=self.logging_extra(),
             )
 
@@ -293,6 +290,6 @@ class ProcJobExecutor:
     def logging_extra(self):
         extra: dict[str, Any] = {
             "pid": self.pid,
-            "inference_process": True,
+            "inference_proc": True,
         }
         return extra

@@ -43,6 +43,7 @@ from livekit.protocol import agent, models
 
 from . import http_server, ipc, utils
 from ._exceptions import AssignmentTimeoutError
+from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
     JobContext,
@@ -276,6 +277,19 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         self._main_task: asyncio.Task[None] | None = None
 
+        self._inference_executor: (
+            ipc.inference_proc_executor.InferenceProcExecutor | None
+        ) = None
+        if len(_InferenceRunner.registered_runners) > 0:
+            self._inference_executor = (
+                ipc.inference_proc_executor.InferenceProcExecutor(
+                    initialize_timeout=60.0,
+                    close_timeout=5.0,
+                    mp_ctx=mp_ctx,
+                    loop=self._loop,
+                )
+            )
+
     async def run(self):
         if not self._closed:
             raise Exception("worker is already running")
@@ -284,6 +298,11 @@ class Worker(utils.EventEmitter[EventTypes]):
             "starting worker",
             extra={"version": __version__, "rtc-version": rtc.__version__},
         )
+
+        if self._inference_executor is not None:
+            logger.info("starting inference executor")
+            await self._inference_executor.start()
+            await self._inference_executor.initialize()
 
         self._closed = False
         self._proc_pool.start()
