@@ -14,12 +14,13 @@
 
 import ctypes
 import logging
-from typing import List
+import types
+from typing import List, Optional
 
 try:
     import av
 except ImportError:
-    av = None
+    av: Optional[types.ModuleType] = None
 from livekit import rtc
 
 
