@@ -32,7 +32,12 @@ class AvailabilityChangedEvent:
 
 
 class ToolChoice(TypedDict, total=False):
-    type: Literal["auto", "any", "tool", "none", "required"]
+    type: Literal[
+        "auto",
+        "any",
+        "tool",
+        "none",
+    ]
     name: str
 
 
@@ -72,7 +77,13 @@ class FallbackAdapter(
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, None, Literal["auto", "any", "none", "required"]
+            ToolChoice,
+            None,
+            Literal[
+                "auto",
+                "any",
+                "none",
+            ],
         ] = None,
     ) -> "LLMStream":
         return FallbackLLMStream(
@@ -83,6 +94,7 @@ class FallbackAdapter(
             temperature=temperature,
             n=n,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
 
@@ -97,6 +109,15 @@ class FallbackLLMStream(LLMStream):
         temperature: float | None,
         n: int | None,
         parallel_tool_calls: bool | None,
+        tool_choice: Union[
+            ToolChoice,
+            None,
+            Literal[
+                "auto",
+                "any",
+                "none",
+            ],
+        ],
     ) -> None:
         super().__init__(
             llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
@@ -105,6 +126,7 @@ class FallbackLLMStream(LLMStream):
         self._temperature = temperature
         self._n = n
         self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
 
     async def _try_generate(
         self, *, llm: LLM, recovering: bool = False
@@ -116,6 +138,7 @@ class FallbackLLMStream(LLMStream):
                 temperature=self._temperature,
                 n=self._n,
                 parallel_tool_calls=self._parallel_tool_calls,
+                tool_choice=self._tool_choice,
                 conn_options=dataclasses.replace(
                     self._conn_options,
                     max_retry=self._fallback_adapter._max_retry_per_llm,

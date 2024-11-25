@@ -51,8 +51,13 @@ from .models import (
 
 
 class ToolChoice(TypedDict, total=False):
-    type: Literal["auto", "any", "tool", "none", "required"]
-    name: str  # Optional: only used when type is "tool"
+    type: Literal[
+        "auto",
+        "any",
+        "tool",
+        "none",
+    ]
+    name: str
 
 
 @dataclass
@@ -61,7 +66,15 @@ class LLMOptions:
     user: str | None
     temperature: float | None
     parallel_tool_calls: bool | None
-    tool_choice: Union[ToolChoice, None, Literal["auto", "any", "none", "required"]]
+    tool_choice: Union[
+        ToolChoice,
+        None,
+        Literal[
+            "auto",
+            "any",
+            "none",
+        ],
+    ]
 
 
 class LLM(llm.LLM):
@@ -76,7 +89,13 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, None, Literal["auto", "any", "none", "required"]
+            ToolChoice,
+            None,
+            Literal[
+                "auto",
+                "any",
+                "none",
+            ],
         ] = None,
     ) -> None:
         """
@@ -123,7 +142,13 @@ class LLM(llm.LLM):
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, None, Literal["auto", "any", "none", "required"]
+            ToolChoice,
+            None,
+            Literal[
+                "auto",
+                "any",
+                "none",
+            ],
         ] = None,
     ) -> "LLMStream":
         if temperature is None:
@@ -147,10 +172,10 @@ class LLM(llm.LLM):
                         "type": "tool",
                         "name": tool_choice["name"],
                     }
-                elif tool_choice["type"] in ["any", "required"]:
+                elif tool_choice["type"] == "any":
                     anthropic_tool_choice = {"type": "any"}
             elif isinstance(tool_choice, str):
-                if tool_choice in ["any", "required"]:
+                if tool_choice == "any":
                     anthropic_tool_choice = {"type": "any"}
                 elif tool_choice == "none":
                     anthropic_tool_choice = {"type": "auto"}

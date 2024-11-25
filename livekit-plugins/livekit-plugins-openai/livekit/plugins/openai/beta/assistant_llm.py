@@ -54,8 +54,13 @@ class LLMOptions:
 
 
 class ToolChoice(TypedDict, total=False):
-    type: Literal["auto", "any", "tool", "none", "required"]
-    name: str  # Optional: only used when type is "tool"
+    type: Literal[
+        "auto",
+        "any",
+        "tool",
+        "none",
+    ]
+    name: str
 
 
 @dataclass
@@ -178,7 +183,13 @@ class AssistantLLM(llm.LLM):
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[
-            ToolChoice, None, Literal["auto", "any", "none", "required"]
+            ToolChoice,
+            None,
+            Literal[
+                "auto",
+                "any",
+                "none",
+            ],
         ] = None,
     ):
         if n is not None:
