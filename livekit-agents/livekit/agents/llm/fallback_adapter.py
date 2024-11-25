@@ -120,7 +120,7 @@ class FallbackLLMStream(LLMStream):
                 temperature=self._temperature,
                 n=self._n,
                 parallel_tool_calls=self._parallel_tool_calls,
-                tool_choice=self._tool_choice if self._tool_choice else None,
+                tool_choice=self._tool_choice,
                 conn_options=dataclasses.replace(
                     self._conn_options,
                     max_retry=self._fallback_adapter._max_retry_per_llm,
