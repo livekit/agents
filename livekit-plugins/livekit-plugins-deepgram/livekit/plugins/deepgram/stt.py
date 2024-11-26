@@ -323,7 +323,7 @@ class SpeechStream(stt.SpeechStream):
         self._closed = False
         self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self._ws_lock = asyncio.Lock()
-        self._stt = stt
+        self._stt: STT = stt
         self._stt._active_streams.add(self)
 
     async def update_options(self, language: DeepgramLanguages | str | None) -> None:
