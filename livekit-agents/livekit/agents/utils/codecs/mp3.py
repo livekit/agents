@@ -13,12 +13,11 @@
 # limitations under the License.
 
 import ctypes
-import importlib.util
 import logging
 from typing import List
 
 try:
-    import av
+    import av  # noqa
 except ImportError:
     pass
 from livekit import rtc
@@ -31,7 +30,9 @@ class Mp3StreamDecoder:
     """
 
     def __init__(self):
-        if importlib.util.find_spec("av") is None:
+        try:
+            import av
+        except ImportError:
             raise ImportError(
                 "You haven't included the 'codecs' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[codecs]`"
             )
