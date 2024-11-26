@@ -29,6 +29,8 @@ class STTOptions:
     speech_region: str | None
     # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-container-stt?tabs=container#use-the-container
     speech_host: str | None
+    # for using Microsoft Entra auth (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-configure-azure-ad-auth?tabs=portal&pivots=programming-language-python)
+    speech_auth_token: str | None
     sample_rate: int
     num_channels: int
     segmentation_silence_timeout_ms: int | None
@@ -46,6 +48,7 @@ class STT(stt.STT):
         speech_key: str | None = None,
         speech_region: str | None = None,
         speech_host: str | None = None,
+        speech_auth_token: str | None = None,
         sample_rate: int = 16000,
         num_channels: int = 1,
         segmentation_silence_timeout_ms: int | None = None,
@@ -56,9 +59,11 @@ class STT(stt.STT):
         """
         Create a new instance of Azure STT.
 
-        Either ``speech_host`` or ``speech_key`` and ``speech_region`` must be set,
-        either using arguments or by setting the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
+        Either ``speech_host`` or ``speech_key`` and ``speech_region`` or
+        ``speech_auth_token`` and ``speech_region`` must be set using arguments.
+         Alternatively,  set the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
         and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
+        ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
         """
 
         super().__init__(
@@ -68,15 +73,20 @@ class STT(stt.STT):
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
         speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
 
-        if not speech_host and (not speech_key or not speech_region):
+        if not (
+            speech_host
+            or (speech_key and speech_region)
+            or (speech_auth_token and speech_region)
+        ):
             raise ValueError(
-                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION must be set"
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"
             )
 
         self._config = STTOptions(
             speech_key=speech_key,
             speech_region=speech_region,
             speech_host=speech_host,
+            speech_auth_token=speech_auth_token,
             languages=languages,
             sample_rate=sample_rate,
             num_channels=num_channels,
@@ -233,6 +243,10 @@ def _create_speech_recognizer(
 ) -> speechsdk.SpeechRecognizer:
     if config.speech_host:
         speech_config = speechsdk.SpeechConfig(host=config.speech_host)
+    if config.speech_auth_token:
+        speech_config = speechsdk.SpeechConfig(
+            auth_token=config.speech_auth_token, region=config.speech_region
+        )
     else:
         speech_config = speechsdk.SpeechConfig(
             subscription=config.speech_key, region=config.speech_region
