@@ -180,7 +180,7 @@ class STT(stt.STT):
             energy_filter=energy_filter,
         )
         self._session = http_session
-        self._active_streams = set()
+        self._active_streams: set(SpeechStream) = set()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
