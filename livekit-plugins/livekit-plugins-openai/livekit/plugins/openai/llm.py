@@ -653,10 +653,10 @@ class LLM(llm.LLM):
             if fnc_ctx and parallel_tool_calls is not None:
                 opts["parallel_tool_calls"] = parallel_tool_calls
             if tool_choice is not None:
-                if isinstance(tool_choice, dict):
+                if isinstance(tool_choice, ToolChoice):
                     opts["tool_choice"] = {
                         "type": "function",
-                        "function": {"name": tool_choice["name"]},
+                        "function": {"name": tool_choice.name},
                     }
                 else:
                     opts["tool_choice"] = tool_choice
