@@ -68,6 +68,7 @@ class _EUORunner(_InferenceRunner):
             raise ValueError("chat_ctx is required on the inference input data")
 
         text = self._format_chat_ctx(chat_ctx)
+        print(text)
         inputs = self._tokenizer(
             text,
             add_special_tokens=False,

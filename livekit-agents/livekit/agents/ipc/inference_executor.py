@@ -38,5 +38,5 @@ class _InferenceRunnerClient(InferenceExecutor):
             return
 
         print("got response", resp)
-        with contextlib.suppress(asyncio.CancelledError):
+        with contextlib.suppress(asyncio.InvalidStateError):
             fut.set_result(resp)

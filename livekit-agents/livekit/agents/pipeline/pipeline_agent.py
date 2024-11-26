@@ -1070,7 +1070,7 @@ class _DeferredReplyValidation:
     UNLIKELY_ENDPOINT_THRESHOLD = 0.15
 
     # Long delay to use when the model thinks the user is still speaking
-    UNLIKELY_ENDPOINT_DELAY = 5.0
+    UNLIKELY_ENDPOINT_DELAY = 3.0
 
     def __init__(
         self,
