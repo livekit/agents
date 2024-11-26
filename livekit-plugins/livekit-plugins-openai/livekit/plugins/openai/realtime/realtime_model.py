@@ -1014,7 +1014,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     if closing:
                         return
 
-                    raise Exception("OpenAI S2S connection closed unexpectedly")
+                    # Attempt to recover.
+                    self.emit("session_expired")
+                    return
+                    # raise Exception("OpenAI S2S connection closed unexpectedly")
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning(
