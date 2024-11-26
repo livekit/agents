@@ -10,7 +10,7 @@ from typing import Any, Callable
 from livekit import rtc
 
 from .. import utils
-from ..job import JobContext, JobProcess
+from ..job import JobContext, JobProcess, _JobContextVar
 from ..log import logger
 from ..utils.aio import duplex_unix
 from . import channel, proto
@@ -74,6 +74,8 @@ def _start_job(
     @utils.log_exceptions(logger=logger)
     async def _run_job_task() -> None:
         utils.http_context._new_session_ctx()
+        job_ctx_token = _JobContextVar.set(job_ctx)
+
         job_entry_task = asyncio.create_task(
             job_entrypoint_fnc(job_ctx), name="job_entrypoint"
         )
@@ -125,6 +127,7 @@ def _start_job(
             logger.exception("error while shutting down the job")
 
         await utils.http_context._close_http_ctx()
+        _JobContextVar.reset(job_ctx_token)
         exit_proc_fut.set()
 
     task = asyncio.create_task(_run_job_task())

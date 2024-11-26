@@ -147,17 +147,21 @@ class InferenceResponse:
 
     MSG_ID: ClassVar[int] = 8
     request_id: str = ""
-    data: bytes = b""
+    data: bytes | None = None
     error: str = ""
 
     def write(self, b: io.BytesIO) -> None:
         channel.write_string(b, self.request_id)
-        channel.write_bytes(b, self.data)
+        channel.write_bool(b, self.data is not None)
+        if self.data is not None:
+            channel.write_bytes(b, self.data)
         channel.write_string(b, self.error)
 
     def read(self, b: io.BytesIO) -> None:
         self.request_id = channel.read_string(b)
-        self.data = channel.read_bytes(b)
+        has_data = channel.read_bool(b)
+        if has_data:
+            self.data = channel.read_bytes(b)
         self.error = channel.read_string(b)
 
 

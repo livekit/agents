@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import multiprocessing as mp
 from dataclasses import dataclass
 from enum import Enum, unique
@@ -24,6 +25,20 @@ from livekit import rtc
 from livekit.protocol import agent, models
 
 from .log import logger
+
+from .ipc.inference_executor import InferenceExecutor
+
+_JobContextVar = contextvars.ContextVar("agents_job_context")
+
+
+def get_current_job_context() -> JobContext:
+    ctx = _JobContextVar.get(None)
+    if ctx is None:
+        raise RuntimeError(
+            "no job context found, are you running this code inside a job entrypoint?"
+        )
+
+    return ctx
 
 
 @unique
@@ -249,10 +264,28 @@ def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) ->
 
 
 class JobProcess:
-    def __init__(self, *, start_arguments: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        start_arguments: Any | None = None,
+        inference_executor: InferenceExecutor | None = None,
+    ) -> None:
         self._mp_proc = mp.current_process()
         self._userdata: dict[str, Any] = {}
         self._start_arguments = start_arguments
+        self._inf_executor = inference_executor
+
+    @property
+    def inference_executor(self) -> InferenceExecutor:
+        if self._inf_executor is None:
+            raise ValueError(
+                (
+                    "no inference executor is provided for the current JobProcess, did you "
+                    "forgot to register/import plugins necessary for inference?"
+                )
+            )
+
+        return self._inf_executor
 
     @property
     def pid(self) -> int | None:

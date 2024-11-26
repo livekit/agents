@@ -13,8 +13,10 @@ from typing import Any
 from .. import utils
 from ..log import logger
 from ..utils.aio import duplex_unix
-from . import channel, inference_main, inference_proc_lazy_main, proto
+from . import channel, inference_proc_lazy_main, proto
 from .log_queue import LogQueueListener
+
+from ..inference_runner import _InferenceRunner
 
 
 @dataclass
@@ -28,10 +30,10 @@ class InferenceProcExecutor:
     def __init__(
         self,
         *,
-        initialize_timeout: float,
-        close_timeout: float,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
+        initialize_timeout: float = 60.0,
+        close_timeout: float = 2.5,
     ) -> None:
         self._loop = loop
         self._opts = _ProcOpts(
@@ -93,10 +95,11 @@ class InferenceProcExecutor:
             log_listener = LogQueueListener(log_pch, _add_proc_ctx_log)
             log_listener.start()
 
-            self._proc_args = inference_main.ProcStartArgs(
+            self._proc_args = inference_proc_lazy_main.ProcStartArgs(
                 log_cch=mp_log_cch,
                 mp_cch=mp_cch,
                 asyncio_debug=self._loop.get_debug(),
+                runners=_InferenceRunner.registered_runners,
             )
 
             self._proc = self._opts.mp_ctx.Process(  # type: ignore

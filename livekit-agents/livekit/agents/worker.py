@@ -283,8 +283,6 @@ class Worker(utils.EventEmitter[EventTypes]):
         if len(_InferenceRunner.registered_runners) > 0:
             self._inference_executor = (
                 ipc.inference_proc_executor.InferenceProcExecutor(
-                    initialize_timeout=60.0,
-                    close_timeout=5.0,
                     mp_ctx=mp_ctx,
                     loop=self._loop,
                 )

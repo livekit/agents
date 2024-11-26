@@ -5,7 +5,9 @@ import string
 
 import numpy as np
 from livekit.agents import llm
+from livekit.agents.job import get_current_job_context
 from livekit.agents.inference_runner import _InferenceRunner
+from livekit.agents.ipc.inference_executor import InferenceExecutor
 
 HG_MODEL = "livekit/opt-125m-endpoint-detector"
 PUNCS = string.punctuation.replace("'", "")
@@ -18,10 +20,7 @@ def _softmax(logits: np.ndarray) -> np.ndarray:
 
 
 class _EUORunner(_InferenceRunner):
-    METHOD = "lk_end_of_utterance"
-
-    def __init__(self) -> None:
-        pass
+    INFERENCE_METHOD = "lk_end_of_utterance"
 
     def _normalize(self, text):
         def strip_puncs(text):
@@ -32,9 +31,6 @@ class _EUORunner(_InferenceRunner):
     def _format_chat_ctx(self, chat_ctx: dict):
         new_chat_ctx = []
         for msg in chat_ctx:
-            if msg["role"] not in ["user", "assistant"]:
-                continue
-
             content = self._normalize(msg["content"])
 
             if not content:
@@ -57,9 +53,8 @@ class _EUORunner(_InferenceRunner):
 
     def initialize(self) -> None:
         from transformers import AutoModelForCausalLM, AutoTokenizer
-
-        self._model = AutoModelForCausalLM.from_pretrained(HG_MODEL)
-        self._tokenizer = AutoTokenizer.from_pretrained(HG_MODEL)
+        self._model = AutoModelForCausalLM.from_pretrained(HG_MODEL, local_files_only=True)
+        self._tokenizer = AutoTokenizer.from_pretrained(HG_MODEL, local_files_only=True)
         self._eou_index = self._tokenizer.encode("<|im_end|>")[-1]
 
     def run(self, data: bytes) -> bytes | None:
@@ -68,8 +63,6 @@ class _EUORunner(_InferenceRunner):
 
         if not chat_ctx:
             raise ValueError("chat_ctx is required on the inference input data")
-
-        chat_ctx = chat_ctx[-MAX_HISTORY:]
 
         text = self._format_chat_ctx(chat_ctx)
         inputs = self._tokenizer(
@@ -87,8 +80,46 @@ class _EUORunner(_InferenceRunner):
 
 
 class EOU:
-    def __init__(self):
-        pass
+    def __init__(self, inference_executor: InferenceExecutor | None = None) -> None:
+        self._executor = (
+            inference_executor or get_current_job_context().proc.inference_executor
+        )
 
-    def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
-        pass
+    async def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
+        messages = []
+
+        for msg in chat_ctx.messages:
+            if msg.role not in ("user", "assistant"):
+                continue
+
+            if isinstance(msg.content, str):
+                messages.append(
+                    {
+                        "role": msg.role,
+                        "content": msg.content,
+                    }
+                )
+            elif isinstance(msg.content, list):
+                for cnt in msg.content:
+                    if isinstance(cnt, str):
+                        messages.append(
+                            {
+                                "role": msg.role,
+                                "content": cnt,
+                            }
+                        )
+                        break
+
+        messages = messages[-MAX_HISTORY:]
+
+        json_data = json.dumps({"chat_ctx": messages}).encode()
+        result = await self._executor.do_inference(
+            _EUORunner.INFERENCE_METHOD, json_data
+        )
+
+        assert (
+            result is not None
+        ), "end_of_utterance prediction should always returns a result"
+
+        result_json = json.loads(result.decode())
+        return result_json["eou_probability"]

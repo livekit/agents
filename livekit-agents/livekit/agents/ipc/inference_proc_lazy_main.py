@@ -16,16 +16,32 @@ if current_process().name == "inference_proc":
     sys.excepthook = _no_traceback_excepthook
 
 
-def proc_main(args) -> None:
-    # import every package lazily
-    import asyncio
+import asyncio
+import socket
+from dataclasses import dataclass
+
+from ..inference_runner import _RunnersDict
+from ..log import logger
+from ..utils import aio, log_exceptions
+from . import proto
+from .channel import Message
+from .proc_client import _ProcClient
+
+
+@dataclass
+class ProcStartArgs:
+    log_cch: socket.socket
+    mp_cch: socket.socket
+    asyncio_debug: bool
+    runners: _RunnersDict
+
+
+def proc_main(args: ProcStartArgs) -> None:
     import logging
 
     from ..log import logger
     from ..utils import aio
-    from .channel import recv_message, send_message
     from .log_queue import LogQueueHandler
-    from .proto import IPC_MESSAGES, InitializeRequest, InitializeResponse
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.NOTSET)
@@ -34,40 +50,74 @@ def proc_main(args) -> None:
     log_handler = LogQueueHandler(log_cch)
     root_logger.addHandler(log_handler)
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.set_debug(args.asyncio_debug)
-    loop.slow_callback_duration = 0.1  # 100ms
-    aio.debug.hook_slow_callbacks(2.0)
-
-    cch = aio.duplex_unix._Duplex.open(args.mp_cch)
     try:
-        init_req = recv_message(cch, IPC_MESSAGES)
+        from .proc_client import _ProcClient
 
-        assert isinstance(
-            init_req, InitializeRequest
-        ), "first message must be InitializeRequest"
+        inf_proc = _InferenceProc(args.runners)
+
+        client = _ProcClient(
+            args.mp_cch,
+            inf_proc.initialize,
+            inf_proc.entrypoint,
+            args.asyncio_debug,
+        )
 
         pid = current_process().pid
         logger.info("initializing process", extra={"pid": pid})
-        args.initialize_process_fnc()
+        client.initialize()
         logger.info("process initialized", extra={"pid": pid})
-        send_message(cch, InitializeResponse())
 
-        from .inference_main import _async_main
-
-        main_task = loop.create_task(
-            _async_main(args.entrypoint_fnc, cch.detach()),
-            name="inference_proc_main",
-        )
-        while not main_task.done():
-            try:
-                loop.run_until_complete(main_task)
-            except KeyboardInterrupt:
-                # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
-                pass
-    except (aio.duplex_unix.DuplexClosed, KeyboardInterrupt):
-        pass
+        client.run()
     finally:
         log_handler.close()
-        loop.run_until_complete(loop.shutdown_default_executor())
+
+
+class _InferenceProc:
+    def __init__(self, runners: _RunnersDict) -> None:
+        # create an instance of each runner (the ctor must not requires any argument)
+        self._runners = {name: runner() for name, runner in runners.items()}
+
+    def initialize(
+        self, init_req: proto.InitializeRequest, client: _ProcClient
+    ) -> None:
+        self._client = client
+
+        for runner in self._runners.values():
+            logger.debug(
+                "initializing inference runner",
+                extra={"runner": runner.__class__.INFERENCE_METHOD},
+            )
+            runner.initialize()
+
+    @log_exceptions(logger=logger)
+    async def entrypoint(self, cch: aio.ChanReceiver[Message]) -> None:
+        async for msg in cch:
+            if isinstance(msg, proto.InferenceRequest):
+                await self._handle_inference_request(msg)
+
+            if isinstance(msg, proto.ShutdownRequest):
+                await self._client.send(proto.Exiting(reason=msg.reason))
+                break
+
+    async def _handle_inference_request(self, msg: proto.InferenceRequest) -> None:
+        loop = asyncio.get_running_loop()
+
+        if msg.method not in self._runners:
+            logger.warning("unknown inference method", extra={"method": msg.method})
+
+        try:
+            data = await loop.run_in_executor(
+                None, self._runners[msg.method].run, msg.data
+            )
+            await self._client.send(
+                proto.InferenceResponse(
+                    request_id=msg.request_id,
+                    data=data,
+                )
+            )
+
+        except Exception as e:
+            logger.exception("error running inference")
+            await self._client.send(
+                proto.InferenceResponse(request_id=msg.request_id, error=str(e))
+            )
