@@ -42,7 +42,6 @@ from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
 
 BASE_URL = "https://api.deepgram.com/v1/listen"
-BASE_URL_WS = "wss://api.deepgram.com/v1/listen"
 
 
 # This is the magic number during testing that we use to determine if a frame is loud enough
@@ -127,7 +126,6 @@ class STT(stt.STT):
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
-        base_url_ws: str = BASE_URL_WS,
         energy_filter: AudioEnergyFilter | bool = False,
     ) -> None:
         """
@@ -143,7 +141,6 @@ class STT(stt.STT):
             )
         )
         self._base_url = base_url
-        self._base_url_ws = base_url_ws
 
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
         if api_key is None:
@@ -219,9 +216,7 @@ class STT(stt.STT):
 
         try:
             async with self._ensure_session().post(
-                url=_to_deepgram_url(
-                    recognize_config, self._base_url, self._base_url_ws
-                ),
+                url=_to_deepgram_url(recognize_config, self._base_url),
                 data=data,
                 headers={
                     "Authorization": f"Token {self._api_key}",
@@ -256,7 +251,6 @@ class STT(stt.STT):
             self._api_key,
             self._ensure_session(),
             self._base_url,
-            self._base_url_ws,
         )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
@@ -281,7 +275,6 @@ class SpeechStream(stt.SpeechStream):
         api_key: str,
         http_session: aiohttp.ClientSession,
         base_url: str,
-        base_url_ws: str,
         max_retry: int = 32,
     ) -> None:
         super().__init__(stt, sample_rate=opts.sample_rate)
@@ -293,7 +286,6 @@ class SpeechStream(stt.SpeechStream):
         self._api_key = api_key
         self._session = http_session
         self._base_url = base_url
-        self._base_url_ws = base_url_ws
         self._speaking = False
         self._max_retry = max_retry
         self._audio_duration_collector = metrics.PeriodicCollector(
@@ -347,9 +339,7 @@ class SpeechStream(stt.SpeechStream):
 
                 headers = {"Authorization": f"Token {self._api_key}"}
                 ws = await self._session.ws_connect(
-                    _to_deepgram_url(
-                        live_config, self._base_url, self._base_url_ws, websocket=True
-                    ),
+                    _to_deepgram_url(live_config, self._base_url, websocket=True),
                     headers=headers,
                 )
                 retry_count = 0  # connected successfully, reset the retry_count
@@ -604,9 +594,7 @@ def prerecorded_transcription_to_speech_event(
     )
 
 
-def _to_deepgram_url(
-    opts: dict, base_url: str, base_url_ws: str, *, websocket: bool = False
-) -> str:
+def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool = False) -> str:
     if opts.get("keywords"):
         # convert keywords to a list of "keyword:intensifier"
         opts["keywords"] = [
@@ -615,5 +603,11 @@ def _to_deepgram_url(
 
     # lowercase bools
     opts = {k: str(v).lower() if isinstance(v, bool) else v for k, v in opts.items()}
-    base_url = base_url_ws if websocket else base_url
+
+    if websocket and base_url.startswith("http"):
+        base_url = base_url.replace("http", "ws", 1)
+
+    elif not websocket and base_url.startswith("ws"):
+        base_url = base_url.replace("ws", "http", 1)
+
     return f"{base_url}?{urlencode(opts, doseq=True)}"
