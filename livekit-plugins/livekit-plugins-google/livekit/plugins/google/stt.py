@@ -14,14 +14,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 from dataclasses import dataclass
-from typing import AsyncIterable, List, Union
+from typing import List, Union
 
-from livekit import agents, rtc
+from livekit import rtc
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
+    APIConnectOptions,
     APIStatusError,
     APITimeoutError,
     stt,
@@ -29,7 +30,7 @@ from livekit.agents import (
 )
 
 from google.api_core.client_options import ClientOptions
-from google.api_core.exceptions import Aborted, DeadlineExceeded, GoogleAPICallError
+from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.speech_v2 import SpeechAsyncClient
@@ -51,6 +52,7 @@ class STTOptions:
     punctuate: bool
     spoken_punctuation: bool
     model: SpeechModels
+    sample_rate: int
     keywords: List[tuple[str, float]] | None
 
     def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
@@ -83,6 +85,7 @@ class STT(stt.STT):
         spoken_punctuation: bool = True,
         model: SpeechModels = "long",
         location: str = "global",
+        sample_rate: int = 16000,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
         keywords: List[tuple[str, float]] | None = None,
@@ -123,6 +126,7 @@ class STT(stt.STT):
             punctuate=punctuate,
             spoken_punctuation=spoken_punctuation,
             model=model,
+            sample_rate=sample_rate,
             keywords=keywords,
         )
 
@@ -183,10 +187,11 @@ class STT(stt.STT):
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: SpeechLanguages | str | None = None,
+        language: SpeechLanguages | str | None,
+        conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
-        frame = agents.utils.merge_frames(buffer)
+        frame = rtc.combine_audio_frames(buffer)
 
         config = cloud_speech.RecognitionConfig(
             explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
@@ -210,7 +215,8 @@ class STT(stt.STT):
                     recognizer=self._recognizer,
                     config=config,
                     content=frame.data.tobytes(),
-                )
+                ),
+                timeout=conn_options.timeout,
             )
 
             return _recognize_response_to_speech_event(raw)
@@ -227,38 +233,45 @@ class STT(stt.STT):
             raise APIConnectionError() from e
 
     def stream(
-        self, *, language: SpeechLanguages | str | None = None
+        self,
+        *,
+        language: SpeechLanguages | str | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(self, self._ensure_client(), self._recognizer, config)
+        return SpeechStream(
+            stt=self,
+            client=self._ensure_client(),
+            recognizer=self._recognizer,
+            config=config,
+            conn_options=conn_options,
+        )
 
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
         self,
+        *,
         stt: STT,
+        conn_options: APIConnectOptions,
         client: SpeechAsyncClient,
         recognizer: str,
         config: STTOptions,
-        sample_rate: int = 48000,
-        num_channels: int = 1,
-        max_retry: int = 32,
     ) -> None:
-        super().__init__(stt)
+        super().__init__(
+            stt=stt, conn_options=conn_options, sample_rate=config.sample_rate
+        )
 
         self._client = client
         self._recognizer = recognizer
         self._config = config
-        self._sample_rate = sample_rate
-        self._num_channels = num_channels
-        self._max_retry = max_retry
 
         self._streaming_config = cloud_speech.StreamingRecognitionConfig(
             config=cloud_speech.RecognitionConfig(
                 explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
                     encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
-                    sample_rate_hertz=self._sample_rate,
-                    audio_channel_count=self._num_channels,
+                    sample_rate_hertz=config.sample_rate,
+                    audio_channel_count=1,
                 ),
                 adaptation=config.build_adaptation(),
                 language_codes=self._config.languages,
@@ -274,67 +287,32 @@ class SpeechStream(stt.SpeechStream):
             ),
         )
 
-    @utils.log_exceptions(logger=logger)
-    async def _main_task(self) -> None:
-        await self._run(self._max_retry)
-
-    async def _run(self, max_retry: int) -> None:
-        retry_count = 0
-        while self._input_ch.qsize() or not self._input_ch.closed:
+    async def _run(self) -> None:
+        # google requires a async generator when calling streaming_recognize
+        # this function basically convert the queue into a async generator
+        async def input_generator():
             try:
-                # google requires a async generator when calling streaming_recognize
-                # this function basically convert the queue into a async generator
-                async def input_generator():
-                    try:
-                        # first request should contain the config
+                # first request should contain the config
+                yield cloud_speech.StreamingRecognizeRequest(
+                    recognizer=self._recognizer,
+                    streaming_config=self._streaming_config,
+                )
+
+                async for frame in self._input_ch:
+                    if isinstance(frame, rtc.AudioFrame):
                         yield cloud_speech.StreamingRecognizeRequest(
-                            recognizer=self._recognizer,
-                            streaming_config=self._streaming_config,
+                            audio=frame.data.tobytes()
                         )
 
-                        async for frame in self._input_ch:
-                            if isinstance(frame, rtc.AudioFrame):
-                                frame = frame.remix_and_resample(
-                                    self._sample_rate, self._num_channels
-                                )
-                                yield cloud_speech.StreamingRecognizeRequest(
-                                    audio=frame.data.tobytes()
-                                )
-
-                    except Exception:
-                        logger.exception(
-                            "an error occurred while streaming input to google STT"
-                        )
-
-                # try to connect
-                stream = await self._client.streaming_recognize(
-                    requests=input_generator()
+            except Exception:
+                logger.exception(
+                    "an error occurred while streaming input to google STT"
                 )
-                retry_count = 0  # connection successful, reset retry count
 
-                await self._run_stream(stream)
-            except Aborted:
-                logger.error("google stt connection aborted")
-                break
-            except Exception as e:
-                if retry_count >= max_retry:
-                    logger.error(
-                        f"failed to connect to google stt after {max_retry} tries",
-                        exc_info=e,
-                    )
-                    break
+        stream = await self._client.streaming_recognize(
+            requests=input_generator(),
+        )
 
-                retry_delay = min(retry_count * 2, 5)  # max 5s
-                retry_count += 1
-                logger.warning(
-                    f"google stt connection failed, retrying in {retry_delay}s",
-                    exc_info=e,
-                )
-                await asyncio.sleep(retry_delay)
-
-    async def _run_stream(
-        self, stream: AsyncIterable[cloud_speech.StreamingRecognizeResponse]
-    ):
         async for resp in stream:
             if (
                 resp.speech_event_type
