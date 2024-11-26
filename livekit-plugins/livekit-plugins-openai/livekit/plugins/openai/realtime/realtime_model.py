@@ -730,7 +730,35 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._init_sync_task = asyncio.create_task(self.set_chat_ctx(chat_ctx))
 
         self._fnc_tasks = utils.aio.TaskSet()
+        
+        # Handle session expiration by notifying the model to renew
+        self.on("session_expired", lambda: self._loop.create_task(self.renew_session()))
+        # Trigger session expiration for testing purposes
+        asyncio.get_event_loop().call_later(65, lambda: self.emit("session_expired"))
 
+    async def renew_session(self):
+        logger.info("CLOSING")
+        await self.aclose()
+        
+        logger.info("CREATE NEW MAIN")
+        self._main_atask = asyncio.create_task(
+            self._main_task(), name="openai-realtime-session"
+        )
+        
+        logger.info("INIT NEW SEND CH")
+        self._send_ch = utils.aio.Chan[api_proto.ClientEvents]()
+        
+        self._session_id = "not-connected"
+        self.session_update()  # initial session init
+        
+        logger.info("SESSION UPDATE COMPLETE")
+        
+        chat_ctx = self.chat_ctx_copy()
+        self._remote_converstation_items = remote_items._RemoteConversationItems()
+        await self.set_chat_ctx(chat_ctx)
+        
+        logger.info("Syncronized chat history")
+    
     async def aclose(self) -> None:
         if self._send_ch.closed:
             return
@@ -925,7 +953,11 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         item.content = content
 
     def _queue_msg(self, msg: api_proto.ClientEvents) -> None:
-        self._send_ch.send_nowait(msg)
+        try:
+            self._send_ch.send_nowait(msg)
+        except Exception:
+            # TODO: Send during session switch. Wait and try again.
+            logger.error("caught queue message exception, carry on")
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
