@@ -180,7 +180,7 @@ class STT(stt.STT):
             energy_filter=energy_filter,
         )
         self._session = http_session
-        self._active_streams: set(SpeechStream) = set()
+        self._active_streams: set[SpeechStream] = set()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -263,9 +263,7 @@ class STT(stt.STT):
 
     def update_options(self, language: DeepgramLanguages | str | None) -> None:
         """Update the STT options and propagate changes to active streams."""
-        # Update the options stored inside the class
         self._opts.language = language or self._opts.language
-        # Propagate updated options to active streams
         for stream in self._active_streams:
             asyncio.create_task(stream.update_options(language=language))
 
@@ -327,7 +325,6 @@ class SpeechStream(stt.SpeechStream):
         self._stt._active_streams.add(self)
 
     async def update_options(self, language: DeepgramLanguages | str | None) -> None:
-        """Update the options and trigger reconnection."""
         async with self._ws_lock:
             self._opts.language = language or self._opts.language
             self._reconnect_event.set()
