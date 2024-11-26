@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, Literal, MutableSet, Union
 import httpx
 from livekit import rtc
 from livekit.agents import llm, utils
-from livekit.agents.llm import FunctionToolChoice
+from livekit.agents.llm import ToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from openai import AsyncAssistantEventHandler, AsyncClient
@@ -173,7 +173,7 @@ class AssistantLLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
         | None = None,
     ):
         if n is not None:
