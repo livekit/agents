@@ -351,7 +351,7 @@ async def _request_fnc_call(
     fnc_ctx: FncCtx,
     temperature: float | None = None,
     parallel_tool_calls: bool | None = None,
-    tool_choice: Union[llm.FunctionToolChoice, Literal["auto", "required", "none"]]
+    tool_choice: Union[llm.ToolChoice, Literal["auto", "required", "none"]]
     | None = None,
 ) -> llm.LLMStream:
     stream = model.chat(

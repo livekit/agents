@@ -11,7 +11,6 @@ from typing import (
     AsyncIterator,
     Generic,
     Literal,
-    TypedDict,
     TypeVar,
     Union,
 )
@@ -60,7 +59,8 @@ class ChatChunk:
     usage: CompletionUsage | None = None
 
 
-class FunctionToolChoice(TypedDict):
+@dataclass
+class ToolChoice:
     type: Literal["function"]
     name: str
 
@@ -92,7 +92,7 @@ class LLM(
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
         | None = None,
     ) -> "LLMStream": ...
 

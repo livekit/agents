@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import Literal, Union
+
 from livekit.agents import (
     APIConnectionError,
     llm,
 )
+from livekit.agents.llm import ToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from llama_index.core.chat_engine.types import (
@@ -33,6 +36,8 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream":
         if fnc_ctx is not None:
             logger.warning("fnc_ctx is currently not supported with llama_index.LLM")

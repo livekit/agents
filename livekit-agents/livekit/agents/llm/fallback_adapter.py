@@ -12,7 +12,7 @@ from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .chat_context import ChatContext
 from .function_context import FunctionContext
-from .llm import LLM, ChatChunk, FunctionToolChoice, LLMStream
+from .llm import LLM, ChatChunk, LLMStream, ToolChoice
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -66,7 +66,7 @@ class FallbackAdapter(
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
         | None = None,
     ) -> "LLMStream":
         return FallbackLLMStream(
@@ -92,7 +92,7 @@ class FallbackLLMStream(LLMStream):
         temperature: float | None,
         n: int | None,
         parallel_tool_calls: bool | None,
-        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
         | None = None,
     ) -> None:
         super().__init__(

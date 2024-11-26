@@ -29,7 +29,7 @@ from livekit.agents import (
     APITimeoutError,
     llm,
 )
-from livekit.agents.llm import FunctionToolChoice
+from livekit.agents.llm import ToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import openai
@@ -62,7 +62,7 @@ class LLMOptions:
     user: str | None
     temperature: float | None
     parallel_tool_calls: bool | None
-    tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]] = "auto"
+    tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto"
 
 
 class LLM(llm.LLM):
@@ -76,9 +76,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -128,9 +126,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -174,9 +170,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of Cerebras LLM.
@@ -211,9 +205,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of VertexAI LLM.
@@ -298,9 +290,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of Fireworks LLM.
@@ -336,9 +326,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ):
         """
         Create a new instance of XAI LLM.
@@ -373,9 +361,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of Groq LLM.
@@ -411,9 +397,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of DeepSeek LLM.
@@ -449,9 +433,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of OctoAI LLM.
@@ -485,9 +467,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of Ollama LLM.
@@ -513,9 +493,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of PerplexityAI LLM.
@@ -551,9 +529,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of TogetherAI LLM.
@@ -589,9 +565,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of Telnyx LLM.
@@ -633,9 +607,7 @@ class LLM(llm.LLM):
         user: str | None = None,
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[
-            FunctionToolChoice, Literal["auto", "required", "none"]
-        ] = "auto",
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
         return LLM.with_azure(
@@ -663,7 +635,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[FunctionToolChoice, Literal["auto", "required", "none"]]
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
         | None = None,
     ) -> "LLMStream":
         if parallel_tool_calls is None:

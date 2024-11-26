@@ -23,9 +23,9 @@ from .llm import (
     Choice,
     ChoiceDelta,
     CompletionUsage,
-    FunctionToolChoice,
     LLMCapabilities,
     LLMStream,
+    ToolChoice,
 )
 
 __all__ = [
@@ -53,5 +53,5 @@ __all__ = [
     "LLMCapabilities",
     "FallbackAdapter",
     "AvailabilityChangedEvent",
-    "FunctionToolChoice",
+    "ToolChoice",
 ]
