@@ -733,31 +733,24 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         
         # Handle session expiration by notifying the model to renew
         self.on("session_expired", lambda: self._loop.create_task(self.renew_session()))
-        # Trigger session expiration for testing purposes
-        asyncio.get_event_loop().call_later(65, lambda: self.emit("session_expired"))
 
     async def renew_session(self):
-        logger.info("CLOSING")
         await self.aclose()
         
-        logger.info("CREATE NEW MAIN")
         self._main_atask = asyncio.create_task(
             self._main_task(), name="openai-realtime-session"
         )
         
-        logger.info("INIT NEW SEND CH")
         self._send_ch = utils.aio.Chan[api_proto.ClientEvents]()
         
         self._session_id = "not-connected"
         self.session_update()  # initial session init
         
-        logger.info("SESSION UPDATE COMPLETE")
-        
         chat_ctx = self.chat_ctx_copy()
         self._remote_converstation_items = remote_items._RemoteConversationItems()
         await self.set_chat_ctx(chat_ctx)
         
-        logger.info("Syncronized chat history")
+        logger.info("Synchronized chat history")
     
     async def aclose(self) -> None:
         if self._send_ch.closed:
@@ -956,7 +949,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         try:
             self._send_ch.send_nowait(msg)
         except Exception:
-            # TODO: Send during session switch. Wait and try again.
+            # TODO: Sent during session renewal. For now, can ignore.
             logger.error("caught queue message exception, carry on")
 
     @utils.log_exceptions(logger=logger)
@@ -1106,6 +1099,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._session_id = session_created["session"]["id"]
 
     def _handle_error(self, error: api_proto.ServerEvent.Error):
+        if error["error"]["code"] == "session_expired":
+            logger.warning("session expired.")
+            self.emit("session_expired")
         logger.error(
             "OpenAI S2S error %s",
             error,
