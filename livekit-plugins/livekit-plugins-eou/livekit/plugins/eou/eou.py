@@ -78,14 +78,13 @@ class _EUORunner(_InferenceRunner):
         logits = outputs.logits[0, -1, :].detach().numpy()
         output_probs = _softmax(logits)
         eou_probability = output_probs[self._eou_index]
-
-        return json.dumps({"eou_probability": eou_probability}).encode()
+        return json.dumps({"eou_probability": float(eou_probability)}).encode()
 
 
 class EOU:
     def __init__(self, inference_executor: InferenceExecutor | None = None) -> None:
         self._executor = (
-            inference_executor or get_current_job_context().proc.inference_executor
+            inference_executor or get_current_job_context().inference_executor
         )
 
     async def predict_eou(self, chat_ctx: llm.ChatContext) -> float:

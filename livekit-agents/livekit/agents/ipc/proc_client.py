@@ -94,6 +94,7 @@ class _ProcClient:
                         )
                         await asend_message(self._acch, pong)
 
+                    print(msg)
                     ipc_ch.send_nowait(msg)
 
             async def _self_health_check():

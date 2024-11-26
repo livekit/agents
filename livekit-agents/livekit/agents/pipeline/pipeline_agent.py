@@ -12,6 +12,7 @@ from typing import (
     Callable,
     Literal,
     Optional,
+    Protocol,
     Union,
 )
 
@@ -150,6 +151,10 @@ class AgentTranscriptionOptions:
     representing the hyphenated parts of the word."""
 
 
+class _EOUModel(Protocol):
+    async def predict_eou(self, chat_ctx: ChatContext) -> float: ...
+
+
 class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     """
     A pipeline agent (VAD + STT + LLM + TTS) implementation.
@@ -165,6 +170,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         stt: stt.STT,
         llm: LLM,
         tts: tts.TTS,
+        eou: _EOUModel | None = None,
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
@@ -255,6 +261,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             )
 
         self._stt, self._vad, self._llm, self._tts = stt, vad, llm, tts
+        self._eou = eou
         self._chat_ctx = chat_ctx or ChatContext()
         self._fnc_ctx = fnc_ctx
         self._started, self._closed = False, False
@@ -274,7 +281,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._deferred_validation = _DeferredReplyValidation(
             self._validate_reply_if_possible,
             self._opts.min_endpointing_delay,
-            loop=self._loop,
+            eou=self._eou,
+            chat_ctx=self._chat_ctx,
         )
 
         self._speech_q: list[SpeechHandle] = []
@@ -1057,18 +1065,28 @@ class _DeferredReplyValidation:
 
     LATE_TRANSCRIPT_TOLERANCE = 1.5  # late compared to end of speech
 
+    # When endpoint probability is below this threshold we think the user is not finished speaking
+    # so we will use a long delay
+    UNLIKELY_ENDPOINT_THRESHOLD = 0.15
+
+    # Long delay to use when the model thinks the user is still speaking
+    UNLIKELY_ENDPOINT_DELAY = 5.0
+
     def __init__(
         self,
         validate_fnc: Callable[[], None],
         min_endpointing_delay: float,
-        loop: asyncio.AbstractEventLoop | None = None,
+        eou: _EOUModel | None,
+        chat_ctx: ChatContext,
     ) -> None:
+        self._eou = eou
         self._validate_fnc = validate_fnc
         self._validating_task: asyncio.Task | None = None
         self._last_final_transcript: str = ""
         self._last_recv_end_of_speech_time: float = 0.0
         self._speaking = False
 
+        self._chat_ctx = chat_ctx
         self._end_of_speech_delay = min_endpointing_delay
         self._final_transcript_delay = min_endpointing_delay + 1.0
 
@@ -1094,7 +1112,6 @@ class _DeferredReplyValidation:
         delay = delay * (
             self.PUNCTUATION_REDUCE_FACTOR if self._end_with_punctuation() else 1.0
         )
-
         self._run(delay)
 
     def on_human_start_of_speech(self, ev: vad.VADEvent) -> None:
@@ -1128,13 +1145,29 @@ class _DeferredReplyValidation:
         self._last_recv_end_of_speech_time = 0.0
 
     def _run(self, delay: float) -> None:
+        detect_ctx = self._chat_ctx.copy()
+        detect_ctx.messages.append(
+            ChatMessage.create(text=self._last_final_transcript, role="user")
+        )
+
         @utils.log_exceptions(logger=logger)
-        async def _run_task(delay: float) -> None:
+        async def _run_task(chat_ctx: ChatContext, delay: float) -> None:
             await asyncio.sleep(delay)
+            if self._eou is not None:
+                eou_prob = await self._eou.predict_eou(chat_ctx)
+                logger.debug(
+                    "eou prediction",
+                    extra={"eou_probability": eou_prob},
+                )
+
+                if eou_prob < self.UNLIKELY_ENDPOINT_THRESHOLD:
+                    # TODO(theomonnom): This is additive with the last delay, need to refactor
+                    await asyncio.sleep(self.UNLIKELY_ENDPOINT_DELAY)
+
             self._reset_states()
             self._validate_fnc()
 
         if self._validating_task is not None:
             self._validating_task.cancel()
 
-        self._validating_task = asyncio.create_task(_run_task(delay))
+        self._validating_task = asyncio.create_task(_run_task(detect_ctx, delay))
