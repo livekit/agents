@@ -19,7 +19,16 @@ import inspect
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Awaitable, List, Tuple, get_args, get_origin
+from typing import (
+    Any,
+    Awaitable,
+    List,
+    Literal,
+    Tuple,
+    Union,
+    get_args,
+    get_origin,
+)
 
 import httpx
 from livekit import rtc
@@ -30,6 +39,7 @@ from livekit.agents import (
     llm,
     utils,
 )
+from livekit.agents.llm import ToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import anthropic
@@ -45,6 +55,8 @@ class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
+    parallel_tool_calls: bool | None
+    tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None
 
 
 class LLM(llm.LLM):
@@ -57,6 +69,8 @@ class LLM(llm.LLM):
         user: str | None = None,
         client: anthropic.AsyncClient | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -71,7 +85,13 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError("Anthropic API key is required")
 
-        self._opts = LLMOptions(model=model, user=user, temperature=temperature)
+        self._opts = LLMOptions(
+            model=model,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,
             base_url=base_url,
@@ -95,9 +115,15 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
+        if parallel_tool_calls is None:
+            parallel_tool_calls = self._opts.parallel_tool_calls
+        if tool_choice is None:
+            tool_choice = self._opts.tool_choice
 
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
@@ -106,9 +132,20 @@ class LLM(llm.LLM):
                 fncs_desc.append(_build_function_description(fnc))
 
             opts["tools"] = fncs_desc
-
-            if fnc_ctx and parallel_tool_calls is not None:
-                opts["parallel_tool_calls"] = parallel_tool_calls
+            if tool_choice is not None:
+                anthropic_tool_choice: dict[str, Any] = {"type": "auto"}
+                if isinstance(tool_choice, ToolChoice):
+                    if tool_choice.type == "function":
+                        anthropic_tool_choice = {
+                            "type": "tool",
+                            "name": tool_choice.name,
+                        }
+                elif isinstance(tool_choice, str):
+                    if tool_choice == "required":
+                        anthropic_tool_choice = {"type": "any"}
+            if parallel_tool_calls is not None and parallel_tool_calls is False:
+                anthropic_tool_choice["disable_parallel_tool_use"] = True
+            opts["tool_choice"] = anthropic_tool_choice
 
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))

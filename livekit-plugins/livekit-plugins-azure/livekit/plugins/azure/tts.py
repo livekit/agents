@@ -114,6 +114,8 @@ class _TTSOptions:
     voice: str | None = None
     # for using custom voices (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-speech-synthesis?tabs=browserjs%2Cterminal&pivots=programming-language-python#use-a-custom-endpoint)
     endpoint_id: str | None = None
+    # for using Microsoft Entra auth (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-configure-azure-ad-auth?tabs=portal&pivots=programming-language-python)
+    speech_auth_token: str | None = None
     # Useful to specify the language with multi-language voices
     language: str | None = None
     # See https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-voice#adjust-prosody
@@ -131,13 +133,17 @@ class TTS(tts.TTS):
         speech_key: str | None = None,
         speech_region: str | None = None,
         speech_host: str | None = None,
+        speech_auth_token: str | None = None,
         endpoint_id: str | None = None,
     ) -> None:
         """
         Create a new instance of Azure TTS.
 
-        ``speech_key`` and ``speech_region`` must be set, either using arguments or by setting the
-        ``AZURE_SPEECH_KEY`` and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
+        Either ``speech_host`` or ``speech_key`` and ``speech_region`` or
+        ``speech_auth_token`` and ``speech_region`` must be set using arguments.
+         Alternatively,  set the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
+        and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
+        ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
         """
 
         if sample_rate not in SUPPORTED_SAMPLE_RATE:
@@ -157,9 +163,13 @@ class TTS(tts.TTS):
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
         speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
 
-        if not speech_host and not (speech_key and speech_region):
+        if not (
+            speech_host
+            or (speech_key and speech_region)
+            or (speech_auth_token and speech_region)
+        ):
             raise ValueError(
-                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION must be set"
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"
             )
 
         if prosody:
@@ -169,6 +179,8 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             speech_key=speech_key,
             speech_region=speech_region,
+            speech_host=speech_host,
+            speech_auth_token=speech_auth_token,
             voice=voice,
             endpoint_id=endpoint_id,
             language=language,
@@ -314,6 +326,12 @@ def _create_speech_synthesizer(
 ) -> speechsdk.SpeechSynthesizer:
     if config.speech_host:
         speech_config = speechsdk.SpeechConfig(host=config.speech_host)
+    if config.speech_auth_token:
+        speech_config = speechsdk.SpeechConfig(
+            auth_token=config.speech_auth_token,
+            region=config.speech_region,
+            speech_recognition_language=config.language or "en-US",
+        )
     else:
         speech_config = speechsdk.SpeechConfig(
             subscription=config.speech_key,

@@ -871,24 +871,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         if changes.to_add and not any(
             isinstance(msg.content, llm.ChatAudio) for _, msg in changes.to_add
         ):
-            # Patch: add an empty audio message to the chat context
-            # to set the API in audio mode
-            data = b"\x00\x00" * api_proto.SAMPLE_RATE
-            _empty_audio = rtc.AudioFrame(
-                data=data,
-                sample_rate=api_proto.SAMPLE_RATE,
-                num_channels=api_proto.NUM_CHANNELS,
-                samples_per_channel=len(data) // 2,
-            )
-            changes.to_add.append(
-                (
-                    None,
-                    llm.ChatMessage(
-                        role="user", content=llm.ChatAudio(frame=_empty_audio)
-                    ),
-                )
-            )
-            logger.debug("added empty audio message to the chat context")
+            # Patch: append an empty audio message to set the API in audio mode
+            changes.to_add.append((None, self._create_empty_user_audio_message(1.0)))
 
         _futs = [
             self.conversation.item.delete(item_id=msg.id) for msg in changes.to_delete
@@ -899,6 +883,34 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         # wait for all the futures to complete
         await asyncio.gather(*_futs)
+
+    def _create_empty_user_audio_message(self, duration: float) -> llm.ChatMessage:
+        """Create an empty audio message with the given duration."""
+        samples = int(duration * api_proto.SAMPLE_RATE)
+        return llm.ChatMessage(
+            role="user",
+            content=llm.ChatAudio(
+                frame=rtc.AudioFrame(
+                    data=b"\x00\x00" * (samples * api_proto.NUM_CHANNELS),
+                    sample_rate=api_proto.SAMPLE_RATE,
+                    num_channels=api_proto.NUM_CHANNELS,
+                    samples_per_channel=samples,
+                )
+            ),
+        )
+
+    def _recover_from_text_response(self, item_id: str | None = None) -> None:
+        """Try to recover from a text response to audio mode.
+
+        Sometimes the OpenAI Realtime API returns text instead of audio responses.
+        This method tries to recover from this by requesting a new response after
+        deleting the text response and creating an empty user audio message.
+        """
+        if item_id:
+            # remove the text response if needed
+            self.conversation.item.delete(item_id=item_id)
+        self.conversation.item.create(self._create_empty_user_audio_message(1.0))
+        self.response.create()
 
     def _update_converstation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
@@ -1029,6 +1041,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                         self._handle_response_audio_transcript_delta(data)
                     elif event == "response.audio.done":
                         self._handle_response_audio_done(data)
+                    elif event == "response.text.done":
+                        self._handle_response_text_done(data)
                     elif event == "response.audio_transcript.done":
                         self._handle_response_audio_transcript_done(data)
                     elif event == "response.content_part.done":
@@ -1300,6 +1314,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         content = self._get_content(response_audio_done)
         assert isinstance(content.audio_stream, utils.aio.Chan)
         content.audio_stream.close()
+
+    def _handle_response_text_done(
+        self, response_text_done: api_proto.ServerEvent.ResponseTextDone
+    ):
+        content = self._get_content(response_text_done)
+        content.text = response_text_done["text"]
 
     def _handle_response_audio_transcript_done(
         self,

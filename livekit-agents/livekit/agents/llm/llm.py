@@ -5,7 +5,15 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Any, AsyncIterable, AsyncIterator, Generic, Literal, TypeVar, Union
+from typing import (
+    Any,
+    AsyncIterable,
+    AsyncIterator,
+    Generic,
+    Literal,
+    TypeVar,
+    Union,
+)
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
@@ -51,6 +59,12 @@ class ChatChunk:
     usage: CompletionUsage | None = None
 
 
+@dataclass
+class ToolChoice:
+    type: Literal["function"]
+    name: str
+
+
 TEvent = TypeVar("TEvent")
 
 
@@ -78,6 +92,8 @@ class LLM(
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream": ...
 
     @property
