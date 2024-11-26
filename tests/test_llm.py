@@ -295,7 +295,7 @@ test_tool_choice_cases = [
     pytest.param(
         "Tool_choice set to a specific tool ('get_weather')",
         "Get the weather for Miami.",
-        {"type": "function", "name": "get_weather"},
+        llm.ToolChoice(type="function", name="get_weather"),
         {"get_weather"},
         id="Tool_choice set to a specific tool ('get_weather')",
     ),
