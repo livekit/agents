@@ -106,7 +106,7 @@ class _TTSOptions:
     # for using custom voices (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-speech-synthesis?tabs=browserjs%2Cterminal&pivots=programming-language-python#use-a-custom-endpoint)
     endpoint_id: str | None = None
     # for using Microsoft Entra auth (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-configure-azure-ad-auth?tabs=portal&pivots=programming-language-python)
-    speech_auth_token: str | None = (None,)
+    speech_auth_token: str | None = None
     # Useful to specify the language with multi-language voices
     language: str | None = None
     # See https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-voice#adjust-prosody
