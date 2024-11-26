@@ -357,7 +357,11 @@ class SpeechStream(stt.SpeechStream):
                     self._ws = None
 
                     continue
-
+                if any(task in done for task in [send_task, recv_task]):
+                    for task in tasks:
+                        if task.done() and task.exception():
+                            raise task.exception()
+                    break
             except Exception:
                 logger.exception("Error in SpeechStream _run method")
                 # Decide whether to retry or break based on the exception type
