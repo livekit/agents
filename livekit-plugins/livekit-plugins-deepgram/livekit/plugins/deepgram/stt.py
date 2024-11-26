@@ -210,7 +210,7 @@ class STT(stt.STT):
 
         try:
             async with self._ensure_session().post(
-                url=_to_deepgram_url(recognize_config, self._base_url),
+                url=_to_deepgram_url(recognize_config, self._base_url, websocket=False),
                 data=rtc.combine_audio_frames(buffer).to_wav_bytes(),
                 headers={
                     "Authorization": f"Token {self._api_key}",
@@ -423,7 +423,9 @@ class SpeechStream(stt.SpeechStream):
 
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
-                    _to_deepgram_url(live_config, websocket=True),
+                    _to_deepgram_url(
+                        live_config, base_url=self._base_url, websocket=True
+                    ),
                     headers={"Authorization": f"Token {self._api_key}"},
                 ),
                 self._conn_options.timeout,
@@ -570,7 +572,7 @@ def prerecorded_transcription_to_speech_event(
     )
 
 
-def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool = False) -> str:
+def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
     if opts.get("keywords"):
         # convert keywords to a list of "keyword:intensifier"
         opts["keywords"] = [
