@@ -17,6 +17,7 @@ from . import channel, inference_proc_lazy_main, proto
 from .log_queue import LogQueueListener
 
 from ..inference_runner import _InferenceRunner
+from .inference_executor import InferenceExecutor, _InferenceRunnerClient
 
 
 @dataclass
@@ -26,7 +27,7 @@ class _ProcOpts:
     close_timeout: float
 
 
-class InferenceProcExecutor:
+class InferenceProcExecutor(InferenceExecutor):
     def __init__(
         self,
         *,
@@ -102,6 +103,8 @@ class InferenceProcExecutor:
                 runners=_InferenceRunner.registered_runners,
             )
 
+            self._inf_client = _InferenceRunnerClient(cch=self._pch)
+
             self._proc = self._opts.mp_ctx.Process(  # type: ignore
                 target=inference_proc_lazy_main.proc_main,
                 args=(self._proc_args,),
@@ -134,6 +137,12 @@ class InferenceProcExecutor:
         async with self._lock:
             if self._main_atask:
                 await asyncio.shield(self._main_atask)
+
+    async def do_inference(self, method: str, data: bytes) -> bytes | None:
+        if not self.started:
+            raise RuntimeError("process not started")
+
+        return await self._inf_client.do_inference(method, data)
 
     async def initialize(self) -> None:
         await channel.asend_message(self._pch, proto.InitializeRequest())
@@ -257,6 +266,9 @@ class InferenceProcExecutor:
 
                 with contextlib.suppress(utils.aio.SleepFinished):
                     self._pong_timeout.reset()
+
+            if isinstance(msg, proto.InferenceResponse):
+                self._inf_client._on_inference_response(msg)
 
     @utils.log_exceptions(logger=logger)
     async def _ping_pong_task(self) -> None:

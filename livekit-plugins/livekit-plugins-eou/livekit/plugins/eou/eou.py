@@ -53,7 +53,10 @@ class _EUORunner(_InferenceRunner):
 
     def initialize(self) -> None:
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        self._model = AutoModelForCausalLM.from_pretrained(HG_MODEL, local_files_only=True)
+
+        self._model = AutoModelForCausalLM.from_pretrained(
+            HG_MODEL, local_files_only=True
+        )
         self._tokenizer = AutoTokenizer.from_pretrained(HG_MODEL, local_files_only=True)
         self._eou_index = self._tokenizer.encode("<|im_end|>")[-1]
 

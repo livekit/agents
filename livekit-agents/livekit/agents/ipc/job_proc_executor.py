@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable
 
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
+from .inference_executor import InferenceExecutor
 from ..log import logger
 from ..utils.aio import duplex_unix
 from . import channel, job_main, job_proc_lazy_main, proto
@@ -40,6 +41,7 @@ class ProcJobExecutor:
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         initialize_timeout: float,
+        inference_executor: InferenceExecutor | None,
         close_timeout: float,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
@@ -54,6 +56,7 @@ class ProcJobExecutor:
         )
 
         self._user_args: Any | None = None
+        self._inf_excecutor = inference_executor
         self._running_job: RunningJobInfo | None = None
         self._exitcode: int | None = None
         self._pid: int | None = None
@@ -63,6 +66,8 @@ class ProcJobExecutor:
         self._closing = False
         self._kill_sent = False
         self._initialize_fut = asyncio.Future[None]()
+
+        self._inference_tasks: list[asyncio.Task[None]] = []
 
         self._lock = asyncio.Lock()
 
@@ -331,6 +336,29 @@ class ProcJobExecutor:
                 logger.info(
                     "job exiting", extra={"reason": msg.reason, **self.logging_extra()}
                 )
+
+            if isinstance(msg, proto.InferenceRequest):
+                self._inference_tasks.append(
+                    asyncio.create_task(self._do_inference_task(msg))
+                )
+
+    async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
+        if self._inf_excecutor is None:
+            logger.warning("inference request received but no inference executor")
+            return
+
+        try:
+            inf_res = await self._inf_excecutor.do_inference(
+                inf_req.method, inf_req.data
+            )
+            await channel.asend_message(
+                self._pch,
+                proto.InferenceResponse(request_id=inf_req.request_id, data=inf_res),
+            )
+        except Exception as e:
+            logger.exception(
+                "error handling inference request", extra=self.logging_extra()
+            )
 
     @utils.log_exceptions(logger=logger)
     async def _ping_pong_task(self, pong_timeout: utils.aio.Sleep) -> None:

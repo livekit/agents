@@ -8,7 +8,7 @@ from .. import utils
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
-from . import job_proc_executor, job_thread_executor
+from . import job_proc_executor, job_thread_executor, inference_executor
 from .job_executor import JobExecutor
 
 EventTypes = Literal[
@@ -31,6 +31,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
+        inference_executor: inference_executor.InferenceExecutor | None,
         job_executor_type: JobExecutorType,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
@@ -41,6 +42,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._close_timeout = close_timeout
+        self._inf_executor = inference_executor
         self._initialize_timeout = initialize_timeout
         self._loop = loop
 
@@ -108,6 +110,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
+                inference_executor=self._inf_executor,
                 mp_ctx=self._mp_ctx,
                 loop=self._loop,
             )

@@ -85,6 +85,7 @@ class JobContext:
         room: rtc.Room,
         on_connect: Callable[[], None],
         on_shutdown: Callable[[str], None],
+        inference_executor: InferenceExecutor,
     ) -> None:
         self._proc = proc
         self._info = info
@@ -102,6 +103,11 @@ class JobContext:
         ] = []
         self._participant_tasks = dict[Tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._participant_available)
+        self._inf_executor = inference_executor
+
+    @property
+    def inference_executor(self) -> InferenceExecutor:
+        return self._inf_executor
 
     @property
     def proc(self) -> JobProcess:
@@ -268,24 +274,10 @@ class JobProcess:
         self,
         *,
         start_arguments: Any | None = None,
-        inference_executor: InferenceExecutor | None = None,
     ) -> None:
         self._mp_proc = mp.current_process()
         self._userdata: dict[str, Any] = {}
         self._start_arguments = start_arguments
-        self._inf_executor = inference_executor
-
-    @property
-    def inference_executor(self) -> InferenceExecutor:
-        if self._inf_executor is None:
-            raise ValueError(
-                (
-                    "no inference executor is provided for the current JobProcess, did you "
-                    "forgot to register/import plugins necessary for inference?"
-                )
-            )
-
-        return self._inf_executor
 
     @property
     def pid(self) -> int | None:

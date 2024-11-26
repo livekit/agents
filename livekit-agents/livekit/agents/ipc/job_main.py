@@ -15,6 +15,8 @@ from ..log import logger
 from ..utils.aio import duplex_unix
 from . import channel, proto
 
+from .inference_executor import InferenceExecutor, _InferenceRunnerClient
+
 
 @dataclass
 class _ShutdownInfo:
@@ -35,6 +37,7 @@ def _start_job(
     start_req: proto.StartJobRequest,
     exit_proc_fut: asyncio.Event,
     cch: utils.aio.duplex_unix._AsyncDuplex,
+    inference_client: _InferenceRunnerClient,
 ) -> JobTask:
     # used to warn users if none of connect/shutdown is called inside the job_entry
     ctx_connect, ctx_shutdown = False, False
@@ -69,6 +72,7 @@ def _start_job(
         room=room,
         on_connect=_on_ctx_connect,
         on_shutdown=_on_ctx_shutdown,
+        inference_executor=inference_client,
     )
 
     @utils.log_exceptions(logger=logger)
@@ -146,6 +150,8 @@ async def _async_main(
     exit_proc_fut = asyncio.Event()
     no_msg_timeout = utils.aio.sleep(proto.PING_INTERVAL * 5)  # missing 5 pings
 
+    inference_client = _InferenceRunnerClient(cch=cch)
+
     @utils.log_exceptions(logger=logger)
     async def _read_ipc_task():
         nonlocal job_task
@@ -166,17 +172,21 @@ async def _async_main(
 
             if isinstance(msg, proto.StartJobRequest):
                 assert job_task is None, "job task already running"
-                job_task = _start_job(proc, job_entrypoint_fnc, msg, exit_proc_fut, cch)
+                job_task = _start_job(
+                    proc, job_entrypoint_fnc, msg, exit_proc_fut, cch, inference_client
+                )
 
             if isinstance(msg, proto.ShutdownRequest):
                 if job_task is None:
-                    # there is no running job, we can exit immediately
-                    break
+                    break  # there is no running job, we can exit immediately
 
                 with contextlib.suppress(asyncio.InvalidStateError):
                     job_task.shutdown_fut.set_result(
                         _ShutdownInfo(reason=msg.reason, user_initiated=False)
                     )
+
+            if isinstance(msg, proto.InferenceResponse):
+                inference_client._on_inference_response(msg)
 
     async def _self_health_check():
         await no_msg_timeout
@@ -208,6 +218,7 @@ class ProcStartArgs:
     mp_cch: socket.socket
     asyncio_debug: bool
     user_arguments: Any | None = None
+    inference_runners: dict[str, Callable[[], InferenceExecutor]] | None = None
 
 
 @dataclass

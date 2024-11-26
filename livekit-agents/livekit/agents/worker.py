@@ -249,6 +249,18 @@ class Worker(utils.EventEmitter[EventTypes]):
         # using spawn context for all platforms. We may have further optimizations for
         # Linux with forkserver, but for now, this is the safest option
         mp_ctx = mp.get_context("spawn")
+
+        self._inference_executor: (
+            ipc.inference_proc_executor.InferenceProcExecutor | None
+        ) = None
+        if len(_InferenceRunner.registered_runners) > 0:
+            self._inference_executor = (
+                ipc.inference_proc_executor.InferenceProcExecutor(
+                    mp_ctx=mp_ctx,
+                    loop=self._loop,
+                )
+            )
+
         self._proc_pool = ipc.proc_pool.ProcPool(
             initialize_process_fnc=opts.prewarm_fnc,
             job_entrypoint_fnc=opts.entrypoint_fnc,
@@ -257,6 +269,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             ),
             loop=self._loop,
             job_executor_type=opts.job_executor_type,
+            inference_executor=self._inference_executor,
             mp_ctx=mp_ctx,
             initialize_timeout=opts.initialize_process_timeout,
             close_timeout=opts.shutdown_process_timeout,
@@ -276,17 +289,6 @@ class Worker(utils.EventEmitter[EventTypes]):
         )
 
         self._main_task: asyncio.Task[None] | None = None
-
-        self._inference_executor: (
-            ipc.inference_proc_executor.InferenceProcExecutor | None
-        ) = None
-        if len(_InferenceRunner.registered_runners) > 0:
-            self._inference_executor = (
-                ipc.inference_proc_executor.InferenceProcExecutor(
-                    mp_ctx=mp_ctx,
-                    loop=self._loop,
-                )
-            )
 
     async def run(self):
         if not self._closed:
