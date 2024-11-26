@@ -136,7 +136,7 @@ class LLM(llm.LLM):
             opts["tools"] = fncs_desc
             if tool_choice is not None:
                 anthropic_tool_choice: dict[str, Any] = {"type": "auto"}
-                if isinstance(tool_choice, dict):
+                if isinstance(tool_choice, FunctionToolChoice):
                     if tool_choice["type"] == "function":
                         anthropic_tool_choice = {
                             "type": "tool",
