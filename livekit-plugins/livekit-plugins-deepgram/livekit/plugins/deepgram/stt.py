@@ -350,6 +350,7 @@ class SpeechStream(stt.SpeechStream):
                     logger.info("reconnecting with updated options...")
                     for task in tasks:
                         task.cancel()
+                    reconnect_wait_task.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
 
                     if self._ws and not self._ws.closed:
@@ -357,15 +358,17 @@ class SpeechStream(stt.SpeechStream):
                     self._ws = None
 
                     continue
-                if any(task in done for task in [send_task, recv_task]):
+                if recv_task in done:
                     for task in tasks:
                         if task.done() and task.exception():
                             raise task.exception()
-                    break
+                    break  # Exit the loop if the recv_task has completed
+
+                reconnect_wait_task.cancel()
+                await asyncio.gather(reconnect_wait_task, return_exceptions=True)
             except Exception:
                 logger.exception("Error in SpeechStream _run method")
-                # Decide whether to retry or break based on the exception type
-                break  # For now, we break the loop on exceptions
+                break
 
         await self._cleanup()
 
