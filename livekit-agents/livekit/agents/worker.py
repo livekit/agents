@@ -38,11 +38,13 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
+import psutil
 from livekit import api, rtc
 from livekit.protocol import agent, models
 
 from . import http_server, ipc, utils
 from ._exceptions import AssignmentTimeoutError
+from .ipc.proc_job_executor import ProcJobExecutor
 from .job import (
     JobAcceptArguments,
     JobContext,
@@ -158,6 +160,11 @@ class WorkerOptions:
 
     Defaults to 0.75 on "production" mode, and is disabled in "development" mode.
     """
+    max_job_memory_usage: float = 0
+    """Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
+    Defaults to 0 (disabled).
+    """
+    """Number of idle processes to keep warm."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
         dev_default=0, prod_default=3
     )
@@ -298,6 +305,18 @@ class Worker(utils.EventEmitter[EventTypes]):
             self._main_task,
             asyncio.create_task(self._http_server.run(), name="http_server"),
         ]
+
+        # start the memory monitoring task
+        if self._opts.max_job_memory_usage > 0:
+            if self._opts.job_executor_type != JobExecutorType.PROCESS:
+                logger.warning(
+                    "max_job_memory_usage is only supported for process-based job executors"
+                )
+            else:
+                tasks.append(
+                    asyncio.create_task(self._monitor_memory(), name="memory_monitor")
+                )
+
         try:
             await asyncio.gather(*tasks)
         finally:
@@ -781,3 +800,54 @@ class Worker(utils.EventEmitter[EventTypes]):
         )
         msg = agent.WorkerMessage(update_job=update)
         await self._queue_msg(msg)
+
+    async def _monitor_memory(self) -> None:
+        """Monitor memory usage of active jobs and kill those exceeding the limit."""
+        while not self._closed:
+            for proc in self._proc_pool.processes:
+                if not proc.running_job or not isinstance(proc, ProcJobExecutor):
+                    continue
+
+                try:
+                    # Get process memory info
+                    process = psutil.Process(proc.pid)
+                    memory_info = process.memory_info()
+                    memory_mb = memory_info.rss / (1024 * 1024)  # Convert to MB
+                    if memory_mb > self._opts.max_job_memory_usage:
+                        logger.error(
+                            "Job exceeded memory limit, killing process",
+                            extra={
+                                "pid": proc.pid,
+                                "job_id": proc.running_job.job.id,
+                                "memory_usage_mb": memory_mb,
+                                "memory_limit_mb": self._opts.max_job_memory_usage,
+                            },
+                        )
+                        await asyncio.wait_for(proc.kill(), timeout=10.0)
+                        logger.info(
+                            "Process killed after exceeding memory limit",
+                            extra={"pid": proc.pid, "job_id": proc.running_job.job.id},
+                        )
+                except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                    logger.warning(
+                        "Failed to get memory info for process",
+                        extra={
+                            "pid": proc.pid,
+                            "job_id": proc.running_job.job.id,
+                            "error": str(e),
+                        },
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        "Failed to kill process after 10 seconds",
+                        extra={"pid": proc.pid, "job_id": proc.running_job.job.id},
+                    )
+                except Exception as e:
+                    if self._closed:
+                        return
+
+                    logger.exception(
+                        "Error in memory monitoring task", extra={"error": str(e)}
+                    )
+
+            await asyncio.sleep(5)  # Check every 5 seconds
