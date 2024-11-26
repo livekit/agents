@@ -4,7 +4,7 @@ import asyncio
 import dataclasses
 import time
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal
+from typing import AsyncIterable, Literal, Union
 
 from livekit.agents._exceptions import APIConnectionError, APIError
 
@@ -12,7 +12,7 @@ from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .chat_context import ChatContext
 from .function_context import FunctionContext
-from .llm import LLM, ChatChunk, LLMStream
+from .llm import LLM, ChatChunk, LLMStream, ToolChoice
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -66,6 +66,8 @@ class FallbackAdapter(
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream":
         return FallbackLLMStream(
             llm=self,
@@ -75,6 +77,7 @@ class FallbackAdapter(
             temperature=temperature,
             n=n,
             parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
 
@@ -89,6 +92,8 @@ class FallbackLLMStream(LLMStream):
         temperature: float | None,
         n: int | None,
         parallel_tool_calls: bool | None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> None:
         super().__init__(
             llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
@@ -97,6 +102,7 @@ class FallbackLLMStream(LLMStream):
         self._temperature = temperature
         self._n = n
         self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
 
     async def _try_generate(
         self, *, llm: LLM, recovering: bool = False
@@ -108,6 +114,7 @@ class FallbackLLMStream(LLMStream):
                 temperature=self._temperature,
                 n=self._n,
                 parallel_tool_calls=self._parallel_tool_calls,
+                tool_choice=self._tool_choice,
                 conn_options=dataclasses.replace(
                     self._conn_options,
                     max_retry=self._fallback_adapter._max_retry_per_llm,
