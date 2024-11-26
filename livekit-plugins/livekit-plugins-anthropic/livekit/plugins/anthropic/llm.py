@@ -135,10 +135,10 @@ class LLM(llm.LLM):
             if tool_choice is not None:
                 anthropic_tool_choice: dict[str, Any] = {"type": "auto"}
                 if isinstance(tool_choice, ToolChoice):
-                    if tool_choice["type"] == "function":
+                    if tool_choice.type == "function":
                         anthropic_tool_choice = {
                             "type": "tool",
-                            "name": tool_choice["name"],
+                            "name": tool_choice.name,
                         }
                 elif isinstance(tool_choice, str):
                     if tool_choice == "required":
