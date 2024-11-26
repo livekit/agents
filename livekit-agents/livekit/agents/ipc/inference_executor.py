@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from typing import Protocol
 from ..utils import aio, shortuuid
 from . import proto
@@ -36,4 +37,6 @@ class _InferenceRunnerClient(InferenceExecutor):
             )
             return
 
-        fut.set_result(resp)
+        print("got response", resp)
+        with contextlib.suppress(asyncio.CancelledError):
+            fut.set_result(resp)
