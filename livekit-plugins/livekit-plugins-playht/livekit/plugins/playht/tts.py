@@ -176,6 +176,7 @@ class ChunkedStream(tts.ChunkedStream):
         json_data = {
             "text": self._input_text,
             "output_format": self._opts.encoding,
+            "sample_rate": self._opts.sample_rate,
             "voice": self._opts.voice.id,
         }
         try:
