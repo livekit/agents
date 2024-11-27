@@ -446,9 +446,10 @@ class ProcJobExecutor:
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                 logger.warning(
                     "Failed to get memory info for process",
-                    extra=self.logging_extra(), exc_info=e,
+                    extra=self.logging_extra(),
+                    exc_info=e,
                 )
-            except Exception as e:
+            except Exception:
                 if self._closing or self._kill_sent:
                     return
 
