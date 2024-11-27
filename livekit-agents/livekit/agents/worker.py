@@ -158,10 +158,14 @@ class WorkerOptions:
 
     Defaults to 0.75 on "production" mode, and is disabled in "development" mode.
     """
-    max_job_memory_usage: float = 0
+
+    job_memory_warn_mb: float = 300
+    """Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged."""
+    job_memory_limit_mb: float = 0
     """Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
     Defaults to 0 (disabled).
     """
+
     """Number of idle processes to keep warm."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
         dev_default=0, prod_default=3
@@ -240,7 +244,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             )
 
         if (
-            opts.max_job_memory_usage > 0
+            opts.job_memory_limit_mb > 0
             and opts.job_executor_type != JobExecutorType.PROCESS
         ):
             logger.warning(
@@ -273,7 +277,8 @@ class Worker(utils.EventEmitter[EventTypes]):
             mp_ctx=mp_ctx,
             initialize_timeout=opts.initialize_process_timeout,
             close_timeout=opts.shutdown_process_timeout,
-            max_job_memory_usage=opts.max_job_memory_usage,
+            job_memory_warn_mb=opts.job_memory_warn_mb,
+            job_memory_limit_mb=opts.job_memory_limit_mb,
         )
         self._proc_pool.on("process_started", self._on_process_started)
         self._proc_pool.on("process_closed", self._on_process_closed)

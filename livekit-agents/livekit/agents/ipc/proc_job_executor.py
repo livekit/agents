@@ -76,7 +76,8 @@ class _ProcOpts:
     mp_ctx: BaseContext
     initialize_timeout: float
     close_timeout: float
-    max_job_memory_usage: float
+    job_memory_warn_mb: float
+    job_memory_limit_mb: float
 
 
 class ProcJobExecutor:
@@ -89,7 +90,8 @@ class ProcJobExecutor:
         close_timeout: float,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
-        max_job_memory_usage: float = 0,
+        job_memory_warn_mb: float = 0,
+        job_memory_limit_mb: float = 0,
     ) -> None:
         self._loop = loop
         self._opts = _ProcOpts(
@@ -98,7 +100,8 @@ class ProcJobExecutor:
             initialize_timeout=initialize_timeout,
             close_timeout=close_timeout,
             mp_ctx=mp_ctx,
-            max_job_memory_usage=max_job_memory_usage,
+            job_memory_warn_mb=job_memory_warn_mb,
+            job_memory_limit_mb=job_memory_limit_mb,
         )
 
         self._user_args: Any | None = None
@@ -341,7 +344,7 @@ class ProcJobExecutor:
         ping_task = asyncio.create_task(self._ping_pong_task(pong_timeout))
         monitor_task = asyncio.create_task(self._monitor_task(pong_timeout))
 
-        if self._opts.max_job_memory_usage > 0:
+        if self._opts.job_memory_limit_mb > 0 or self._opts.job_memory_warn_mb > 0:
             memory_monitor_task = asyncio.create_task(self._memory_monitor_task())
         else:
             memory_monitor_task = None
@@ -431,17 +434,33 @@ class ProcJobExecutor:
                 memory_info = process.memory_info()
                 memory_mb = memory_info.rss / (1024 * 1024)  # Convert to MB
 
-                if memory_mb > self._opts.max_job_memory_usage:
+                if (
+                    self._opts.job_memory_limit_mb > 0
+                    and memory_mb > self._opts.job_memory_limit_mb
+                ):
                     logger.error(
                         "Job exceeded memory limit, killing job",
                         extra={
                             "memory_usage_mb": memory_mb,
-                            "memory_limit_mb": self._opts.max_job_memory_usage,
+                            "memory_limit_mb": self._opts.job_memory_limit_mb,
                             **self.logging_extra(),
                         },
                     )
                     self._exception = JobExecutorError_MemoryLimitExceeded()
                     self._send_kill_signal()
+                elif (
+                    self._opts.job_memory_warn_mb > 0
+                    and memory_mb > self._opts.job_memory_warn_mb
+                ):
+                    logger.warning(
+                        "Job memory usage is high",
+                        extra={
+                            "memory_usage_mb": memory_mb,
+                            "memory_warn_mb": self._opts.job_memory_warn_mb,
+                            "memory_limit_mb": self._opts.job_memory_limit_mb,
+                            **self.logging_extra(),
+                        },
+                    )
 
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                 logger.warning(
