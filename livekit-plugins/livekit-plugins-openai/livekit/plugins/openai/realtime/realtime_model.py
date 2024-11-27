@@ -865,7 +865,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 "type": "session.update",
                 "session": session_data,
             }
-        )
+        ) 
 
     def chat_ctx_copy(self) -> llm.ChatContext:
         return self._remote_converstation_items.to_chat_context()
@@ -898,15 +898,16 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             # Patch: append an empty audio message to set the API in audio mode
             changes.to_add.append((None, self._create_empty_user_audio_message(1.0)))
 
-        _futs = [
-            self.conversation.item.delete(item_id=msg.id) for msg in changes.to_delete
-        ] + [
+        # First delete all items that need to be removed
+        for msg in changes.to_delete:
+            self.conversation.item.delete(item_id=msg.id)
+
+        # Then create new items in order
+        for prev, msg in changes.to_add:
             self.conversation.item.create(msg, prev.id if prev else None)
-            for prev, msg in changes.to_add
-        ]
 
         # wait for all the futures to complete
-        await asyncio.gather(*_futs)
+        # await asyncio.gather(*_futs)
 
     def _create_empty_user_audio_message(self, duration: float) -> llm.ChatMessage:
         """Create an empty audio message with the given duration."""
