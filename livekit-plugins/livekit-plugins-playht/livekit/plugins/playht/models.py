@@ -1,6 +1,11 @@
 from typing import Literal
 
-TTSEngines = Literal["PlayHT2.0", "PlayHT1.0", "PlayHT2.0-turbo"]
+TTSEngines = Literal[
+    "PlayHT2.0",
+    "PlayHT1.0",
+    "PlayHT2.0-turbo",
+    "Play3.0-mini",
+]
 
 TTSEncoding = Literal[
     "mp3_22050_32",

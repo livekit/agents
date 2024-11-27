@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from typing import Any, Awaitable, Callable
 
+import psutil
+
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
@@ -17,6 +19,7 @@ from ..utils.aio import duplex_unix
 from . import channel, job_main, job_proc_lazy_main, proto
 from .inference_executor import InferenceExecutor
 from .job_executor import (
+    JobExecutorError_MemoryLimitExceeded,
     JobExecutorError_Runtime,
     JobExecutorError_ShutdownTimeout,
     JobExecutorError_Unresponsive,
@@ -32,6 +35,8 @@ class _ProcOpts:
     mp_ctx: BaseContext
     initialize_timeout: float
     close_timeout: float
+    job_memory_warn_mb: float
+    job_memory_limit_mb: float
 
 
 class ProcJobExecutor:
@@ -45,6 +50,8 @@ class ProcJobExecutor:
         close_timeout: float,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
+        job_memory_warn_mb: float = 0,
+        job_memory_limit_mb: float = 0,
     ) -> None:
         self._loop = loop
         self._opts = _ProcOpts(
@@ -53,6 +60,8 @@ class ProcJobExecutor:
             initialize_timeout=initialize_timeout,
             close_timeout=close_timeout,
             mp_ctx=mp_ctx,
+            job_memory_warn_mb=job_memory_warn_mb,
+            job_memory_limit_mb=job_memory_limit_mb,
         )
 
         self._user_args: Any | None = None
@@ -298,10 +307,18 @@ class ProcJobExecutor:
         ping_task = asyncio.create_task(self._ping_pong_task(pong_timeout))
         monitor_task = asyncio.create_task(self._monitor_task(pong_timeout))
 
+        if self._opts.job_memory_limit_mb > 0 or self._opts.job_memory_warn_mb > 0:
+            memory_monitor_task = asyncio.create_task(self._memory_monitor_task())
+        else:
+            memory_monitor_task = None
+
         await self._join_fut
         self._exitcode = self._proc.exitcode
         self._proc.close()
         await utils.aio.gracefully_cancel(ping_task, monitor_task)
+
+        if memory_monitor_task:
+            await utils.aio.gracefully_cancel(memory_monitor_task)
 
         with contextlib.suppress(duplex_unix.DuplexClosed):
             await self._pch.aclose()
@@ -388,6 +405,65 @@ class ProcJobExecutor:
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+
+    @utils.log_exceptions(logger=logger)
+    async def _memory_monitor_task(self) -> None:
+        """Monitor memory usage and kill the process if it exceeds the limit."""
+        while not self._closing and not self._kill_sent:
+            try:
+                if not self._pid or not self._running_job:
+                    await asyncio.sleep(5)
+                    continue
+
+                # Get process memory info
+                process = psutil.Process(self._pid)
+                memory_info = process.memory_info()
+                memory_mb = memory_info.rss / (1024 * 1024)  # Convert to MB
+
+                if (
+                    self._opts.job_memory_limit_mb > 0
+                    and memory_mb > self._opts.job_memory_limit_mb
+                ):
+                    logger.error(
+                        "Job exceeded memory limit, killing job",
+                        extra={
+                            "memory_usage_mb": memory_mb,
+                            "memory_limit_mb": self._opts.job_memory_limit_mb,
+                            **self.logging_extra(),
+                        },
+                    )
+                    self._exception = JobExecutorError_MemoryLimitExceeded()
+                    self._send_kill_signal()
+                elif (
+                    self._opts.job_memory_warn_mb > 0
+                    and memory_mb > self._opts.job_memory_warn_mb
+                ):
+                    logger.warning(
+                        "Job memory usage is high",
+                        extra={
+                            "memory_usage_mb": memory_mb,
+                            "memory_warn_mb": self._opts.job_memory_warn_mb,
+                            "memory_limit_mb": self._opts.job_memory_limit_mb,
+                            **self.logging_extra(),
+                        },
+                    )
+
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                logger.warning(
+                    "Failed to get memory info for process",
+                    extra=self.logging_extra(),
+                    exc_info=e,
+                )
+            except Exception:
+                if self._closing or self._kill_sent:
+                    return
+
+                logger.exception(
+                    "Error in memory monitoring task",
+                    extra=self.logging_extra(),
+                )
+
+            await asyncio.sleep(5)  # Check every 5 seconds
 
     def logging_extra(self):
         extra: dict[str, Any] = {
