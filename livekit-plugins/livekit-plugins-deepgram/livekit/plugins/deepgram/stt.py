@@ -329,108 +329,17 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         while not self._closed:
-            closing_ws = False
-
-            async def keepalive_task(ws: aiohttp.ClientWebSocketResponse):
-                # if we want to keep the connection alive even if no audio is sent,
-                # Deepgram expects a keepalive message.
-                # https://developers.deepgram.com/reference/listen-live#stream-keepalive
-                try:
-                    while True:
-                        await ws.send_str(SpeechStream._KEEPALIVE_MSG)
-                        await asyncio.sleep(5)
-                except Exception:
-                    return
-
-            async def send_task(ws: aiohttp.ClientWebSocketResponse):
-                nonlocal closing_ws
-
-                # forward audio to deepgram in chunks of 50ms
-                samples_50ms = self._opts.sample_rate // 20
-                audio_bstream = utils.audio.AudioByteStream(
-                    sample_rate=self._opts.sample_rate,
-                    num_channels=self._opts.num_channels,
-                    samples_per_channel=samples_50ms,
-                )
-
-                has_ended = False
-                last_frame: Optional[rtc.AudioFrame] = None
-                async for data in self._input_ch:
-                    frames: list[rtc.AudioFrame] = []
-                    if isinstance(data, rtc.AudioFrame):
-                        state = self._check_energy_state(data)
-                        if state in (
-                            AudioEnergyFilter.State.START,
-                            AudioEnergyFilter.State.SPEAKING,
-                        ):
-                            if last_frame:
-                                frames.extend(
-                                    audio_bstream.write(last_frame.data.tobytes())
-                                )
-                                last_frame = None
-                            frames.extend(audio_bstream.write(data.data.tobytes()))
-                        elif state == AudioEnergyFilter.State.END:
-                            # no need to buffer as we have cooldown period
-                            frames = audio_bstream.flush()
-                            has_ended = True
-                        elif state == AudioEnergyFilter.State.SILENCE:
-                            # buffer the last silence frame, since it could contain beginning of speech
-                            # TODO: improve accuracy by using a ring buffer with longer window
-                            last_frame = data
-                    elif isinstance(data, self._FlushSentinel):
-                        frames = audio_bstream.flush()
-                        has_ended = True
-
-                    for frame in frames:
-                        self._audio_duration_collector.push(frame.duration)
-                        await ws.send_bytes(frame.data.tobytes())
-
-                        if has_ended:
-                            self._audio_duration_collector.flush()
-                            await ws.send_str(SpeechStream._FINALIZE_MSG)
-                            has_ended = False
-
-                # tell deepgram we are done sending audio/inputs
-                closing_ws = True
-                await ws.send_str(SpeechStream._CLOSE_MSG)
-
-            async def recv_task(ws: aiohttp.ClientWebSocketResponse):
-                nonlocal closing_ws
-                while True:
-                    msg = await ws.receive()
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        if closing_ws:  # close is expected, see SpeechStream.aclose
-                            return
-
-                        # this will trigger a reconnection, see the _run loop
-                        raise Exception("deepgram connection closed unexpectedly")
-
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        logger.warning("unexpected deepgram message type %s", msg.type)
-                        continue
-
-                    try:
-                        self._process_stream_event(json.loads(msg.data))
-                    except Exception:
-                        logger.exception("failed to process deepgram message")
-
-            async def wait_for_reconnect():
-                await self._options_update_event.wait()
-
+            self._closing_ws = False
             ws: aiohttp.ClientWebSocketResponse | None = None
 
             try:
                 ws = await self._connect_ws()
 
                 tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                    asyncio.create_task(keepalive_task(ws)),
-                    asyncio.create_task(wait_for_reconnect()),
+                    asyncio.create_task(self._send_task(ws)),
+                    asyncio.create_task(self._recv_task(ws)),
+                    asyncio.create_task(self._keepalive_task(ws)),
+                    asyncio.create_task(self._wait_for_reconnect()),
                 ]
 
                 done, pending = await asyncio.wait(
@@ -452,6 +361,91 @@ class SpeechStream(stt.SpeechStream):
             finally:
                 if ws is not None:
                     await ws.close()
+
+    async def _keepalive_task(self, ws: aiohttp.ClientWebSocketResponse):
+        # if we want to keep the connection alive even if no audio is sent,
+        # Deepgram expects a keepalive message.
+        # https://developers.deepgram.com/reference/listen-live#stream-keepalive
+        try:
+            while True:
+                await ws.send_str(SpeechStream._KEEPALIVE_MSG)
+                await asyncio.sleep(5)
+        except Exception:
+            return
+
+    async def _send_task(self, ws: aiohttp.ClientWebSocketResponse):
+        # forward audio to deepgram in chunks of 50ms
+        samples_50ms = self._opts.sample_rate // 20
+        audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=self._opts.sample_rate,
+            num_channels=self._opts.num_channels,
+            samples_per_channel=samples_50ms,
+        )
+
+        has_ended = False
+        last_frame: Optional[rtc.AudioFrame] = None
+        async for data in self._input_ch:
+            frames: list[rtc.AudioFrame] = []
+            if isinstance(data, rtc.AudioFrame):
+                state = self._check_energy_state(data)
+                if state in (
+                    AudioEnergyFilter.State.START,
+                    AudioEnergyFilter.State.SPEAKING,
+                ):
+                    if last_frame:
+                        frames.extend(audio_bstream.write(last_frame.data.tobytes()))
+                        last_frame = None
+                    frames.extend(audio_bstream.write(data.data.tobytes()))
+                elif state == AudioEnergyFilter.State.END:
+                    # no need to buffer as we have cooldown period
+                    frames = audio_bstream.flush()
+                    has_ended = True
+                elif state == AudioEnergyFilter.State.SILENCE:
+                    # buffer the last silence frame, since it could contain beginning of speech
+                    # TODO: improve accuracy by using a ring buffer with longer window
+                    last_frame = data
+            elif isinstance(data, self._FlushSentinel):
+                frames = audio_bstream.flush()
+                has_ended = True
+
+            for frame in frames:
+                self._audio_duration_collector.push(frame.duration)
+                await ws.send_bytes(frame.data.tobytes())
+
+                if has_ended:
+                    self._audio_duration_collector.flush()
+                    await ws.send_str(SpeechStream._FINALIZE_MSG)
+                    has_ended = False
+
+        # tell deepgram we are done sending audio/inputs
+        self._self._closing_ws = True
+        await ws.send_str(SpeechStream._CLOSE_MSG)
+
+    async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse):
+        while True:
+            msg = await ws.receive()
+            if msg.type in (
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSING,
+            ):
+                if self._closing_ws:  # close is expected, see SpeechStream.aclose
+                    return
+
+                # this will trigger a reconnection, see the _run loop
+                raise Exception("deepgram connection closed unexpectedly")
+
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                logger.warning("unexpected deepgram message type %s", msg.type)
+                continue
+
+            try:
+                self._process_stream_event(json.loads(msg.data))
+            except Exception:
+                logger.exception("failed to process deepgram message")
+
+    async def _wait_for_reconnect(self):
+        await self._options_update_event.wait()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config = {
