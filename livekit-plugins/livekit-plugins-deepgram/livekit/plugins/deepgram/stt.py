@@ -362,12 +362,24 @@ class SpeechStream(stt.SpeechStream):
                     for task in tasks:
                         if task.done() and task.exception():
                             raise task.exception()
+                        if not task.done():
+                            task.cancel()
+                    reconnect_wait_task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
                     break
-
+                if send_task in done:
+                    if send_task.exception():
+                        raise send_task.exception()
+                    continue
                 reconnect_wait_task.cancel()
                 await asyncio.gather(reconnect_wait_task, return_exceptions=True)
             except Exception:
                 logger.exception("Error in SpeechStream _run method")
+                for task in tasks + [reconnect_wait_task]:
+                    task.cancel()
+                    await asyncio.gather(
+                        *tasks + [reconnect_wait_task], return_exceptions=True
+                    )
                 break
 
         await self._cleanup()
@@ -516,7 +528,8 @@ class SpeechStream(stt.SpeechStream):
         except Exception:
             logger.exception("Error in recv_task")
         finally:
-            await ws.close()
+            if not ws.closed:
+                await ws.close()
 
     async def _keepalive_task(self):
         """Task for sending keepalive messages."""
@@ -530,7 +543,11 @@ class SpeechStream(stt.SpeechStream):
             while True:
                 await ws.send_str(SpeechStream._KEEPALIVE_MSG)
                 await asyncio.sleep(5)
-        except asyncio.CancelledError:
+        except (
+            asyncio.CancelledError,
+            aiohttp.ClientConnectionError,
+            aiohttp.ClientConnectionError,
+        ):
             # Task was cancelled due to reconnection or closure
             pass
         except Exception:
@@ -619,9 +636,10 @@ class SpeechStream(stt.SpeechStream):
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
         self._closed = True
-        self._reconnect_event.set()  # Trigger any waiting loops to exit
+        self._reconnect_event.set()
         self._stt.remove_stream(self)
         await super().aclose()
+        await self._task
         await self._cleanup()
 
     async def _cleanup(self):
