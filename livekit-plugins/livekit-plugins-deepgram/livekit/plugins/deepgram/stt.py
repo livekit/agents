@@ -181,7 +181,7 @@ class STT(stt.STT):
             energy_filter=energy_filter,
         )
         self._session = http_session
-        self._active_stream: SpeechStream = None
+        self._active_speech_stream: Optional[SpeechStream] = None
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -247,8 +247,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-
-        stream = SpeechStream(
+        self._active_speech_stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
             opts=config,
@@ -256,16 +255,16 @@ class STT(stt.STT):
             http_session=self._ensure_session(),
             base_url=self._base_url,
         )
-        self._active_stream = stream
-        return self._active_stream
+        return self._active_speech_stream
 
-    def remove_stream(self, stream: "SpeechStream") -> None:
-        self._active_stream = None
-
-    def update_options(self, language: DeepgramLanguages | str | None) -> None:
-        """Update the STT options and propagate changes to active streams."""
-        self._opts.language = language or self._opts.language
-        asyncio.create_task(self._active_stream.update_options(language=language))
+    async def update_options(self, **kwargs):
+        for key, value in kwargs.items():
+            if hasattr(self._opts, key):
+                setattr(self._opts, key, value)
+            else:
+                raise AttributeError(f"Invalid option: {key}")
+        if self._active_speech_stream is not None:
+            await self._active_speech_stream.update_options(self._opts)
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
@@ -319,90 +318,142 @@ class SpeechStream(stt.SpeechStream):
         self._pushed_audio_duration = 0.0
         self._request_id = ""
 
-        self._reconnect_event = asyncio.Event()
+        self._reconnect_needed = False
+        self._options_update_event = asyncio.Event()
         self._closed = False
-        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
-        self._stt: STT = stt
 
-    async def update_options(self, language: DeepgramLanguages | str | None) -> None:
-        self._opts.language = language or self._opts.language
-        self._reconnect_event.set()
-        logger.info("options updated, reconnection requested.")
+    async def update_options(self, opts: STTOptions):
+        self._opts = opts
+        self._reconnect_needed = True
+        self._options_update_event.set()
 
     async def _run(self) -> None:
-        tasks = []
-        reconnect_wait_task = None
         while not self._closed:
-            try:
-                await self._connect_ws()
-                send_task = asyncio.create_task(self._send_task())
-                recv_task = asyncio.create_task(self._recv_task())
-                keepalive_task = asyncio.create_task(self._keepalive_task())
-                reconnect_wait_task = asyncio.create_task(self._reconnect_event.wait())
+            closing_ws = False
 
-                tasks = [send_task, recv_task, keepalive_task]
+            async def keepalive_task(ws: aiohttp.ClientWebSocketResponse):
+                # if we want to keep the connection alive even if no audio is sent,
+                # Deepgram expects a keepalive message.
+                # https://developers.deepgram.com/reference/listen-live#stream-keepalive
+                try:
+                    while True:
+                        await ws.send_str(SpeechStream._KEEPALIVE_MSG)
+                        await asyncio.sleep(5)
+                except Exception:
+                    return
+
+            async def send_task(ws: aiohttp.ClientWebSocketResponse):
+                nonlocal closing_ws
+
+                # forward audio to deepgram in chunks of 50ms
+                samples_50ms = self._opts.sample_rate // 20
+                audio_bstream = utils.audio.AudioByteStream(
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=self._opts.num_channels,
+                    samples_per_channel=samples_50ms,
+                )
+
+                has_ended = False
+                last_frame: Optional[rtc.AudioFrame] = None
+                async for data in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        state = self._check_energy_state(data)
+                        if state in (
+                            AudioEnergyFilter.State.START,
+                            AudioEnergyFilter.State.SPEAKING,
+                        ):
+                            if last_frame:
+                                frames.extend(
+                                    audio_bstream.write(last_frame.data.tobytes())
+                                )
+                                last_frame = None
+                            frames.extend(audio_bstream.write(data.data.tobytes()))
+                        elif state == AudioEnergyFilter.State.END:
+                            # no need to buffer as we have cooldown period
+                            frames = audio_bstream.flush()
+                            has_ended = True
+                        elif state == AudioEnergyFilter.State.SILENCE:
+                            # buffer the last silence frame, since it could contain beginning of speech
+                            # TODO: improve accuracy by using a ring buffer with longer window
+                            last_frame = data
+                    elif isinstance(data, self._FlushSentinel):
+                        frames = audio_bstream.flush()
+                        has_ended = True
+
+                    for frame in frames:
+                        self._audio_duration_collector.push(frame.duration)
+                        await ws.send_bytes(frame.data.tobytes())
+
+                        if has_ended:
+                            self._audio_duration_collector.flush()
+                            await ws.send_str(SpeechStream._FINALIZE_MSG)
+                            has_ended = False
+
+                # tell deepgram we are done sending audio/inputs
+                closing_ws = True
+                await ws.send_str(SpeechStream._CLOSE_MSG)
+
+            async def recv_task(ws: aiohttp.ClientWebSocketResponse):
+                nonlocal closing_ws
+                while True:
+                    msg = await ws.receive()
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                    ):
+                        if closing_ws:  # close is expected, see SpeechStream.aclose
+                            return
+
+                        # this will trigger a reconnection, see the _run loop
+                        raise Exception("deepgram connection closed unexpectedly")
+
+                    if msg.type != aiohttp.WSMsgType.TEXT:
+                        logger.warning("unexpected deepgram message type %s", msg.type)
+                        continue
+
+                    try:
+                        self._process_stream_event(json.loads(msg.data))
+                    except Exception:
+                        logger.exception("failed to process deepgram message")
+
+            async def wait_for_reconnect():
+                await self._options_update_event.wait()
+
+            ws: aiohttp.ClientWebSocketResponse | None = None
+
+            try:
+                ws = await self._connect_ws()
+
+                tasks = [
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                    asyncio.create_task(keepalive_task(ws)),
+                    asyncio.create_task(wait_for_reconnect()),
+                ]
+
                 done, pending = await asyncio.wait(
-                    [reconnect_wait_task] + tasks,
+                    tasks,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
 
-                if reconnect_wait_task.done():
-                    self._reconnect_event.clear()
-                    logger.info("reconnecting with updated options...")
-                    for task in tasks:
-                        task.cancel()
-                    reconnect_wait_task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
-
-                    if self._ws and not self._ws.closed:
-                        await self._ws.close()
-                    self._ws = None
+                if self._reconnect_needed:
+                    self._reconnect_needed = False
+                    self._options_update_event.clear()
+                    await utils.aio.gracefully_cancel(*pending)
+                    if ws is not None:
+                        await ws.close()
                     continue
-
-                if recv_task in done:
-                    for task in tasks:
-                        if task.done():
-                            exc = task.exception()
-                            if exc:
-                                if isinstance(exc, Exception):
-                                    raise exc
-                                else:
-                                    raise Exception(f"Task raised exception: {exc}")
-                        if not task.done():
-                            task.cancel()
-                    reconnect_wait_task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                else:
+                    self._closed = True
                     break
 
-                if send_task in done:
-                    exc = send_task.exception()
-                    if exc:
-                        if isinstance(exc, Exception):
-                            raise exc
-                        else:
-                            raise Exception(f"Task raised exception: {exc}")
-                    continue
-                reconnect_wait_task.cancel()
-                await asyncio.gather(reconnect_wait_task, return_exceptions=True)
+            finally:
+                if ws is not None:
+                    await ws.close()
 
-            except Exception:
-                logger.exception("Error in SpeechStream _run method")
-                if tasks:
-                    for task in tasks:
-                        task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                if reconnect_wait_task:
-                    reconnect_wait_task.cancel()
-                    await asyncio.gather(reconnect_wait_task, return_exceptions=True)
-                break
-
-        await self._cleanup()
-
-    async def _connect_ws(self):
-        """Establish the websocket connection using the current options."""
-        if self._ws and not self._ws.closed:
-            await self._ws.close()
-
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config = {
             "model": self._opts.model,
             "punctuate": self._opts.punctuate,
@@ -424,149 +475,14 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.language:
             live_config["language"] = self._opts.language
 
-        try:
-            self._ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    _to_deepgram_url(live_config, self._base_url, websocket=True),
-                    headers={"Authorization": f"Token {self._api_key}"},
-                ),
-                self._conn_options.timeout,
-            )
-            logger.info("WebSocket connection established.")
-        except Exception as e:
-            logger.exception("Failed to establish WebSocket connection.")
-            raise APIConnectionError() from e
-
-    async def _send_task(self):
-        """Task for sending audio data to the websocket."""
-        # Ensure the websocket is connected
-        if not self._ws or self._ws.closed:
-            logger.error("WebSocket is not connected in send_task.")
-            return
-
-        ws = self._ws
-        closing_ws = False
-
-        # Forward audio to deepgram in chunks of 50ms
-        samples_50ms = self._opts.sample_rate // 20
-        audio_bstream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.sample_rate,
-            num_channels=self._opts.num_channels,
-            samples_per_channel=samples_50ms,
+        ws = await asyncio.wait_for(
+            self._session.ws_connect(
+                _to_deepgram_url(live_config, base_url=self._base_url, websocket=True),
+                headers={"Authorization": f"Token {self._api_key}"},
+            ),
+            self._conn_options.timeout,
         )
-
-        has_ended = False
-        last_frame: Optional[rtc.AudioFrame] = None
-
-        try:
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    state = self._check_energy_state(data)
-                    if state in (
-                        AudioEnergyFilter.State.START,
-                        AudioEnergyFilter.State.SPEAKING,
-                    ):
-                        if last_frame:
-                            frames.extend(
-                                audio_bstream.write(last_frame.data.tobytes())
-                            )
-                            last_frame = None
-                        frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif state == AudioEnergyFilter.State.END:
-                        # no need to buffer as we have cooldown period
-                        frames = audio_bstream.flush()
-                        has_ended = True
-                    elif state == AudioEnergyFilter.State.SILENCE:
-                        # buffer the last silence frame, since it could contain beginning of speech
-                        # TODO: improve accuracy by using a ring buffer with longer window
-                        last_frame = data
-                elif isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                    has_ended = True
-
-                for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
-                    await ws.send_bytes(frame.data.tobytes())
-
-                    if has_ended:
-                        self._audio_duration_collector.flush()
-                        await ws.send_str(SpeechStream._FINALIZE_MSG)
-                        has_ended = False
-
-            # tell deepgram we are done sending audio/inputs
-            closing_ws = True
-            await ws.send_str(SpeechStream._CLOSE_MSG)
-
-        except (
-            asyncio.CancelledError,
-            aiohttp.ClientConnectionError,
-        ):
-            # Task was cancelled due to reconnection or closure
-            pass
-        except Exception:
-            logger.exception("Error in send_task")
-        finally:
-            if closing_ws:
-                await ws.close()
-
-    async def _recv_task(self):
-        """Task for receiving data from the websocket."""
-        # Ensure the websocket is connected
-        if not self._ws or self._ws.closed:
-            logger.error("WebSocket is not connected in recv_task.")
-            return
-
-        ws = self._ws
-        try:
-            while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    logger.info("WebSocket connection closed.")
-                    break
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected deepgram message type %s", msg.type)
-                    continue
-
-                try:
-                    self._process_stream_event(json.loads(msg.data))
-                except Exception:
-                    logger.exception("Failed to process message from Deepgram")
-
-        except asyncio.CancelledError:
-            # Task was cancelled due to reconnection or closure
-            pass
-        except Exception:
-            logger.exception("Error in recv_task")
-        finally:
-            if not ws.closed:
-                await ws.close()
-
-    async def _keepalive_task(self):
-        """Task for sending keepalive messages."""
-        # Ensure the websocket is connected
-        if not self._ws or self._ws.closed:
-            logger.error("WebSocket is not connected in keepalive_task.")
-            return
-
-        ws = self._ws
-        try:
-            while True:
-                await ws.send_str(SpeechStream._KEEPALIVE_MSG)
-                await asyncio.sleep(5)
-        except (
-            asyncio.CancelledError,
-            aiohttp.ClientConnectionError,
-        ):
-            # Task was cancelled due to reconnection or closure
-            pass
-        except Exception:
-            logger.exception("Error in keepalive_task")
+        return ws
 
     def _check_energy_state(self, frame: rtc.AudioFrame) -> AudioEnergyFilter.State:
         if self._audio_energy_filter:
@@ -647,20 +563,6 @@ class SpeechStream(stt.SpeechStream):
             pass  # metadata is too noisy
         else:
             logger.warning("received unexpected message from deepgram %s", data)
-
-    async def aclose(self) -> None:
-        """Close the stream and clean up resources."""
-        self._closed = True
-        self._reconnect_event.set()
-        self._stt.remove_stream(self)
-        await super().aclose()
-        await self._cleanup()
-
-    async def _cleanup(self):
-        """Cleanup resources."""
-        if self._ws and not self._ws.closed:
-            await self._ws.close()
-        self._ws = None
 
 
 def live_transcription_to_speech_data(
