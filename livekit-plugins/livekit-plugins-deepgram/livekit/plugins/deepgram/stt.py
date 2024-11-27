@@ -366,16 +366,25 @@ class SpeechStream(stt.SpeechStream):
                     continue
                 if recv_task in done:
                     for task in tasks:
-                        if task.done() and task.exception():
-                            raise task.exception()
+                        if task.done():
+                            exc = task.exception()
+                            if exc:
+                                if isinstance(exc, Exception):
+                                    raise exc
+                                else:
+                                    raise Exception(f"Task raised exception: {exc}")
                         if not task.done():
                             task.cancel()
                     reconnect_wait_task.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
                     break
                 if send_task in done:
-                    if send_task.exception():
-                        raise send_task.exception()
+                    exc = task.exception()
+                    if exc:
+                        if isinstance(exc, Exception):
+                            raise exc
+                        else:
+                            raise Exception(f"Task raised exception: {exc}")
                     continue
                 reconnect_wait_task.cancel()
                 await asyncio.gather(reconnect_wait_task, return_exceptions=True)
