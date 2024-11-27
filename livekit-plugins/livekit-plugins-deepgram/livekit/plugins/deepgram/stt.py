@@ -418,7 +418,7 @@ class SpeechStream(stt.SpeechStream):
                     has_ended = False
 
         # tell deepgram we are done sending audio/inputs
-        self._self._closing_ws = True
+        self._closing_ws = True
         await ws.send_str(SpeechStream._CLOSE_MSG)
 
     async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse):
