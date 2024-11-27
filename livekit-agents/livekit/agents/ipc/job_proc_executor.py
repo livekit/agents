@@ -100,9 +100,10 @@ class ProcJobExecutor(SupervisedProc):
                 self._pch,
                 proto.InferenceResponse(request_id=inf_req.request_id, data=inf_res),
             )
-        except Exception:
-            logger.exception(
-                "error handling inference request", extra=self.logging_extra()
+        except Exception as e:
+            await channel.asend_message(
+                self._pch,
+                proto.InferenceResponse(request_id=inf_req.request_id, error=str(e)),
             )
 
     async def launch_job(self, info: RunningJobInfo) -> None:
