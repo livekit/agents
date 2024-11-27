@@ -32,6 +32,8 @@ def _encoding_from_format(output_format: TTSEncoding) -> _Encoding:
         return "mp3"
     elif output_format.startswith("pcm"):
         return "pcm"
+    elif output_format.startswith("wav"):
+        return "pcm"
 
     raise ValueError(f"Unknown format: {output_format}")
 
@@ -46,7 +48,7 @@ class Voice:
 DEFAULT_VOICE = Voice(
     id="s3://peregrine-voices/mel22/manifest.json",
     name="Will",
-    voice_engine="PlayHT2.0",
+    voice_engine="Play3.0-mini",
 )
 
 ACCEPT_HEADER = {
