@@ -20,6 +20,7 @@ TTSEncoding = Literal[
     "pcm_44100",
 ]
 
+
 class TTSSampleRate(Enum):
     SR_22050 = 22050
     SR_24000 = 24000
@@ -32,6 +33,6 @@ class TTSSampleRate(Enum):
 
     def __int__(self):
         return self.value
-    
+
     def __repr__(self):
         return self.value
