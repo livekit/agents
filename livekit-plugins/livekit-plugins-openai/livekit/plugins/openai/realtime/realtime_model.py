@@ -497,10 +497,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
             message_content = message.content
             tool_call_id = message.tool_call_id
-            if not tool_call_id and message_content is None:
-                # not a function call while the message content is None
-                fut.set_result(False)
-                return fut
             event: api_proto.ClientEvent.ConversationItemCreate | None = None
             if tool_call_id:
                 if message.role == "tool":
@@ -547,12 +543,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             else:
                 if message_content is None:
                     logger.warning(
-                        "message content is None, skipping: %s",
+                        "message content is None, setting to empty content for continuity: %s",
                         message,
                         extra=self._sess.logging_extra(),
                     )
-                    fut.set_result(False)
-                    return fut
+                    message_content = []
+                    # fut.set_result(False)
+                    # return fut
                 if not isinstance(message_content, list):
                     message_content = [message_content]
 
