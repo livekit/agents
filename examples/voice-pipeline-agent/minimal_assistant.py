@@ -13,8 +13,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import deepgram, openai, silero
-from livekit.plugins import eou
+from livekit.plugins import deepgram, eou, openai, silero
 
 load_dotenv()
 logger = logging.getLogger("voice-assistant")

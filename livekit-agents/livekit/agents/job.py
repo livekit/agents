@@ -24,9 +24,8 @@ from typing import Any, Callable, Coroutine, Tuple
 from livekit import rtc
 from livekit.protocol import agent, models
 
-from .log import logger
-
 from .ipc.inference_executor import InferenceExecutor
+from .log import logger
 
 _JobContextVar = contextvars.ContextVar("agents_job_context")
 

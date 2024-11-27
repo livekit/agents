@@ -12,10 +12,10 @@ from typing import Any, Awaitable, Callable
 
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
-from .inference_executor import InferenceExecutor
 from ..log import logger
 from ..utils.aio import duplex_unix
 from . import channel, job_main, job_proc_lazy_main, proto
+from .inference_executor import InferenceExecutor
 from .job_executor import (
     JobExecutorError_Runtime,
     JobExecutorError_ShutdownTimeout,
@@ -355,7 +355,7 @@ class ProcJobExecutor:
                 self._pch,
                 proto.InferenceResponse(request_id=inf_req.request_id, data=inf_res),
             )
-        except Exception as e:
+        except Exception:
             logger.exception(
                 "error handling inference request", extra=self.logging_extra()
             )

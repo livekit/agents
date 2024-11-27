@@ -89,17 +89,19 @@ class _ProcClient:
                         ping_timeout.reset()
 
                     if isinstance(msg, proto.PingRequest):
-                        pong = proto.PongResponse(
-                            last_timestamp=msg.timestamp, timestamp=time_ms()
+                        await asend_message(
+                            self._acch,
+                            proto.PongResponse(
+                                last_timestamp=msg.timestamp, timestamp=time_ms()
+                            ),
                         )
-                        await asend_message(self._acch, pong)
 
                     ipc_ch.send_nowait(msg)
 
             async def _self_health_check():
                 await ping_timeout
                 print(
-                    "worker process is not responding.. worker crashed??",
+                    "worker process is not responding.. worker crashed?",
                     file=sys.stderr,
                 )
 

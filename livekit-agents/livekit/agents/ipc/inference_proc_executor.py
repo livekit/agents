@@ -11,13 +11,12 @@ from multiprocessing.context import BaseContext
 from typing import Any
 
 from .. import utils
+from ..inference_runner import _InferenceRunner
 from ..log import logger
 from ..utils.aio import duplex_unix
 from . import channel, inference_proc_lazy_main, proto
-from .log_queue import LogQueueListener
-
-from ..inference_runner import _InferenceRunner
 from .inference_executor import InferenceExecutor, _InferenceRunnerClient
+from .log_queue import LogQueueListener
 
 
 @dataclass

@@ -5,9 +5,9 @@ import string
 
 import numpy as np
 from livekit.agents import llm
-from livekit.agents.job import get_current_job_context
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
+from livekit.agents.job import get_current_job_context
 
 HG_MODEL = "livekit/opt-125m-endpoint-detector"
 PUNCS = string.punctuation.replace("'", "")

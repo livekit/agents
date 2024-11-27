@@ -8,7 +8,7 @@ from .. import utils
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
-from . import job_proc_executor, job_thread_executor, inference_executor
+from . import inference_executor, job_proc_executor, job_thread_executor
 from .job_executor import JobExecutor
 
 EventTypes = Literal[

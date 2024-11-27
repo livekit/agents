@@ -1095,7 +1095,7 @@ class _DeferredReplyValidation:
         return self._validating_task is not None and not self._validating_task.done()
 
     def on_human_final_transcript(self, transcript: str) -> None:
-        self._last_final_transcript += (" " + transcript.strip())  # type: ignore
+        self._last_final_transcript += " " + transcript.strip()  # type: ignore
 
         if self._speaking:
             return

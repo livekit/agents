@@ -17,6 +17,7 @@ if current_process().name == "inference_proc":
 
 
 import asyncio
+import logging
 import socket
 from dataclasses import dataclass
 
@@ -25,6 +26,7 @@ from ..log import logger
 from ..utils import aio, log_exceptions
 from . import proto
 from .channel import Message
+from .log_queue import LogQueueHandler
 from .proc_client import _ProcClient
 
 
@@ -37,12 +39,6 @@ class ProcStartArgs:
 
 
 def proc_main(args: ProcStartArgs) -> None:
-    import logging
-
-    from ..log import logger
-    from ..utils import aio
-    from .log_queue import LogQueueHandler
-
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.NOTSET)
 
@@ -63,9 +59,9 @@ def proc_main(args: ProcStartArgs) -> None:
         )
 
         pid = current_process().pid
-        logger.info("initializing process", extra={"pid": pid})
+        logger.info("initializing inference process", extra={"pid": pid})
         client.initialize()
-        logger.info("process initialized", extra={"pid": pid})
+        logger.info("inference process initialized", extra={"pid": pid})
 
         client.run()
     finally:
