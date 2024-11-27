@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from enum import Enum
 import os
 from dataclasses import dataclass
 from typing import Any, List, Literal
@@ -63,8 +62,8 @@ ACCEPT_HEADER = {
 API_BASE_URL_V2 = "https://api.play.ht/api/v2"
 AUTHORIZATION_HEADER = "AUTHORIZATION"
 USERID_HEADER = "X-USER-ID"
-PLAYHT_TTS_SAMPLE_RATE = TTSSampleRate.SR_24000
 PLAYHT_TTS_CHANNELS = 1
+PLAYHT_TTS_SAMPLE_RATE = TTSSampleRate.SR_24000
 
 _TTSEncoding = Literal["mp3", "wav", "ogg", "flac", "mulaw"]
 
