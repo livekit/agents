@@ -276,6 +276,10 @@ class STT(stt.STT):
         return config
 
 
+class ReconnectRequired(Exception):
+    pass
+
+
 class SpeechStream(stt.SpeechStream):
     _KEEPALIVE_MSG: str = json.dumps({"type": "KeepAlive"})
     _CLOSE_MSG: str = json.dumps({"type": "CloseStream"})
@@ -328,39 +332,30 @@ class SpeechStream(stt.SpeechStream):
         self._options_update_event.set()
 
     async def _run(self) -> None:
-        while not self._closed:
-            self._closing_ws = False
-            ws: aiohttp.ClientWebSocketResponse | None = None
+        self._closing_ws = False
+        ws: aiohttp.ClientWebSocketResponse | None = None
+
+        try:
+            ws = await self._connect_ws()
+
+            tasks = [
+                asyncio.create_task(self._send_task(ws)),
+                asyncio.create_task(self._recv_task(ws)),
+                asyncio.create_task(self._keepalive_task(ws)),
+            ]
 
             try:
-                ws = await self._connect_ws()
-
-                tasks = [
-                    asyncio.create_task(self._send_task(ws)),
-                    asyncio.create_task(self._recv_task(ws)),
-                    asyncio.create_task(self._keepalive_task(ws)),
-                    asyncio.create_task(self._wait_for_reconnect()),
-                ]
-
-                done, pending = await asyncio.wait(
-                    tasks,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-
-                if self._reconnect_needed:
-                    self._reconnect_needed = False
-                    self._options_update_event.clear()
-                    await utils.aio.gracefully_cancel(*pending)
-                    if ws is not None:
-                        await ws.close()
-                    continue
-                else:
-                    self._closed = True
-                    break
-
+                await asyncio.gather(*tasks)
+            # except ReconnectRequired:
+            #     logger.info("Reconnection requested.")
+            #     await utils.aio.gracefully_cancel(*tasks)
+            #     await ws.close()
             finally:
-                if ws is not None:
-                    await ws.close()
+                await utils.aio.gracefully_cancel(*tasks)
+
+        finally:
+            if ws is not None:
+                await ws.close()
 
     async def _keepalive_task(self, ws: aiohttp.ClientWebSocketResponse):
         # if we want to keep the connection alive even if no audio is sent,
@@ -446,6 +441,9 @@ class SpeechStream(stt.SpeechStream):
 
     async def _wait_for_reconnect(self):
         await self._options_update_event.wait()
+        if not self._closed:
+            self._options_update_event.clear()
+            raise ReconnectRequired()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config = {
