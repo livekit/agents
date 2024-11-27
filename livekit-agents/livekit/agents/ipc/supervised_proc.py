@@ -151,7 +151,15 @@ class SupervisedProc(ABC):
     async def initialize(self) -> None:
         """initialize the process, this is sending a InitializeRequest message and waiting for a
         InitializeResponse with a timeout"""
-        await channel.asend_message(self._pch, proto.InitializeRequest())
+        await channel.asend_message(
+            self._pch,
+            proto.InitializeRequest(
+                asyncio_debug=self._loop.get_debug(),
+                ping_interval=self._opts.ping_interval,
+                ping_timeout=self._opts.ping_timeout,
+                high_ping_threshold=self._opts.high_ping_threshold,
+            ),
+        )
 
         # wait for the process to become ready
         try:

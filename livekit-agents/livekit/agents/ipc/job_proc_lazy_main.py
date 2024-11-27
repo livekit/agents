@@ -80,7 +80,7 @@ class _InfClient(InferenceExecutor):
         self._active_requests: dict[str, asyncio.Future[InferenceResponse]] = {}
 
     async def do_inference(self, method: str, data: bytes) -> bytes | None:
-        request_id = shortuuid("inference_")
+        request_id = shortuuid("inference_job_")
         fut = asyncio.Future[InferenceResponse]()
 
         await self._client.send(
