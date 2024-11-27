@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from enum import Enum
 import os
 from dataclasses import dataclass
 from typing import Any, List, Literal
@@ -17,7 +18,7 @@ from livekit.agents import (
 )
 
 from .log import logger
-from .models import TTSEncoding, TTSEngines
+from .models import TTSEncoding, TTSEngines, TTSSampleRate
 
 _Encoding = Literal["mp3", "pcm"]
 
@@ -62,7 +63,7 @@ ACCEPT_HEADER = {
 API_BASE_URL_V2 = "https://api.play.ht/api/v2"
 AUTHORIZATION_HEADER = "AUTHORIZATION"
 USERID_HEADER = "X-USER-ID"
-PLAYHT_TTS_SAMPLE_RATE = 48000
+PLAYHT_TTS_SAMPLE_RATE = TTSSampleRate.SR_24000
 PLAYHT_TTS_CHANNELS = 1
 
 _TTSEncoding = Literal["mp3", "wav", "ogg", "flac", "mulaw"]
@@ -87,13 +88,14 @@ class TTS(tts.TTS):
         user_id: str | None = None,
         base_url: str | None = None,
         encoding: _TTSEncoding = "wav",
+        sample_rate: TTSSampleRate = PLAYHT_TTS_SAMPLE_RATE,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
             ),
-            sample_rate=PLAYHT_TTS_SAMPLE_RATE,
+            sample_rate=int(sample_rate),
             num_channels=PLAYHT_TTS_CHANNELS,
         )
         api_key = api_key or os.environ.get("PLAYHT_API_KEY")
@@ -109,7 +111,7 @@ class TTS(tts.TTS):
             user_id=user_id,
             api_key=api_key,
             base_url=base_url or API_BASE_URL_V2,
-            sample_rate=PLAYHT_TTS_SAMPLE_RATE,
+            sample_rate=int(sample_rate),
             encoding=encoding,
         )
         self._session = http_session

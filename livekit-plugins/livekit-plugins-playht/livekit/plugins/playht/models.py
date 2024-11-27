@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Literal
 
 TTSEngines = Literal[
@@ -18,3 +19,19 @@ TTSEncoding = Literal[
     "pcm_22050",
     "pcm_44100",
 ]
+
+class TTSSampleRate(Enum):
+    SR_22050 = 22050
+    SR_24000 = 24000
+    SR_32000 = 32000
+    SR_44100 = 44100
+    SR_48000 = 48000
+
+    def __str__(self):
+        return str(self.value)
+
+    def __int__(self):
+        return self.value
+    
+    def __repr__(self):
+        return self.value
