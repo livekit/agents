@@ -335,6 +335,8 @@ class SpeechStream(stt.SpeechStream):
             logger.info("options updated, reconnection requested.")
 
     async def _run(self) -> None:
+        tasks = []
+        reconnect_wait_task = None
         while not self._closed:
             try:
                 await self._connect_ws()
@@ -379,11 +381,13 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.gather(reconnect_wait_task, return_exceptions=True)
             except Exception:
                 logger.exception("Error in SpeechStream _run method")
-                for task in tasks + [reconnect_wait_task]:
-                    task.cancel()
-                    await asyncio.gather(
-                        *tasks + [reconnect_wait_task], return_exceptions=True
-                    )
+                if tasks:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                if reconnect_wait_task:
+                    reconnect_wait_task.cancel()
+                    await asyncio.gather(reconnect_wait_task, return_exceptions=True)
                 break
 
         await self._cleanup()
@@ -418,7 +422,7 @@ class SpeechStream(stt.SpeechStream):
             try:
                 self._ws = await asyncio.wait_for(
                     self._session.ws_connect(
-                        _to_deepgram_url(live_config, websocket=True),
+                        _to_deepgram_url(live_config, self._base_url, websocket=True),
                         headers={"Authorization": f"Token {self._api_key}"},
                     ),
                     self._conn_options.timeout,
@@ -489,7 +493,10 @@ class SpeechStream(stt.SpeechStream):
             closing_ws = True
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
-        except asyncio.CancelledError:
+        except (
+            asyncio.CancelledError,
+            aiohttp.ClientConnectionError,
+        ):
             # Task was cancelled due to reconnection or closure
             pass
         except Exception:
@@ -549,7 +556,6 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.sleep(5)
         except (
             asyncio.CancelledError,
-            aiohttp.ClientConnectionError,
             aiohttp.ClientConnectionError,
         ):
             # Task was cancelled due to reconnection or closure
