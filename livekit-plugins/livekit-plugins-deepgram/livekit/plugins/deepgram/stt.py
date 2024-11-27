@@ -181,7 +181,7 @@ class STT(stt.STT):
             energy_filter=energy_filter,
         )
         self._session = http_session
-        self._active_streams: set[SpeechStream] = set()
+        self._active_stream: SpeechStream = None
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -256,18 +256,16 @@ class STT(stt.STT):
             http_session=self._ensure_session(),
             base_url=self._base_url,
         )
-        self._active_streams.add(stream)
-        return stream
+        self._active_stream = stream
+        return self._active_stream
 
     def remove_stream(self, stream: "SpeechStream") -> None:
-        """Remove a SpeechStream from the active streams set."""
-        self._active_streams.discard(stream)
+        self._active_stream = None
 
     def update_options(self, language: DeepgramLanguages | str | None) -> None:
         """Update the STT options and propagate changes to active streams."""
         self._opts.language = language or self._opts.language
-        for stream in self._active_streams:
-            asyncio.create_task(stream.update_options(language=language))
+        asyncio.create_task(self._active_stream.update_options(language=language))
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
@@ -324,15 +322,12 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._closed = False
         self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
-        self._ws_lock = asyncio.Lock()
         self._stt: STT = stt
-        self._stt._active_streams.add(self)
 
     async def update_options(self, language: DeepgramLanguages | str | None) -> None:
-        async with self._ws_lock:
-            self._opts.language = language or self._opts.language
-            self._reconnect_event.set()
-            logger.info("options updated, reconnection requested.")
+        self._opts.language = language or self._opts.language
+        self._reconnect_event.set()
+        logger.info("options updated, reconnection requested.")
 
     async def _run(self) -> None:
         tasks = []
@@ -362,8 +357,8 @@ class SpeechStream(stt.SpeechStream):
                     if self._ws and not self._ws.closed:
                         await self._ws.close()
                     self._ws = None
-
                     continue
+
                 if recv_task in done:
                     for task in tasks:
                         if task.done():
@@ -378,8 +373,9 @@ class SpeechStream(stt.SpeechStream):
                     reconnect_wait_task.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
                     break
+
                 if send_task in done:
-                    exc = task.exception()
+                    exc = send_task.exception()
                     if exc:
                         if isinstance(exc, Exception):
                             raise exc
@@ -388,6 +384,7 @@ class SpeechStream(stt.SpeechStream):
                     continue
                 reconnect_wait_task.cancel()
                 await asyncio.gather(reconnect_wait_task, return_exceptions=True)
+
             except Exception:
                 logger.exception("Error in SpeechStream _run method")
                 if tasks:
@@ -403,43 +400,42 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self):
         """Establish the websocket connection using the current options."""
-        async with self._ws_lock:
-            if self._ws and not self._ws.closed:
-                await self._ws.close()
+        if self._ws and not self._ws.closed:
+            await self._ws.close()
 
-            live_config = {
-                "model": self._opts.model,
-                "punctuate": self._opts.punctuate,
-                "smart_format": self._opts.smart_format,
-                "no_delay": self._opts.no_delay,
-                "interim_results": self._opts.interim_results,
-                "encoding": "linear16",
-                "vad_events": True,
-                "sample_rate": self._opts.sample_rate,
-                "channels": self._opts.num_channels,
-                "endpointing": False
-                if self._opts.endpointing_ms == 0
-                else self._opts.endpointing_ms,
-                "filler_words": self._opts.filler_words,
-                "keywords": self._opts.keywords,
-                "profanity_filter": self._opts.profanity_filter,
-            }
+        live_config = {
+            "model": self._opts.model,
+            "punctuate": self._opts.punctuate,
+            "smart_format": self._opts.smart_format,
+            "no_delay": self._opts.no_delay,
+            "interim_results": self._opts.interim_results,
+            "encoding": "linear16",
+            "vad_events": True,
+            "sample_rate": self._opts.sample_rate,
+            "channels": self._opts.num_channels,
+            "endpointing": False
+            if self._opts.endpointing_ms == 0
+            else self._opts.endpointing_ms,
+            "filler_words": self._opts.filler_words,
+            "keywords": self._opts.keywords,
+            "profanity_filter": self._opts.profanity_filter,
+        }
 
-            if self._opts.language:
-                live_config["language"] = self._opts.language
+        if self._opts.language:
+            live_config["language"] = self._opts.language
 
-            try:
-                self._ws = await asyncio.wait_for(
-                    self._session.ws_connect(
-                        _to_deepgram_url(live_config, self._base_url, websocket=True),
-                        headers={"Authorization": f"Token {self._api_key}"},
-                    ),
-                    self._conn_options.timeout,
-                )
-                logger.info("WebSocket connection established.")
-            except Exception as e:
-                logger.exception("Failed to establish WebSocket connection.")
-                raise APIConnectionError() from e
+        try:
+            self._ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    _to_deepgram_url(live_config, self._base_url, websocket=True),
+                    headers={"Authorization": f"Token {self._api_key}"},
+                ),
+                self._conn_options.timeout,
+            )
+            logger.info("WebSocket connection established.")
+        except Exception as e:
+            logger.exception("Failed to establish WebSocket connection.")
+            raise APIConnectionError() from e
 
     async def _send_task(self):
         """Task for sending audio data to the websocket."""
@@ -658,7 +654,6 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
         self._stt.remove_stream(self)
         await super().aclose()
-        await self._task
         await self._cleanup()
 
     async def _cleanup(self):
