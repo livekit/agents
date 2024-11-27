@@ -17,7 +17,6 @@ if current_process().name == "inference_proc":
 
 
 import asyncio
-import logging
 import socket
 from dataclasses import dataclass
 
@@ -26,7 +25,6 @@ from ..log import logger
 from ..utils import aio, log_exceptions
 from . import proto
 from .channel import Message
-from .log_queue import LogQueueHandler
 from .proc_client import _ProcClient
 
 
@@ -34,38 +32,27 @@ from .proc_client import _ProcClient
 class ProcStartArgs:
     log_cch: socket.socket
     mp_cch: socket.socket
-    asyncio_debug: bool
     runners: _RunnersDict
 
 
 def proc_main(args: ProcStartArgs) -> None:
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.NOTSET)
+    from .proc_client import _ProcClient
 
-    log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
-    log_handler = LogQueueHandler(log_cch)
-    root_logger.addHandler(log_handler)
+    inf_proc = _InferenceProc(args.runners)
 
-    try:
-        from .proc_client import _ProcClient
+    client = _ProcClient(
+        args.mp_cch,
+        args.log_cch,
+        inf_proc.initialize,
+        inf_proc.entrypoint,
+    )
 
-        inf_proc = _InferenceProc(args.runners)
+    pid = current_process().pid
+    logger.info("initializing inference process", extra={"pid": pid})
+    client.initialize()
+    logger.info("inference process initialized", extra={"pid": pid})
 
-        client = _ProcClient(
-            args.mp_cch,
-            inf_proc.initialize,
-            inf_proc.entrypoint,
-            args.asyncio_debug,
-        )
-
-        pid = current_process().pid
-        logger.info("initializing inference process", extra={"pid": pid})
-        client.initialize()
-        logger.info("inference process initialized", extra={"pid": pid})
-
-        client.run()
-    finally:
-        log_handler.close()
+    client.run()
 
 
 class _InferenceProc:

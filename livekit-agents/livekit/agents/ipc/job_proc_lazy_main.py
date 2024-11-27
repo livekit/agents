@@ -20,7 +20,6 @@ if current_process().name == "job_proc":
 
 import asyncio
 import contextlib
-import logging
 import socket
 import threading
 from dataclasses import dataclass
@@ -33,7 +32,6 @@ from ..log import logger
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
-from .log_queue import LogQueueHandler
 from .proc_client import _ProcClient
 from .proto import (
     Exiting,
@@ -51,40 +49,29 @@ class ProcStartArgs:
     job_entrypoint_fnc: Callable[[JobContext], Any]
     mp_cch: socket.socket
     log_cch: socket.socket
-    asyncio_debug: bool
     user_arguments: Any | None = None
 
 
 def proc_main(args: ProcStartArgs) -> None:
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.NOTSET)
+    from .proc_client import _ProcClient
 
-    log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
-    log_handler = LogQueueHandler(log_cch)
-    root_logger.addHandler(log_handler)
+    job_proc = _JobProc(
+        args.initialize_process_fnc, args.job_entrypoint_fnc, args.user_arguments
+    )
 
-    try:
-        from .proc_client import _ProcClient
+    client = _ProcClient(
+        args.mp_cch,
+        args.log_cch,
+        job_proc.initialize,
+        job_proc.entrypoint,
+    )
 
-        job_proc = _JobProc(
-            args.initialize_process_fnc, args.job_entrypoint_fnc, args.user_arguments
-        )
+    pid = current_process().pid
+    logger.info("initializing job process", extra={"pid": pid})
+    client.initialize()
+    logger.info("job process initialized", extra={"pid": pid})
 
-        client = _ProcClient(
-            args.mp_cch,
-            job_proc.initialize,
-            job_proc.entrypoint,
-            args.asyncio_debug,
-        )
-
-        pid = current_process().pid
-        logger.info("initializing job process", extra={"pid": pid})
-        client.initialize()
-        logger.info("job process initialized", extra={"pid": pid})
-
-        client.run()
-    finally:
-        log_handler.close()
+    client.run()
 
 
 class _InfClient(InferenceExecutor):
@@ -93,7 +80,7 @@ class _InfClient(InferenceExecutor):
         self._active_requests: dict[str, asyncio.Future[InferenceResponse]] = {}
 
     async def do_inference(self, method: str, data: bytes) -> bytes | None:
-        request_id = shortuuid("INF_")
+        request_id = shortuuid("inference_")
         fut = asyncio.Future[InferenceResponse]()
 
         await self._client.send(

@@ -9,17 +9,31 @@ from livekit.protocol import agent
 from ..job import JobAcceptArguments, RunningJobInfo
 from . import channel
 
-PING_INTERVAL = 2.5
-PING_TIMEOUT = 90
-HIGH_PING_THRESHOLD = 0.5
-NO_MESSAGE_TIMEOUT = 15.0
-
 
 @dataclass
 class InitializeRequest:
     """sent by the main process to the subprocess to initialize it. this is going to call initialize_process_fnc"""
 
     MSG_ID: ClassVar[int] = 0
+
+    asyncio_debug: bool = False
+    ping_interval: float = 0
+    ping_timeout: float = 0  # if no response, process is considered dead
+    high_ping_threshold: float = (
+        0  # if ping is higher than this, process is considered unresponsive
+    )
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_bool(b, self.asyncio_debug)
+        channel.write_float(b, self.ping_interval)
+        channel.write_float(b, self.ping_timeout)
+        channel.write_float(b, self.high_ping_threshold)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.asyncio_debug = channel.read_bool(b)
+        self.ping_interval = channel.read_float(b)
+        self.ping_timeout = channel.read_float(b)
+        self.high_ping_threshold = channel.read_float(b)
 
 
 @dataclass

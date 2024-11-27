@@ -1,42 +1,65 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
+import logging
 import socket
 import sys
 from typing import Callable, Coroutine
 
 from ..log import logger
 from ..utils import aio, log_exceptions, time_ms
-from . import proto
 from .channel import Message, arecv_message, asend_message, recv_message, send_message
+from .log_queue import LogQueueHandler
+from .proto import (
+    IPC_MESSAGES,
+    InitializeRequest,
+    InitializeResponse,
+    PingRequest,
+    PongResponse,
+)
 
 
 class _ProcClient:
     def __init__(
         self,
         mp_cch: socket.socket,
-        initialize_fnc: Callable[[proto.InitializeRequest, "_ProcClient"], None],
-        entrypoint_fnc: Callable[
+        log_cch: socket.socket | None,
+        initialize_fnc: Callable[[InitializeRequest, "_ProcClient"], None],
+        main_task_fnc: Callable[
             [aio.ChanReceiver[Message]], Coroutine[None, None, None]
         ],
-        asyncio_debug: bool,
     ) -> None:
         self._mp_cch = mp_cch
-        self._asyncio_debug = asyncio_debug
+        self._log_cch = log_cch
         self._initialize_fnc = initialize_fnc
-        self._entrypoint_fnc = entrypoint_fnc
+        self._main_task_fnc = main_task_fnc
         self._initialized = False
+        self._log_handler: LogQueueHandler | None = None
+
+    def initialize_logger(self) -> None:
+        if self._log_cch is None:
+            raise RuntimeError("cannot initialize logger without log channel")
+
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.NOTSET)
+
+        log_cch = aio.duplex_unix._Duplex.open(self._log_cch)
+        self._log_handler = LogQueueHandler(log_cch)
+        root_logger.addHandler(self._log_handler)
 
     def initialize(self) -> None:
         try:
             cch = aio.duplex_unix._Duplex.open(self._mp_cch)
-            self._init_req = recv_message(cch, proto.IPC_MESSAGES)
+            first_req = recv_message(cch, IPC_MESSAGES)
 
             assert isinstance(
-                self._init_req, proto.InitializeRequest
+                first_req, InitializeRequest
             ), "first message must be proto.InitializeRequest"
 
+            self._init_req = first_req
             self._initialize_fnc(self._init_req, self)
-            send_message(cch, proto.InitializeResponse())
+            send_message(cch, InitializeResponse())
             self._initialized = True
             cch.detach()
         except aio.duplex_unix.DuplexClosed as e:
@@ -48,12 +71,12 @@ class _ProcClient:
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.set_debug(self._asyncio_debug)
+        loop.set_debug(self._init_req.asyncio_debug)
         loop.slow_callback_duration = 0.1  # 100ms
         aio.debug.hook_slow_callbacks(2.0)
 
         try:
-            self._task = loop.create_task(self._main_task(), name="proc_client_main")
+            self._task = loop.create_task(self._monitor_task(), name="proc_client_main")
             while not self._task.done():
                 try:
                     loop.run_until_complete(self._task)
@@ -64,16 +87,19 @@ class _ProcClient:
         except KeyboardInterrupt:
             pass
         finally:
+            if self._log_handler is not None:
+                self._log_handler.close()
+
             loop.run_until_complete(loop.shutdown_default_executor())
 
     async def send(self, msg: Message) -> None:
         await asend_message(self._acch, msg)
 
-    async def _main_task(self) -> None:
+    async def _monitor_task(self) -> None:
         self._acch = await aio.duplex_unix._AsyncDuplex.open(self._mp_cch)
         try:
             exit_flag = asyncio.Event()
-            ping_timeout = aio.sleep(proto.PING_INTERVAL * 5)
+            ping_timeout = aio.sleep(self._init_req.ping_timeout)
 
             ipc_ch = aio.Chan[Message]()
 
@@ -81,17 +107,17 @@ class _ProcClient:
             async def _read_ipc_task():
                 while True:
                     try:
-                        msg = await arecv_message(self._acch, proto.IPC_MESSAGES)
+                        msg = await arecv_message(self._acch, IPC_MESSAGES)
                     except aio.duplex_unix.DuplexClosed:
                         break
 
                     with contextlib.suppress(aio.SleepFinished):
                         ping_timeout.reset()
 
-                    if isinstance(msg, proto.PingRequest):
+                    if isinstance(msg, PingRequest):
                         await asend_message(
                             self._acch,
-                            proto.PongResponse(
+                            PongResponse(
                                 last_timestamp=msg.timestamp, timestamp=time_ms()
                             ),
                         )
@@ -109,8 +135,8 @@ class _ProcClient:
             health_check_task = asyncio.create_task(
                 _self_health_check(), name="health_check"
             )
-            entrypoint_task = asyncio.create_task(
-                self._entrypoint_fnc(ipc_ch), name="entrypoint"
+            main_task = asyncio.create_task(
+                self._main_task_fnc(ipc_ch), name="main_task_entrypoint"
             )
 
             def _done_cb(_: asyncio.Task) -> None:
@@ -121,9 +147,9 @@ class _ProcClient:
 
             read_task.add_done_callback(_done_cb)
             health_check_task.add_done_callback(_done_cb)
-            entrypoint_task.add_done_callback(_done_cb)
+            main_task.add_done_callback(_done_cb)
 
             await exit_flag.wait()
-            await aio.gracefully_cancel(read_task, health_check_task, entrypoint_task)
+            await aio.gracefully_cancel(read_task, health_check_task, main_task)
         finally:
             await self._acch.aclose()
