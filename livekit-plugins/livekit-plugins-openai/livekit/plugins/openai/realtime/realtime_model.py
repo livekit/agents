@@ -731,10 +731,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         self._fnc_tasks = utils.aio.TaskSet()
         
+        self._is_recovering = False
         # Handle session expiration by notifying the model to renew
         self.on("session_expired", lambda: self._loop.create_task(self.renew_session()))
 
     async def renew_session(self):
+        logger.info("attempting to renew session")
         await self.aclose()
         
         self._main_atask = asyncio.create_task(
@@ -750,7 +752,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._remote_converstation_items = remote_items._RemoteConversationItems()
         await self.set_chat_ctx(chat_ctx)
         
-        logger.info("Synchronized chat history")
+        self._is_recovering = False
+        logger.info("session renewed successfully")
     
     async def aclose(self) -> None:
         if self._send_ch.closed:
@@ -1015,7 +1018,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                         return
 
                     # Attempt to recover.
-                    self.emit("session_expired")
+                    if not self._is_recovering:
+                        self._is_recovering = True
+                        self.emit("session_expired")
                     return
                     # raise Exception("OpenAI S2S connection closed unexpectedly")
 
@@ -1103,6 +1108,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
     def _handle_error(self, error: api_proto.ServerEvent.Error):
         if error["error"]["code"] == "session_expired":
+            self._is_recovering = True
             logger.warning("session expired.")
             self.emit("session_expired")
         logger.error(
