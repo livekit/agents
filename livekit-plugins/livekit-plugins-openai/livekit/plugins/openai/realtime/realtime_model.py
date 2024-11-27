@@ -900,14 +900,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         # First delete all items that need to be removed
         for msg in changes.to_delete:
-            self.conversation.item.delete(item_id=msg.id)
+            await self.conversation.item.delete(item_id=msg.id)
 
         # Then create new items in order
         for prev, msg in changes.to_add:
-            self.conversation.item.create(msg, prev.id if prev else None)
+            await self.conversation.item.create(msg, prev.id if prev else None)
 
-        # wait for all the futures to complete
-        # await asyncio.gather(*_futs)
 
     def _create_empty_user_audio_message(self, duration: float) -> llm.ChatMessage:
         """Create an empty audio message with the given duration."""
