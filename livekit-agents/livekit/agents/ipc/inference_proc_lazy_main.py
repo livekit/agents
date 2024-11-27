@@ -47,6 +47,8 @@ def proc_main(args: ProcStartArgs) -> None:
         inf_proc.entrypoint,
     )
 
+    client.initialize_logger()
+
     pid = current_process().pid
     logger.info("initializing inference process", extra={"pid": pid})
     client.initialize()
