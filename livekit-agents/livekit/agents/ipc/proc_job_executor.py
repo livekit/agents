@@ -446,7 +446,7 @@ class ProcJobExecutor:
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                 logger.warning(
                     "Failed to get memory info for process",
-                    extra={"error": str(e), **self.logging_extra()},
+                    extra=self.logging_extra(), exc_info=e,
                 )
             except Exception as e:
                 if self._closing or self._kill_sent:
@@ -454,7 +454,7 @@ class ProcJobExecutor:
 
                 logger.exception(
                     "Error in memory monitoring task",
-                    extra={"error": str(e), **self.logging_extra()},
+                    extra=self.logging_extra(),
                 )
 
             await asyncio.sleep(5)  # Check every 5 seconds
