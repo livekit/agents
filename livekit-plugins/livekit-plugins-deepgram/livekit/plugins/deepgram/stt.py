@@ -257,14 +257,9 @@ class STT(stt.STT):
         )
         return self._active_speech_stream
 
-    async def update_options(self, **kwargs):
-        for key, value in kwargs.items():
-            if hasattr(self._opts, key):
-                setattr(self._opts, key, value)
-            else:
-                raise AttributeError(f"Invalid option: {key}")
-        if self._active_speech_stream is not None:
-            await self._active_speech_stream.update_options(self._opts)
+    async def update_options(self, language: str | None = None):
+        if self._active_speech_stream is not None and language is not None:
+            await self._active_speech_stream.update_options(language)
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
@@ -320,8 +315,8 @@ class SpeechStream(stt.SpeechStream):
 
         self._ws: aiohttp.ClientWebSocketResponse | None = None
 
-    async def update_options(self, opts: STTOptions):
-        self._opts = opts
+    async def update_options(self, language: str | None = None):
+        self._opts.language = language or self._opts.language
         await self._connect_ws()
 
     async def _run(self) -> None:
@@ -426,10 +421,7 @@ class SpeechStream(stt.SpeechStream):
             except Exception:
                 logger.exception("failed to process deepgram message")
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        if self._ws is not None:
-            await self._ws.close()
-            self._ws = None
+    async def _connect_ws(self):
         live_config = {
             "model": self._opts.model,
             "punctuate": self._opts.punctuate,
