@@ -882,25 +882,25 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             if interrupted:
                 collected_text += "..."
+            if collected_text:
+                msg = ChatMessage.create(text=collected_text, role="assistant")
+                self._chat_ctx.messages.append(msg)
 
-            msg = ChatMessage.create(text=collected_text, role="assistant")
-            self._chat_ctx.messages.append(msg)
+                speech_handle.mark_speech_committed()
 
-            speech_handle.mark_speech_committed()
+                if interrupted:
+                    self.emit("agent_speech_interrupted", msg)
+                else:
+                    self.emit("agent_speech_committed", msg)
 
-            if interrupted:
-                self.emit("agent_speech_interrupted", msg)
-            else:
-                self.emit("agent_speech_committed", msg)
-
-            logger.debug(
-                "committed agent speech",
-                extra={
-                    "agent_transcript": collected_text,
-                    "interrupted": interrupted,
-                    "speech_id": speech_handle.id,
-                },
-            )
+                logger.debug(
+                    "committed agent speech",
+                    extra={
+                        "agent_transcript": collected_text,
+                        "interrupted": interrupted,
+                        "speech_id": speech_handle.id,
+                    },
+                )
 
         # mark the speech as done
         speech_handle._set_done()
