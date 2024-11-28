@@ -312,12 +312,12 @@ class SpeechStream(stt.SpeechStream):
 
         self._pushed_audio_duration = 0.0
         self._request_id = ""
-
+        self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     async def update_options(self, language: str | None = None):
         self._opts.language = language or self._opts.language
-        await self._connect_ws()
+        self._reconnect_event.set()
 
     async def _run(self) -> None:
         self._closing_ws = False
@@ -325,13 +325,27 @@ class SpeechStream(stt.SpeechStream):
             await self._connect_ws()
 
             tasks = [
-                asyncio.create_task(self._send_task()),
-                asyncio.create_task(self._recv_task()),
-                asyncio.create_task(self._keepalive_task()),
+                asyncio.create_task(self._send_task(), name="send_task"),
+                asyncio.create_task(self._recv_task(), name="recv_task"),
+                asyncio.create_task(self._keepalive_task(), name="keepalive_task"),
             ]
 
             try:
-                await asyncio.gather(*tasks)
+                while True:
+                    done, pending = await asyncio.wait(
+                        [
+                            asyncio.gather(*tasks),
+                            asyncio.create_task(
+                                self._reconnect_event.wait(), name="reconnect"
+                            ),
+                        ],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if self._reconnect_event.is_set():
+                        self._reconnect_event.clear()
+                        await self._connect_ws()
+                    else:
+                        break
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
 
