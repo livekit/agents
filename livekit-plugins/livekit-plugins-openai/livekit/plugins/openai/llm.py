@@ -43,6 +43,7 @@ from .models import (
     ChatModels,
     DeepSeekChatModels,
     GroqChatModels,
+    MistralChatModels,
     OctoChatModels,
     PerplexityChatModels,
     TelnyxChatModels,
@@ -86,7 +87,10 @@ class LLM(llm.LLM):
         ``OPENAI_API_KEY`` environmental variable.
         """
         super().__init__()
-        self._capabilities = llm.LLMCapabilities(supports_choices_on_int=True)
+        self._capabilities = llm.LLMCapabilities(
+            supports_choices_on_int=True,
+            supports_stream_options=True,
+        )
 
         self._opts = LLMOptions(
             model=model,
@@ -199,6 +203,42 @@ class LLM(llm.LLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
         )
+
+    @staticmethod
+    def with_mistral(
+        *,
+        model: str | MistralChatModels = "mistral-large-latest",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.mistral.ai/v1",
+        user: str | None = None,
+        temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+    ) -> LLM:
+        """
+        Create a new instance of Mistral LLM.
+
+        ``api_key`` must be set to your Mistral API key, either using the argument or by setting
+        the ``MISTRAL_API_KEY`` environmental variable.
+        """
+
+        api_key = api_key or os.environ.get("MISTRAL_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "Mistral API key is required, either as argument or set MISTRAL_API_KEY environmental variable"
+            )
+
+        mistral_llm = LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+        mistral_llm._capabilities = llm.LLMCapabilities(supports_stream_options=False)
+        return mistral_llm
 
     @staticmethod
     def with_vertex(
@@ -650,9 +690,40 @@ class LLM(llm.LLM):
 
         if tool_choice is None:
             tool_choice = self._opts.tool_choice
+        opts: dict[str, Any] = dict()
+        if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
+            fncs_desc = []
+            for fnc in fnc_ctx.ai_functions.values():
+                fncs_desc.append(build_oai_function_description(fnc, self.capabilities))
 
+            opts["tools"] = fncs_desc
+
+            if fnc_ctx and parallel_tool_calls is not None:
+                opts["parallel_tool_calls"] = parallel_tool_calls
+            if tool_choice is not None:
+                if isinstance(tool_choice, ToolChoice):
+                    opts["tool_choice"] = {
+                        "type": "function",
+                        "function": {"name": tool_choice.name},
+                    }
+                else:
+                    opts["tool_choice"] = tool_choice
+
+        user = self._opts.user or openai.NOT_GIVEN
         if temperature is None:
             temperature = self._opts.temperature
+
+        messages = _build_oai_context(chat_ctx, id(self))
+
+        cmp = self._client.chat.completions.create(
+            messages=messages,
+            model=self._opts.model,
+            n=n,
+            temperature=temperature,
+            stream=True,
+            user=user,
+            **opts,
+        )
 
         return LLMStream(
             self,

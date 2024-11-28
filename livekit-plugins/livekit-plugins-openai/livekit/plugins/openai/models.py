@@ -37,6 +37,17 @@ AssistantTools = Literal["code_interpreter", "file_search", "function"]
 
 # adapters for OpenAI-compatible LLMs
 
+MistralChatModels = Literal[
+    "mistral-large-latest",
+    "ministral-3b-latest",
+    "ministral-8b-latest",
+    "mistral-small-latest",
+    "mistral-large-2411",
+    "ministral-3b-2410",
+    "ministral-8b-2410",
+    "mistral-small-2409",
+]
+
 TelnyxChatModels = Literal[
     "meta-llama/Meta-Llama-3.1-8B-Instruct",
     "meta-llama/Meta-Llama-3.1-70B-Instruct",

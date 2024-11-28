@@ -50,6 +50,7 @@ class Choice:
 @dataclass
 class LLMCapabilities:
     supports_choices_on_int: bool = True
+    supports_stream_options: bool = True
 
 
 @dataclass
