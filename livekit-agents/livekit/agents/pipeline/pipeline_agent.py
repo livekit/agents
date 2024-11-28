@@ -882,6 +882,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             if interrupted:
                 collected_text += "..."
+
             if collected_text:
                 msg = ChatMessage.create(text=collected_text, role="assistant")
                 self._chat_ctx.messages.append(msg)
