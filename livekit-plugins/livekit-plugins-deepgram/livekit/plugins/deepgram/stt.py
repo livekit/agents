@@ -332,7 +332,7 @@ class SpeechStream(stt.SpeechStream):
 
             try:
                 while True:
-                    done, pending = await asyncio.wait(
+                    await asyncio.wait(
                         [
                             asyncio.gather(*tasks),
                             asyncio.create_task(
