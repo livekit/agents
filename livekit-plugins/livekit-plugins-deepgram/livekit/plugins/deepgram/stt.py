@@ -412,44 +412,14 @@ class SpeechStream(stt.SpeechStream):
         ws: aiohttp.ClientWebSocketResponse | None = None
 
         try:
-            while True:
-                live_config = {
-                    "model": self._opts.model,
-                    "punctuate": self._opts.punctuate,
-                    "smart_format": self._opts.smart_format,
-                    "no_delay": self._opts.no_delay,
-                    "interim_results": self._opts.interim_results,
-                    "encoding": "linear16",
-                    "vad_events": True,
-                    "sample_rate": self._opts.sample_rate,
-                    "channels": self._opts.num_channels,
-                    "endpointing": False
-                    if self._opts.endpointing_ms == 0
-                    else self._opts.endpointing_ms,
-                    "filler_words": self._opts.filler_words,
-                    "keywords": self._opts.keywords,
-                    "profanity_filter": self._opts.profanity_filter,
-                }
-
-                if self._opts.language:
-                    live_config["language"] = self._opts.language
-
-                ws = await asyncio.wait_for(
-                    self._session.ws_connect(
-                        _to_deepgram_url(
-                            live_config, base_url=self._base_url, websocket=True
-                        ),
-                        headers={"Authorization": f"Token {self._api_key}"},
-                    ),
-                    self._conn_options.timeout,
-                )
-
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                    asyncio.create_task(keepalive_task(ws)),
-                ]
-                try:
+            ws = await self._connect_ws()
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+                asyncio.create_task(keepalive_task(ws)),
+            ]
+            try:
+                while True:
                     await asyncio.wait(
                         [
                             asyncio.gather(*tasks),
@@ -461,14 +431,45 @@ class SpeechStream(stt.SpeechStream):
                     )
                     if self._reconnect_event.is_set():
                         self._reconnect_event.clear()
-                        continue
+                        ws = await self._connect_ws()
                     else:
                         break
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks)
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
         finally:
             if ws is not None:
                 await ws.close()
+
+    async def _connect_ws(self):
+        live_config = {
+            "model": self._opts.model,
+            "punctuate": self._opts.punctuate,
+            "smart_format": self._opts.smart_format,
+            "no_delay": self._opts.no_delay,
+            "interim_results": self._opts.interim_results,
+            "encoding": "linear16",
+            "vad_events": True,
+            "sample_rate": self._opts.sample_rate,
+            "channels": self._opts.num_channels,
+            "endpointing": False
+            if self._opts.endpointing_ms == 0
+            else self._opts.endpointing_ms,
+            "filler_words": self._opts.filler_words,
+            "keywords": self._opts.keywords,
+            "profanity_filter": self._opts.profanity_filter,
+        }
+
+        if self._opts.language:
+            live_config["language"] = self._opts.language
+
+        ws = await asyncio.wait_for(
+            self._session.ws_connect(
+                _to_deepgram_url(live_config, base_url=self._base_url, websocket=True),
+                headers={"Authorization": f"Token {self._api_key}"},
+            ),
+            self._conn_options.timeout,
+        )
+        return ws
 
     def _check_energy_state(self, frame: rtc.AudioFrame) -> AudioEnergyFilter.State:
         if self._audio_energy_filter:
