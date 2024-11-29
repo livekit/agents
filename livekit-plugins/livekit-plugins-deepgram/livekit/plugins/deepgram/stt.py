@@ -440,7 +440,7 @@ class SpeechStream(stt.SpeechStream):
             if ws is not None:
                 await ws.close()
 
-    async def _connect_ws(self):
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config = {
             "model": self._opts.model,
             "punctuate": self._opts.punctuate,
