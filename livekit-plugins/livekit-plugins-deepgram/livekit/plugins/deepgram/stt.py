@@ -313,7 +313,6 @@ class SpeechStream(stt.SpeechStream):
         self._pushed_audio_duration = 0.0
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     def update_options(self, language: str | None = None):
         self._opts.language = language or self._opts.language
