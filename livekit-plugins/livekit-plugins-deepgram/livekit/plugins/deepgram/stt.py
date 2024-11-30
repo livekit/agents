@@ -427,8 +427,8 @@ class SpeechStream(stt.SpeechStream):
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
-        try:
-            while True:
+        while True:
+            try:
                 ws = await self._connect_ws()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
@@ -437,24 +437,20 @@ class SpeechStream(stt.SpeechStream):
                 ]
                 reconnect_task = asyncio.create_task(_wait_for_reconnect())
                 try:
-                    await asyncio.wait(
+                    done, _ = await asyncio.wait(
                         [asyncio.gather(*tasks), reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
-                    if self._reconnect_event.is_set():
+                    if reconnect_task in done and self._reconnect_event.is_set():
                         self._reconnect_event.clear()
-                        await utils.aio.gracefully_cancel(*tasks)
-                        await ws.close()
                         continue
                     else:
-                        await utils.aio.gracefully_cancel(*tasks)
-                        await utils.aio.gracefully_cancel(reconnect_task)
                         break
                 finally:
-                    await utils.aio.gracefully_cancel(*tasks)
-        finally:
-            if ws is not None:
-                await ws.close()
+                    await utils.aio.gracefully_cancel(*tasks, reconnect_task)
+            finally:
+                if ws is not None:
+                    await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config = {
