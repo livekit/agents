@@ -56,6 +56,7 @@ EventTypes = Literal[
     "function_calls_collected",
     "function_calls_finished",
     "metrics_collected",
+    "error_message_collected",
 ]
 
 _CallContextVar = contextvars.ContextVar["AgentCallContext"](
@@ -929,6 +930,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         continue
 
                     yield content
+
+            except Exception as e:
+                self.emit("error_message_collected", e)
             finally:
                 await stream.aclose()
 
