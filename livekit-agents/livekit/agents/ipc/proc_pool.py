@@ -34,6 +34,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         job_executor_type: JobExecutorType,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
+        job_memory_warn_mb: float = 0,
+        job_memory_limit_mb: float = 0,
     ) -> None:
         super().__init__()
         self._job_executor_type = job_executor_type
@@ -43,7 +45,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._close_timeout = close_timeout
         self._initialize_timeout = initialize_timeout
         self._loop = loop
-
+        self._job_memory_limit_mb = job_memory_limit_mb
+        self._job_memory_warn_mb = job_memory_warn_mb
         self._num_idle_processes = num_idle_processes
         self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
         self._proc_needed_sem = asyncio.Semaphore(num_idle_processes)
@@ -110,6 +113,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 close_timeout=self._close_timeout,
                 mp_ctx=self._mp_ctx,
                 loop=self._loop,
+                job_memory_warn_mb=self._job_memory_warn_mb,
+                job_memory_limit_mb=self._job_memory_limit_mb,
             )
         else:
             raise ValueError(f"unsupported job executor: {self._job_executor_type}")
