@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from dotenv import load_dotenv
@@ -13,7 +12,7 @@ from livekit.agents import (
     tts,
 )
 from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import deepgram, openai, silero, cartesia
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 load_dotenv()
 logger = logging.getLogger("fallback-adapter-example")
@@ -48,11 +47,11 @@ async def entrypoint(ctx: JobContext):
         ]
     )
 
-    # fallback to Cartesia if OpenAI goes down
+    # fallback to OpenAI if Cartesia goes down
     fallback_tts = tts.FallbackAdapter(
         [
-            openai.TTS(),
             cartesia.TTS(),
+            openai.TTS(),
         ]
     )
 
