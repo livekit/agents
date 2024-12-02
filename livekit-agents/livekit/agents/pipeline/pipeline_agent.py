@@ -282,7 +282,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self._validate_reply_if_possible,
             self._opts.min_endpointing_delay,
             eou=self._eou,
-            chat_ctx=self._chat_ctx,
+            agent=self,
         )
 
         self._speech_q: list[SpeechHandle] = []
@@ -1077,7 +1077,7 @@ class _DeferredReplyValidation:
         validate_fnc: Callable[[], None],
         min_endpointing_delay: float,
         eou: _EOUModel | None,
-        chat_ctx: ChatContext,
+        agent: VoicePipelineAgent,
     ) -> None:
         self._eou = eou
         self._validate_fnc = validate_fnc
@@ -1086,7 +1086,7 @@ class _DeferredReplyValidation:
         self._last_recv_end_of_speech_time: float = 0.0
         self._speaking = False
 
-        self._chat_ctx = chat_ctx
+        self._agent = agent
         self._end_of_speech_delay = min_endpointing_delay
         self._final_transcript_delay = min_endpointing_delay
 
@@ -1145,9 +1145,9 @@ class _DeferredReplyValidation:
         self._last_recv_end_of_speech_time = 0.0
 
     def _run(self, delay: float) -> None:
-        detect_ctx = self._chat_ctx.copy()
+        detect_ctx = self._agent._chat_ctx.copy()
         detect_ctx.messages.append(
-            ChatMessage.create(text=self._last_final_transcript, role="user")
+            ChatMessage.create(text=self._agent._transcribed_text, role="user")
         )
 
         @utils.log_exceptions(logger=logger)
