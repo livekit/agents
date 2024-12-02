@@ -250,9 +250,46 @@ class STT(stt.STT):
         )
         return self._active_speech_stream
 
-    def update_options(self, language: str | None = None):
-        if self._active_speech_stream is not None and language is not None:
-            self._active_speech_stream.update_options(language)
+    def update_options(
+        self,
+        *,
+        languages: LanguageCode | None = None,
+        detect_language: bool | None = None,
+        interim_results: bool | None = None,
+        punctuate: bool | None = None,
+        spoken_punctuation: bool | None = None,
+        model: SpeechModels | None = None,
+        location: str | None = None,
+        keywords: List[tuple[str, float]] | None = None,
+    ):
+        if languages is not None:
+            if isinstance(languages, str):
+                languages = [languages]
+            self._config.languages = languages
+        if detect_language is not None:
+            self._config.detect_language = detect_language
+        if interim_results is not None:
+            self._config.interim_results = interim_results
+        if punctuate is not None:
+            self._config.punctuate = punctuate
+        if spoken_punctuation is not None:
+            self._config.spoken_punctuation = spoken_punctuation
+        if model is not None:
+            self._config.model = model
+        if keywords is not None:
+            self._config.keywords = keywords
+
+        if self._active_speech_stream is not None:
+            self._active_speech_stream.update_options(
+                languages=languages,
+                detect_language=detect_language,
+                interim_results=interim_results,
+                punctuate=punctuate,
+                spoken_punctuation=spoken_punctuation,
+                model=model,
+                location=location,
+                keywords=keywords,
+            )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -274,10 +311,36 @@ class SpeechStream(stt.SpeechStream):
         self._config = config
         self._reconnect_event = asyncio.Event()
 
-    def update_options(self, language: str | None):
-        if language:
-            self._config.languages = [language]
-            self._reconnect_event.set()
+    def update_options(
+        self,
+        *,
+        languages: LanguageCode | None = None,
+        detect_language: bool | None = None,
+        interim_results: bool | None = None,
+        punctuate: bool | None = None,
+        spoken_punctuation: bool | None = None,
+        model: SpeechModels | None = None,
+        location: str | None = None,
+        keywords: List[tuple[str, float]] | None = None,
+    ):
+        if languages is not None:
+            if isinstance(languages, str):
+                languages = [languages]
+            self._config.languages = languages
+        if detect_language is not None:
+            self._config.detect_language = detect_language
+        if interim_results is not None:
+            self._config.interim_results = interim_results
+        if punctuate is not None:
+            self._config.punctuate = punctuate
+        if spoken_punctuation is not None:
+            self._config.spoken_punctuation = spoken_punctuation
+        if model is not None:
+            self._config.model = model
+        if keywords is not None:
+            self._config.keywords = keywords
+
+        self._reconnect_event.set()
 
     async def _run(self) -> None:
         # google requires a async generator when calling streaming_recognize
