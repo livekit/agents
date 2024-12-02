@@ -103,7 +103,7 @@ class _EUORunner(_InferenceRunner):
         return json.dumps({"eou_probability": float(eou_probability)}).encode()
 
 
-class EOU:
+class TurnDetector:
     def __init__(self, inference_executor: InferenceExecutor | None = None) -> None:
         self._executor = (
             inference_executor or get_current_job_context().inference_executor

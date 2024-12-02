@@ -15,11 +15,11 @@
 from livekit.agents import Plugin
 from livekit.agents.inference_runner import _InferenceRunner
 
-from .eou import EOU, _EUORunner
+from .eou import TurnDetector, _EUORunner
 from .log import logger
 from .version import __version__
 
-__all__ = ["EOU", "__version__"]
+__all__ = ["TurnDetector", "__version__"]
 
 
 class EOUPlugin(Plugin):

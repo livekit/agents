@@ -49,7 +49,7 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(model=dg_model),
         llm=openai.LLM(),
         tts=openai.TTS(),
-        eou=eou.EOU(),
+        eou=eou.TurnDetector(),
         chat_ctx=initial_ctx,
     )
 
