@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import weakref
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import List, Union
 
 from livekit import rtc
 from livekit.agents import (
@@ -130,7 +131,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             keywords=keywords,
         )
-        self._active_speech_stream: Optional[SpeechStream] = None
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     def _ensure_client(self) -> SpeechAsyncClient:
         if self._credentials_info:
@@ -241,14 +242,15 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        self._active_speech_stream = SpeechStream(
+        stream = SpeechStream(
             stt=self,
             client=self._ensure_client(),
             recognizer=self._recognizer,
             config=config,
             conn_options=conn_options,
         )
-        return self._active_speech_stream
+        self._streams.add(stream)
+        return stream
 
     def update_options(
         self,
@@ -279,8 +281,8 @@ class STT(stt.STT):
         if keywords is not None:
             self._config.keywords = keywords
 
-        if self._active_speech_stream is not None:
-            self._active_speech_stream.update_options(
+        for stream in self._streams:
+            stream.update_options(
                 languages=languages,
                 detect_language=detect_language,
                 interim_results=interim_results,

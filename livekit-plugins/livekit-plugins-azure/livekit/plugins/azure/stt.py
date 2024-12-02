@@ -15,8 +15,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import weakref
 from dataclasses import dataclass
-from typing import Optional
 
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
@@ -95,7 +95,7 @@ class STT(stt.STT):
             segmentation_max_time_ms=segmentation_max_time_ms,
             segmentation_strategy=segmentation_strategy,
         )
-        self._active_speech_stream: Optional[SpeechStream] = None
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     async def _recognize_impl(
         self,
@@ -112,15 +112,15 @@ class STT(stt.STT):
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
-        self._active_speech_stream = SpeechStream(
-            stt=self, opts=self._config, conn_options=conn_options
-        )
-        return self._active_speech_stream
+        stream = SpeechStream(stt=self, opts=self._config, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
 
     def update_options(self, *, language: str | None = None):
-        if self._active_speech_stream is not None and language is not None:
+        if language is not None:
             self._config.languages = [language]
-            self._active_speech_stream.update_options(language=language)
+            for stream in self._streams:
+                stream.update_options(language=language)
 
 
 class SpeechStream(stt.SpeechStream):

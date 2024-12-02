@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import weakref
 from dataclasses import dataclass
 from typing import List, Literal, Optional
 from urllib.parse import urlencode
@@ -93,7 +94,7 @@ class STT(stt.STT):
             end_utterance_silence_threshold=end_utterance_silence_threshold,
         )
         self._session = http_session
-        self._active_speech_stream: Optional[SpeechStream] = None
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -117,14 +118,15 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
         config = dataclasses.replace(self._opts)
-        self._active_speech_stream = SpeechStream(
+        stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
             opts=config,
             api_key=self._api_key,
             http_session=self.session,
         )
-        return self._active_speech_stream
+        self._streams.add(stream)
+        return stream
 
     def update_options(
         self,
@@ -148,8 +150,8 @@ class STT(stt.STT):
         if buffer_size_seconds is not None:
             self._opts.buffer_size_seconds = buffer_size_seconds
 
-        if self._active_speech_stream is not None:
-            self._active_speech_stream.update_options(
+        for stream in self._streams:
+            stream.update_options(
                 disable_partial_transcripts=disable_partial_transcripts,
                 word_boost=word_boost,
                 end_utterance_silence_threshold=end_utterance_silence_threshold,
@@ -255,9 +257,6 @@ class SpeechStream(stt.SpeechStream):
                 await ws.send_str(SpeechStream._CLOSE_MSG)
             except asyncio.CancelledError:
                 pass
-            except Exception:
-                logger.error("failed to send audio to AssemblyAI")
-                return
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             try:
@@ -294,9 +293,6 @@ class SpeechStream(stt.SpeechStream):
                         logger.exception("failed to process AssemblyAI message")
             except asyncio.CancelledError:
                 pass
-            except Exception:
-                logger.error("failed to receive messages from AssemblyAI")
-                return
 
         async def _wait_for_reconnect():
             await self._reconnect_event.wait()

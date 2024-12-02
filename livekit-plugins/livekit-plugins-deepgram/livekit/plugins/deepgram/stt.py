@@ -18,6 +18,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import weakref
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional, Tuple
@@ -182,6 +183,7 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._active_speech_stream: Optional[SpeechStream] = None
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -247,7 +249,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        self._active_speech_stream = SpeechStream(
+        stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
             opts=config,
@@ -255,7 +257,8 @@ class STT(stt.STT):
             http_session=self._ensure_session(),
             base_url=self._base_url,
         )
-        return self._active_speech_stream
+        self._streams.add(stream)
+        return stream
 
     def update_options(
         self,
@@ -310,11 +313,9 @@ class STT(stt.STT):
             self._opts.keywords = keywords
         if profanity_filter is not None:
             self._opts.profanity_filter = profanity_filter
-        if energy_filter is not None:
-            self._opts.energy_filter = energy_filter
 
-        if self._active_speech_stream is not None:
-            self._active_speech_stream.update_options(
+        for stream in self._streams:
+            stream.update_options(
                 language=language,
                 model=model,
                 interim_results=interim_results,
@@ -326,7 +327,6 @@ class STT(stt.STT):
                 filler_words=filler_words,
                 keywords=keywords,
                 profanity_filter=profanity_filter,
-                energy_filter=energy_filter,
             )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
@@ -396,7 +396,6 @@ class SpeechStream(stt.SpeechStream):
         filler_words: bool | None = None,
         keywords: list[Tuple[str, float]] | None = None,
         profanity_filter: bool | None = None,
-        energy_filter: AudioEnergyFilter | bool | None = None,
     ):
         if language is not None:
             self._opts.language = language
@@ -435,8 +434,6 @@ class SpeechStream(stt.SpeechStream):
             self._opts.keywords = keywords
         if profanity_filter is not None:
             self._opts.profanity_filter = profanity_filter
-        if energy_filter is not None:
-            self._opts.energy_filter = energy_filter
 
         self._reconnect_event.set()
 
@@ -510,9 +507,6 @@ class SpeechStream(stt.SpeechStream):
                 await ws.send_str(SpeechStream._CLOSE_MSG)
             except asyncio.CancelledError:
                 pass
-            except Exception as e:
-                logger.error("unexpected error in send_task %s", e)
-                return
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             try:
@@ -540,9 +534,6 @@ class SpeechStream(stt.SpeechStream):
                         logger.exception("failed to process deepgram message")
             except asyncio.CancelledError:
                 pass
-            except Exception as e:
-                logger.error("unexpected error in recv_task %s", e)
-                return
 
         async def _wait_for_reconnect():
             await self._reconnect_event.wait()
