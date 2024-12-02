@@ -94,6 +94,12 @@ class _EUORunner(_InferenceRunner):
         logits = outputs.logits[0, -1, :].detach().numpy()
         output_probs = _softmax(logits)
         eou_probability = output_probs[self._eou_index]
+
+        logger.debug(
+            "eou prediction",
+            extra={"eou_probability": eou_probability, "input": text},
+        )
+
         return json.dumps({"eou_probability": float(eou_probability)}).encode()
 
 

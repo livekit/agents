@@ -277,7 +277,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     runners=_InferenceRunner.registered_runners,
                     initialize_timeout=30,
                     close_timeout=5,
-                    memory_warn_mb=500,
+                    memory_warn_mb=2000,
                     memory_limit_mb=0,  # no limit
                     ping_interval=5,
                     ping_timeout=60,

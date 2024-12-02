@@ -1070,7 +1070,7 @@ class _DeferredReplyValidation:
     UNLIKELY_ENDPOINT_THRESHOLD = 0.15
 
     # Long delay to use when the model thinks the user is still speaking
-    UNLIKELY_ENDPOINT_DELAY = 3.0
+    UNLIKELY_ENDPOINT_DELAY = 2.5
 
     def __init__(
         self,
@@ -1088,7 +1088,7 @@ class _DeferredReplyValidation:
 
         self._chat_ctx = chat_ctx
         self._end_of_speech_delay = min_endpointing_delay
-        self._final_transcript_delay = min_endpointing_delay + 1.0
+        self._final_transcript_delay = min_endpointing_delay
 
     @property
     def validating(self) -> bool:
@@ -1155,13 +1155,7 @@ class _DeferredReplyValidation:
             await asyncio.sleep(delay)
             if self._eou is not None:
                 eou_prob = await self._eou.predict_eou(chat_ctx)
-                logger.debug(
-                    "eou prediction",
-                    extra={"eou_probability": eou_prob},
-                )
-
                 if eou_prob < self.UNLIKELY_ENDPOINT_THRESHOLD:
-                    # TODO(theomonnom): This is additive with the last delay, need to refactor
                     await asyncio.sleep(self.UNLIKELY_ENDPOINT_DELAY)
 
             self._reset_states()
