@@ -58,3 +58,7 @@ class JobExecutorError_Unresponsive(JobExecutorError):
 
 class JobExecutorError_Runtime(JobExecutorError):
     pass
+
+
+class JobExecutorError_MemoryLimitExceeded(JobExecutorError):
+    pass
