@@ -27,7 +27,7 @@ from livekit.protocol import agent, models
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
 
-_JobContextVar = contextvars.ContextVar("agents_job_context")
+_JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 
 def get_current_job_context() -> JobContext:
