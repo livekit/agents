@@ -124,6 +124,7 @@ class _ProcClient:
 
                     ipc_ch.send_nowait(msg)
 
+            @log_exceptions(logger=logger)
             async def _self_health_check():
                 await ping_timeout
                 print(
@@ -132,9 +133,11 @@ class _ProcClient:
                 )
 
             read_task = asyncio.create_task(_read_ipc_task(), name="ipc_read")
-            health_check_task = asyncio.create_task(
-                _self_health_check(), name="health_check"
-            )
+            health_check_task: asyncio.Task | None = None
+            if self._init_req.ping_interval > 0:
+                health_check_task = asyncio.create_task(
+                    _self_health_check(), name="health_check"
+                )
             main_task = asyncio.create_task(
                 self._main_task_fnc(ipc_ch), name="main_task_entrypoint"
             )
@@ -146,10 +149,14 @@ class _ProcClient:
                 ipc_ch.close()
 
             read_task.add_done_callback(_done_cb)
-            health_check_task.add_done_callback(_done_cb)
+            if health_check_task is not None:
+                health_check_task.add_done_callback(_done_cb)
+
             main_task.add_done_callback(_done_cb)
 
             await exit_flag.wait()
-            await aio.gracefully_cancel(read_task, health_check_task, main_task)
+            await aio.gracefully_cancel(read_task, main_task)
+            if health_check_task is not None:
+                await aio.gracefully_cancel(health_check_task)
         finally:
             await self._acch.aclose()

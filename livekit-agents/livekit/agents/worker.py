@@ -426,7 +426,6 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._main_task.cancel()
 
         await self._proc_pool.aclose()
-        print("proc_pool closed")
 
         if self._inference_executor is not None:
             await self._inference_executor.aclose()

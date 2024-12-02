@@ -272,11 +272,11 @@ class JobProcess:
     def __init__(
         self,
         *,
-        start_arguments: Any | None = None,
+        user_arguments: Any | None = None,
     ) -> None:
         self._mp_proc = mp.current_process()
         self._userdata: dict[str, Any] = {}
-        self._start_arguments = start_arguments
+        self._user_arguments = user_arguments
 
     @property
     def pid(self) -> int | None:
@@ -287,8 +287,8 @@ class JobProcess:
         return self._userdata
 
     @property
-    def start_arguments(self) -> Any | None:
-        return self._start_arguments
+    def user_arguments(self) -> Any | None:
+        return self._user_arguments
 
 
 class JobRequest:

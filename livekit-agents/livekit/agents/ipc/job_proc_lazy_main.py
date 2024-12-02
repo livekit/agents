@@ -124,7 +124,7 @@ class _JobProc:
     ) -> None:
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
-        self._job_proc = JobProcess(start_arguments=user_arguments)
+        self._job_proc = JobProcess(user_arguments=user_arguments)
         self._job_task: asyncio.Task | None = None
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
