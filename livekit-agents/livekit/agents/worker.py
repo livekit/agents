@@ -303,15 +303,6 @@ class Worker(utils.EventEmitter[EventTypes]):
             memory_limit_mb=opts.job_memory_limit_mb,
         )
 
-        def _update_job_status(proc: ipc.job_executor.JobExecutor) -> None:
-            t = self._loop.create_task(self._update_job_status(proc))
-            self._tasks.add(t)
-            t.add_done_callback(self._tasks.discard)
-
-        self._proc_pool.on("process_started", self._update_job_status)
-        self._proc_pool.on("process_closed", self._update_job_status)
-        self._proc_pool.on("process_job_launched", self._update_job_status)
-
         self._previous_status = agent.WorkerStatus.WS_AVAILABLE
 
         self._api: api.LiveKitAPI | None = None
@@ -339,6 +330,16 @@ class Worker(utils.EventEmitter[EventTypes]):
             await self._inference_executor.initialize()
 
         self._closed = False
+
+        def _update_job_status(proc: ipc.job_executor.JobExecutor) -> None:
+            t = self._loop.create_task(self._update_job_status(proc))
+            self._tasks.add(t)
+            t.add_done_callback(self._tasks.discard)
+
+        self._proc_pool.on("process_started", _update_job_status)
+        self._proc_pool.on("process_closed", _update_job_status)
+        self._proc_pool.on("process_job_launched", _update_job_status)
+
         self._proc_pool.start()
         self._api = api.LiveKitAPI(
             self._opts.ws_url, self._opts.api_key, self._opts.api_secret
@@ -425,6 +426,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._main_task.cancel()
 
         await self._proc_pool.aclose()
+        print("proc_pool closed")
 
         if self._inference_executor is not None:
             await self._inference_executor.aclose()

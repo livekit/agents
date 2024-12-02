@@ -125,10 +125,7 @@ class _JobProc:
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._job_proc = JobProcess(start_arguments=user_arguments)
-        self._exit_proc_flag = asyncio.Event()
-
         self._job_task: asyncio.Task | None = None
-        self._shutdown_fut: asyncio.Future[_ShutdownInfo] = asyncio.Future()
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
         self._ctx_connect_called = False
@@ -145,6 +142,9 @@ class _JobProc:
 
     @log_exceptions(logger=logger)
     async def entrypoint(self, cch: aio.ChanReceiver[Message]) -> None:
+        self._exit_proc_flag = asyncio.Event()
+        self._shutdown_fut: asyncio.Future[_ShutdownInfo] = asyncio.Future()
+
         @log_exceptions(logger=logger)
         async def _read_ipc_task():
             async for msg in cch:
@@ -158,6 +158,7 @@ class _JobProc:
                     self._start_job(msg)
                 if isinstance(msg, ShutdownRequest):
                     if not self.has_running_job:
+                        self._exit_proc_flag.set()
                         break  # exit immediately
 
                     with contextlib.suppress(asyncio.InvalidStateError):
