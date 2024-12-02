@@ -15,12 +15,13 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import multiprocessing as mp
 from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Any, Callable, Coroutine, Tuple
 
-from livekit import rtc, api
+from livekit import api, rtc
 from livekit.protocol import agent, models
 
 from .log import logger
@@ -87,11 +88,10 @@ class JobContext:
         ] = []
         self._participant_tasks = dict[Tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._participant_available)
-        self._api = api.LiveKitAPI()
 
-    @property
+    @functools.cached_property
     def api(self) -> api.LiveKitAPI:
-        return self._api
+        return api.LiveKitAPI()
 
     @property
     def proc(self) -> JobProcess:
