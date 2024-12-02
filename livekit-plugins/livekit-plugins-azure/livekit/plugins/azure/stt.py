@@ -120,7 +120,7 @@ class STT(stt.STT):
     def update_options(self, *, language: str | None = None):
         if self._active_speech_stream is not None and language is not None:
             self._config.languages = [language]
-            self._active_speech_stream.update_options(language)
+            self._active_speech_stream.update_options(language=language)
 
 
 class SpeechStream(stt.SpeechStream):

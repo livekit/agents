@@ -314,7 +314,20 @@ class STT(stt.STT):
             self._opts.energy_filter = energy_filter
 
         if self._active_speech_stream is not None:
-            self._active_speech_stream.update_options(language)
+            self._active_speech_stream.update_options(
+                language=language,
+                model=model,
+                interim_results=interim_results,
+                punctuate=punctuate,
+                smart_format=smart_format,
+                sample_rate=sample_rate,
+                no_delay=no_delay,
+                endpointing_ms=endpointing_ms,
+                filler_words=filler_words,
+                keywords=keywords,
+                profanity_filter=profanity_filter,
+                energy_filter=energy_filter,
+            )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
