@@ -54,8 +54,8 @@ class _EUORunner(_InferenceRunner):
         return text
 
     def initialize(self) -> None:
-        from transformers import AutoModelForCausalLM, AutoTokenizer
         from huggingface_hub import errors
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         try:
             self._model = AutoModelForCausalLM.from_pretrained(

@@ -11,7 +11,7 @@ from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils.aio import duplex_unix
-from . import channel, proto
+from . import channel, job_proc_lazy_main, proto
 from .job_executor import JobStatus
 
 
@@ -101,17 +101,16 @@ class ThreadJobExecutor:
                 with contextlib.suppress(RuntimeError):
                     self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
 
-            targs = job_main.ThreadStartArgs(
+            targs = job_proc_lazy_main.ThreadStartArgs(
                 mp_cch=mp_cch,
                 initialize_process_fnc=self._opts.initialize_process_fnc,
                 job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
                 user_arguments=self._user_args,
-                asyncio_debug=self._loop.get_debug(),
                 join_fnc=_on_join,
             )
 
             self._thread = t = threading.Thread(
-                target=job_main.thread_main,
+                target=job_proc_lazy_main.thread_main,
                 args=(targs,),
                 name="job_thread_runner",
             )

@@ -283,7 +283,6 @@ class ThreadStartArgs:
     join_fnc: Callable[[], None]
     mp_cch: socket.socket
     user_arguments: Any | None
-    asyncio_debug: bool
 
 
 def thread_main(
@@ -301,9 +300,9 @@ def thread_main(
 
         client = _ProcClient(
             args.mp_cch,
+            None,
             job_proc.initialize,
             job_proc.entrypoint,
-            args.asyncio_debug,
         )
 
         logger.info("initializing job runner", extra={"tid": tid})
