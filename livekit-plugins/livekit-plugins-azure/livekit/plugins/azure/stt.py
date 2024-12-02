@@ -139,8 +139,9 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
 
     def update_options(self, language: str | None = None):
-        self._opts.languages = [language]
-        self._reconnect_event.set()
+        if language:
+            self._opts.languages = [language]
+            self._reconnect_event.set()
 
     async def _run(self) -> None:
         while True:
