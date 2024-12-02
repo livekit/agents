@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
@@ -94,6 +95,7 @@ class STT(stt.STT):
             segmentation_max_time_ms=segmentation_max_time_ms,
             segmentation_strategy=segmentation_strategy,
         )
+        self._active_speech_stream: Optional[SpeechStream] = None
 
     async def _recognize_impl(
         self,
@@ -110,7 +112,14 @@ class STT(stt.STT):
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
-        return SpeechStream(stt=self, opts=self._config, conn_options=conn_options)
+        self._active_speech_stream = SpeechStream(
+            stt=self, opts=self._config, conn_options=conn_options
+        )
+        return self._active_speech_stream
+
+    def update_options(self, language: str | None = None):
+        if self._active_speech_stream is not None and language is not None:
+            self._active_speech_stream.update_options(language)
 
 
 class SpeechStream(stt.SpeechStream):
@@ -127,44 +136,56 @@ class SpeechStream(stt.SpeechStream):
         self._session_started_event = asyncio.Event()
 
         self._loop = asyncio.get_running_loop()
+        self._reconnect_event = asyncio.Event()
+
+    def update_options(self, language: str | None = None):
+        self._opts.languages = [language]
+        self._reconnect_event.set()
 
     async def _run(self) -> None:
-        self._stream = speechsdk.audio.PushAudioInputStream(
-            stream_format=speechsdk.audio.AudioStreamFormat(
-                samples_per_second=self._opts.sample_rate,
-                bits_per_sample=16,
-                channels=self._opts.num_channels,
+        while True:
+            self._stream = speechsdk.audio.PushAudioInputStream(
+                stream_format=speechsdk.audio.AudioStreamFormat(
+                    samples_per_second=self._opts.sample_rate,
+                    bits_per_sample=16,
+                    channels=self._opts.num_channels,
+                )
             )
-        )
-        self._recognizer = _create_speech_recognizer(
-            config=self._opts, stream=self._stream
-        )
-        self._recognizer.recognizing.connect(self._on_recognizing)
-        self._recognizer.recognized.connect(self._on_recognized)
-        self._recognizer.speech_start_detected.connect(self._on_speech_start)
-        self._recognizer.speech_end_detected.connect(self._on_speech_end)
-        self._recognizer.session_started.connect(self._on_session_started)
-        self._recognizer.session_stopped.connect(self._on_session_stopped)
-        self._recognizer.start_continuous_recognition()
-
-        try:
-            await asyncio.wait_for(
-                self._session_started_event.wait(), self._conn_options.timeout
+            self._recognizer = _create_speech_recognizer(
+                config=self._opts, stream=self._stream
             )
+            self._recognizer.recognizing.connect(self._on_recognizing)
+            self._recognizer.recognized.connect(self._on_recognized)
+            self._recognizer.speech_start_detected.connect(self._on_speech_start)
+            self._recognizer.speech_end_detected.connect(self._on_speech_end)
+            self._recognizer.session_started.connect(self._on_session_started)
+            self._recognizer.session_stopped.connect(self._on_session_stopped)
+            self._recognizer.start_continuous_recognition()
 
-            async for input in self._input_ch:
-                if isinstance(input, rtc.AudioFrame):
-                    self._stream.write(input.data.tobytes())
+            try:
+                await asyncio.wait_for(
+                    self._session_started_event.wait(), self._conn_options.timeout
+                )
 
-            self._stream.close()
-            await self._session_stopped_event.wait()
-        finally:
+                async for input in self._input_ch:
+                    if self._reconnect_event.is_set():
+                        break
+                    if isinstance(input, rtc.AudioFrame):
+                        self._stream.write(input.data.tobytes())
 
-            def _cleanup():
-                self._recognizer.stop_continuous_recognition()
-                del self._recognizer
+                self._stream.close()
+                await self._session_stopped_event.wait()
+            finally:
 
-            await asyncio.to_thread(_cleanup)
+                def _cleanup():
+                    self._recognizer.stop_continuous_recognition()
+                    del self._recognizer
+
+                await asyncio.to_thread(_cleanup)
+                if self._reconnect_event.is_set():
+                    self._reconnect_event.clear()
+                else:
+                    break
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs):
         detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
