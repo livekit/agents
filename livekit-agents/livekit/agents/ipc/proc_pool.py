@@ -105,6 +105,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
+                inference_executor=self._inf_executor,
                 ping_interval=2.5,
                 high_ping_threshold=0.5,
                 loop=self._loop,
