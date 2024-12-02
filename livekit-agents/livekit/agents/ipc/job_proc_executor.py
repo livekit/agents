@@ -81,7 +81,7 @@ class ProcJobExecutor(SupervisedProc):
             user_arguments=self._user_args,
         )
 
-        return self._opts.mp_ctx.Process(  # type: ignore
+        return self._mp_ctx.Process(  # type: ignore
             target=proc_main,
             args=(proc_args,),
             name="job_proc",
