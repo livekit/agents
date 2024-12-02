@@ -11,6 +11,7 @@ from ..log import logger
 from ..utils import aio, log_exceptions
 from . import channel, proto
 from .inference_executor import InferenceExecutor
+from .job_executor import JobStatus
 from .job_proc_lazy_main import ProcStartArgs, proc_main
 from .supervised_proc import SupervisedProc
 
@@ -44,12 +45,28 @@ class ProcJobExecutor(SupervisedProc):
             loop=loop,
         )
 
+        self._user_args: Any | None = None
+        self._job_status: JobStatus | None = None
         self._running_job: RunningJobInfo | None = None
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._inference_executor = inference_executor
-
         self._inference_tasks: list[asyncio.Task[None]] = []
+
+    @property
+    def status(self) -> JobStatus:
+        if self._job_status is None:
+            raise RuntimeError("job status not available")
+
+        return self._job_status
+
+    @property
+    def user_arguments(self) -> Any | None:
+        return self._user_args
+
+    @user_arguments.setter
+    def user_arguments(self, value: Any | None) -> None:
+        self._user_args = value
 
     @property
     def running_job(self) -> RunningJobInfo | None:
@@ -81,6 +98,10 @@ class ProcJobExecutor(SupervisedProc):
         finally:
             await aio.gracefully_cancel(*self._inference_tasks)
 
+            self._job_status = (
+                JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
+            )
+
     async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
         if self._inference_executor is None:
             logger.warning("inference request received but no inference executor")
@@ -111,7 +132,12 @@ class ProcJobExecutor(SupervisedProc):
         if self._running_job is not None:
             raise RuntimeError("process already has a running job")
 
+        if not self._initialize_fut.done():
+            raise RuntimeError("process not initialized")
+
+        self._job_status = JobStatus.RUNNING
         self._running_job = info
+
         start_req = proto.StartJobRequest()
         start_req.running_job = info
         await channel.asend_message(self._pch, start_req)

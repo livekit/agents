@@ -51,7 +51,7 @@ class InferenceProcExecutor(SupervisedProc):
             runners=self._runners,
         )
 
-        return self._opts.mp_ctx.Process(  # type: ignore
+        return self._mp_ctx.Process(  # type: ignore
             target=proc_main,
             args=(proc_args,),
             name="inference_proc",

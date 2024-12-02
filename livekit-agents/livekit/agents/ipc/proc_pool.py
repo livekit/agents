@@ -34,9 +34,9 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         inference_executor: inference_executor.InferenceExecutor | None,
         job_executor_type: JobExecutorType,
         mp_ctx: BaseContext,
+        memory_warn_mb: float,
+        memory_limit_mb: float,
         loop: asyncio.AbstractEventLoop,
-        job_memory_warn_mb: float = 0,
-        job_memory_limit_mb: float = 0,
     ) -> None:
         super().__init__()
         self._job_executor_type = job_executor_type
@@ -47,8 +47,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._inf_executor = inference_executor
         self._initialize_timeout = initialize_timeout
         self._loop = loop
-        self._job_memory_limit_mb = job_memory_limit_mb
-        self._job_memory_warn_mb = job_memory_warn_mb
+        self._memory_limit_mb = memory_limit_mb
+        self._memory_warn_mb = memory_warn_mb
         self._num_idle_processes = num_idle_processes
         self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
         self._proc_needed_sem = asyncio.Semaphore(num_idle_processes)
@@ -105,6 +105,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
+                ping_interval=2.5,
+                high_ping_threshold=0.5,
                 loop=self._loop,
             )
         elif self._job_executor_type == JobExecutorType.PROCESS:
@@ -116,8 +118,11 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 inference_executor=self._inf_executor,
                 mp_ctx=self._mp_ctx,
                 loop=self._loop,
-                job_memory_warn_mb=self._job_memory_warn_mb,
-                job_memory_limit_mb=self._job_memory_limit_mb,
+                ping_interval=2.5,
+                ping_timeout=60,
+                high_ping_threshold=0.5,
+                memory_warn_mb=self._memory_warn_mb,
+                memory_limit_mb=self._memory_limit_mb,
             )
         else:
             raise ValueError(f"unsupported job executor: {self._job_executor_type}")

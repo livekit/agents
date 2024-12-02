@@ -58,7 +58,6 @@ class SupervisedProc(ABC):
             high_ping_threshold=high_ping_threshold,
         )
 
-        self._user_args: Any | None = None
         self._exitcode: int | None = None
         self._pid: int | None = None
 
@@ -66,7 +65,6 @@ class SupervisedProc(ABC):
         self._closing = False
         self._kill_sent = False
         self._initialize_fut = asyncio.Future[None]()
-
         self._lock = asyncio.Lock()
 
     @abstractmethod

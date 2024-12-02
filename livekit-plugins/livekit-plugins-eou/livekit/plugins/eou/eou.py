@@ -9,6 +9,8 @@ from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_current_job_context
 
+from .log import logger
+
 HG_MODEL = "livekit/opt-125m-endpoint-detector"
 PUNCS = string.punctuation.replace("'", "")
 MAX_HISTORY = 4
@@ -53,12 +55,26 @@ class _EUORunner(_InferenceRunner):
 
     def initialize(self) -> None:
         from transformers import AutoModelForCausalLM, AutoTokenizer
+        from huggingface_hub import errors
 
-        self._model = AutoModelForCausalLM.from_pretrained(
-            HG_MODEL, local_files_only=True
-        )
-        self._tokenizer = AutoTokenizer.from_pretrained(HG_MODEL, local_files_only=True)
-        self._eou_index = self._tokenizer.encode("<|im_end|>")[-1]
+        try:
+            self._model = AutoModelForCausalLM.from_pretrained(
+                HG_MODEL, local_files_only=True
+            )
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                HG_MODEL, local_files_only=True
+            )
+            self._eou_index = self._tokenizer.encode("<|im_end|>")[-1]
+        except (errors.LocalEntryNotFoundError, OSError):
+            logger.error(
+                (
+                    f"Could not find model {HG_MODEL}. Make sure you have downloaded the model before running the agent. "
+                    "Use `python3 your_agent.py download-files` to download the models."
+                )
+            )
+            raise RuntimeError(
+                f"livekit-plugins-eou initialization failed. Could not find model {HG_MODEL}."
+            ) from None
 
     def run(self, data: bytes) -> bytes | None:
         data_json = json.loads(data)
@@ -68,7 +84,6 @@ class _EUORunner(_InferenceRunner):
             raise ValueError("chat_ctx is required on the inference input data")
 
         text = self._format_chat_ctx(chat_ctx)
-        print(text)
         inputs = self._tokenizer(
             text,
             add_special_tokens=False,
