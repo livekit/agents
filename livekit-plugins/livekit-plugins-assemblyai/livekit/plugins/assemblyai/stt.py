@@ -126,9 +126,36 @@ class STT(stt.STT):
         )
         return self._active_speech_stream
 
-    def update_options(self, language: str | None = None):
-        if self._active_speech_stream is not None and language is not None:
-            self._active_speech_stream.update_options(language)
+    def update_options(
+        self,
+        *,
+        disable_partial_transcripts: Optional[bool] = None,
+        word_boost: Optional[List[str]] = None,
+        end_utterance_silence_threshold: Optional[int] = None,
+        enable_extra_session_information: Optional[bool] = None,
+        buffer_size_seconds: Optional[float] = None,
+    ):
+        if disable_partial_transcripts is not None:
+            self._opts.disable_partial_transcripts = disable_partial_transcripts
+        if word_boost is not None:
+            self._opts.word_boost = word_boost
+        if end_utterance_silence_threshold is not None:
+            self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
+        if enable_extra_session_information is not None:
+            self._opts.enable_extra_session_information = (
+                enable_extra_session_information
+            )
+        if buffer_size_seconds is not None:
+            self._opts.buffer_size_seconds = buffer_size_seconds
+
+        if self._active_speech_stream is not None:
+            self._active_speech_stream.update_options(
+                disable_partial_transcripts=disable_partial_transcripts,
+                word_boost=word_boost,
+                end_utterance_silence_threshold=end_utterance_silence_threshold,
+                enable_extra_session_information=enable_extra_session_information,
+                buffer_size_seconds=buffer_size_seconds,
+            )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -157,8 +184,28 @@ class SpeechStream(stt.SpeechStream):
         self._final_events: List[stt.SpeechEvent] = []
         self._reconnect_event = asyncio.Event()
 
-    def update_options(self, language: str | None = None):
-        self._opts.language = language or self._opts.language
+    def update_options(
+        self,
+        *,
+        disable_partial_transcripts: Optional[bool] = None,
+        word_boost: Optional[List[str]] = None,
+        end_utterance_silence_threshold: Optional[int] = None,
+        enable_extra_session_information: Optional[bool] = None,
+        buffer_size_seconds: Optional[float] = None,
+    ):
+        if disable_partial_transcripts is not None:
+            self._opts.disable_partial_transcripts = disable_partial_transcripts
+        if word_boost is not None:
+            self._opts.word_boost = word_boost
+        if end_utterance_silence_threshold is not None:
+            self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
+        if enable_extra_session_information is not None:
+            self._opts.enable_extra_session_information = (
+                enable_extra_session_information
+            )
+        if buffer_size_seconds is not None:
+            self._opts.buffer_size_seconds = buffer_size_seconds
+
         self._reconnect_event.set()
 
     async def _run(self) -> None:

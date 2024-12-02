@@ -257,8 +257,63 @@ class STT(stt.STT):
         )
         return self._active_speech_stream
 
-    def update_options(self, language: str | None = None):
-        if self._active_speech_stream is not None and language is not None:
+    def update_options(
+        self,
+        *,
+        language: DeepgramLanguages | None = None,
+        model: DeepgramModels | None = None,
+        interim_results: bool | None = None,
+        punctuate: bool | None = None,
+        smart_format: bool | None = None,
+        sample_rate: int | None = None,
+        no_delay: bool | None = None,
+        endpointing_ms: int | None = None,
+        filler_words: bool | None = None,
+        keywords: list[Tuple[str, float]] | None = None,
+        profanity_filter: bool | None = None,
+        energy_filter: AudioEnergyFilter | bool | None = None,
+    ):
+        if language is not None:
+            self._opts.language = language
+        if model is not None:
+            if language not in ("en-US", "en") and model in (
+                "nova-2-meeting",
+                "nova-2-phonecall",
+                "nova-2-finance",
+                "nova-2-conversationalai",
+                "nova-2-voicemail",
+                "nova-2-video",
+                "nova-2-medical",
+                "nova-2-drivethru",
+                "nova-2-automotive",
+            ):
+                logger.warning(
+                    f"{model} does not support language {language}, falling back to nova-2-general"
+                )
+                model = "nova-2-general"
+            self._opts.model = model
+        if interim_results is not None:
+            self._opts.interim_results = interim_results
+        if punctuate is not None:
+            self._opts.punctuate = punctuate
+        if smart_format is not None:
+            self._opts.smart_format = smart_format
+        if sample_rate is not None:
+            self._opts.sample_rate = sample_rate
+        if no_delay is not None:
+            self._opts.no_delay = no_delay
+        if endpointing_ms is not None:
+            self._opts.endpointing_ms = endpointing_ms
+        if filler_words is not None:
+            self._opts.filler_words = filler_words
+        if keywords is not None:
+            self._opts.keywords = keywords
+        if profanity_filter is not None:
+            self._opts.profanity_filter = profanity_filter
+        if energy_filter is not None:
+            self._opts.energy_filter = energy_filter
+
+        if self._active_speech_stream is not None:
             self._active_speech_stream.update_options(language)
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
@@ -314,8 +369,62 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
 
-    def update_options(self, language: str | None = None):
-        self._opts.language = language or self._opts.language
+    def update_options(
+        self,
+        *,
+        language: DeepgramLanguages | None = None,
+        model: DeepgramModels | None = None,
+        interim_results: bool | None = None,
+        punctuate: bool | None = None,
+        smart_format: bool | None = None,
+        sample_rate: int | None = None,
+        no_delay: bool | None = None,
+        endpointing_ms: int | None = None,
+        filler_words: bool | None = None,
+        keywords: list[Tuple[str, float]] | None = None,
+        profanity_filter: bool | None = None,
+        energy_filter: AudioEnergyFilter | bool | None = None,
+    ):
+        if language is not None:
+            self._opts.language = language
+        if model is not None:
+            if language not in ("en-US", "en") and model in (
+                "nova-2-meeting",
+                "nova-2-phonecall",
+                "nova-2-finance",
+                "nova-2-conversationalai",
+                "nova-2-voicemail",
+                "nova-2-video",
+                "nova-2-medical",
+                "nova-2-drivethru",
+                "nova-2-automotive",
+            ):
+                logger.warning(
+                    f"{model} does not support language {language}, falling back to nova-2-general"
+                )
+                model = "nova-2-general"
+            self._opts.model = model
+        if interim_results is not None:
+            self._opts.interim_results = interim_results
+        if punctuate is not None:
+            self._opts.punctuate = punctuate
+        if smart_format is not None:
+            self._opts.smart_format = smart_format
+        if sample_rate is not None:
+            self._opts.sample_rate = sample_rate
+        if no_delay is not None:
+            self._opts.no_delay = no_delay
+        if endpointing_ms is not None:
+            self._opts.endpointing_ms = endpointing_ms
+        if filler_words is not None:
+            self._opts.filler_words = filler_words
+        if keywords is not None:
+            self._opts.keywords = keywords
+        if profanity_filter is not None:
+            self._opts.profanity_filter = profanity_filter
+        if energy_filter is not None:
+            self._opts.energy_filter = energy_filter
+
         self._reconnect_event.set()
 
     async def _run(self) -> None:

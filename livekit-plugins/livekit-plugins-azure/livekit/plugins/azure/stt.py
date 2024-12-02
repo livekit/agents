@@ -117,8 +117,9 @@ class STT(stt.STT):
         )
         return self._active_speech_stream
 
-    def update_options(self, language: str | None = None):
+    def update_options(self, *, language: str | None = None):
         if self._active_speech_stream is not None and language is not None:
+            self._config.languages = [language]
             self._active_speech_stream.update_options(language)
 
 
@@ -138,7 +139,7 @@ class SpeechStream(stt.SpeechStream):
         self._loop = asyncio.get_running_loop()
         self._reconnect_event = asyncio.Event()
 
-    def update_options(self, language: str | None = None):
+    def update_options(self, *, language: str | None = None):
         if language:
             self._opts.languages = [language]
             self._reconnect_event.set()
