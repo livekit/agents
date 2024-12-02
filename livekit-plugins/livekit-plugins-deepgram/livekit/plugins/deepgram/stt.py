@@ -182,7 +182,6 @@ class STT(stt.STT):
             energy_filter=energy_filter,
         )
         self._session = http_session
-        self._active_speech_stream: Optional[SpeechStream] = None
         self._streams = weakref.WeakSet[SpeechStream]()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
