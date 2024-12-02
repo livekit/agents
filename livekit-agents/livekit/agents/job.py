@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Any, Callable, Coroutine, Tuple
 
-from livekit import rtc
+from livekit import rtc, api
 from livekit.protocol import agent, models
 
 from .log import logger
@@ -87,6 +87,11 @@ class JobContext:
         ] = []
         self._participant_tasks = dict[Tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._participant_available)
+        self._api = api.LiveKitAPI()
+
+    @property
+    def api(self) -> api.LiveKitAPI:
+        return self._api
 
     @property
     def proc(self) -> JobProcess:
