@@ -13,6 +13,7 @@ from ..log import logger
 from ..utils.aio import duplex_unix
 from . import channel, job_proc_lazy_main, proto
 from .job_executor import JobStatus
+from .inference_executor import InferenceExecutor
 
 
 @dataclass
@@ -31,6 +32,7 @@ class ThreadJobExecutor:
         *,
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
+        inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
         close_timeout: float,
         ping_interval: float,
@@ -55,6 +57,9 @@ class ThreadJobExecutor:
         self._initialize_fut = asyncio.Future[None]()
         self._closing = False
         self._lock = asyncio.Lock()
+
+        self._inference_executor = inference_executor
+        self._inference_tasks: list[asyncio.Task[None]] = []
 
     @property
     def status(self) -> JobStatus:
@@ -179,6 +184,31 @@ class ThreadJobExecutor:
             if self._main_atask:
                 await asyncio.shield(self._main_atask)
 
+    async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
+        if self._inference_executor is None:
+            logger.warning("inference request received but no inference executor")
+            await channel.asend_message(
+                self._pch,
+                proto.InferenceResponse(
+                    request_id=inf_req.request_id, error="no inference executor"
+                ),
+            )
+            return
+
+        try:
+            inf_res = await self._inference_executor.do_inference(
+                inf_req.method, inf_req.data
+            )
+            await channel.asend_message(
+                self._pch,
+                proto.InferenceResponse(request_id=inf_req.request_id, data=inf_res),
+            )
+        except Exception as e:
+            await channel.asend_message(
+                self._pch,
+                proto.InferenceResponse(request_id=inf_req.request_id, error=str(e)),
+            )
+
     async def launch_job(self, info: RunningJobInfo) -> None:
         """start/assign a job to the executor"""
         if self._running_job is not None:
@@ -208,6 +238,7 @@ class ThreadJobExecutor:
 
         await self._join_fut
         await utils.aio.gracefully_cancel(ping_task, monitor_task)
+        await utils.aio.gracefully_cancel(*self._inference_tasks)
 
         with contextlib.suppress(duplex_unix.DuplexClosed):
             await self._pch.aclose()
@@ -233,6 +264,11 @@ class ThreadJobExecutor:
             if isinstance(msg, proto.Exiting):
                 logger.debug(
                     "job exiting", extra={"reason": msg.reason, **self.logging_extra()}
+                )
+
+            if isinstance(msg, proto.InferenceRequest):
+                self._inference_tasks.append(
+                    asyncio.create_task(self._do_inference_task(msg))
                 )
 
     @utils.log_exceptions(logger=logger)
