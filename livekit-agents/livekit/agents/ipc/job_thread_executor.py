@@ -12,8 +12,8 @@ from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils.aio import duplex_unix
 from . import channel, job_proc_lazy_main, proto
-from .job_executor import JobStatus
 from .inference_executor import InferenceExecutor
+from .job_executor import JobStatus
 
 
 @dataclass
