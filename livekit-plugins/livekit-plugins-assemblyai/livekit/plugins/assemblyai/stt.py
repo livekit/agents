@@ -219,80 +219,74 @@ class SpeechStream(stt.SpeechStream):
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse):
-            try:
-                nonlocal closing_ws
+            nonlocal closing_ws
 
-                if self._opts.end_utterance_silence_threshold:
-                    await ws.send_str(
-                        json.dumps(
-                            {
-                                "end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold
-                            }
-                        )
+            if self._opts.end_utterance_silence_threshold:
+                await ws.send_str(
+                    json.dumps(
+                        {
+                            "end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold
+                        }
                     )
-
-                samples_per_buffer = self._opts.sample_rate // round(
-                    1 / self._opts.buffer_size_seconds
-                )
-                audio_bstream = utils.audio.AudioByteStream(
-                    sample_rate=self._opts.sample_rate,
-                    num_channels=1,
-                    samples_per_channel=samples_per_buffer,
                 )
 
-                # forward inputs to AssemblyAI
-                # if we receive a close message, signal it to AssemblyAI and break.
-                # the recv task will then make sure to process the remaining audio and stop
-                async for data in self._input_ch:
-                    if isinstance(data, self._FlushSentinel):
-                        frames = audio_bstream.flush()
-                    else:
-                        frames = audio_bstream.write(data.data.tobytes())
+            samples_per_buffer = self._opts.sample_rate // round(
+                1 / self._opts.buffer_size_seconds
+            )
+            audio_bstream = utils.audio.AudioByteStream(
+                sample_rate=self._opts.sample_rate,
+                num_channels=1,
+                samples_per_channel=samples_per_buffer,
+            )
 
-                    for frame in frames:
-                        self._speech_duration += frame.duration
-                        await ws.send_bytes(frame.data.tobytes())
+            # forward inputs to AssemblyAI
+            # if we receive a close message, signal it to AssemblyAI and break.
+            # the recv task will then make sure to process the remaining audio and stop
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    frames = audio_bstream.flush()
+                else:
+                    frames = audio_bstream.write(data.data.tobytes())
 
-                closing_ws = True
-                await ws.send_str(SpeechStream._CLOSE_MSG)
-            except asyncio.CancelledError:
-                pass
+                for frame in frames:
+                    self._speech_duration += frame.duration
+                    await ws.send_bytes(frame.data.tobytes())
+
+            closing_ws = True
+            await ws.send_str(SpeechStream._CLOSE_MSG)
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
-            try:
-                nonlocal closing_ws
-                while True:
-                    try:
-                        msg = await asyncio.wait_for(ws.receive(), timeout=5)
-                    except asyncio.TimeoutError:
-                        if closing_ws:
-                            break
-                        continue
+            nonlocal closing_ws
+            while True:
+                try:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                except asyncio.TimeoutError:
+                    if closing_ws:
+                        break
+                    continue
 
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        if closing_ws:  # close is expected, see SpeechStream.aclose
-                            return
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    if closing_ws:  # close is expected, see SpeechStream.aclose
+                        return
 
-                        raise Exception(
-                            "AssemblyAI connection closed unexpectedly",
-                        )  # this will trigger a reconnection, see the _run loop
+                    raise Exception(
+                        "AssemblyAI connection closed unexpectedly",
+                    )  # this will trigger a reconnection, see the _run loop
 
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        logger.error("unexpected AssemblyAI message type %s", msg.type)
-                        continue
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.error("unexpected AssemblyAI message type %s", msg.type)
+                    continue
 
-                    try:
-                        # received a message from AssemblyAI
-                        data = json.loads(msg.data)
-                        self._process_stream_event(data, closing_ws)
-                    except Exception:
-                        logger.exception("failed to process AssemblyAI message")
-            except asyncio.CancelledError:
-                pass
+                try:
+                    # received a message from AssemblyAI
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data, closing_ws)
+                except Exception:
+                    logger.exception("failed to process AssemblyAI message")
 
         async def _wait_for_reconnect():
             await self._reconnect_event.wait()

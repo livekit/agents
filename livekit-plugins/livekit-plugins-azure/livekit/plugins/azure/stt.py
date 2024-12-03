@@ -187,6 +187,9 @@ class SpeechStream(stt.SpeechStream):
                 finally:
                     self._stream.close()
                     await self._session_stopped_event.wait()
+                    await utils.aio.gracefully_cancel(
+                        process_input_task, reconnect_task
+                    )
             finally:
 
                 def _cleanup():
