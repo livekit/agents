@@ -1,4 +1,5 @@
 import logging
+import random
 from typing import Annotated
 
 import aiohttp
@@ -39,11 +40,25 @@ class AssistantFnc(llm.FunctionContext):
         # while awaiting the completion of the function call. To create a more dynamic and engaging
         # interaction, consider varying the responses based on context or user input.
         call_ctx = AgentCallContext.get_current()
-        message = f"Let me check the weather in {location} for you."
+        # message = f"Let me check the weather in {location} for you."
+        message = f"Here is the weather in {location}: "
+        filler_messages = [
+            "Let me check the weather in {location} for you.",
+            "Let me see what the weather is like in {location} right now.",
+            # LLM will complete this sentence if it is added to the end of the chat context
+            "The current weather in {location} is ",
+        ]
+        message = random.choice(filler_messages).format(location=location)
         speech_handle = await call_ctx.agent.say(message)  # noqa: F841
 
         # (optional) add the filler message to the chat context for synthesis the tool call speech
-        call_ctx.chat_ctx.append(text=message, role="assistant")
+        said_message = llm.ChatMessage(role="assistant", content=message)
+
+        # option 1: add the message to the beginning of the function call outputs
+        # call_ctx.chat_ctx.messages.append(said_message)
+
+        # option 2: add the message to the end of the function call outputs
+        call_ctx.add_extra_chat_message(said_message)
 
         # Or wait for the speech to finish, the said message will be added to the chat context
         # automatically when the `add_to_chat_ctx` is True (default)

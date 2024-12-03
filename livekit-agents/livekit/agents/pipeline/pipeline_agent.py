@@ -68,6 +68,7 @@ class AgentCallContext:
         self._assistant = assistant
         self._metadata = dict[str, Any]()
         self._llm_stream = llm_stream
+        self._extra_chat_messages: list[ChatMessage] = []
 
     @staticmethod
     def get_current() -> "AgentCallContext":
@@ -89,6 +90,14 @@ class AgentCallContext:
 
     def llm_stream(self) -> LLMStream:
         return self._llm_stream
+
+    def add_extra_chat_message(self, message: ChatMessage) -> None:
+        """Append chat message to the end of function outputs for the answer LLM call"""
+        self._extra_chat_messages.append(message)
+
+    @property
+    def extra_chat_messages(self) -> list[ChatMessage]:
+        return self._extra_chat_messages
 
 
 def _default_before_llm_cb(
@@ -838,6 +847,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             # synthesize the tool speech with the chat ctx from llm_stream
             chat_ctx = call_ctx.chat_ctx.copy()
             chat_ctx.messages.extend(extra_tools_messages)
+            chat_ctx.messages.extend(call_ctx.extra_chat_messages)
             answer_llm_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx)
 
             synthesis_handle = self._synthesize_agent_speech(
