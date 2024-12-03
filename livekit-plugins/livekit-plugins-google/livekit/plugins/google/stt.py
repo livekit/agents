@@ -366,6 +366,51 @@ class SpeechStream(stt.SpeechStream):
                     "an error occurred while streaming input to google STT"
                 )
 
+        async def process_stream(stream):
+            async for resp in stream:
+                if (
+                    resp.speech_event_type
+                    == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
+                ):
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    )
+
+                if (
+                    resp.speech_event_type
+                    == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
+                ):
+                    result = resp.results[0]
+                    speech_data = _streaming_recognize_response_to_speech_data(resp)
+                    if speech_data is None:
+                        continue
+
+                    if not result.is_final:
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                                alternatives=[speech_data],
+                            )
+                        )
+                    else:
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                alternatives=[speech_data],
+                            )
+                        )
+
+                if (
+                    resp.speech_event_type
+                    == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
+                ):
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                    )
+
+        async def _wait_for_reconnect():
+            await self._reconnect_event.wait()
+
         while True:
             try:
                 self._streaming_config = cloud_speech.StreamingRecognitionConfig(
@@ -393,49 +438,17 @@ class SpeechStream(stt.SpeechStream):
                     requests=input_generator(),
                 )
 
-                async for resp in stream:
-                    if self._reconnect_event.is_set():
-                        break
+                process_stream_task = asyncio.create_task(process_stream(stream))
+                reconnect_task = asyncio.create_task(_wait_for_reconnect())
 
-                    if (
-                        resp.speech_event_type
-                        == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
-                    ):
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                        )
+                try:
+                    await asyncio.wait(
+                        [process_stream_task, reconnect_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                except asyncio.CancelledError:
+                    pass
 
-                    if (
-                        resp.speech_event_type
-                        == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
-                    ):
-                        result = resp.results[0]
-                        speech_data = _streaming_recognize_response_to_speech_data(resp)
-                        if speech_data is None:
-                            continue
-
-                        if not result.is_final:
-                            self._event_ch.send_nowait(
-                                stt.SpeechEvent(
-                                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                                    alternatives=[speech_data],
-                                )
-                            )
-                        else:
-                            self._event_ch.send_nowait(
-                                stt.SpeechEvent(
-                                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                    alternatives=[speech_data],
-                                )
-                            )
-
-                    if (
-                        resp.speech_event_type
-                        == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
-                    ):
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                        )
             finally:
                 if self._reconnect_event.is_set():
                     self._reconnect_event.clear()
