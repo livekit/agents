@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from utils.misc import shortuuid
+from ..utils import shortuuid
 
 from livekit import rtc
 
