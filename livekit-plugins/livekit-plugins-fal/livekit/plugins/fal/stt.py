@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import os
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Optional
 
 import fal_client
 from livekit import rtc
@@ -50,7 +50,7 @@ class WizperSTT(stt.STT):
                 "FAL AI API key is required. It should be set with env FAL_KEY"
             )
 
-    def update_options(self, *, language: Union[str, None]) -> None:
+    def update_options(self, *, language: Optional[str]) -> None:
         self._opts.language = language or self._opts.language
 
     def _sanitize_options(
