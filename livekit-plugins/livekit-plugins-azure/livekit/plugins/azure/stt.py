@@ -169,11 +169,22 @@ class SpeechStream(stt.SpeechStream):
                     self._session_started_event.wait(), self._conn_options.timeout
                 )
 
-                async for input in self._input_ch:
-                    if self._reconnect_event.is_set():
-                        break
-                    if isinstance(input, rtc.AudioFrame):
-                        self._stream.write(input.data.tobytes())
+                async def process_input():
+                    async for input in self._input_ch:
+                        if isinstance(input, rtc.AudioFrame):
+                            self._stream.write(input.data.tobytes())
+                            
+                async def _wait_for_reconnect():
+                    await self._reconnect_event.wait()
+
+                process_input_task = asyncio.create_task(process_input())
+                reconnect_task = asyncio.create_task(_wait_for_reconnect())
+                try: 
+                    await  asyncio.wait(
+                        [process_input_task, reconnect_task], return_when=asyncio.FIRST_COMPLETED
+                    )
+                except asyncio.CancelledError:
+                    pass 
 
                 self._stream.close()
                 await self._session_stopped_event.wait()
