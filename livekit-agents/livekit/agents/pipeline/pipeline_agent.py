@@ -417,6 +417,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         *,
         allow_interruptions: bool = True,
         add_to_chat_ctx: bool = True,
+        add_to_fnc_call_ctx: bool = False,
     ) -> SpeechHandle:
         """
         Play a speech source through the voice assistant.
@@ -426,12 +427,31 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 It can be a string, an LLMStream, or an asynchronous iterable of strings.
             allow_interruptions: Whether to allow interruptions during the speech playback.
             add_to_chat_ctx: Whether to add the speech to the chat context.
+            add_to_fnc_call_ctx: Whether to add the speech to the function call context.
+                This is useful inside function calls to add the said messages to the chat context.
 
         Returns:
             The speech handle for the speech that was played, can be used to
             wait for the speech to finish.
         """
         await self._track_published_fut
+
+        call_ctx = None
+        fnc_source: str | AsyncIterable[str] | None = None
+        if add_to_fnc_call_ctx:
+            try:
+                call_ctx = AgentCallContext.get_current()
+            except LookupError:
+                logger.warning(
+                    "no active call context found, ignore add_to_fnc_call_ctx"
+                )
+            else:
+                if isinstance(source, LLMStream):
+                    logger.warning("add_to_fnc_call_ctx is not supported for LLMStream")
+                elif isinstance(source, AsyncIterable):
+                    source, fnc_source = utils.aio.itertools.tee(source, 2)  # type: ignore
+                else:
+                    fnc_source = source
 
         new_handle = SpeechHandle.create_assistant_speech(
             allow_interruptions=allow_interruptions, add_to_chat_ctx=add_to_chat_ctx
@@ -443,6 +463,19 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self._playing_speech.add_nested_speech(new_handle)
         else:
             self._add_speech_for_playout(new_handle)
+
+        # add the speech to the function call context if needed
+        if call_ctx is not None and fnc_source is not None:
+            if isinstance(fnc_source, AsyncIterable):
+                text = ""
+                async for chunk in fnc_source:
+                    text += chunk
+            else:
+                text = fnc_source
+
+            call_ctx.add_extra_chat_message(
+                ChatMessage.create(text=text, role="assistant")
+            )
 
         return new_handle
 

@@ -49,16 +49,10 @@ class AssistantFnc(llm.FunctionContext):
             "The current weather in {location} is ",
         ]
         message = random.choice(filler_messages).format(location=location)
-        speech_handle = await call_ctx.agent.say(message)  # noqa: F841
 
-        # (optional) add the filler message to the chat context for synthesis the tool call speech
-        said_message = llm.ChatMessage(role="assistant", content=message)
-
-        # option 1: add the message to the beginning of the function call outputs
-        # call_ctx.chat_ctx.messages.append(said_message)
-
-        # option 2: add the message to the end of the function call outputs
-        call_ctx.add_extra_chat_message(said_message)
+        # NOTE: set add_to_fnc_call_ctx=True will add the message to the end
+        #   of the chat context of the function call for answer synthesis
+        speech_handle = await call_ctx.agent.say(message, add_to_fnc_call_ctx=True)  # noqa: F841
 
         # Or wait for the speech to finish, the said message will be added to the chat context
         # automatically when the `add_to_chat_ctx` is True (default)
