@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import uuid
+from utils.misc import shortuuid
 
 from livekit import rtc
 
@@ -29,4 +29,4 @@ def find_micro_track_id(room: rtc.Room, identity: str) -> str:
 
 
 def segment_uuid() -> str:
-    return "SG_" + str(uuid.uuid4().hex)[:12]
+    return shortuuid("SG_")
