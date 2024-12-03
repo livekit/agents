@@ -7,10 +7,8 @@ This API is non-breaking (backward compatible)
 STT -> LLM -> TTS
 
 ```python
-# rtc.AudioStream already satisfies this interface
 AudioInput = AsyncIterator[rtc.AudioFrame | rtc.AudioFrameEvent]
 
-# rtc.AudioSource already satisfies this interface
 class AudioOutput(Protocol):
     async def capture_frame(self, frame: rtc.AudioFrame) -> None: ...
 
