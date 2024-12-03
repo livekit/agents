@@ -18,7 +18,6 @@ class AVSynchronizer:
             video_source=video_source,
             video_sample_rate=video_sample_rate,
         )
-        av_sync.start()
 
         async for video_frame, audio_frame in video_generator:
             av_sync.push(video_frame)
@@ -28,12 +27,17 @@ class AVSynchronizer:
     def __init__(
         self,
         *,
-        audio_source: rtc.AudioSource,
-        video_source: rtc.VideoSource,
-        video_sample_rate: float,
+        audio_source: rtc.AudioSource | None,
+        video_source: rtc.VideoSource | None,
+        video_sample_rate: float | None = None,
         video_queue_size_ms: float = 1000,
         _max_delay_tolerance_ms: float = 300,
     ):
+        if video_source is not None and video_sample_rate is None:
+            raise ValueError(
+                "video_sample_rate is required when video_source is provided"
+            )
+
         self._audio_source = audio_source
         self._video_source = video_source
         self._video_sample_rate = video_sample_rate
@@ -43,30 +47,37 @@ class AVSynchronizer:
         self._video_queue = asyncio.Queue[rtc.VideoFrame](
             maxsize=self._video_queue_max_size
         )
+        self._max_delay_tolerance_ms = _max_delay_tolerance_ms
 
-        self._fps_controller = _FPSController(
-            expected_fps=video_sample_rate,
-            max_delay_tolerance_ms=_max_delay_tolerance_ms,
-        )
         self._stopped = False
-
-    def start(self) -> None:
-        self._capture_video_task = asyncio.create_task(self._capture_video_task())
+        self._capture_video_task = None
+        if self._video_source is not None:
+            self._capture_video_task = asyncio.create_task(self._capture_video_task())
 
     async def push(self, frame: rtc.VideoFrame | rtc.AudioFrame) -> None:
         if isinstance(frame, rtc.AudioFrame):
+            if self._audio_source is None:
+                logger.warning("No audio source provided")
+                return
             await self._audio_source.capture_frame(frame)
             return
 
+        if self._video_source is None:
+            logger.warning("No video source provided")
+            return
         await self._video_queue.put(frame)
 
     async def _capture_video_task(self) -> None:
+        fps_controller = _FPSController(
+            expected_fps=self._video_sample_rate,
+            max_delay_tolerance_ms=self._max_delay_tolerance_ms,
+        )
         while not self._stopped:
             frame = await self._video_queue.get()
 
-            await self._fps_controller.wait_next_process()
+            await fps_controller.wait_next_process()
             self._video_source.capture_frame(frame)
-            self._fps_controller.after_process()
+            fps_controller.after_process()
 
     async def aclose(self) -> None:
         self._stopped = True
