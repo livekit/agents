@@ -147,21 +147,7 @@ class STT(stt.STT):
         if api_key is None:
             raise ValueError("Deepgram API key is required")
 
-        if language not in ("en-US", "en") and model in (
-            "nova-2-meeting",
-            "nova-2-phonecall",
-            "nova-2-finance",
-            "nova-2-conversationalai",
-            "nova-2-voicemail",
-            "nova-2-video",
-            "nova-2-medical",
-            "nova-2-drivethru",
-            "nova-2-automotive",
-        ):
-            logger.warning(
-                f"{model} does not support language {language}, falling back to nova-2-general"
-            )
-            model = "nova-2-general"
+        model = _validate_model(model, language)
 
         self._api_key = api_key
 
@@ -278,22 +264,7 @@ class STT(stt.STT):
         if language is not None:
             self._opts.language = language
         if model is not None:
-            if language not in ("en-US", "en") and model in (
-                "nova-2-meeting",
-                "nova-2-phonecall",
-                "nova-2-finance",
-                "nova-2-conversationalai",
-                "nova-2-voicemail",
-                "nova-2-video",
-                "nova-2-medical",
-                "nova-2-drivethru",
-                "nova-2-automotive",
-            ):
-                logger.warning(
-                    f"{model} does not support language {language}, falling back to nova-2-general"
-                )
-                model = "nova-2-general"
-            self._opts.model = model
+            self._opts.model = _validate_model(model, language)
         if interim_results is not None:
             self._opts.interim_results = interim_results
         if punctuate is not None:
@@ -399,22 +370,7 @@ class SpeechStream(stt.SpeechStream):
         if language is not None:
             self._opts.language = language
         if model is not None:
-            if language not in ("en-US", "en") and model in (
-                "nova-2-meeting",
-                "nova-2-phonecall",
-                "nova-2-finance",
-                "nova-2-conversationalai",
-                "nova-2-voicemail",
-                "nova-2-video",
-                "nova-2-medical",
-                "nova-2-drivethru",
-                "nova-2-automotive",
-            ):
-                logger.warning(
-                    f"{model} does not support language {language}, falling back to nova-2-general"
-                )
-                model = "nova-2-general"
-            self._opts.model = model
+            self._opts.model = _validate_model(model, language)
         if interim_results is not None:
             self._opts.interim_results = interim_results
         if punctuate is not None:
@@ -447,92 +403,84 @@ class SpeechStream(stt.SpeechStream):
                 while True:
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
                     await asyncio.sleep(5)
-            except asyncio.CancelledError:
-                pass
             except Exception:
                 return
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse):
-            try:
-                nonlocal closing_ws
+            nonlocal closing_ws
 
-                # forward audio to deepgram in chunks of 50ms
-                samples_50ms = self._opts.sample_rate // 20
-                audio_bstream = utils.audio.AudioByteStream(
-                    sample_rate=self._opts.sample_rate,
-                    num_channels=self._opts.num_channels,
-                    samples_per_channel=samples_50ms,
-                )
+            # forward audio to deepgram in chunks of 50ms
+            samples_50ms = self._opts.sample_rate // 20
+            audio_bstream = utils.audio.AudioByteStream(
+                sample_rate=self._opts.sample_rate,
+                num_channels=self._opts.num_channels,
+                samples_per_channel=samples_50ms,
+            )
 
-                has_ended = False
-                last_frame: Optional[rtc.AudioFrame] = None
-                async for data in self._input_ch:
-                    frames: list[rtc.AudioFrame] = []
-                    if isinstance(data, rtc.AudioFrame):
-                        state = self._check_energy_state(data)
-                        if state in (
-                            AudioEnergyFilter.State.START,
-                            AudioEnergyFilter.State.SPEAKING,
-                        ):
-                            if last_frame:
-                                frames.extend(
-                                    audio_bstream.write(last_frame.data.tobytes())
-                                )
-                                last_frame = None
-                            frames.extend(audio_bstream.write(data.data.tobytes()))
-                        elif state == AudioEnergyFilter.State.END:
-                            # no need to buffer as we have cooldown period
-                            frames = audio_bstream.flush()
-                            has_ended = True
-                        elif state == AudioEnergyFilter.State.SILENCE:
-                            # buffer the last silence frame, since it could contain beginning of speech
-                            # TODO: improve accuracy by using a ring buffer with longer window
-                            last_frame = data
-                    elif isinstance(data, self._FlushSentinel):
+            has_ended = False
+            last_frame: Optional[rtc.AudioFrame] = None
+            async for data in self._input_ch:
+                frames: list[rtc.AudioFrame] = []
+                if isinstance(data, rtc.AudioFrame):
+                    state = self._check_energy_state(data)
+                    if state in (
+                        AudioEnergyFilter.State.START,
+                        AudioEnergyFilter.State.SPEAKING,
+                    ):
+                        if last_frame:
+                            frames.extend(
+                                audio_bstream.write(last_frame.data.tobytes())
+                            )
+                            last_frame = None
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif state == AudioEnergyFilter.State.END:
+                        # no need to buffer as we have cooldown period
                         frames = audio_bstream.flush()
                         has_ended = True
+                    elif state == AudioEnergyFilter.State.SILENCE:
+                        # buffer the last silence frame, since it could contain beginning of speech
+                        # TODO: improve accuracy by using a ring buffer with longer window
+                        last_frame = data
+                elif isinstance(data, self._FlushSentinel):
+                    frames = audio_bstream.flush()
+                    has_ended = True
 
-                    for frame in frames:
-                        self._audio_duration_collector.push(frame.duration)
-                        await ws.send_bytes(frame.data.tobytes())
+                for frame in frames:
+                    self._audio_duration_collector.push(frame.duration)
+                    await ws.send_bytes(frame.data.tobytes())
 
-                        if has_ended:
-                            self._audio_duration_collector.flush()
-                            await ws.send_str(SpeechStream._FINALIZE_MSG)
-                            has_ended = False
+                    if has_ended:
+                        self._audio_duration_collector.flush()
+                        await ws.send_str(SpeechStream._FINALIZE_MSG)
+                        has_ended = False
 
-                # tell deepgram we are done sending audio/inputs
-                closing_ws = True
-                await ws.send_str(SpeechStream._CLOSE_MSG)
-            except asyncio.CancelledError:
-                pass
+            # tell deepgram we are done sending audio/inputs
+            closing_ws = True
+            await ws.send_str(SpeechStream._CLOSE_MSG)
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
-            try:
-                nonlocal closing_ws
-                while True:
-                    msg = await ws.receive()
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        if closing_ws:  # close is expected, see SpeechStream.aclose
-                            return
+            nonlocal closing_ws
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    if closing_ws:  # close is expected, see SpeechStream.aclose
+                        return
 
-                        # this will trigger a reconnection, see the _run loop
-                        raise Exception("deepgram connection closed unexpectedly")
+                    # this will trigger a reconnection, see the _run loop
+                    raise Exception("deepgram connection closed unexpectedly")
 
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        logger.warning("unexpected deepgram message type %s", msg.type)
-                        continue
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning("unexpected deepgram message type %s", msg.type)
+                    continue
 
-                    try:
-                        self._process_stream_event(json.loads(msg.data))
-                    except Exception:
-                        logger.exception("failed to process deepgram message")
-            except asyncio.CancelledError:
-                pass
+                try:
+                    self._process_stream_event(json.loads(msg.data))
+                except Exception:
+                    logger.exception("failed to process deepgram message")
 
         async def _wait_for_reconnect():
             await self._reconnect_event.wait()
@@ -739,3 +687,25 @@ def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
         base_url = base_url.replace("ws", "http", 1)
 
     return f"{base_url}?{urlencode(opts, doseq=True)}"
+
+
+def _validate_model(
+    model: DeepgramModels, language: DeepgramLanguages | str
+) -> DeepgramModels:
+    en_only_models = {
+        "nova-2-meeting",
+        "nova-2-phonecall",
+        "nova-2-finance",
+        "nova-2-conversationalai",
+        "nova-2-voicemail",
+        "nova-2-video",
+        "nova-2-medical",
+        "nova-2-drivethru",
+        "nova-2-automotive",
+    }
+    if language not in ("en-US", "en") and model in en_only_models:
+        logger.warning(
+            f"{model} does not support language {language}, falling back to nova-2-general"
+        )
+        return "nova-2-general"
+    return model
