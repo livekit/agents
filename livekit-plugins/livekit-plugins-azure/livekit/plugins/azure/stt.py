@@ -184,11 +184,9 @@ class SpeechStream(stt.SpeechStream):
                         [process_input_task, reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
-                except asyncio.CancelledError:
-                    pass
-
-                self._stream.close()
-                await self._session_stopped_event.wait()
+                finally:
+                    self._stream.close()
+                    await self._session_stopped_event.wait()
             finally:
 
                 def _cleanup():
