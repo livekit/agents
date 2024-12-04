@@ -94,7 +94,8 @@ jobs:
                       ./livekit-plugins/livekit-plugins-azure \
                       ./livekit-plugins/livekit-plugins-anthropic \
                       ./livekit-plugins/livekit-plugins-assemblyai \
-                      ./livekit-plugins/livekit-plugins-fal
+                      ./livekit-plugins/livekit-plugins-fal \
+                      ./livekit-plugins/livekit-plugins-playht
 
       - name: Run tests
         shell: bash
@@ -113,6 +114,8 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
           FAL_KEY: ${{ secrets.FAL_KEY }}
+          PLAYHT_API_KEY: ${{ secrets.PLAYHT_API_KEY }}
+          PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
         working-directory: tests
