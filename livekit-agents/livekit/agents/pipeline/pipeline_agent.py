@@ -417,7 +417,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         *,
         allow_interruptions: bool = True,
         add_to_chat_ctx: bool = True,
-        add_to_fnc_call_ctx: bool = False,
     ) -> SpeechHandle:
         """
         Play a speech source through the voice assistant.
@@ -427,8 +426,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 It can be a string, an LLMStream, or an asynchronous iterable of strings.
             allow_interruptions: Whether to allow interruptions during the speech playback.
             add_to_chat_ctx: Whether to add the speech to the chat context.
-            add_to_fnc_call_ctx: Whether to add the speech to the function call context.
-                This is useful inside function calls to add the said messages to the chat context.
 
         Returns:
             The speech handle for the speech that was played, can be used to
@@ -438,16 +435,17 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         call_ctx = None
         fnc_source: str | AsyncIterable[str] | None = None
-        if add_to_fnc_call_ctx:
+        if add_to_chat_ctx:
             try:
                 call_ctx = AgentCallContext.get_current()
             except LookupError:
-                logger.warning(
-                    "no active call context found, ignore add_to_fnc_call_ctx"
-                )
+                # no active call context, ignore
+                pass
             else:
                 if isinstance(source, LLMStream):
-                    logger.warning("add_to_fnc_call_ctx is not supported for LLMStream")
+                    logger.warning(
+                        "LLMStream will be ignored for function call chat context"
+                    )
                 elif isinstance(source, AsyncIterable):
                     source, fnc_source = utils.aio.itertools.tee(source, 2)  # type: ignore
                 else:
@@ -475,6 +473,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             call_ctx.add_extra_chat_message(
                 ChatMessage.create(text=text, role="assistant")
+            )
+            logger.debug(
+                "added speech to function call chat context",
+                extra={"text": text},
             )
 
         return new_handle

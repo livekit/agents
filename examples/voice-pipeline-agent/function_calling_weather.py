@@ -50,12 +50,11 @@ class AssistantFnc(llm.FunctionContext):
         ]
         message = random.choice(filler_messages).format(location=location)
 
-        # NOTE: set add_to_fnc_call_ctx=True will add the message to the end
+        # NOTE: set add_to_chat_ctx=True will add the message to the end
         #   of the chat context of the function call for answer synthesis
-        speech_handle = await call_ctx.agent.say(message, add_to_fnc_call_ctx=True)  # noqa: F841
+        speech_handle = await call_ctx.agent.say(message, add_to_chat_ctx=True)  # noqa: F841
 
-        # Or wait for the speech to finish, the said message will be added to the chat context
-        # automatically when the `add_to_chat_ctx` is True (default)
+        # To wait for the speech to finish
         # await speech_handle.join()
 
         logger.info(f"getting weather for {location}")
