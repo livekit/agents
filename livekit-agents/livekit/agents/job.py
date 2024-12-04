@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 import multiprocessing as mp
 from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Any, Callable, Coroutine, Tuple
 
-from livekit import rtc
+from livekit import api, rtc
 from livekit.protocol import agent, models
 
 from .ipc.inference_executor import InferenceExecutor
@@ -107,6 +108,10 @@ class JobContext:
     @property
     def inference_executor(self) -> InferenceExecutor:
         return self._inf_executor
+
+    @functools.cached_property
+    def api(self) -> api.LiveKitAPI:
+        return api.LiveKitAPI()
 
     @property
     def proc(self) -> JobProcess:
