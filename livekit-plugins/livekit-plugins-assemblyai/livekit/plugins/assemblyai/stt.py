@@ -288,9 +288,6 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("failed to process AssemblyAI message")
 
-        async def _wait_for_reconnect():
-            await self._reconnect_event.wait()
-
         while True:
             try:
                 ws = await self._connect_ws()
@@ -298,13 +295,13 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                 ]
-                reconnect_task = asyncio.create_task(_wait_for_reconnect())
+                reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
                     done, _ = await asyncio.wait(
                         [asyncio.gather(*tasks), reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
-                    )
+                    )  # type: ignore
                     if reconnect_task not in done:
                         break
 

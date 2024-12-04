@@ -408,9 +408,6 @@ class SpeechStream(stt.SpeechStream):
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
 
-        async def _wait_for_reconnect():
-            await self._reconnect_event.wait()
-
         while True:
             try:
                 self._streaming_config = cloud_speech.StreamingRecognitionConfig(
@@ -439,12 +436,12 @@ class SpeechStream(stt.SpeechStream):
                 )
 
                 process_stream_task = asyncio.create_task(process_stream(stream))
-                reconnect_task = asyncio.create_task(_wait_for_reconnect())
+                reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 try:
                     await asyncio.wait(
                         [process_stream_task, reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
-                    )
+                    )  # type: ignore
                 finally:
                     await utils.aio.gracefully_cancel(
                         process_stream_task, reconnect_task

@@ -174,22 +174,21 @@ class SpeechStream(stt.SpeechStream):
                         if isinstance(input, rtc.AudioFrame):
                             self._stream.write(input.data.tobytes())
 
-                async def _wait_for_reconnect():
-                    await self._reconnect_event.wait()
-
                 process_input_task = asyncio.create_task(process_input())
-                reconnect_task = asyncio.create_task(_wait_for_reconnect())
+                reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
                 try:
                     await asyncio.wait(
                         [process_input_task, reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                 finally:
-                    self._stream.close()
-                    await self._session_stopped_event.wait()
                     await utils.aio.gracefully_cancel(
                         process_input_task, reconnect_task
                     )
+
+                self._stream.close()
+                await self._session_stopped_event.wait()
             finally:
 
                 def _cleanup():
