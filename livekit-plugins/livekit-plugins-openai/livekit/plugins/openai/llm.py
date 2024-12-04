@@ -713,10 +713,11 @@ class LLMStream(llm.LLMStream):
     async def _run(self) -> None:
         if hasattr(self._llm._client, "_refresh_credentials"):
             await self._llm._client._refresh_credentials()
-        if not self._oai_stream:
-            self._oai_stream = await self._awaitable_oai_stream
 
         try:
+            if not self._oai_stream:
+                self._oai_stream = await self._awaitable_oai_stream
+
             async with self._oai_stream as stream:
                 async for chunk in stream:
                     for choice in chunk.choices:
