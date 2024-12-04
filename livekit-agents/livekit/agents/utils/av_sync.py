@@ -119,6 +119,10 @@ class _FPSController:
         if sleep_time > 0:
             await asyncio.sleep(sleep_time)
         else:
+            logger.debug(
+                "Sync state",
+                extra={"sleep_time": sleep_time, "fps": self.actual_fps},
+            )
             # check if significantly behind schedule
             if -sleep_time > self._max_delay_tolerance_secs:
                 logger.warning(
