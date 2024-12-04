@@ -175,16 +175,16 @@ class SpeechStream(stt.SpeechStream):
                             self._stream.write(input.data.tobytes())
 
                 process_input_task = asyncio.create_task(process_input())
-                reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
                     await asyncio.wait(
-                        [process_input_task, reconnect_task],
+                        [process_input_task, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                 finally:
                     await utils.aio.gracefully_cancel(
-                        process_input_task, reconnect_task
+                        process_input_task, wait_reconnect_task
                     )
 
                 self._stream.close()

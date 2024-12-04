@@ -259,7 +259,6 @@ class STT(stt.STT):
         filler_words: bool | None = None,
         keywords: list[Tuple[str, float]] | None = None,
         profanity_filter: bool | None = None,
-        energy_filter: AudioEnergyFilter | bool | None = None,
     ):
         if language is not None:
             self._opts.language = language
@@ -492,18 +491,18 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(recv_task(ws)),
                     asyncio.create_task(keepalive_task(ws)),
                 ]
-                reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), reconnect_task],
+                        [asyncio.gather(*tasks), wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )  # type: ignore
-                    if reconnect_task not in done:
+                    if wait_reconnect_task not in done:
                         break
 
                     self._reconnect_event.clear()
                 finally:
-                    await utils.aio.gracefully_cancel(*tasks, reconnect_task)
+                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
             finally:
                 if ws is not None:
                     await ws.close()
