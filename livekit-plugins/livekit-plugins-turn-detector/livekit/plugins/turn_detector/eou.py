@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import string
+import time
 
 import numpy as np
 from livekit.agents import llm
@@ -73,7 +74,7 @@ class _EUORunner(_InferenceRunner):
                 )
             )
             raise RuntimeError(
-                f"livekit-plugins-eou initialization failed. Could not find model {HG_MODEL}."
+                f"livekit-plugins-turn-detector initialization failed. Could not find model {HG_MODEL}."
             ) from None
 
     def run(self, data: bytes) -> bytes | None:
@@ -82,6 +83,8 @@ class _EUORunner(_InferenceRunner):
 
         if not chat_ctx:
             raise ValueError("chat_ctx is required on the inference input data")
+
+        start_time = time.perf_counter()
 
         text = self._format_chat_ctx(chat_ctx)
         inputs = self._tokenizer(
@@ -95,9 +98,15 @@ class _EUORunner(_InferenceRunner):
         output_probs = _softmax(logits)
         eou_probability = output_probs[self._eou_index]
 
+        end_time = time.perf_counter()
+
         logger.debug(
             "eou prediction",
-            extra={"eou_probability": eou_probability, "input": text},
+            extra={
+                "eou_probability": eou_probability,
+                "input": text,
+                "duration": round(end_time - start_time, 3),
+            },
         )
 
         return json.dumps({"eou_probability": float(eou_probability)}).encode()
