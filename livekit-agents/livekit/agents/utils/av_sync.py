@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 from collections import deque
+from typing import Optional, Union
 
 import livekit.agents.utils as utils
 from livekit import rtc
@@ -27,9 +28,9 @@ class AVSynchronizer:
     def __init__(
         self,
         *,
-        audio_source: rtc.AudioSource | None,
-        video_source: rtc.VideoSource | None,
-        video_sample_rate: float | None = None,
+        audio_source: Optional[rtc.AudioSource],
+        video_source: Optional[rtc.VideoSource],
+        video_sample_rate: Optional[float],
         video_queue_size_ms: float = 1000,
         _max_delay_tolerance_ms: float = 300,
     ):
@@ -41,20 +42,24 @@ class AVSynchronizer:
         self._audio_source = audio_source
         self._video_source = video_source
         self._video_sample_rate = video_sample_rate
-
         self._video_queue_size_ms = video_queue_size_ms
-        self._video_queue_max_size = int(video_sample_rate * video_queue_size_ms / 1000)
-        self._video_queue = asyncio.Queue[rtc.VideoFrame](
-            maxsize=self._video_queue_max_size
-        )
         self._max_delay_tolerance_ms = _max_delay_tolerance_ms
 
         self._stopped = False
-        self._capture_video_task = None
-        if self._video_source is not None:
-            self._capture_video_task = asyncio.create_task(self._capture_video_task())
 
-    async def push(self, frame: rtc.VideoFrame | rtc.AudioFrame) -> None:
+        self._video_queue: Optional[asyncio.Queue[rtc.VideoFrame]] = None
+        self._capture_video_task: Optional[asyncio.Task[None]] = None
+        if self._video_source and self._video_sample_rate is not None:
+            _video_queue_max_size = int(
+                self._video_sample_rate * self._video_queue_size_ms / 1000
+            )
+            self._video_queue = asyncio.Queue[rtc.VideoFrame](
+                maxsize=_video_queue_max_size
+            )
+
+            self._capture_video_task = asyncio.create_task(self._capture_video())
+
+    async def push(self, frame: Union[rtc.VideoFrame, rtc.AudioFrame]) -> None:
         if isinstance(frame, rtc.AudioFrame):
             if self._audio_source is None:
                 logger.warning("No audio source provided")
@@ -62,12 +67,18 @@ class AVSynchronizer:
             await self._audio_source.capture_frame(frame)
             return
 
-        if self._video_source is None:
+        if self._video_queue is None:
             logger.warning("No video source provided")
             return
         await self._video_queue.put(frame)
 
-    async def _capture_video_task(self) -> None:
+    async def _capture_video(self) -> None:
+        assert (
+            self._video_source
+            and self._video_queue
+            and self._video_sample_rate is not None
+        )
+
         fps_controller = _FPSController(
             expected_fps=self._video_sample_rate,
             max_delay_tolerance_ms=self._max_delay_tolerance_ms,
@@ -107,8 +118,9 @@ class _FPSController:
 
         self._max_delay_tolerance_secs = max_delay_tolerance_ms / 1000
 
-        self._next_frame_time = None
-        self._send_timestamps = deque(maxlen=self._fps_calc_winsize)
+        self._next_frame_time: float | None = None
+        self._fps_calc_winsize = max(2, int(0.5 * expected_fps))
+        self._send_timestamps: deque[float] = deque(maxlen=self._fps_calc_winsize)
 
     async def wait_next_process(self) -> None:
         """Wait until it's time for the next frame.
@@ -136,6 +148,10 @@ class _FPSController:
 
     def after_process(self) -> None:
         """Update timing information after processing a frame."""
+        assert (
+            self._next_frame_time is not None
+        ), "wait_next_process must be called first"
+
         # update timing information
         self._send_timestamps.append(time.perf_counter())
 
