@@ -13,8 +13,6 @@ from livekit.agents import (
 from pyht import AsyncClient as PlayHTAsyncClient
 from pyht.client import Format, Language, TTSOptions
 
-from .log import logger
-
 
 @dataclass
 class _TTSOptions:
@@ -211,7 +209,6 @@ class ChunkedStream(tts.ChunkedStream):
                     tts.SynthesizedAudio(request_id=request_id, frame=frame)
                 )
         except Exception as e:
-            logger.error(f"Error in PlayHT ChunkedStream: {e}")
             raise APIConnectionError() from e
 
 
@@ -267,5 +264,4 @@ class SynthesizeStream(tts.SynthesizeStream):
                     tts.SynthesizedAudio(request_id=request_id, frame=frame)
                 )
         except Exception as e:
-            logger.error(f"Error in PlayHT SynthesizeStream: {e}")
             raise APIConnectionError() from e
