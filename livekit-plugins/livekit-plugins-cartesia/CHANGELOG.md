@@ -1,5 +1,11 @@
 # livekit-plugins-cartesia
 
+## 0.4.4
+
+### Patch Changes
+
+- feat: tts retry & tts.FallbackAdapter - [#1074](https://github.com/livekit/agents/pull/1074) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.4.3
 
 ### Patch Changes
