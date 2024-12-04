@@ -170,7 +170,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         stt: stt.STT,
         llm: LLM,
         tts: tts.TTS,
-        eou: _EOUModel | None = None,
+        turn_detector: _EOUModel | None = None,
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
@@ -261,7 +261,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             )
 
         self._stt, self._vad, self._llm, self._tts = stt, vad, llm, tts
-        self._eou = eou
+        self._turn_detector = turn_detector
         self._chat_ctx = chat_ctx or ChatContext()
         self._fnc_ctx = fnc_ctx
         self._started, self._closed = False, False
@@ -281,7 +281,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._deferred_validation = _DeferredReplyValidation(
             self._validate_reply_if_possible,
             self._opts.min_endpointing_delay,
-            eou=self._eou,
+            turn_detector=self._turn_detector,
             agent=self,
         )
 
@@ -1076,10 +1076,10 @@ class _DeferredReplyValidation:
         self,
         validate_fnc: Callable[[], None],
         min_endpointing_delay: float,
-        eou: _EOUModel | None,
+        turn_detector: _EOUModel | None,
         agent: VoicePipelineAgent,
     ) -> None:
-        self._eou = eou
+        self._turn_detector = turn_detector
         self._validate_fnc = validate_fnc
         self._validating_task: asyncio.Task | None = None
         self._last_final_transcript: str = ""
@@ -1153,8 +1153,8 @@ class _DeferredReplyValidation:
         @utils.log_exceptions(logger=logger)
         async def _run_task(chat_ctx: ChatContext, delay: float) -> None:
             await asyncio.sleep(delay)
-            if self._eou is not None:
-                eou_prob = await self._eou.predict_eou(chat_ctx)
+            if self._turn_detector is not None:
+                eou_prob = await self._turn_detector.predict_eou(chat_ctx)
                 if eou_prob < self.UNLIKELY_ENDPOINT_THRESHOLD:
                     await asyncio.sleep(self.UNLIKELY_ENDPOINT_DELAY)
 

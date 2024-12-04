@@ -11,7 +11,7 @@ from livekit.agents.job import get_current_job_context
 
 from .log import logger
 
-HG_MODEL = "livekit/opt-125m-endpoint-detector"
+HG_MODEL = "livekit/opt-125m-endpoint-detector-2"
 PUNCS = string.punctuation.replace("'", "")
 MAX_HISTORY = 4
 
@@ -103,7 +103,7 @@ class _EUORunner(_InferenceRunner):
         return json.dumps({"eou_probability": float(eou_probability)}).encode()
 
 
-class TurnDetector:
+class EOUModel:
     def __init__(self, inference_executor: InferenceExecutor | None = None) -> None:
         self._executor = (
             inference_executor or get_current_job_context().inference_executor

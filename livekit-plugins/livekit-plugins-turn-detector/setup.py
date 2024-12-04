@@ -25,7 +25,7 @@ with open(os.path.join(here, "livekit", "plugins", "eou", "version.py"), "r") as
 
 
 setuptools.setup(
-    name="livekit-plugins-eou",
+    name="livekit-plugins-turn-detector",
     version=about["__version__"],
     description="End of utterance detection for LiveKit Agents",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
