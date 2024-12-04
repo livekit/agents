@@ -61,7 +61,7 @@ class STT(stt.STT):
         api_key: Optional[str] = None,
         sample_rate: Optional[int] = 16000,
         word_boost: Optional[List[str]] = None,
-        encoding: Optional[str] = "pcm_s16le",
+        encoding: Optional[Literal["pcm_s16le", "pcm_mulaw"]] = "pcm_s16le",
         disable_partial_transcripts: bool = False,
         enable_extra_session_information: bool = False,
         end_utterance_silence_threshold: Optional[int] = 500,
