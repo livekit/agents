@@ -17,78 +17,56 @@ class AVSynchronizer:
         av_sync = AVSynchronizer(
             audio_source=audio_source,
             video_source=video_source,
-            video_sample_rate=video_sample_rate,
+            video_fps=video_fps,
         )
 
         async for video_frame, audio_frame in video_generator:
-            av_sync.push(video_frame)
-            av_sync.push(audio_frame)
+            await av_sync.push(video_frame)
+            await av_sync.push(audio_frame)
     """
 
     def __init__(
         self,
         *,
-        audio_source: Optional[rtc.AudioSource],
-        video_source: Optional[rtc.VideoSource],
-        video_sample_rate: Optional[float],
+        audio_source: rtc.AudioSource,
+        video_source: rtc.VideoSource,
+        video_fps: float,
         video_queue_size_ms: float = 1000,
         _max_delay_tolerance_ms: float = 300,
     ):
-        if video_source is not None and video_sample_rate is None:
-            raise ValueError(
-                "video_sample_rate is required when video_source is provided"
-            )
-
         self._audio_source = audio_source
         self._video_source = video_source
-        self._video_sample_rate = video_sample_rate
+        self._video_fps = video_fps
         self._video_queue_size_ms = video_queue_size_ms
         self._max_delay_tolerance_ms = _max_delay_tolerance_ms
 
         self._stopped = False
 
-        self._video_queue: Optional[asyncio.Queue[rtc.VideoFrame]] = None
-        self._capture_video_task: Optional[asyncio.Task[None]] = None
-        if self._video_source and self._video_sample_rate is not None:
-            _video_queue_max_size = int(
-                self._video_sample_rate * self._video_queue_size_ms / 1000
-            )
-            self._video_queue = asyncio.Queue[rtc.VideoFrame](
-                maxsize=_video_queue_max_size
-            )
-
-            self._capture_video_task = asyncio.create_task(self._capture_video())
+        self._video_queue_max_size = int(
+            self._video_fps * self._video_queue_size_ms / 1000
+        )
+        self._video_queue = asyncio.Queue[rtc.VideoFrame](
+            maxsize=self._video_queue_max_size
+        )
+        self._capture_video_task = asyncio.create_task(self._capture_video())
 
     async def push(self, frame: Union[rtc.VideoFrame, rtc.AudioFrame]) -> None:
         if isinstance(frame, rtc.AudioFrame):
-            if self._audio_source is None:
-                logger.warning("No audio source provided")
-                return
+            # TODO: test if frame duration is too long
             await self._audio_source.capture_frame(frame)
             return
 
-        if self._video_queue is None:
-            logger.warning("No video source provided")
-            return
         await self._video_queue.put(frame)
 
     async def _capture_video(self) -> None:
-        assert (
-            self._video_source
-            and self._video_queue
-            and self._video_sample_rate is not None
-        )
-
         fps_controller = _FPSController(
-            expected_fps=self._video_sample_rate,
+            expected_fps=self._video_fps,
             max_delay_tolerance_ms=self._max_delay_tolerance_ms,
         )
         while not self._stopped:
             frame = await self._video_queue.get()
-
-            await fps_controller.wait_next_process()
-            self._video_source.capture_frame(frame)
-            fps_controller.after_process()
+            async with fps_controller:
+                self._video_source.capture_frame(frame)
 
     async def aclose(self) -> None:
         self._stopped = True
@@ -103,11 +81,9 @@ class _FPSController:
         """Controls frame rate by adjusting sleep time based on actual FPS.
 
         Usage:
-            fps_controller = _FPSController(expected_fps=30, max_delay_tolerance_ms=300)
-            while True:
-                await fps_controller.wait_next_frame()
+            async with _FPSController(expected_fps=30):
                 # process frame
-                await fps_controller.after_process()
+                pass
 
         Args:
             expected_fps: Target frames per second
@@ -115,12 +91,17 @@ class _FPSController:
         """
         self._expected_fps = expected_fps
         self._frame_interval = 1.0 / expected_fps
-
         self._max_delay_tolerance_secs = max_delay_tolerance_ms / 1000
 
-        self._next_frame_time: float | None = None
+        self._next_frame_time: Optional[float] = None
         self._fps_calc_winsize = max(2, int(0.5 * expected_fps))
         self._send_timestamps: deque[float] = deque(maxlen=self._fps_calc_winsize)
+
+    async def __aenter__(self) -> None:
+        await self.wait_next_process()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.after_process()
 
     async def wait_next_process(self) -> None:
         """Wait until it's time for the next frame.
