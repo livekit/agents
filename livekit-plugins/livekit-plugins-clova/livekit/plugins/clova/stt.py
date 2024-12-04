@@ -69,7 +69,7 @@ class STT(stt.STT):
             )
         self.threshold = threshold
 
-    def update_options(self, *, language: str | None) -> None:
+    def update_options(self, *, language: str | None = None) -> None:
         self._language = (
             clova_languages_mapping.get(language, language) or self._language
         )
