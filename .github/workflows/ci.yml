@@ -63,6 +63,7 @@ jobs:
                       ./livekit-plugins/livekit-plugins-anthropic \
                       ./livekit-plugins/livekit-plugins-llama-index \
                       ./livekit-plugins/livekit-plugins-fal \
+                      ./livekit-plugins/livekit-plugins-assemblyai \
                       ./livekit-plugins/livekit-plugins-playht
 
       - name: Install stub packages
@@ -92,5 +93,5 @@ jobs:
                -p livekit.plugins.azure \
                -p livekit.plugins.anthropic \
                -p livekit.plugins.fal \
-               -p livekit.plugins.playht
-
+               -p livekit.plugins.playht \
+               -p livekit.plugins.assemblyai

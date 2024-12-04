@@ -1,5 +1,19 @@
 # livekit-plugins-deepgram
 
+## 0.6.13
+
+### Patch Changes
+
+- fix release - [#1176](https://github.com/livekit/agents/pull/1176) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.6.12
+
+### Patch Changes
+
+- feat: stt retry & stt.FallbackAdapter - [#1114](https://github.com/livekit/agents/pull/1114) ([@theomonnom](https://github.com/theomonnom))
+
+- Added support for custom deepgram base url - [#1137](https://github.com/livekit/agents/pull/1137) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.11
 
 ### Patch Changes

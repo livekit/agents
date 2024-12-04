@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
 import multiprocessing as mp
 from dataclasses import dataclass
@@ -24,7 +25,20 @@ from typing import Any, Callable, Coroutine, Tuple
 from livekit import api, rtc
 from livekit.protocol import agent, models
 
+from .ipc.inference_executor import InferenceExecutor
 from .log import logger
+
+_JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
+
+
+def get_current_job_context() -> JobContext:
+    ctx = _JobContextVar.get(None)
+    if ctx is None:
+        raise RuntimeError(
+            "no job context found, are you running this code inside a job entrypoint?"
+        )
+
+    return ctx
 
 
 @unique
@@ -71,6 +85,7 @@ class JobContext:
         room: rtc.Room,
         on_connect: Callable[[], None],
         on_shutdown: Callable[[str], None],
+        inference_executor: InferenceExecutor,
     ) -> None:
         self._proc = proc
         self._info = info
@@ -88,6 +103,11 @@ class JobContext:
         ] = []
         self._participant_tasks = dict[Tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._participant_available)
+        self._inf_executor = inference_executor
+
+    @property
+    def inference_executor(self) -> InferenceExecutor:
+        return self._inf_executor
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
@@ -254,10 +274,14 @@ def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) ->
 
 
 class JobProcess:
-    def __init__(self, *, start_arguments: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        user_arguments: Any | None = None,
+    ) -> None:
         self._mp_proc = mp.current_process()
         self._userdata: dict[str, Any] = {}
-        self._start_arguments = start_arguments
+        self._user_arguments = user_arguments
 
     @property
     def pid(self) -> int | None:
@@ -268,8 +292,8 @@ class JobProcess:
         return self._userdata
 
     @property
-    def start_arguments(self) -> Any | None:
-        return self._start_arguments
+    def user_arguments(self) -> Any | None:
+        return self._user_arguments
 
 
 class JobRequest:
