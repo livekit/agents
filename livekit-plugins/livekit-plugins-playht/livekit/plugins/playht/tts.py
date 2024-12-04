@@ -23,6 +23,13 @@ class _TTSOptions:
     sample_rate: int
     speed: float
     language: Language
+    temperature: float
+    top_p: float
+    text_guidance: float
+    voice_guidance: float
+    style_guidance: float
+    repetition_penalty: float
+    disable_stabilization: bool
 
 
 class TTS(tts.TTS):
@@ -30,24 +37,35 @@ class TTS(tts.TTS):
         self,
         *,
         voice: str = "s3://voice-cloning-zero-shot/775ae416-49bb-4fb6-bd45-740f205d20a1/jennifersaad/manifest.json",
-        format: str = "mp3",
         sample_rate: int = 24000,
         speed: float = 1.0,
         language: str = "english",
         api_key: str | None = None,
         user_id: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        text_guidance: float | None = None,
+        voice_guidance: float | None = None,
+        style_guidance: float | None = None,
+        repetition_penalty: float | None = None,
     ) -> None:
         """
         Initialize the PlayHT TTS engine.
 
         Args:
-            voice (str): The voice to use.
-            format (str): The audio format. Options are 'mp3', 'wav', 'mulaw', 'flac', 'ogg', 'raw'.
+            voice (str): A URL pointing to a Play voice manifest file. (e.g. "s3://voice-cloning-zero-shot/775ae416-49bb-4fb6-bd45-740f205d20a1/jennifersaad/manifest.json").
             sample_rate (int): The sample rate in Hz. Options are 8000, 16000, 24000, 44100, 48000.
             speed (float): The speed of the audio. Default is 1.0.
             language (str): The language of the text. Default is 'english'.
             api_key (str): The PlayHT API key. Can be set via environment variable PLAY_HT_API_KEY.
             user_id (str): The PlayHT user ID. Can be set via environment variable PLAY_HT_USER_ID.
+            > The following options are inference-time hyperparameters of the text-to-speech model; if unset, the model will use default values chosen by PlayHT.
+            temperature (float): The temperature of the model.
+            top_p (float): The top-p value of the model.
+            text_guidance (float): The text guidance of the model.
+            voice_guidance (float): The voice guidance of the model.
+            style_guidance (float): (Play3.0-mini-http and Play3.0-mini-ws only) The style guidance of the model.
+            repetition_penalty (float): The repetition penalty of the model.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -75,10 +93,27 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             speed=speed,
             language=Language(language),
+            temperature=temperature,
+            top_p=top_p,
+            text_guidance=text_guidance,
+            voice_guidance=voice_guidance,
+            style_guidance=style_guidance,
+            repetition_penalty=repetition_penalty,
         )
 
     def update_options(
-        self, *, voice: str | None = None, language: str | None = None
+        self,
+        *,
+        voice: str | None = None,
+        language: str | None = None,
+        sample_rate: int | None = None,
+        speed: float | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        text_guidance: float | None = None,
+        voice_guidance: float | None = None,
+        style_guidance: float | None = None,
+        repetition_penalty: float | None = None,
     ) -> None:
         """
         Update the TTS options.
@@ -86,11 +121,30 @@ class TTS(tts.TTS):
         Args:
             voice (str, optional): The voice to use.
             language (str, optional): The language of the text.
+            sample_rate (int, optional): The sample rate of the audio.
+            speed (float, optional): The speed of the audio.
+            temperature (float, optional): The temperature of the model.
+            top_p (float, optional): The top-p value of the model.
+            text_guidance (float, optional): The text guidance of the model.
+            voice_guidance (float, optional): The voice guidance of the model.
+            style_guidance (float, optional): The style guidance of the model.
+            repetition_penalty (float, optional): The repetition penalty of the model.
         """
-        if voice:
-            self._opts.voice = voice
-        if language:
-            self._opts.language = Language(language)
+        updates = {
+            "voice": voice,
+            "language": Language(language) if language else None,
+            "sample_rate": sample_rate,
+            "speed": speed,
+            "temperature": temperature,
+            "top_p": top_p,
+            "text_guidance": text_guidance,
+            "voice_guidance": voice_guidance,
+            "style_guidance": style_guidance,
+            "repetition_penalty": repetition_penalty,
+        }
+        for k, v in updates.items():
+            if v is not None:
+                setattr(self._opts, k, v)
 
     def synthesize(
         self,
