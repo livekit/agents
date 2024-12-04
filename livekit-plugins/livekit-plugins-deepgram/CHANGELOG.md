@@ -1,5 +1,11 @@
 # livekit-plugins-deepgram
 
+## 0.6.13
+
+### Patch Changes
+
+- fix release - [#1176](https://github.com/livekit/agents/pull/1176) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.12
 
 ### Patch Changes
