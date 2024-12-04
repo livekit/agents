@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import weakref
 from dataclasses import dataclass
 from typing import List, Union
 
@@ -129,6 +131,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             keywords=keywords,
         )
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     def _ensure_client(self) -> SpeechAsyncClient:
         if self._credentials_info:
@@ -239,13 +242,56 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
-        return SpeechStream(
+        stream = SpeechStream(
             stt=self,
             client=self._ensure_client(),
             recognizer=self._recognizer,
             config=config,
             conn_options=conn_options,
         )
+        self._streams.add(stream)
+        return stream
+
+    def update_options(
+        self,
+        *,
+        languages: LanguageCode | None = None,
+        detect_language: bool | None = None,
+        interim_results: bool | None = None,
+        punctuate: bool | None = None,
+        spoken_punctuation: bool | None = None,
+        model: SpeechModels | None = None,
+        location: str | None = None,
+        keywords: List[tuple[str, float]] | None = None,
+    ):
+        if languages is not None:
+            if isinstance(languages, str):
+                languages = [languages]
+            self._config.languages = languages
+        if detect_language is not None:
+            self._config.detect_language = detect_language
+        if interim_results is not None:
+            self._config.interim_results = interim_results
+        if punctuate is not None:
+            self._config.punctuate = punctuate
+        if spoken_punctuation is not None:
+            self._config.spoken_punctuation = spoken_punctuation
+        if model is not None:
+            self._config.model = model
+        if keywords is not None:
+            self._config.keywords = keywords
+
+        for stream in self._streams:
+            stream.update_options(
+                languages=languages,
+                detect_language=detect_language,
+                interim_results=interim_results,
+                punctuate=punctuate,
+                spoken_punctuation=spoken_punctuation,
+                model=model,
+                location=location,
+                keywords=keywords,
+            )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -265,27 +311,38 @@ class SpeechStream(stt.SpeechStream):
         self._client = client
         self._recognizer = recognizer
         self._config = config
+        self._reconnect_event = asyncio.Event()
 
-        self._streaming_config = cloud_speech.StreamingRecognitionConfig(
-            config=cloud_speech.RecognitionConfig(
-                explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
-                    encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
-                    sample_rate_hertz=config.sample_rate,
-                    audio_channel_count=1,
-                ),
-                adaptation=config.build_adaptation(),
-                language_codes=self._config.languages,
-                model=self._config.model,
-                features=cloud_speech.RecognitionFeatures(
-                    enable_automatic_punctuation=self._config.punctuate,
-                    enable_word_time_offsets=True,
-                ),
-            ),
-            streaming_features=cloud_speech.StreamingRecognitionFeatures(
-                enable_voice_activity_events=True,
-                interim_results=self._config.interim_results,
-            ),
-        )
+    def update_options(
+        self,
+        *,
+        languages: LanguageCode | None = None,
+        detect_language: bool | None = None,
+        interim_results: bool | None = None,
+        punctuate: bool | None = None,
+        spoken_punctuation: bool | None = None,
+        model: SpeechModels | None = None,
+        location: str | None = None,
+        keywords: List[tuple[str, float]] | None = None,
+    ):
+        if languages is not None:
+            if isinstance(languages, str):
+                languages = [languages]
+            self._config.languages = languages
+        if detect_language is not None:
+            self._config.detect_language = detect_language
+        if interim_results is not None:
+            self._config.interim_results = interim_results
+        if punctuate is not None:
+            self._config.punctuate = punctuate
+        if spoken_punctuation is not None:
+            self._config.spoken_punctuation = spoken_punctuation
+        if model is not None:
+            self._config.model = model
+        if keywords is not None:
+            self._config.keywords = keywords
+
+        self._reconnect_event.set()
 
     async def _run(self) -> None:
         # google requires a async generator when calling streaming_recognize
@@ -309,50 +366,90 @@ class SpeechStream(stt.SpeechStream):
                     "an error occurred while streaming input to google STT"
                 )
 
-        stream = await self._client.streaming_recognize(
-            requests=input_generator(),
-        )
-
-        async for resp in stream:
-            if (
-                resp.speech_event_type
-                == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
-            ):
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                )
-
-            if (
-                resp.speech_event_type
-                == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
-            ):
-                result = resp.results[0]
-                speech_data = _streaming_recognize_response_to_speech_data(resp)
-                if speech_data is None:
-                    continue
-
-                if not result.is_final:
+        async def process_stream(stream):
+            async for resp in stream:
+                if (
+                    resp.speech_event_type
+                    == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
+                ):
                     self._event_ch.send_nowait(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[speech_data],
-                        )
-                    )
-                else:
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[speech_data],
-                        )
+                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     )
 
-            if (
-                resp.speech_event_type
-                == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
-            ):
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                if (
+                    resp.speech_event_type
+                    == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
+                ):
+                    result = resp.results[0]
+                    speech_data = _streaming_recognize_response_to_speech_data(resp)
+                    if speech_data is None:
+                        continue
+
+                    if not result.is_final:
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                                alternatives=[speech_data],
+                            )
+                        )
+                    else:
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                alternatives=[speech_data],
+                            )
+                        )
+
+                if (
+                    resp.speech_event_type
+                    == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
+                ):
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                    )
+
+        while True:
+            try:
+                self._streaming_config = cloud_speech.StreamingRecognitionConfig(
+                    config=cloud_speech.RecognitionConfig(
+                        explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
+                            encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+                            sample_rate_hertz=self._config.sample_rate,
+                            audio_channel_count=1,
+                        ),
+                        adaptation=self._config.build_adaptation(),
+                        language_codes=self._config.languages,
+                        model=self._config.model,
+                        features=cloud_speech.RecognitionFeatures(
+                            enable_automatic_punctuation=self._config.punctuate,
+                            enable_word_time_offsets=True,
+                        ),
+                    ),
+                    streaming_features=cloud_speech.StreamingRecognitionFeatures(
+                        enable_voice_activity_events=True,
+                        interim_results=self._config.interim_results,
+                    ),
                 )
+
+                stream = await self._client.streaming_recognize(
+                    requests=input_generator(),
+                )
+
+                process_stream_task = asyncio.create_task(process_stream(stream))
+                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                try:
+                    await asyncio.wait(
+                        [process_stream_task, wait_reconnect_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                finally:
+                    await utils.aio.gracefully_cancel(
+                        process_stream_task, wait_reconnect_task
+                    )
+            finally:
+                if not self._reconnect_event.is_set():
+                    break
+                self._reconnect_event.clear()
 
 
 def _recognize_response_to_speech_event(
