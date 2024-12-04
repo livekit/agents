@@ -450,10 +450,9 @@ class SpeechStream(stt.SpeechStream):
                         process_stream_task, reconnect_task
                     )
             finally:
-                if self._reconnect_event.is_set():
-                    self._reconnect_event.clear()
-                else:
+                if not self._reconnect_event.is_set():
                     break
+                self._reconnect_event.clear()
 
 
 def _recognize_response_to_speech_event(

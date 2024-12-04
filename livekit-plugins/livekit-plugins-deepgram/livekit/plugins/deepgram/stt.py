@@ -501,11 +501,10 @@ class SpeechStream(stt.SpeechStream):
                         [asyncio.gather(*tasks), reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
-                    if reconnect_task in done and self._reconnect_event.is_set():
-                        self._reconnect_event.clear()
-                        continue
-                    else:
+                    if reconnect_task not in done:
                         break
+
+                    self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, reconnect_task)
             finally:

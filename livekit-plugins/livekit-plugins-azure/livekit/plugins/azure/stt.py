@@ -197,10 +197,9 @@ class SpeechStream(stt.SpeechStream):
                     del self._recognizer
 
                 await asyncio.to_thread(_cleanup)
-                if self._reconnect_event.is_set():
-                    self._reconnect_event.clear()
-                else:
+                if not self._reconnect_event.is_set():
                     break
+                self._reconnect_event.clear()
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs):
         detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
