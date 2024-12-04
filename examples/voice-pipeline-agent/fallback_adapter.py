@@ -12,7 +12,7 @@ from livekit.agents import (
     tts,
 )
 from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import cartesia, deepgram, elevenlabs, openai, silero
 
 load_dotenv()
 logger = logging.getLogger("fallback-adapter-example")
@@ -47,18 +47,27 @@ async def entrypoint(ctx: JobContext):
         ]
     )
 
-    # fallback to OpenAI if Cartesia goes down
+    # fallback to Azure if OpenAI goes down
+    fallback_llm = llm.FallbackAdapter(
+        [
+            openai.LLM(),
+            openai.LLM.with_azure(),
+        ]
+    )
+
+    # fallback to 11labs if Cartesia goes down
+    # you can keep the same voice by using their voice cloning feature
     fallback_tts = tts.FallbackAdapter(
         [
             cartesia.TTS(),
-            openai.TTS(),
+            elevenlabs.TTS(),
         ]
     )
 
     agent = VoicePipelineAgent(
         vad=vad,
         stt=fallback_stt,
-        llm=openai.LLM(),
+        llm=fallback_llm,
         tts=fallback_tts,
         chat_ctx=initial_ctx,
     )
