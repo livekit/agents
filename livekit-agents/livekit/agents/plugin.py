@@ -13,7 +13,6 @@ EventTypes = Literal["plugin_registered",]
 class Plugin(ABC):
     registered_plugins: List["Plugin"] = []
     emitter: utils.EventEmitter[EventTypes] = utils.EventEmitter()
-    lock = threading.Lock()
 
     # TODO(theomonnom): make logger mandatory once all plugins have been updated
     def __init__(
