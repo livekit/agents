@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import weakref
 from dataclasses import dataclass
 from typing import List, Literal, Optional
 from urllib.parse import urlencode
@@ -93,6 +94,7 @@ class STT(stt.STT):
             end_utterance_silence_threshold=end_utterance_silence_threshold,
         )
         self._session = http_session
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -116,13 +118,46 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
         config = dataclasses.replace(self._opts)
-        return SpeechStream(
+        stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
             opts=config,
             api_key=self._api_key,
             http_session=self.session,
         )
+        self._streams.add(stream)
+        return stream
+
+    def update_options(
+        self,
+        *,
+        disable_partial_transcripts: Optional[bool] = None,
+        word_boost: Optional[List[str]] = None,
+        end_utterance_silence_threshold: Optional[int] = None,
+        enable_extra_session_information: Optional[bool] = None,
+        buffer_size_seconds: Optional[float] = None,
+    ):
+        if disable_partial_transcripts is not None:
+            self._opts.disable_partial_transcripts = disable_partial_transcripts
+        if word_boost is not None:
+            self._opts.word_boost = word_boost
+        if end_utterance_silence_threshold is not None:
+            self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
+        if enable_extra_session_information is not None:
+            self._opts.enable_extra_session_information = (
+                enable_extra_session_information
+            )
+        if buffer_size_seconds is not None:
+            self._opts.buffer_size_seconds = buffer_size_seconds
+
+        for stream in self._streams:
+            stream.update_options(
+                disable_partial_transcripts=disable_partial_transcripts,
+                word_boost=word_boost,
+                end_utterance_silence_threshold=end_utterance_silence_threshold,
+                enable_extra_session_information=enable_extra_session_information,
+                buffer_size_seconds=buffer_size_seconds,
+            )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -149,33 +184,41 @@ class SpeechStream(stt.SpeechStream):
 
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: List[stt.SpeechEvent] = []
+        self._reconnect_event = asyncio.Event()
+
+    def update_options(
+        self,
+        *,
+        disable_partial_transcripts: Optional[bool] = None,
+        word_boost: Optional[List[str]] = None,
+        end_utterance_silence_threshold: Optional[int] = None,
+        enable_extra_session_information: Optional[bool] = None,
+        buffer_size_seconds: Optional[float] = None,
+    ):
+        if disable_partial_transcripts is not None:
+            self._opts.disable_partial_transcripts = disable_partial_transcripts
+        if word_boost is not None:
+            self._opts.word_boost = word_boost
+        if end_utterance_silence_threshold is not None:
+            self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
+        if enable_extra_session_information is not None:
+            self._opts.enable_extra_session_information = (
+                enable_extra_session_information
+            )
+        if buffer_size_seconds is not None:
+            self._opts.buffer_size_seconds = buffer_size_seconds
+
+        self._reconnect_event.set()
 
     async def _run(self) -> None:
         """
         Run a single websocket connection to AssemblyAI and make sure to reconnect
         when something went wrong.
         """
-        live_config = {
-            "sample_rate": self._opts.sample_rate,
-            "word_boost": self._opts.word_boost,
-            "encoding": self._opts.encoding,
-            "disable_partial_transcripts": self._opts.disable_partial_transcripts,
-            "enable_extra_session_information": self._opts.enable_extra_session_information,
-        }
-
-        headers = {
-            "Authorization": self._api_key,
-            "Content-Type": "application/json",
-        }
-
-        ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
-        filtered_config = {k: v for k, v in live_config.items() if v is not None}
-        url = f"{ws_url}?{urlencode(filtered_config).lower()}"
-        ws = await self._session.ws_connect(url, headers=headers)
 
         closing_ws = False
 
-        async def send_task():
+        async def send_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
 
             if self._opts.end_utterance_silence_threshold:
@@ -212,7 +255,7 @@ class SpeechStream(stt.SpeechStream):
             closing_ws = True
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
-        async def recv_task():
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
             while True:
                 try:
@@ -245,15 +288,49 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("failed to process AssemblyAI message")
 
-        tasks = [
-            asyncio.create_task(send_task()),
-            asyncio.create_task(recv_task()),
-        ]
+        while True:
+            try:
+                ws = await self._connect_ws()
+                tasks = [
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                ]
+                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
+                try:
+                    done, _ = await asyncio.wait(
+                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if wait_reconnect_task not in done:
+                        break
+
+                    self._reconnect_event.clear()
+                finally:
+                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+            finally:
+                if ws is not None:
+                    await ws.close()
+
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        live_config = {
+            "sample_rate": self._opts.sample_rate,
+            "word_boost": self._opts.word_boost,
+            "encoding": self._opts.encoding,
+            "disable_partial_transcripts": self._opts.disable_partial_transcripts,
+            "enable_extra_session_information": self._opts.enable_extra_session_information,
+        }
+
+        headers = {
+            "Authorization": self._api_key,
+            "Content-Type": "application/json",
+        }
+
+        ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
+        filtered_config = {k: v for k, v in live_config.items() if v is not None}
+        url = f"{ws_url}?{urlencode(filtered_config).lower()}"
+        ws = await self._session.ws_connect(url, headers=headers)
+        return ws
 
     def _process_stream_event(self, data: dict, closing_ws: bool) -> None:
         # see this page:

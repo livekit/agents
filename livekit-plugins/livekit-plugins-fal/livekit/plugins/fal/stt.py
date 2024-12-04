@@ -50,6 +50,9 @@ class WizperSTT(stt.STT):
                 "FAL AI API key is required. It should be set with env FAL_KEY"
             )
 
+    def update_options(self, *, language: Optional[str] = None) -> None:
+        self._opts.language = language or self._opts.language
+
     def _sanitize_options(
         self,
         *,
