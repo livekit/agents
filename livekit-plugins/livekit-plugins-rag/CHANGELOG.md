@@ -1,5 +1,11 @@
 # livekit-plugins-rag
 
+## 0.2.3
+
+### Patch Changes
+
+- fix release - [#1176](https://github.com/livekit/agents/pull/1176) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.2.2
 
 ### Patch Changes
