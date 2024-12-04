@@ -26,6 +26,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
+from livekit.agents.stt import SpeechEvent
 from livekit.agents.utils import AudioBuffer
 
 from .log import logger
@@ -41,14 +42,14 @@ bytes_per_frame = {
 
 @dataclass
 class STTOptions:
-    sample_rate: Optional[int] = None
+    sample_rate: int
+    buffer_size_seconds: float
     word_boost: Optional[List[str]] = None
     encoding: Optional[Literal["pcm_s16le", "pcm_mulaw"]] = None
     disable_partial_transcripts: bool = False
     enable_extra_session_information: bool = False
     end_utterance_silence_threshold: Optional[int] = None
     # Buffer to collect frames to send to AssemblyAI
-    buffer_size_seconds: Optional[float] = None
 
     def __post_init__(self):
         if self.encoding not in (None, "pcm_s16le", "pcm_mulaw"):
@@ -60,9 +61,9 @@ class STT(stt.STT):
         self,
         *,
         api_key: Optional[str] = None,
-        sample_rate: Optional[int] = 16000,
+        sample_rate: int = 16000,
         word_boost: Optional[List[str]] = None,
-        encoding: Optional[str] = "pcm_s16le",
+        encoding: Optional[Literal["pcm_s16le", "pcm_mulaw"]] = "pcm_s16le",
         disable_partial_transcripts: bool = False,
         enable_extra_session_information: bool = False,
         end_utterance_silence_threshold: Optional[int] = 500,
@@ -180,10 +181,10 @@ class SpeechStream(stt.SpeechStream):
         self._opts = opts
         self._api_key = api_key
         self._session = http_session
-        self._speech_duration = 0
+        self._speech_duration: float = 0
 
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
-        self._final_events: List[stt.SpeechEvent] = []
+        self._final_events: List[SpeechEvent] = []
         self._reconnect_event = asyncio.Event()
 
     def update_options(
@@ -301,7 +302,7 @@ class SpeechStream(stt.SpeechStream):
                     done, _ = await asyncio.wait(
                         [asyncio.gather(*tasks), wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
-                    )
+                    )  # type: ignore
                     if wait_reconnect_task not in done:
                         break
 
