@@ -441,7 +441,7 @@ class SpeechStream(stt.SpeechStream):
                     await asyncio.wait(
                         [process_stream_task, reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
-                    )  # type: ignore
+                    )
                 finally:
                     await utils.aio.gracefully_cancel(
                         process_stream_task, reconnect_task
