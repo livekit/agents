@@ -32,7 +32,7 @@ class ChatImage:
     You may need to consult your LLM provider's documentation on supported URL types.
 
     ```python
-    # With a VideoFrame, which will be automatically converted a data URL internally
+    # With a VideoFrame, which will be automatically converted to a data URL internally
     async for event in rtc.VideoStream(video_track):
         chat_image = ChatImage(image=event.frame)
         # this instance is now available for your ChatContext
