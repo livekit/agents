@@ -62,7 +62,8 @@ jobs:
                       ./livekit-plugins/livekit-plugins-azure \
                       ./livekit-plugins/livekit-plugins-anthropic \
                       ./livekit-plugins/livekit-plugins-llama-index \
-                      ./livekit-plugins/livekit-plugins-fal
+                      ./livekit-plugins/livekit-plugins-fal \
+                      ./livekit-plugins/livekit-plugins-assemblyai
 
       - name: Install stub packages
         run: |
@@ -90,5 +91,5 @@ jobs:
                -p livekit.plugins.rag \
                -p livekit.plugins.azure \
                -p livekit.plugins.anthropic \
-               -p livekit.plugins.fal
-
+               -p livekit.plugins.fal \
+               -p livekit.plugins.assemblyai
