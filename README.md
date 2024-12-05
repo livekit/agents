@@ -59,7 +59,7 @@ The following plugins are available today:
 | [livekit-plugins-deepgram](https://pypi.org/project/livekit-plugins-deepgram/)     | STT                                         |
 | [livekit-plugins-cartesia](https://pypi.org/project/livekit-plugins-cartesia/)     | TTS                                         |
 | [livekit-plugins-elevenlabs](https://pypi.org/project/livekit-plugins-elevenlabs/) | TTS                                         |
-| [livekit-plugins-playht](https://pypi.org/project/livekit-plugins-playht/)         | TTS                                         |
+| [livekit-plugins-playai](https://pypi.org/project/livekit-plugins-playai/)         | TTS                                         |
 | [livekit-plugins-google](https://pypi.org/project/livekit-plugins-google/)         | STT, TTS                                    |
 | [livekit-plugins-nltk](https://pypi.org/project/livekit-plugins-nltk/)             | Utilities for working with text             |
 | [livekit-plugins-rag](https://pypi.org/project/livekit-plugins-rag/)               | Utilities for performing RAG                |

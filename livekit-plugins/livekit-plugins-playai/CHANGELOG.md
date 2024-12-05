@@ -1,4 +1,4 @@
-# livekit-plugins-playht
+# livekit-plugins-playai
 
 ## 1.0.3
 

@@ -1,5 +1,5 @@
 ---
-"livekit-plugins-playht": patch
+"livekit-plugins-playai": patch
 ---
 
-Support PlayHT TTS 
+Support PlayAI TTS 
