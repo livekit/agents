@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    tokenize,
     tts,
     utils,
 )
@@ -236,6 +239,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._client = tts._client
         self._opts = opts
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
+        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
+            min_sentence_len=8
+        ).stream()
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
@@ -251,31 +257,50 @@ class SynthesizeStream(tts.SynthesizeStream):
             language=self._opts.language,
         )
 
-        async def text_stream():
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    continue
-                if data is None:
-                    break
-                yield data
-
+        input_task = asyncio.create_task(self._handle_input())
         try:
+            text_stream = await self._create_text_stream()
             async for chunk in self._client.stream_tts_input(
-                text_stream=text_stream(),
+                text_stream=text_stream,
                 options=tts_options,
                 voice_engine=self._opts.voice_engine,
             ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
                     for frame in bstream.write(frame.data.tobytes()):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                request_id=request_id,
-                                frame=frame,
-                            )
-                        )
+                        self._send_frame(request_id, frame)
+                        last_frame = frame
+
             for frame in bstream.flush():
-                self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(request_id=request_id, frame=frame)
-                )
+                self._send_frame(request_id, frame)
+                last_frame = frame
+            self._send_frame(request_id, last_frame, is_final=True)
         except Exception as e:
             raise APIConnectionError() from e
+        finally:
+            await utils.aio.gracefully_cancel(input_task)
+
+    async def _handle_input(self):
+        async for data in self._input_ch:
+            if isinstance(data, self._FlushSentinel):
+                self._sent_tokenizer_stream.flush()
+                continue
+            self._sent_tokenizer_stream.push_text(data)
+        self._sent_tokenizer_stream.end_input()
+
+    async def _create_text_stream(self):
+        async def text_stream():
+            async for data in self._sent_tokenizer_stream:
+                yield data.token
+
+        return text_stream()
+
+    def _send_frame(
+        self, request_id: str, frame: rtc.AudioFrame, is_final: bool = False
+    ) -> None:
+        self._event_ch.send_nowait(
+            tts.SynthesizedAudio(
+                request_id=request_id,
+                frame=frame,
+                is_final=is_final,
+            )
+        )
