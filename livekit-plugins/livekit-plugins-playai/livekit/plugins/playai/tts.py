@@ -21,6 +21,7 @@ class _TTSOptions:
     voice: str
     format: Format
     sample_rate: int
+    voice_engine: TTSEngines
     speed: float
     language: Language
     temperature: float
@@ -29,7 +30,6 @@ class _TTSOptions:
     voice_guidance: float
     style_guidance: float
     repetition_penalty: float
-    disable_stabilization: bool
 
 
 class TTS(tts.TTS):
@@ -42,7 +42,7 @@ class TTS(tts.TTS):
         language: str = "english",
         sample_rate: int = 24000,
         speed: float = 1.0,
-        voice_engine: TTSEngines | str = "Play3.0-mini",
+        voice_engine: TTSEngines | str = "Play3.0-mini-http",
         temperature: float | None = None,
         top_p: float | None = None,
         text_guidance: float | None = None,
