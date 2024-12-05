@@ -427,7 +427,8 @@ def _build_anthropic_image_content(
 ) -> anthropic.types.ImageBlockParam:
     if isinstance(image.image, str):  # image url
         logger.warning(
-            "image url not supported by anthropic, skipping image '%s'", image.image
+            "ChatImage with url is not yet supported by the LiveKit Anthropic plugin, skipping image '%s'",
+            image.image,
         )
     elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
         if cache_key not in image._cache:
