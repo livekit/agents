@@ -2,7 +2,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterable
+from typing import AsyncIterable, Union
 
 import av
 import numpy as np
@@ -29,7 +29,7 @@ class MediaInfo:
 class MediaFileStreamer:
     """Streams video and audio frames from a media file."""
 
-    def __init__(self, media_file: str | Path) -> None:
+    def __init__(self, media_file: Union[str, Path]) -> None:
         self._media_file = str(media_file)
         self._container = av.open(self._media_file)
 
@@ -40,7 +40,7 @@ class MediaFileStreamer:
         self._info = MediaInfo(
             video_width=self._video_stream.width,
             video_height=self._video_stream.height,
-            video_fps=float(self._video_stream.average_rate),
+            video_fps=float(self._video_stream.average_rate),  # type: ignore
             audio_sample_rate=self._audio_stream.sample_rate,
             audio_channels=self._audio_stream.channels,
         )
@@ -53,9 +53,9 @@ class MediaFileStreamer:
         """Streams video frames from the media file."""
         container = av.open(self._media_file)
         try:
-            for frame in container.decode(video=0):
+            for av_frame in container.decode(video=0):
                 # Convert video frame to RGBA
-                frame = frame.to_rgb().to_ndarray()
+                frame = av_frame.to_rgb().to_ndarray()
                 frame_rgba = np.ones(
                     (frame.shape[0], frame.shape[1], 4), dtype=np.uint8
                 )
@@ -73,9 +73,9 @@ class MediaFileStreamer:
         """Streams audio frames from the media file."""
         container = av.open(self._media_file)
         try:
-            for frame in container.decode(audio=0):
+            for av_frame in container.decode(audio=0):
                 # Convert audio frame to raw int16 samples
-                frame: np.ndarray = frame.to_ndarray(format="s16")
+                frame = av_frame.to_ndarray()
                 frame = (frame * 32768).astype(np.int16)
                 yield rtc.AudioFrame(
                     data=frame.tobytes(),
@@ -96,7 +96,7 @@ async def entrypoint(job: JobContext):
     room = job.room
 
     # Create media streamer
-    media_path = "/path/to/sample.mp4"
+    media_path = "path/to/media/file"
     streamer = MediaFileStreamer(media_path)
     media_info = streamer.info
 
