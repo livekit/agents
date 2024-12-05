@@ -96,7 +96,8 @@ async def entrypoint(job: JobContext):
     room = job.room
 
     # Create media streamer
-    media_path = "path/to/media/file"
+    # Should we add a sample video file?
+    media_path = "/path/to/sample/video.mp4"
     streamer = MediaFileStreamer(media_path)
     media_info = streamer.info
 
@@ -122,14 +123,6 @@ async def entrypoint(job: JobContext):
     await room.local_participant.publish_track(video_track, video_options)
     await room.local_participant.publish_track(audio_track, audio_options)
 
-    # Create AV synchronizer
-    av_sync = AVSynchronizer(
-        audio_source=audio_source,
-        video_source=video_source,
-        video_fps=media_info.video_fps,
-        video_queue_size_ms=queue_size_ms,
-    )
-
     @utils.log_exceptions(logger=logger)
     async def _push_video_frames(
         video_stream: AsyncIterable[rtc.VideoFrame], av_sync: AVSynchronizer
@@ -148,6 +141,13 @@ async def entrypoint(job: JobContext):
 
     try:
         while True:
+            av_sync = AVSynchronizer(
+                audio_source=audio_source,
+                video_source=video_source,
+                video_fps=media_info.video_fps,
+                video_queue_size_ms=queue_size_ms,
+            )
+
             # Create and run video and audio streaming tasks
             video_stream = streamer.stream_video()
             audio_stream = streamer.stream_audio()
@@ -156,10 +156,9 @@ async def entrypoint(job: JobContext):
             audio_task = asyncio.create_task(_push_audio_frames(audio_stream, av_sync))
 
             # Wait for both tasks to complete
-            # TODO: wait the frame in buffer to be processed
             await asyncio.gather(video_task, audio_task)
+            await av_sync.aclose()
     finally:
-        await av_sync.aclose()
         await streamer.aclose()
 
 

@@ -31,7 +31,7 @@ class AVSynchronizer:
         audio_source: rtc.AudioSource,
         video_source: rtc.VideoSource,
         video_fps: float,
-        video_queue_size_ms: float = 1000,
+        video_queue_size_ms: float = 100,
         _max_delay_tolerance_ms: float = 300,
     ):
         self._audio_source = audio_source
@@ -45,8 +45,16 @@ class AVSynchronizer:
         self._video_queue_max_size = int(
             self._video_fps * self._video_queue_size_ms / 1000
         )
+        if self._video_queue_size_ms > 0:
+            # ensure queue is bounded if queue size is specified
+            self._video_queue_max_size = max(1, self._video_queue_max_size)
+
         self._video_queue = asyncio.Queue[rtc.VideoFrame](
             maxsize=self._video_queue_max_size
+        )
+        self._fps_controller = _FPSController(
+            expected_fps=self._video_fps,
+            max_delay_tolerance_ms=self._max_delay_tolerance_ms,
         )
         self._capture_video_task = asyncio.create_task(self._capture_video())
 
@@ -58,20 +66,25 @@ class AVSynchronizer:
 
         await self._video_queue.put(frame)
 
+    async def clear_queue(self) -> None:
+        self._audio_source.clear_queue()
+        while not self._video_queue.empty():
+            await self._video_queue.get()
+
     async def _capture_video(self) -> None:
-        fps_controller = _FPSController(
-            expected_fps=self._video_fps,
-            max_delay_tolerance_ms=self._max_delay_tolerance_ms,
-        )
         while not self._stopped:
             frame = await self._video_queue.get()
-            async with fps_controller:
+            async with self._fps_controller:
                 self._video_source.capture_frame(frame)
 
     async def aclose(self) -> None:
         self._stopped = True
         if self._capture_video_task:
             await utils.aio.gracefully_cancel(self._capture_video_task)
+
+    @property
+    def actual_fps(self) -> float:
+        return self._fps_controller.actual_fps
 
 
 class _FPSController:
@@ -94,7 +107,7 @@ class _FPSController:
         self._max_delay_tolerance_secs = max_delay_tolerance_ms / 1000
 
         self._next_frame_time: Optional[float] = None
-        self._fps_calc_winsize = max(2, int(0.5 * expected_fps))
+        self._fps_calc_winsize = max(2, int(1.0 * expected_fps))
         self._send_timestamps: deque[float] = deque(maxlen=self._fps_calc_winsize)
 
     async def __aenter__(self) -> None:
@@ -119,10 +132,6 @@ class _FPSController:
         if sleep_time > 0:
             await asyncio.sleep(sleep_time)
         else:
-            logger.debug(
-                "Sync state",
-                extra={"sleep_time": sleep_time, "fps": self.actual_fps},
-            )
             # check if significantly behind schedule
             if -sleep_time > self._max_delay_tolerance_secs:
                 logger.warning(

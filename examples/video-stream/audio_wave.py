@@ -46,7 +46,7 @@ async def audio_generator(
     amplitude = 0.5
     period = 7.0
     sine_duration = 5.0  # Duration of sine wave in each period
-    samples_per_frame = 1024
+    chunk_size = 1024
 
     while True:
         current_time = 0.0
@@ -55,8 +55,8 @@ async def audio_generator(
         while current_time < sine_duration:
             t = np.linspace(
                 current_time,
-                current_time + samples_per_frame / media_info.audio_sample_rate,
-                samples_per_frame,
+                current_time + chunk_size / media_info.audio_sample_rate,
+                num=chunk_size,
                 endpoint=False,
             )
             # Create volume envelope using sine wave
@@ -64,18 +64,19 @@ async def audio_generator(
             samples = amplitude * volume * np.sin(2 * np.pi * frequency * t)
 
             # Convert to int16
-            samples = (samples * 32767).astype(np.int16)
+            samples = (samples[np.newaxis, :] * 32767).astype(np.int16)
+            if media_info.audio_channels > 1:
+                samples = np.repeat(samples, media_info.audio_channels, axis=0)
 
             # Create audio frame
             audio_frame = rtc.AudioFrame(
                 data=samples.tobytes(),
                 sample_rate=media_info.audio_sample_rate,
-                num_channels=1,
-                samples_per_channel=samples_per_frame,
+                num_channels=media_info.audio_channels,
+                samples_per_channel=chunk_size,
             )
-
             await output_audio.put(audio_frame)
-            current_time += samples_per_frame / media_info.audio_sample_rate
+            current_time += chunk_size / media_info.audio_sample_rate
             await asyncio.sleep(0)
         await output_audio.put(_AudioEndSentinel())
 
@@ -84,9 +85,9 @@ async def audio_generator(
         await asyncio.sleep(silence_duration)
 
 
-def _draw_timestamp(canvas: np.ndarray, timestamp: float):
+def _draw_timestamp(canvas: np.ndarray, duration: float, fps: float):
     height, width = canvas.shape[:2]
-    text = f"{timestamp:.2f}"
+    text = f"{duration:.1f}s @ {fps:.1f}fps"
     font_face = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 2.0
     thickness = 2
@@ -99,7 +100,7 @@ def _draw_timestamp(canvas: np.ndarray, timestamp: float):
     cv2.putText(canvas, text, (x, y), font_face, font_scale, (0, 0, 0), thickness)
 
 
-def _draw_volume(canvas: np.ndarray, audio_samples: np.ndarray):
+def _draw_wave(canvas: np.ndarray, audio_samples: np.ndarray):
     """Draws an audio waveform visualization"""
     height, width = canvas.shape[:2]
     center_y = height // 2 + 100
@@ -127,30 +128,35 @@ def _draw_volume(canvas: np.ndarray, audio_samples: np.ndarray):
 async def video_generator(
     media_info: MediaInfo,
     input_audio: asyncio.Queue[Union[rtc.AudioFrame, _AudioEndSentinel]],
+    av_sync: AVSynchronizer,  # only used for drawing the actual fps on the video
 ) -> AsyncIterable[tuple[rtc.VideoFrame, Optional[rtc.AudioFrame]]]:
     canvas = np.zeros(
         (media_info.video_height, media_info.video_width, 4), dtype=np.uint8
     )
     canvas.fill(255)
 
-    def _np_to_video_frame(canvas: np.ndarray) -> rtc.VideoFrame:
+    def _np_to_video_frame(image: np.ndarray) -> rtc.VideoFrame:
         return rtc.VideoFrame(
-            width=canvas.shape[1],
-            height=canvas.shape[0],
+            width=image.shape[1],
+            height=image.shape[0],
             type=rtc.VideoBufferType.RGBA,
-            data=canvas.tobytes(),
+            data=image.tobytes(),
         )
 
     audio_samples_per_frame = int(media_info.audio_sample_rate / media_info.video_fps)
     audio_buffer = np.zeros((media_info.audio_channels, 0), dtype=np.int16)
+    start_time = time.time()
     while True:
         try:
-            audio_frame = input_audio.get_nowait()
-        except asyncio.QueueEmpty:
-            # silence frame
+            # timeout has to be shorter than the frame interval to avoid starvation
+            audio_frame = await asyncio.wait_for(
+                input_audio.get(), timeout=0.5 / media_info.video_fps
+            )
+        except asyncio.TimeoutError:
+            # generate frame without audio (e.g. silence state)
             new_frame = canvas.copy()
-            _draw_timestamp(new_frame, time.time())
-            _draw_volume(new_frame, np.zeros((1, 2)))
+            _draw_timestamp(new_frame, time.time() - start_time, av_sync.actual_fps)
+            _draw_wave(new_frame, np.zeros((1, 2)))
             video_frame = _np_to_video_frame(new_frame)
             yield video_frame, None
 
@@ -159,22 +165,22 @@ async def video_generator(
             continue
 
         if isinstance(audio_frame, _AudioEndSentinel):
-            # reset the audio buffer
+            # drop the audio buffer when the audio finished
             audio_buffer = np.zeros((media_info.audio_channels, 0), dtype=np.int16)
             continue
 
         audio_samples = np.frombuffer(audio_frame.data, dtype=np.int16).reshape(
             audio_frame.num_channels, -1
         )
-        # append audio samples to the buffer
+        # accumulate audio samples to the buffer
         audio_buffer = np.concatenate([audio_buffer, audio_samples], axis=1)
         while audio_buffer.shape[1] >= audio_samples_per_frame:
             sub_samples = audio_buffer[:, :audio_samples_per_frame]
             audio_buffer = audio_buffer[:, audio_samples_per_frame:]
 
             new_frame = canvas.copy()
-            _draw_timestamp(new_frame, time.time())
-            _draw_volume(new_frame, sub_samples)
+            _draw_timestamp(new_frame, time.time() - start_time, av_sync.actual_fps)
+            _draw_wave(new_frame, sub_samples)
             video_frame = _np_to_video_frame(new_frame)
             sub_audio_frame = rtc.AudioFrame(
                 data=sub_samples.tobytes(),
@@ -199,7 +205,7 @@ async def entrypoint(job: JobContext):
     )
 
     # Create video and audio sources/tracks
-    queue_size_ms = 100
+    queue_size_ms = 50
     video_source = rtc.VideoSource(
         width=media_info.video_width,
         height=media_info.video_height,
@@ -229,11 +235,13 @@ async def entrypoint(job: JobContext):
     )
 
     # Start audio generator
-    audio_queue = asyncio.Queue[Union[rtc.AudioFrame, _AudioEndSentinel]](maxsize=2)
+    audio_queue = asyncio.Queue[Union[rtc.AudioFrame, _AudioEndSentinel]](maxsize=1)
     audio_task = asyncio.create_task(audio_generator(media_info, audio_queue))
 
     try:
-        async for video_frame, audio_frame in video_generator(media_info, audio_queue):
+        async for video_frame, audio_frame in video_generator(
+            media_info, audio_queue, av_sync=av_sync
+        ):
             await av_sync.push(video_frame)
             if audio_frame:
                 await av_sync.push(audio_frame)
