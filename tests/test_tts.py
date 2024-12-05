@@ -74,6 +74,7 @@ STREAM_TTS = [
     lambda: agents.tts.StreamAdapter(
         tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
+    lambda: playai.TTS(),
 ]
 
 

@@ -196,7 +196,6 @@ class ChunkedStream(tts.ChunkedStream):
         )
         tts_options = TTSOptions(
             voice=self._opts.voice,
-            voice_engine=self._opts.voice_engine,
             format=self._opts.format,
             sample_rate=self._opts.sample_rate,
             speed=self._opts.speed,
@@ -204,7 +203,11 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         try:
-            async for chunk in self._client.tts(self._input_text, tts_options):
+            async for chunk in self._client.tts(
+                text=self._input_text,
+                options=tts_options,
+                voice_engine=self._opts.voice_engine,
+            ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
                     for frame in bstream.write(frame.data.tobytes()):
                         self._event_ch.send_nowait(
@@ -242,7 +245,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         tts_options = TTSOptions(
             voice=self._opts.voice,
-            voice_engine=self._opts.voice_engine,
             format=self._opts.format,
             sample_rate=self._opts.sample_rate,
             speed=self._opts.speed,
@@ -259,7 +261,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             async for chunk in self._client.stream_tts_input(
-                text_stream(), tts_options
+                text_stream=text_stream(),
+                options=tts_options,
+                voice_engine=self._opts.voice_engine,
             ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
                     for frame in bstream.write(frame.data.tobytes()):
