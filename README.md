@@ -57,6 +57,7 @@ The following plugins are available today:
 | [livekit-plugins-assemblyai](https://pypi.org/project/livekit-plugins-assemblyai/) | STT                                         |
 | [livekit-plugins-azure](https://pypi.org/project/livekit-plugins-azure/)           | STT, TTS                                    |
 | [livekit-plugins-deepgram](https://pypi.org/project/livekit-plugins-deepgram/)     | STT                                         |
+| [livekit-plugins-dify](https://pypi.org/project/livekit-plugins-dify/)             | LLM                                         |
 | [livekit-plugins-cartesia](https://pypi.org/project/livekit-plugins-cartesia/)     | TTS                                         |
 | [livekit-plugins-elevenlabs](https://pypi.org/project/livekit-plugins-elevenlabs/) | TTS                                         |
 | [livekit-plugins-playht](https://pypi.org/project/livekit-plugins-playht/)         | TTS                                         |
