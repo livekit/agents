@@ -33,7 +33,7 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents[codecs]>=0.11",
-        "pyplayai",
+        "pyht>=0.1.8",
         "aiohttp",
         "livekit",
     ],
