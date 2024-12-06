@@ -379,6 +379,13 @@ def _build_anthropic_message(
                     type="text",
                 )
             )
+        elif isinstance(msg.content, dict):
+            a_msg["content"].append(
+                anthropic.types.TextBlock(
+                    text=json.dumps(msg.content),
+                    type="text",
+                )
+            )
         elif isinstance(msg.content, list):
             for cnt in msg.content:
                 if isinstance(cnt, str) and cnt:
