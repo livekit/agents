@@ -402,8 +402,10 @@ def _build_anthropic_message(
 
         return a_msg
     elif msg.role == "tool":
+        if isinstance(msg.content, dict):
+            msg.content = json.dumps(msg.content)
         if not isinstance(msg.content, str):
-            logger.warning("tool message content is not a string")
+            logger.warning("tool message content is not a string or dict")
             return None
         if not msg.tool_call_id:
             return None
