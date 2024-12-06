@@ -24,6 +24,7 @@ def prewarm(proc: JobProcess):
 
 
 async def entrypoint(ctx: JobContext):
+    logger.info(f"job metadata: {ctx.job.metadata}")
     initial_ctx = llm.ChatContext().append(
         role="system",
         text=(
@@ -91,5 +92,6 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
+            agent_name="test-agent",
         ),
     )
