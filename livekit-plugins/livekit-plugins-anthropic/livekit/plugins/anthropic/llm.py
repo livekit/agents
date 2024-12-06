@@ -379,13 +379,6 @@ def _build_anthropic_message(
                     type="text",
                 )
             )
-        elif isinstance(msg.content, dict):
-            a_msg["content"].append(
-                anthropic.types.TextBlock(
-                    text=json.dumps(msg.content),
-                    type="text",
-                )
-            )
         elif isinstance(msg.content, list):
             for cnt in msg.content:
                 if isinstance(cnt, str) and cnt:
@@ -409,8 +402,10 @@ def _build_anthropic_message(
 
         return a_msg
     elif msg.role == "tool":
+        if isinstance(msg.content, dict):
+            msg.content = json.dumps(msg.content)
         if not isinstance(msg.content, str):
-            logger.warning("tool message content is not a string")
+            logger.warning("tool message content is not a string or dict")
             return None
         if not msg.tool_call_id:
             return None
