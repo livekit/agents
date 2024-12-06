@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 from typing import Any, Awaitable, Callable, Optional, Union
 
@@ -25,6 +26,8 @@ def build_oai_message(msg: llm.ChatMessage, cache_key: Any):
     # add content if provided
     if isinstance(msg.content, str):
         oai_msg["content"] = msg.content
+    elif isinstance(msg.content, dict):
+        oai_msg["content"] = json.dumps(msg.content)
     elif isinstance(msg.content, list):
         oai_content: list[dict[str, Any]] = []
         for cnt in msg.content:
