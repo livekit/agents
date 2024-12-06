@@ -95,7 +95,7 @@ jobs:
                       ./livekit-plugins/livekit-plugins-anthropic \
                       ./livekit-plugins/livekit-plugins-assemblyai \
                       ./livekit-plugins/livekit-plugins-fal \
-                      ./livekit-plugins/livekit-plugins-playai
+                      ./livekit-plugins/livekit-plugins-playht
 
       - name: Run tests
         shell: bash

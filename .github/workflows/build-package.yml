@@ -39,7 +39,7 @@ jobs:
       inputs.package == 'livekit-plugins-anthropic' ||
       inputs.package == 'livekit-plugins-llama-index' ||
       inputs.package == 'livekit-plugins-fal' ||
-      inputs.package == 'livekit-plugins-playai'
+      inputs.package == 'livekit-plugins-playht'
 
     defaults:
       run:

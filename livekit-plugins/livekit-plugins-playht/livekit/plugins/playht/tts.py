@@ -54,7 +54,7 @@ class TTS(tts.TTS):
         repetition_penalty: float | None = None,
     ) -> None:
         """
-        Initialize the PlayAI TTS engine.
+        Initialize the PlayHT TTS engine.
 
         Args:
             api_key (str): The PlayHT API key. Can be set via environment variable PLAYHT_API_KEY.
@@ -63,7 +63,7 @@ class TTS(tts.TTS):
             language (str): The language of the text. Default is 'english'.
             sample_rate (int): The sample rate in Hz. Options are 8000, 16000, 24000, 44100, 48000.
             speed (float): The speed of the audio. Default is 1.0.
-            voice_engine (str): The voice engine to use. Default is "Play3.0-mini".
+            voice_engine (str): The voice engine to use. Default is "Play3.0-mini-http".
             > The following options are inference-time hyperparameters of the text-to-speech model; if unset, the model will use default values chosen by PlayHT.
             temperature (float): The temperature of the model.
             top_p (float): The top-p value of the model.

@@ -6,14 +6,14 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, "livekit", "plugins", "playai", "version.py"), "r") as f:
+with open(os.path.join(here, "livekit", "plugins", "playht", "version.py"), "r") as f:
     exec(f.read(), about)
 
 
 setuptools.setup(
-    name="livekit-plugins-playai",
+    name="livekit-plugins-playht",
     version=about["__version__"],
-    description="Agent Framework plugin for voice synthesis with PlayAI's API.",
+    description="Agent Framework plugin for voice synthesis with PlayHT's API.",
     long_description=(here / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/livekit/agents",
@@ -27,7 +27,7 @@ setuptools.setup(
         "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: 3 :: Only",
     ],
-    keywords=["webrtc", "realtime", "audio", "livekit", "playAI", "playht"],
+    keywords=["webrtc", "realtime", "audio", "livekit", "playHT"],
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
@@ -37,7 +37,7 @@ setuptools.setup(
         "aiohttp",
         "livekit",
     ],
-    package_data={"livekit.plugins.playai": ["py.typed"]},
+    package_data={"livekit.plugins.playht": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",
