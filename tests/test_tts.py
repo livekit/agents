@@ -9,7 +9,7 @@ import pytest
 from livekit import agents
 from livekit.agents import APIConnectionError, tokenize
 from livekit.agents.utils import AudioBuffer, merge_frames
-from livekit.plugins import azure, cartesia, elevenlabs, google, openai
+from livekit.plugins import azure, cartesia, elevenlabs, google, openai, playht
 
 from .conftest import TEST_CONNECT_OPTIONS
 from .fake_tts import FakeTTS
@@ -40,6 +40,7 @@ SYNTHESIZE_TTS = [
     lambda: google.TTS(),
     lambda: azure.TTS(),
     lambda: cartesia.TTS(),
+    lambda: playht.TTS(),
 ]
 
 
@@ -73,6 +74,7 @@ STREAM_TTS = [
     lambda: agents.tts.StreamAdapter(
         tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
     ),
+    lambda: playht.TTS(),
 ]
 
 
