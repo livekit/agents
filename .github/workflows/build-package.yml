@@ -37,7 +37,8 @@ jobs:
       inputs.package == 'livekit-plugins-rag' ||
       inputs.package == 'livekit-plugins-silero' ||
       inputs.package == 'livekit-plugins-anthropic' ||
-      inputs.package == 'livekit-plugins-llama-index'
+      inputs.package == 'livekit-plugins-llama-index' ||
+      inputs.package == 'livekit-plugins-smallest'
 
     defaults:
       run:

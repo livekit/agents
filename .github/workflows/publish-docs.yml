@@ -45,7 +45,8 @@ jobs:
                                 ./livekit-plugins/livekit-plugins-openai \
                                 ./livekit-plugins/livekit-plugins-rag \
                                 ./livekit-plugins/livekit-plugins-silero \
-                                ./livekit-plugins/livekit-plugins-llama-index
+                                ./livekit-plugins/livekit-plugins-llama-index \
+                                ./livekit-plugins/livekit-plugins-smallest
 
       - name: Build Docs
         run: |

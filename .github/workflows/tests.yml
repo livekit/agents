@@ -94,7 +94,8 @@ jobs:
                       ./livekit-plugins/livekit-plugins-azure \
                       ./livekit-plugins/livekit-plugins-anthropic \
                       ./livekit-plugins/livekit-plugins-assemblyai \
-                      ./livekit-plugins/livekit-plugins-fal
+                      ./livekit-plugins/livekit-plugins-fal \
+                      ./livekit-plugins/livekit-plugins-smallest
 
       - name: Run tests
         shell: bash
@@ -112,6 +113,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
+          SMALLEST_API_KEY: ${{ secrets.SMALLEST_API_KEY }}
           FAL_KEY: ${{ secrets.FAL_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
