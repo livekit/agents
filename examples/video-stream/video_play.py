@@ -27,22 +27,24 @@ class MediaInfo:
 
 
 class MediaFileStreamer:
-    """Streams video and audio frames from a media file."""
+    """Streams video and audio frames from a media file in an endless loop."""
 
     def __init__(self, media_file: Union[str, Path]) -> None:
         self._media_file = str(media_file)
-        self._container = av.open(self._media_file)
-
-        self._video_stream = self._container.streams.video[0]
-        self._audio_stream = self._container.streams.audio[0]
+        # Create separate containers for each stream
+        self._video_container = av.open(self._media_file)
+        self._audio_container = av.open(self._media_file)
+        self._stopped = False
 
         # Cache media info
+        video_stream = self._video_container.streams.video[0]
+        audio_stream = self._audio_container.streams.audio[0]
         self._info = MediaInfo(
-            video_width=self._video_stream.width,
-            video_height=self._video_stream.height,
-            video_fps=float(self._video_stream.average_rate),  # type: ignore
-            audio_sample_rate=self._audio_stream.sample_rate,
-            audio_channels=self._audio_stream.channels,
+            video_width=video_stream.width,
+            video_height=video_stream.height,
+            video_fps=float(video_stream.average_rate),  # type: ignore
+            audio_sample_rate=audio_stream.sample_rate,
+            audio_channels=audio_stream.channels,
         )
 
     @property
@@ -50,10 +52,12 @@ class MediaFileStreamer:
         return self._info
 
     async def stream_video(self) -> AsyncIterable[rtc.VideoFrame]:
-        """Streams video frames from the media file."""
-        container = av.open(self._media_file)
-        try:
-            for av_frame in container.decode(video=0):
+        """Streams video frames from the media file in an endless loop."""
+        while not self._stopped:
+            self._video_container.seek(0)  # Seek back to start
+            for av_frame in self._video_container.decode(video=0):
+                if self._stopped:
+                    break
                 # Convert video frame to RGBA
                 frame = av_frame.to_rgb().to_ndarray()
                 frame_rgba = np.ones(
@@ -66,29 +70,29 @@ class MediaFileStreamer:
                     type=rtc.VideoBufferType.RGBA,
                     data=frame_rgba.tobytes(),
                 )
-        finally:
-            container.close()
 
     async def stream_audio(self) -> AsyncIterable[rtc.AudioFrame]:
-        """Streams audio frames from the media file."""
-        container = av.open(self._media_file)
-        try:
-            for av_frame in container.decode(audio=0):
+        """Streams audio frames from the media file in an endless loop."""
+        while not self._stopped:
+            self._audio_container.seek(0)  # Seek back to start
+            for av_frame in self._audio_container.decode(audio=0):
+                if self._stopped:
+                    break
                 # Convert audio frame to raw int16 samples
-                frame = av_frame.to_ndarray()
+                frame = av_frame.to_ndarray().T  # Transpose to (samples, channels)
                 frame = (frame * 32768).astype(np.int16)
                 yield rtc.AudioFrame(
                     data=frame.tobytes(),
                     sample_rate=self.info.audio_sample_rate,
-                    num_channels=frame.shape[0],
-                    samples_per_channel=frame.shape[1],
+                    num_channels=frame.shape[1],
+                    samples_per_channel=frame.shape[0],
                 )
-        finally:
-            container.close()
 
     async def aclose(self) -> None:
-        """Closes the media container."""
-        self._container.close()
+        """Closes the media container and stops streaming."""
+        self._stopped = True
+        self._video_container.close()
+        self._audio_container.close()
 
 
 async def entrypoint(job: JobContext):
@@ -97,16 +101,17 @@ async def entrypoint(job: JobContext):
 
     # Create media streamer
     # Should we add a sample video file?
-    media_path = "/path/to/sample/video.mp4"
+    media_path = "/path/to/video.mp4"
     streamer = MediaFileStreamer(media_path)
     media_info = streamer.info
 
     # Create video and audio sources/tracks
-    queue_size_ms = 100
+    queue_size_ms = 1000  # 1 second
     video_source = rtc.VideoSource(
         width=media_info.video_width,
         height=media_info.video_height,
     )
+    print(media_info)
     audio_source = rtc.AudioSource(
         sample_rate=media_info.audio_sample_rate,
         num_channels=media_info.audio_channels,
@@ -130,6 +135,7 @@ async def entrypoint(job: JobContext):
         """Task to push video frames to the AV synchronizer."""
         async for frame in video_stream:
             await av_sync.push(frame)
+            await asyncio.sleep(0)
 
     @utils.log_exceptions(logger=logger)
     async def _push_audio_frames(
@@ -138,28 +144,30 @@ async def entrypoint(job: JobContext):
         """Task to push audio frames to the AV synchronizer."""
         async for frame in audio_stream:
             await av_sync.push(frame)
+            await asyncio.sleep(0)
 
     try:
-        while True:
-            av_sync = AVSynchronizer(
-                audio_source=audio_source,
-                video_source=video_source,
-                video_fps=media_info.video_fps,
-                video_queue_size_ms=queue_size_ms,
-            )
+        av_sync = AVSynchronizer(
+            audio_source=audio_source,
+            video_source=video_source,
+            video_fps=media_info.video_fps,
+            video_queue_size_ms=queue_size_ms,
+        )
 
-            # Create and run video and audio streaming tasks
-            video_stream = streamer.stream_video()
-            audio_stream = streamer.stream_audio()
+        # Create and run video and audio streaming tasks
+        video_stream = streamer.stream_video()
+        audio_stream = streamer.stream_audio()
 
-            video_task = asyncio.create_task(_push_video_frames(video_stream, av_sync))
-            audio_task = asyncio.create_task(_push_audio_frames(audio_stream, av_sync))
+        video_task = asyncio.create_task(_push_video_frames(video_stream, av_sync))
+        audio_task = asyncio.create_task(_push_audio_frames(audio_stream, av_sync))
 
-            # Wait for both tasks to complete
-            await asyncio.gather(video_task, audio_task)
-            await av_sync.aclose()
+        # Wait for both tasks to complete
+        await asyncio.gather(video_task, audio_task)
+        await av_sync.wait_for_playout()
+
     finally:
         await streamer.aclose()
+        await av_sync.aclose()
 
 
 if __name__ == "__main__":

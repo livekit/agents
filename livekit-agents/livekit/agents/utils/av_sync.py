@@ -60,7 +60,6 @@ class AVSynchronizer:
 
     async def push(self, frame: Union[rtc.VideoFrame, rtc.AudioFrame]) -> None:
         if isinstance(frame, rtc.AudioFrame):
-            # TODO: test if frame duration is too long
             await self._audio_source.capture_frame(frame)
             return
 
@@ -71,11 +70,17 @@ class AVSynchronizer:
         while not self._video_queue.empty():
             await self._video_queue.get()
 
+    async def wait_for_playout(self) -> None:
+        """Wait until all video and audio frames are played out."""
+        await self._audio_source.wait_for_playout()
+        await self._video_queue.join()
+
     async def _capture_video(self) -> None:
         while not self._stopped:
             frame = await self._video_queue.get()
             async with self._fps_controller:
                 self._video_source.capture_frame(frame)
+            self._video_queue.task_done()
 
     async def aclose(self) -> None:
         self._stopped = True
