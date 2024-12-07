@@ -121,7 +121,8 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         no_delay: bool = True,
         endpointing_ms: int = 25,
-        filler_words: bool = False,
+        # enable filler words by default to improve turn detector accuracy
+        filler_words: bool = True,
         keywords: list[Tuple[str, float]] = [],
         profanity_filter: bool = False,
         api_key: str | None = None,
