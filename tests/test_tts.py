@@ -34,12 +34,14 @@ async def _assert_valid_synthesized_audio(
 
 
 SYNTHESIZE_TTS = [
-    lambda: elevenlabs.TTS(),
-    lambda: elevenlabs.TTS(encoding="pcm_44100"),
-    lambda: openai.TTS(),
-    lambda: google.TTS(),
-    lambda: azure.TTS(),
-    lambda: cartesia.TTS(),
+    pytest.param(lambda: elevenlabs.TTS(), id="elevenlabs"),
+    pytest.param(
+        lambda: elevenlabs.TTS(encoding="pcm_44100"), id="elevenlabs.pcm_44100"
+    ),
+    pytest.param(lambda: openai.TTS(), id="openai"),
+    pytest.param(lambda: google.TTS(), id="google"),
+    pytest.param(lambda: azure.TTS(), id="azure"),
+    pytest.param(lambda: cartesia.TTS(), id="cartesia"),
 ]
 
 
@@ -61,17 +63,28 @@ async def test_synthesize(tts_factory):
 
 STREAM_SENT_TOKENIZER = tokenize.basic.SentenceTokenizer(min_sentence_len=20)
 STREAM_TTS = [
-    lambda: elevenlabs.TTS(),
-    lambda: elevenlabs.TTS(encoding="pcm_44100"),
-    lambda: cartesia.TTS(),
-    lambda: agents.tts.StreamAdapter(
-        tts=openai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    pytest.param(lambda: elevenlabs.TTS(), id="elevenlabs"),
+    pytest.param(
+        lambda: elevenlabs.TTS(encoding="pcm_44100"), id="elevenlabs.pcm_44100"
     ),
-    lambda: agents.tts.StreamAdapter(
-        tts=google.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    pytest.param(lambda: cartesia.TTS(), id="cartesia"),
+    pytest.param(
+        lambda: agents.tts.StreamAdapter(
+            tts=openai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        ),
+        id="openai.stream",
     ),
-    lambda: agents.tts.StreamAdapter(
-        tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    pytest.param(
+        lambda: agents.tts.StreamAdapter(
+            tts=google.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        ),
+        id="google.stream",
+    ),
+    pytest.param(
+        lambda: agents.tts.StreamAdapter(
+            tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        ),
+        id="azure.stream",
     ),
 ]
 

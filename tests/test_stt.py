@@ -15,16 +15,19 @@ from .utils import make_test_speech, wer
 SAMPLE_RATES = [24000, 44100]  # test multiple input sample rates
 WER_THRESHOLD = 0.2
 RECOGNIZE_STT = [
-    lambda: deepgram.STT(),
-    lambda: google.STT(),
-    lambda: google.STT(
-        languages=["en-AU"],
-        model="chirp_2",
-        spoken_punctuation=False,
-        location="us-central1",
+    pytest.param(lambda: deepgram.STT(), id="deepgram"),
+    pytest.param(lambda: google.STT(), id="google"),
+    pytest.param(
+        lambda: google.STT(
+            languages=["en-AU"],
+            model="chirp_2",
+            spoken_punctuation=False,
+            location="us-central1",
+        ),
+        id="google.chirp_2",
     ),
-    lambda: openai.STT(),
-    lambda: fal.WizperSTT(),
+    pytest.param(lambda: openai.STT(), id="openai"),
+    pytest.param(lambda: fal.WizperSTT(), id="fal"),
 ]
 
 
@@ -48,18 +51,27 @@ async def test_recognize(stt_factory, sample_rate):
 
 STREAM_VAD = silero.VAD.load(min_silence_duration=0.75)
 STREAM_STT = [
-    lambda: assemblyai.STT(),
-    lambda: deepgram.STT(),
-    lambda: google.STT(),
-    lambda: agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
-    lambda: agents.stt.StreamAdapter(stt=openai.STT.with_groq(), vad=STREAM_VAD),
-    lambda: google.STT(
-        languages=["en-AU"],
-        model="chirp_2",
-        spoken_punctuation=False,
-        location="us-central1",
+    pytest.param(lambda: assemblyai.STT(), id="assemblyai"),
+    pytest.param(lambda: deepgram.STT(), id="deepgram"),
+    pytest.param(lambda: google.STT(), id="google"),
+    pytest.param(
+        lambda: agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
+        id="openai.stream",
     ),
-    lambda: azure.STT(),
+    pytest.param(
+        lambda: agents.stt.StreamAdapter(stt=openai.STT.with_groq(), vad=STREAM_VAD),
+        id="openai.with_groq.stream",
+    ),
+    pytest.param(
+        lambda: google.STT(
+            languages=["en-AU"],
+            model="chirp_2",
+            spoken_punctuation=False,
+            location="us-central1",
+        ),
+        id="google.chirp_2",
+    ),
+    pytest.param(lambda: azure.STT(), id="azure"),
 ]
 
 
