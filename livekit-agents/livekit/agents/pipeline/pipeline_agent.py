@@ -160,8 +160,12 @@ class AgentTranscriptionOptions:
     representing the hyphenated parts of the word."""
 
 
-class _EOUModel(Protocol):
-    async def predict_eou(self, chat_ctx: ChatContext) -> float: ...
+class TurnDetector(Protocol):
+    # When endpoint probability is below this threshold we think the user is not finished speaking
+    # so we will use a long delay
+    def unlikely_threshold() -> float: ...
+    def supports_language(self, language: str | None) -> bool: ...
+    async def predict_end_of_turn(self, chat_ctx: ChatContext) -> float: ...
 
 
 class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
@@ -179,7 +183,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         stt: stt.STT,
         llm: LLM,
         tts: tts.TTS,
-        turn_detector: _EOUModel | None = None,
+        turn_detector: TurnDetector | None = None,
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
@@ -595,7 +599,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 ):
                     self._synthesize_agent_reply()
 
-            self._deferred_validation.on_human_final_transcript(new_transcript)
+            self._deferred_validation.on_human_final_transcript(
+                new_transcript, ev.alternatives[0].language
+            )
 
             words = self._opts.transcription.word_tokenizer.tokenize(
                 text=new_transcript
@@ -1110,24 +1116,22 @@ class _DeferredReplyValidation:
 
     LATE_TRANSCRIPT_TOLERANCE = 1.5  # late compared to end of speech
 
-    # When endpoint probability is below this threshold we think the user is not finished speaking
-    # so we will use a long delay
-    UNLIKELY_ENDPOINT_THRESHOLD = 0.15
-
     # Long delay to use when the model thinks the user is still speaking
+    # TODO: make this configurable
     UNLIKELY_ENDPOINT_DELAY = 6
 
     def __init__(
         self,
         validate_fnc: Callable[[], None],
         min_endpointing_delay: float,
-        turn_detector: _EOUModel | None,
+        turn_detector: TurnDetector | None,
         agent: VoicePipelineAgent,
     ) -> None:
         self._turn_detector = turn_detector
         self._validate_fnc = validate_fnc
         self._validating_task: asyncio.Task | None = None
         self._last_final_transcript: str = ""
+        self._last_language: str | None = None
         self._last_recv_end_of_speech_time: float = 0.0
         self._speaking = False
 
@@ -1139,8 +1143,9 @@ class _DeferredReplyValidation:
     def validating(self) -> bool:
         return self._validating_task is not None and not self._validating_task.done()
 
-    def on_human_final_transcript(self, transcript: str) -> None:
+    def on_human_final_transcript(self, transcript: str, language: str | None) -> None:
         self._last_final_transcript += " " + transcript.strip()  # type: ignore
+        self._last_language = language
 
         if self._speaking:
             return
@@ -1198,9 +1203,10 @@ class _DeferredReplyValidation:
         @utils.log_exceptions(logger=logger)
         async def _run_task(chat_ctx: ChatContext, delay: float) -> None:
             await asyncio.sleep(delay)
-            if self._turn_detector is not None:
-                eou_prob = await self._turn_detector.predict_eou(chat_ctx)
-                if eou_prob < self.UNLIKELY_ENDPOINT_THRESHOLD:
+            if self._turn_detector is not None and self._turn_detector.supports_language(self._last_language):
+                eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
+                unlikely_threshold = self._turn_detector.unlikely_threshold()
+                if eot_prob < unlikely_threshold:
                     await asyncio.sleep(self.UNLIKELY_ENDPOINT_DELAY)
 
             self._reset_states()

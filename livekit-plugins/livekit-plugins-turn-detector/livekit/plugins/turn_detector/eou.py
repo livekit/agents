@@ -118,7 +118,20 @@ class EOUModel:
             inference_executor or get_current_job_context().inference_executor
         )
 
+    def unlikely_threshold(self) -> float:
+        return 0.15
+
+    def supports_language(self, language: str | None) -> bool:
+        if language is None:
+            return False
+        parts = language.split("-")
+        # certain models use language codes (DG, AssemblyAI), others use full names (like OAI)
+        return parts[0] == "en" or parts[0] == "english"
+
     async def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
+        return await self.predict_end_of_turn(chat_ctx)
+
+    async def predict_end_of_turn(self, chat_ctx: llm.ChatContext) -> float:
         messages = []
 
         for msg in chat_ctx.messages:

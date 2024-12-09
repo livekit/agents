@@ -96,6 +96,8 @@ async def test_stream(stt_factory, sample_rate):
 
             if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
                 text += event.alternatives[0].text
+                # ensure STT is tagging languages correctly
+                assert event.alternatives[0].language.startswith("en")
 
             if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
                 recv_start = False
