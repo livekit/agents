@@ -12,7 +12,7 @@ from livekit.agents.job import get_current_job_context
 
 from .log import logger
 
-HG_MODEL = "livekit/opt-125m-endpoint-detector-2"
+HG_MODEL = "livekit/turn-detector"
 PUNCS = string.punctuation.replace("'", "")
 MAX_HISTORY = 4
 
