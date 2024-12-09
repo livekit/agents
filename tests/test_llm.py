@@ -79,7 +79,7 @@ def test_hashable_typeinfo():
 
 
 LLMS: list[Callable[[], llm.LLM]] = [
-    lambda: openai.LLM(),
+    pytest.param(lambda: openai.LLM(), id="openai"),
     # lambda: openai.beta.AssistantLLM(
     #     assistant_opts=openai.beta.AssistantOptions(
     #         create_options=openai.beta.AssistantCreateOptions(
@@ -89,8 +89,8 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #         )
     #     )
     # ),
-    lambda: anthropic.LLM(),
-    lambda: openai.LLM.with_vertex(),
+    pytest.param(lambda: anthropic.LLM(), id="anthropic"),
+    pytest.param(lambda: openai.LLM.with_vertex(), id="openai.with_vertex"),
 ]
 
 
