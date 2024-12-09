@@ -195,7 +195,7 @@ async def video_generator(
 
         if isinstance(audio_frame, _AudioEndSentinel):
             # drop the audio buffer when the audio finished
-            audio_buffer = np.zeros((media_info.audio_channels, 0), dtype=np.int16)
+            audio_buffer = np.zeros((0, media_info.audio_channels), dtype=np.int16)
             continue
 
         audio_samples = np.frombuffer(audio_frame.data, dtype=np.int16).reshape(
