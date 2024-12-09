@@ -801,6 +801,36 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
+        if (
+            collected_text
+            and speech_handle.add_to_chat_ctx
+            and (not user_question or speech_handle.user_committed)
+        ):
+            if speech_handle.extra_tools_messages:
+                self._chat_ctx.messages.extend(speech_handle.extra_tools_messages)
+
+            if interrupted:
+                collected_text += "..."
+
+            msg = ChatMessage.create(text=collected_text, role="assistant")
+            self._chat_ctx.messages.append(msg)
+
+            speech_handle.mark_speech_committed()
+
+            if interrupted:
+                self.emit("agent_speech_interrupted", msg)
+            else:
+                self.emit("agent_speech_committed", msg)
+
+            logger.debug(
+                "committed agent speech",
+                extra={
+                    "agent_transcript": collected_text,
+                    "interrupted": interrupted,
+                    "speech_id": speech_handle.id,
+                },
+            )
+
         async def _execute_function_calls() -> None:
             nonlocal interrupted, collected_text
 
@@ -825,13 +855,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             ), "user speech should have been committed before using tools"
 
             llm_stream = speech_handle.source
-
-            if collected_text:
-                msg = ChatMessage.create(text=collected_text, role="assistant")
-                self._chat_ctx.messages.append(msg)
-
-                speech_handle.mark_speech_committed()
-                self.emit("agent_speech_committed", msg)
 
             # execute functions
             call_ctx = AgentCallContext(self, llm_stream)
@@ -932,34 +955,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             # break if the function calls task is done
             if fnc_task.done():
                 speech_handle.mark_nested_speech_finished()
-
-        if speech_handle.add_to_chat_ctx and (
-            not user_question or speech_handle.user_committed
-        ):
-            if speech_handle.extra_tools_messages:
-                self._chat_ctx.messages.extend(speech_handle.extra_tools_messages)
-
-            if interrupted:
-                collected_text += "..."
-
-            msg = ChatMessage.create(text=collected_text, role="assistant")
-            self._chat_ctx.messages.append(msg)
-
-            speech_handle.mark_speech_committed()
-
-            if interrupted:
-                self.emit("agent_speech_interrupted", msg)
-            else:
-                self.emit("agent_speech_committed", msg)
-
-            logger.debug(
-                "committed agent speech",
-                extra={
-                    "agent_transcript": collected_text,
-                    "interrupted": interrupted,
-                    "speech_id": speech_handle.id,
-                },
-            )
 
         # mark the speech as done
         speech_handle._set_done()
