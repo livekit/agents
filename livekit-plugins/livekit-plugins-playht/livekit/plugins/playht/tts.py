@@ -3,134 +3,157 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, List, Literal
 
-import aiohttp
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
-    APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
+from pyht import AsyncClient as PlayHTAsyncClient
+from pyht.client import Format, Language, TTSOptions
 
-from .log import logger
-from .models import TTSEncoding, TTSEngines
-
-_Encoding = Literal["mp3", "pcm"]
-
-
-def _sample_rate_from_format(output_format: TTSEncoding) -> int:
-    split = output_format.split("_")
-    return int(split[1])
-
-
-def _encoding_from_format(output_format: TTSEncoding) -> _Encoding:
-    if output_format.startswith("mp3"):
-        return "mp3"
-    elif output_format.startswith("pcm"):
-        return "pcm"
-    elif output_format.startswith("wav"):
-        return "pcm"
-
-    raise ValueError(f"Unknown format: {output_format}")
-
-
-@dataclass
-class Voice:
-    id: str
-    name: str
-    voice_engine: TTSEngines
-
-
-DEFAULT_VOICE = Voice(
-    id="s3://peregrine-voices/mel22/manifest.json",
-    name="Will",
-    voice_engine="Play3.0-mini",
-)
-
-ACCEPT_HEADER = {
-    "mp3": "audio/mpeg",
-    "wav": "audio/wav",
-    "ogg": "audio/ogg",
-    "flac": "audio/flac",
-    "mulaw": "audio/basic",  # commonly used for mulaw
-}
-
-
-API_BASE_URL_V2 = "https://api.play.ht/api/v2"
-AUTHORIZATION_HEADER = "AUTHORIZATION"
-USERID_HEADER = "X-USER-ID"
-PLAYHT_TTS_CHANNELS = 1
-
-_TTSEncoding = Literal["mp3", "wav", "ogg", "flac", "mulaw"]
+from .models import TTSEngines
 
 
 @dataclass
 class _TTSOptions:
-    api_key: str
-    user_id: str
-    voice: Voice
-    base_url: str
+    voice: str
+    format: Format
     sample_rate: int
-    encoding: _TTSEncoding
+    voice_engine: TTSEngines
+    speed: float
+    language: Language
+    temperature: float
+    top_p: float
+    text_guidance: float
+    voice_guidance: float
+    style_guidance: float
+    repetition_penalty: float
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice: Voice = DEFAULT_VOICE,
         api_key: str | None = None,
         user_id: str | None = None,
-        base_url: str | None = None,
+        voice: str = "s3://voice-cloning-zero-shot/775ae416-49bb-4fb6-bd45-740f205d20a1/jennifersaad/manifest.json",
+        language: str = "english",
         sample_rate: int = 24000,
-        encoding: _TTSEncoding = "wav",
-        http_session: aiohttp.ClientSession | None = None,
+        speed: float = 1.0,
+        voice_engine: TTSEngines | str = "Play3.0-mini-http",
+        temperature: float | None = None,
+        top_p: float | None = None,
+        text_guidance: float | None = None,
+        voice_guidance: float | None = None,
+        style_guidance: float | None = None,
+        repetition_penalty: float | None = None,
     ) -> None:
+        """
+        Initialize the PlayHT TTS engine.
+
+        Args:
+            api_key (str): The PlayHT API key. Can be set via environment variable PLAYHT_API_KEY.
+            user_id (str): The PlayHT user ID. Can be set via environment variable PLAYHT_USER_ID.
+            voice (str): A URL pointing to a Play voice manifest file. (e.g. "s3://voice-cloning-zero-shot/775ae416-49bb-4fb6-bd45-740f205d20a1/jennifersaad/manifest.json").
+            language (str): The language of the text. Default is 'english'.
+            sample_rate (int): The sample rate in Hz. Options are 8000, 16000, 24000, 44100, 48000.
+            speed (float): The speed of the audio. Default is 1.0.
+            voice_engine (str): The voice engine to use. Default is "Play3.0-mini-http".
+            > The following options are inference-time hyperparameters of the text-to-speech model; if unset, the model will use default values chosen by PlayHT.
+            temperature (float): The temperature of the model.
+            top_p (float): The top-p value of the model.
+            text_guidance (float): The text guidance of the model.
+            voice_guidance (float): The voice guidance of the model.
+            style_guidance (float): (Play3.0-mini-http and Play3.0-mini-ws only) The style guidance of the model.
+            repetition_penalty (float): The repetition penalty of the model.
+        """
         super().__init__(
             capabilities=tts.TTSCapabilities(
-                streaming=False,
+                streaming=True,
             ),
             sample_rate=sample_rate,
-            num_channels=PLAYHT_TTS_CHANNELS,
+            num_channels=1,
         )
+
         api_key = api_key or os.environ.get("PLAYHT_API_KEY")
-        if not api_key:
-            raise ValueError("PLAYHT_API_KEY must be set")
-
         user_id = user_id or os.environ.get("PLAYHT_USER_ID")
-        if not user_id:
-            raise ValueError("PLAYHT_USER_ID mus be set")
 
-        self._opts = _TTSOptions(
-            voice=voice,
+        if not api_key or not user_id:
+            raise ValueError(
+                "PlayHT API key and user ID are required, either as arguments or set PLAYHT_API_KEY and PLAYHT_USER_ID environment variables"
+            )
+
+        self._client = PlayHTAsyncClient(
             user_id=user_id,
             api_key=api_key,
-            base_url=base_url or API_BASE_URL_V2,
-            sample_rate=sample_rate,
-            encoding=encoding,
         )
-        self._session = http_session
+        self._opts = _TTSOptions(
+            voice=voice,
+            voice_engine=voice_engine,
+            format=Format.FORMAT_MP3,  # default for now
+            sample_rate=sample_rate,
+            speed=speed,
+            language=Language(language),
+            temperature=temperature,
+            top_p=top_p,
+            text_guidance=text_guidance,
+            voice_guidance=voice_guidance,
+            style_guidance=style_guidance,
+            repetition_penalty=repetition_penalty,
+        )
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._session:
-            self._session = utils.http_context.http_session()
+    def update_options(
+        self,
+        *,
+        voice: str | None = None,
+        voice_engine: TTSEngines | str | None = None,
+        language: str | None = None,
+        sample_rate: int | None = None,
+        speed: float | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        text_guidance: float | None = None,
+        voice_guidance: float | None = None,
+        style_guidance: float | None = None,
+        repetition_penalty: float | None = None,
+    ) -> None:
+        """
+        Update the TTS options.
 
-        return self._session
-
-    async def list_voices(self) -> List[Voice]:
-        async with self._ensure_session().get(
-            f"{self._opts.base_url}/voices",
-            headers={
-                "accept": "application/json",
-                AUTHORIZATION_HEADER: self._opts.api_key,
-                USERID_HEADER: self._opts.user_id,
-            },
-        ) as resp:
-            return _dict_to_voices_list(await resp.json())
+        Args:
+            voice (str, optional): The voice to use.
+            voice_engine (str, optional): The voice engine to use.
+            language (str, optional): The language of the text.
+            sample_rate (int, optional): The sample rate of the audio.
+            speed (float, optional): The speed of the audio.
+            temperature (float, optional): The temperature of the model.
+            top_p (float, optional): The top-p value of the model.
+            text_guidance (float, optional): The text guidance of the model.
+            voice_guidance (float, optional): The voice guidance of the model.
+            style_guidance (float, optional): The style guidance of the model.
+            repetition_penalty (float, optional): The repetition penalty of the model.
+        """
+        updates = {
+            "voice": voice,
+            "voice_engine": voice_engine,
+            "language": Language(language) if language else None,
+            "sample_rate": sample_rate,
+            "speed": speed,
+            "temperature": temperature,
+            "top_p": top_p,
+            "text_guidance": text_guidance,
+            "voice_guidance": voice_guidance,
+            "style_guidance": style_guidance,
+            "repetition_penalty": repetition_penalty,
+        }
+        for k, v in updates.items():
+            if v is not None:
+                setattr(self._opts, k, v)
 
     def synthesize(
         self,
@@ -143,96 +166,141 @@ class TTS(tts.TTS):
             input_text=text,
             conn_options=conn_options,
             opts=self._opts,
-            session=self._ensure_session(),
+        )
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> "SynthesizeStream":
+        return SynthesizeStream(
+            tts=self,
+            conn_options=conn_options,
+            opts=self._opts,
         )
 
 
 class ChunkedStream(tts.ChunkedStream):
-    """Synthesize using the chunked api endpoint"""
-
     def __init__(
         self,
+        *,
         tts: TTS,
         input_text: str,
-        opts: _TTSOptions,
         conn_options: APIConnectOptions,
-        session: aiohttp.ClientSession,
+        opts: _TTSOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts, self._session = opts, session
+        self._client = tts._client
+        self._opts = opts
+        self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
     async def _run(self) -> None:
-        stream = utils.audio.AudioByteStream(
+        request_id = utils.shortuuid()
+        bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate, num_channels=1
         )
-        self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
-        request_id = utils.shortuuid()
-        url = f"{API_BASE_URL_V2}/tts/stream"
-        headers = {
-            "accept": ACCEPT_HEADER[self._opts.encoding],
-            "content-type": "application/json",
-            AUTHORIZATION_HEADER: self._opts.api_key,
-            USERID_HEADER: self._opts.user_id,
-        }
-        json_data = {
-            "text": self._input_text,
-            "output_format": self._opts.encoding,
-            "sample_rate": self._opts.sample_rate,
-            "voice": self._opts.voice.id,
-        }
+        tts_options = TTSOptions(
+            voice=self._opts.voice,
+            format=self._opts.format,
+            sample_rate=self._opts.sample_rate,
+            speed=self._opts.speed,
+            language=self._opts.language,
+        )
+
         try:
-            async with self._session.post(
-                url=url, headers=headers, json=json_data
-            ) as resp:
-                if not resp.content_type.startswith("audio/"):
-                    content = await resp.text()
-                    logger.error("playHT returned non-audio data: %s", content)
-                    return
-
-                encoding = _encoding_from_format(self._opts.encoding)
-                if encoding == "mp3":
-                    async for bytes_data, _ in resp.content.iter_chunks():
-                        for frame in self._mp3_decoder.decode_chunk(bytes_data):
-                            self._event_ch.send_nowait(
-                                tts.SynthesizedAudio(
-                                    request_id=request_id,
-                                    frame=frame,
-                                )
-                            )
-                else:
-                    async for bytes_data, _ in resp.content.iter_chunks():
-                        for frame in stream.write(bytes_data):
-                            self._event_ch.send_nowait(
-                                tts.SynthesizedAudio(
-                                    request_id=request_id,
-                                    frame=frame,
-                                )
-                            )
-
-                    for frame in stream.flush():
+            async for chunk in self._client.tts(
+                text=self._input_text,
+                options=tts_options,
+                voice_engine=self._opts.voice_engine,
+            ):
+                for frame in self._mp3_decoder.decode_chunk(chunk):
+                    for frame in bstream.write(frame.data.tobytes()):
                         self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(request_id=request_id, frame=frame)
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                frame=frame,
+                            )
                         )
-
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from e
+            for frame in bstream.flush():
+                self._event_ch.send_nowait(
+                    tts.SynthesizedAudio(request_id=request_id, frame=frame)
+                )
         except Exception as e:
             raise APIConnectionError() from e
 
 
-def _dict_to_voices_list(data: dict[str, Any]):
-    voices: List[Voice] = []
-    for voice in data["text"]:
-        voices.append(
-            Voice(
-                id=voice["id"], name=voice["name"], voice_engine=voice["voice_engine"]
+class SynthesizeStream(tts.SynthesizeStream):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+    ):
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._client = tts._client
+        self._opts = opts
+        self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
+        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
+            min_sentence_len=8
+        ).stream()
+
+    async def _run(self) -> None:
+        request_id = utils.shortuuid()
+        bstream = utils.audio.AudioByteStream(
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+        )
+        tts_options = TTSOptions(
+            voice=self._opts.voice,
+            format=self._opts.format,
+            sample_rate=self._opts.sample_rate,
+            speed=self._opts.speed,
+            language=self._opts.language,
+        )
+
+        input_task = asyncio.create_task(self._handle_input())
+        try:
+            text_stream = await self._create_text_stream()
+            async for chunk in self._client.stream_tts_input(
+                text_stream=text_stream,
+                options=tts_options,
+                voice_engine=self._opts.voice_engine,
+            ):
+                for frame in self._mp3_decoder.decode_chunk(chunk):
+                    for frame in bstream.write(frame.data.tobytes()):
+                        self._send_frame(request_id, frame)
+                        last_frame = frame
+
+            for frame in bstream.flush():
+                self._send_frame(request_id, frame)
+                last_frame = frame
+            self._send_frame(request_id, last_frame, is_final=True)
+        except Exception as e:
+            raise APIConnectionError() from e
+        finally:
+            await utils.aio.gracefully_cancel(input_task)
+
+    async def _handle_input(self):
+        async for data in self._input_ch:
+            if isinstance(data, self._FlushSentinel):
+                self._sent_tokenizer_stream.flush()
+                continue
+            self._sent_tokenizer_stream.push_text(data)
+        self._sent_tokenizer_stream.end_input()
+
+    async def _create_text_stream(self):
+        async def text_stream():
+            async for data in self._sent_tokenizer_stream:
+                yield data.token
+
+        return text_stream()
+
+    def _send_frame(
+        self, request_id: str, frame: rtc.AudioFrame, is_final: bool = False
+    ) -> None:
+        self._event_ch.send_nowait(
+            tts.SynthesizedAudio(
+                request_id=request_id,
+                frame=frame,
+                is_final=is_final,
             )
         )
-    return voices

@@ -1,12 +1,8 @@
-from .models import TTSEngines
-from .tts import DEFAULT_VOICE, TTS, Voice
+from .tts import TTS
 from .version import __version__
 
 __all__ = [
     "TTS",
-    "Voice",
-    "DEFAULT_VOICE",
-    "TTSEngines",
     "__version__",
 ]
 
