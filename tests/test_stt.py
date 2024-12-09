@@ -4,7 +4,6 @@ Do speech recognition on a long audio file and compare the result with the expec
 
 import asyncio
 import time
-from itertools import product
 from typing import Callable
 
 import pytest
@@ -34,9 +33,8 @@ RECOGNIZE_STT: list[Callable[[], stt.STT]] = [
 
 
 @pytest.mark.usefixtures("job_process")
-@pytest.mark.parametrize(
-    "stt_factory, sample_rate", product(RECOGNIZE_STT, SAMPLE_RATES)
-)
+@pytest.mark.parametrize("stt_factory", RECOGNIZE_STT)
+@pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_recognize(stt_factory, sample_rate):
     async with stt_factory() as stt:
         frames, transcript = make_test_speech(sample_rate=sample_rate)
@@ -78,7 +76,8 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
 
 
 @pytest.mark.usefixtures("job_process")
-@pytest.mark.parametrize("stt_factory, sample_rate", product(STREAM_STT, SAMPLE_RATES))
+@pytest.mark.parametrize("stt_factory", STREAM_STT)
+@pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_stream(stt_factory, sample_rate):
     stt = stt_factory()
 
