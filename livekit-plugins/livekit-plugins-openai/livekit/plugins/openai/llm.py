@@ -709,7 +709,7 @@ class LLMStream(llm.LLMStream):
                 fncs_desc = []
                 for fnc in self._fnc_ctx.ai_functions.values():
                     fncs_desc.append(
-                        build_oai_function_description(fnc, self._llm.capabilities)
+                        build_oai_function_description(fnc, self._llm._capabilities)
                     )
 
                 opts["tools"] = fncs_desc
