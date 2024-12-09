@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+from functools import wraps
 import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, Literal, MutableSet, Union
@@ -33,6 +34,7 @@ from livekit.agents.llm import ToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import openai
+from openai.resources import AsyncCompletions
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
 
@@ -626,6 +628,16 @@ class LLM(llm.LLM):
             tool_choice=tool_choice,
         )
 
+    @wraps(AsyncCompletions.create)
+    def create_chat_completions_stream(self, **kwargs):
+        return self._client.chat.completions.create(
+            model=self._opts.model,
+            stream_options={"include_usage": True},
+            stream=True,
+            user=self._opts.user or openai.NOT_GIVEN,
+            **kwargs,
+        )
+
     def chat(
         self,
         *,
@@ -642,45 +654,33 @@ class LLM(llm.LLM):
             parallel_tool_calls = self._opts.parallel_tool_calls
         if tool_choice is None:
             tool_choice = self._opts.tool_choice
-        opts: dict[str, Any] = dict()
+        stream_kwargs: dict[str, Any] = {
+            "n": n,
+        }
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
-            fncs_desc = []
-            for fnc in fnc_ctx.ai_functions.values():
-                fncs_desc.append(build_oai_function_description(fnc, self.capabilities))
-
-            opts["tools"] = fncs_desc
+            stream_kwargs["tools"] = [
+                build_oai_function_description(fnc, self.capabilities)
+                for fnc in fnc_ctx.ai_functions.values()
+            ]
 
             if fnc_ctx and parallel_tool_calls is not None:
-                opts["parallel_tool_calls"] = parallel_tool_calls
+                stream_kwargs["parallel_tool_calls"] = parallel_tool_calls
             if tool_choice is not None:
                 if isinstance(tool_choice, ToolChoice):
-                    opts["tool_choice"] = {
+                    stream_kwargs["tool_choice"] = {
                         "type": "function",
                         "function": {"name": tool_choice.name},
                     }
                 else:
-                    opts["tool_choice"] = tool_choice
-
-        user = self._opts.user or openai.NOT_GIVEN
+                    stream_kwargs["tool_choice"] = tool_choice
         if temperature is None:
-            temperature = self._opts.temperature
-
-        messages = _build_oai_context(chat_ctx, id(self))
-
-        cmp = self._client.chat.completions.create(
-            messages=messages,
-            model=self._opts.model,
-            n=n,
-            temperature=temperature,
-            stream_options={"include_usage": True},
-            stream=True,
-            user=user,
-            **opts,
-        )
+            stream_kwargs["temperature"] = self._opts.temperature
+        stream_kwargs["messages"] = _build_oai_context(chat_ctx, id(self))
+        oai_stream = self.create_chat_completions_stream(**stream_kwargs)
 
         return LLMStream(
             self,
-            oai_stream=cmp,
+            oai_stream=oai_stream,
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
             conn_options=conn_options,
