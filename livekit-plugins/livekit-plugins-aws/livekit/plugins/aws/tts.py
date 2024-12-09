@@ -15,10 +15,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+import boto3
+from aiobotocore.session import AioSession, get_session
 from livekit import rtc
 from livekit.agents import tts, utils
-import boto3
-from aiobotocore.session import get_session, AioSession
 
 from .log import logger
 
@@ -56,11 +56,17 @@ class TTS(tts.TTS):
         )
         credentials = boto3.Session().get_credentials()
 
-        speech_key = speech_key or os.environ.get("AWS_ACCESS_KEY_ID") or credentials.access_key
+        speech_key = (
+            speech_key or os.environ.get("AWS_ACCESS_KEY_ID") or credentials.access_key
+        )
         if not speech_key:
             raise ValueError("AWS_ACCESS_KEY_ID must be set")
 
-        speech_secret = speech_secret or os.environ.get("AWS_SECRET_ACCESS_KEY") or credentials.secret_key
+        speech_secret = (
+            speech_secret
+            or os.environ.get("AWS_SECRET_ACCESS_KEY")
+            or credentials.secret_key
+        )
         if not speech_secret:
             raise ValueError("AWS_SECRET_ACCESS_KEY must be set")
 
@@ -90,9 +96,7 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(
-        self, text: str, opts: _TTSOptions, session: AioSession
-    ) -> None:
+    def __init__(self, text: str, opts: _TTSOptions, session: AioSession) -> None:
         super().__init__()
         self._text, self._opts, self._session = text, opts, session
 
@@ -101,21 +105,29 @@ class ChunkedStream(tts.ChunkedStream):
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
 
-        async with self._session.create_client('polly', region_name=self._opts.speech_region) as client:
+        async with self._session.create_client(
+            "polly", region_name=self._opts.speech_region
+        ) as client:
             response = await client.synthesize_speech(
-                Text=self._text, OutputFormat=self._opts.output_format, Engine=self._opts.speech_engine,
-                VoiceId=self._opts.voice, TextType="text", SampleRate=str(TTS_SAMPLE_RATE)
+                Text=self._text,
+                OutputFormat=self._opts.output_format,
+                Engine=self._opts.speech_engine,
+                VoiceId=self._opts.voice,
+                TextType="text",
+                SampleRate=str(TTS_SAMPLE_RATE),
             )
             if "AudioStream" in response:
                 decoder = utils.codecs.Mp3StreamDecoder()
-                async with response['AudioStream'] as resp:
+                async with response["AudioStream"] as resp:
                     async for data, _ in resp.content.iter_chunks():
                         if self._opts.output_format == "mp3":
                             frames = decoder.decode_chunk(data)
                             for frame in frames:
                                 self._event_ch.send_nowait(
                                     tts.SynthesizedAudio(
-                                        request_id=request_id, segment_id=segment_id, frame=frame
+                                        request_id=request_id,
+                                        segment_id=segment_id,
+                                        frame=frame,
                                     )
                                 )
                         else:

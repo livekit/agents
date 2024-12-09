@@ -94,7 +94,8 @@ jobs:
                       ./livekit-plugins/livekit-plugins-azure \
                       ./livekit-plugins/livekit-plugins-anthropic \
                       ./livekit-plugins/livekit-plugins-assemblyai \
-                      ./livekit-plugins/livekit-plugins-fal
+                      ./livekit-plugins/livekit-plugins-fal \
+                      ./livekit-plugins/livekit-plugins-aws
 
       - name: Run tests
         shell: bash
@@ -115,6 +116,8 @@ jobs:
           FAL_KEY: ${{ secrets.FAL_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         working-directory: tests
         run: |
           echo "$GOOGLE_CREDENTIALS_JSON" > google.json

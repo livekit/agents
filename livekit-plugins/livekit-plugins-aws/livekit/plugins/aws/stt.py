@@ -17,12 +17,11 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from livekit import rtc
-from livekit.agents import stt, utils
-
 import boto3
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.model import TranscriptEvent, TranscriptResultStream
+from livekit import rtc
+from livekit.agents import stt, utils
 
 from .log import logger
 
@@ -46,18 +45,24 @@ class STT(stt.STT):
         speech_secret: str | None = None,
         sample_rate: int = 48000,
         num_channels: int = 1,
-        languages: list[str] = ["en-US"],  # when empty, auto-detect the language
+        languages: list[str] = ["en-US"],
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
         )
         credentials = boto3.Session().get_credentials()
 
-        speech_key = speech_key or os.environ.get("AWS_ACCESS_KEY_ID") or credentials.access_key
+        speech_key = (
+            speech_key or os.environ.get("AWS_ACCESS_KEY_ID") or credentials.access_key
+        )
         if not speech_key:
             raise ValueError("AWS_ACCESS_KEY_ID must be set")
 
-        speech_secret = speech_secret or os.environ.get("AWS_SECRET_ACCESS_KEY") or credentials.secret_key
+        speech_secret = (
+            speech_secret
+            or os.environ.get("AWS_SECRET_ACCESS_KEY")
+            or credentials.secret_key
+        )
         if not speech_secret:
             raise ValueError("AWS_SECRET_ACCESS_KEY must be set")
 
@@ -78,7 +83,9 @@ class STT(stt.STT):
         buffer: utils.AudioBuffer,
         language: str | None = None,
     ) -> stt.SpeechEvent:
-        raise NotImplementedError("Amazon Transcribe does not support single frame recognition")
+        raise NotImplementedError(
+            "Amazon Transcribe does not support single frame recognition"
+        )
 
     def stream(
         self,
@@ -90,7 +97,7 @@ class STT(stt.STT):
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
-        self, 
+        self,
         opts: STTOptions,
         sample_rate: int = 48000,
         num_channels: int = 1,
@@ -104,12 +111,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._client = TranscribeStreamingClient(region=self._opts.speech_region)
 
-    @utils.log_exceptions(logger=logger)
-    async def _main_task(self) -> None:
-        await self._run(self._max_retry)
-
     async def _run(self, max_retry: int) -> None:
-        retry_count = 0
         while not self._input_ch.closed:
             try:
                 # aws requires a async generator when calling start_stream_transcription
@@ -118,39 +120,27 @@ class SpeechStream(stt.SpeechStream):
                     media_sample_rate_hz=self._sample_rate,
                     media_encoding="pcm",
                 )
+
                 # this function basically convert the queue into a async generator
                 async def input_generator():
                     try:
                         async for frame in self._input_ch:
                             if isinstance(frame, rtc.AudioFrame):
-                                await stream.input_stream.send_audio_event(audio_chunk=frame.data.tobytes())
+                                await stream.input_stream.send_audio_event(
+                                    audio_chunk=frame.data.tobytes()
+                                )
                         await stream.input_stream.end_stream()
                     except Exception as e:
-                        logger.exception(f"an error occurred while streaming inputs: {e}")
+                        logger.exception(
+                            f"an error occurred while streaming inputs: {e}"
+                        )
 
                 # try to connect
                 handler = TranscriptEventHandler(stream.output_stream, self._event_ch)
-                await asyncio.gather(
-                    input_generator(), 
-                    handler.handle_events()
-                )
-                retry_count = 0  # connection successful, reset retry count
-                
+                await asyncio.gather(input_generator(), handler.handle_events())
             except Exception as e:
-                if retry_count >= max_retry:
-                    logger.error(
-                        f"failed to connect to aws stt after {max_retry} tries",
-                        exc_info=e,
-                    )
-                    break
+                logger.exception(f"an error occurred while streaming inputs: {e}")
 
-                retry_delay = min(retry_count * 2, 5)  # max 5s
-                retry_count += 1
-                logger.warning(
-                    f"aws stt connection failed, retrying in {retry_delay}s",
-                    exc_info=e,
-                )
-                await asyncio.sleep(retry_delay)
 
 def _streaming_recognize_response_to_speech_data(
     resp: None,
@@ -166,12 +156,13 @@ def _streaming_recognize_response_to_speech_data(
 
     return data
 
+
 class TranscriptEventHandler:
     def __init__(
-            self, 
-            transcript_result_stream: TranscriptResultStream, 
-            event_ch: asyncio.Queue[Optional[stt.SpeechEvent]],
-        ):
+        self,
+        transcript_result_stream: TranscriptResultStream,
+        event_ch: asyncio.Queue[Optional[stt.SpeechEvent]],
+    ):
         self._transcript_result_stream = transcript_result_stream
         self._event_ch = event_ch
 
@@ -185,18 +176,14 @@ class TranscriptEventHandler:
 
     async def handle_transcript_event(self, transcript_event: TranscriptEvent):
         # This handler can be implemented to handle transcriptions as needed.
-        stream =  transcript_event.transcript.results
+        stream = transcript_event.transcript.results
         for resp in stream:
-            if (
-                resp.start_time == 0.0
-            ):
+            if resp.start_time == 0.0:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                 )
 
-            if (
-                resp.end_time > 0.0
-            ):
+            if resp.end_time > 0.0:
                 if resp.is_partial:
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
@@ -217,9 +204,7 @@ class TranscriptEventHandler:
                         )
                     )
 
-            if (
-                resp.is_partial == False
-            ):
+            if not resp.is_partial:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 )
