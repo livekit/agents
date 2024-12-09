@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.12.2
+
+### Patch Changes
+
+- fix duplicated agent speech commit for message with function call - [#1192](https://github.com/livekit/agents/pull/1192) ([@longcw](https://github.com/longcw))
+
 ## 0.12.1
 
 ### Patch Changes

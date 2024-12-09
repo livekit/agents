@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.10.10
+
+### Patch Changes
+
+- fix: return structured output from func calls - [#1187](https://github.com/livekit/agents/pull/1187) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.10.9
 
 ### Patch Changes
