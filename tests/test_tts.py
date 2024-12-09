@@ -4,10 +4,11 @@ We verify the content using a good STT model
 """
 
 import dataclasses
+from typing import Callable
 
 import pytest
 from livekit import agents
-from livekit.agents import APIConnectionError, tokenize
+from livekit.agents import APIConnectionError, tokenize, tts
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins import azure, cartesia, elevenlabs, google, openai
 
@@ -33,7 +34,7 @@ async def _assert_valid_synthesized_audio(
     ), "num channels should be the same"
 
 
-SYNTHESIZE_TTS = [
+SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: elevenlabs.TTS(), id="elevenlabs"),
     pytest.param(
         lambda: elevenlabs.TTS(encoding="pcm_44100"), id="elevenlabs.pcm_44100"
@@ -62,7 +63,7 @@ async def test_synthesize(tts_factory):
 
 
 STREAM_SENT_TOKENIZER = tokenize.basic.SentenceTokenizer(min_sentence_len=20)
-STREAM_TTS = [
+STREAM_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: elevenlabs.TTS(), id="elevenlabs"),
     pytest.param(
         lambda: elevenlabs.TTS(encoding="pcm_44100"), id="elevenlabs.pcm_44100"
