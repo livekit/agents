@@ -55,8 +55,8 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        self._api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
-        if not self._api_key:
+        api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
+        if not api_key:
             raise ValueError(
                 "Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key."
             )
@@ -69,6 +69,7 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
         )
         self._session = http_session
+        self._api_key = api_key
         self._base_url = base_url
 
     def _ensure_session(self) -> aiohttp.ClientSession:
