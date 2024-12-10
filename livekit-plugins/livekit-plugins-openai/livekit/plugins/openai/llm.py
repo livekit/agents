@@ -79,8 +79,8 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
-        store: bool = False,
-        metadata: dict[str, Any] = {},
+        store: bool | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -676,10 +676,16 @@ class LLM(llm.LLM):
         messages = _build_oai_context(chat_ctx, id(self))
 
         if store is None:
-            store = self._opts.store
+            if self._opts.store is not None:
+                opts["store"] = self._opts.store
+        else:
+            opts["store"] = store
 
         if metadata is None:
-            metadata = self._opts.metadata
+            if self._opts.metadata is not None:
+                opts["metadata"] = self._opts.metadata
+        else:
+            opts["metadata"] = metadata
 
         cmp = self._client.chat.completions.create(
             messages=messages,
@@ -689,8 +695,6 @@ class LLM(llm.LLM):
             stream_options={"include_usage": True},
             stream=True,
             user=user,
-            store=store,
-            metadata=metadata,
             **opts,
         )
 
