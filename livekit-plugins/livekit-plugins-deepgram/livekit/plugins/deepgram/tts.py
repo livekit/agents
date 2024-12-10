@@ -142,7 +142,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._api_key = api_key
 
     async def _run(self) -> None:
-        request_id = utils.shortuuid()
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate,
             num_channels=NUM_CHANNELS,
