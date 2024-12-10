@@ -22,7 +22,6 @@ import weakref
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional, Tuple
-from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
@@ -38,7 +37,7 @@ from livekit.agents import (
 )
 from livekit.agents.utils import AudioBuffer
 
-from ._utils import PeriodicCollector
+from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
 
@@ -664,25 +663,6 @@ def prerecorded_transcription_to_speech_event(
             for alt in dg_alts
         ],
     )
-
-
-def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
-    if opts.get("keywords"):
-        # convert keywords to a list of "keyword:intensifier"
-        opts["keywords"] = [
-            f"{keyword}:{intensifier}" for (keyword, intensifier) in opts["keywords"]
-        ]
-
-    # lowercase bools
-    opts = {k: str(v).lower() if isinstance(v, bool) else v for k, v in opts.items()}
-
-    if websocket and base_url.startswith("http"):
-        base_url = base_url.replace("http", "ws", 1)
-
-    elif not websocket and base_url.startswith("ws"):
-        base_url = base_url.replace("ws", "http", 1)
-
-    return f"{base_url}?{urlencode(opts, doseq=True)}"
 
 
 def _validate_model(
