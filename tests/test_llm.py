@@ -203,7 +203,7 @@ async def test_calls_arrays(llm_factory: Callable[[], llm.LLM]):
 
     stream = await _request_fnc_call(
         input_llm,
-        "Can you select all currencies in Europe at once from given choices?",
+        "Can you select all currencies in Europe at once from given choices using tool `select_currencies`?",
         fnc_ctx,
         temperature=0.2,
     )
