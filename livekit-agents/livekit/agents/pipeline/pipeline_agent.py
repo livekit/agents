@@ -160,7 +160,7 @@ class AgentTranscriptionOptions:
     representing the hyphenated parts of the word."""
 
 
-class TurnDetector(Protocol):
+class _TurnDetector(Protocol):
     # When endpoint probability is below this threshold we think the user is not finished speaking
     # so we will use a long delay
     def unlikely_threshold() -> float: ...
@@ -183,7 +183,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         stt: stt.STT,
         llm: LLM,
         tts: tts.TTS,
-        turn_detector: TurnDetector | None = None,
+        turn_detector: _TurnDetector | None = None,
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
@@ -1119,7 +1119,7 @@ class _DeferredReplyValidation:
         self,
         validate_fnc: Callable[[], None],
         min_endpointing_delay: float,
-        turn_detector: TurnDetector | None,
+        turn_detector: _TurnDetector | None,
         agent: VoicePipelineAgent,
     ) -> None:
         self._turn_detector = turn_detector
@@ -1198,7 +1198,10 @@ class _DeferredReplyValidation:
         @utils.log_exceptions(logger=logger)
         async def _run_task(chat_ctx: ChatContext, delay: float) -> None:
             await asyncio.sleep(delay)
-            if self._turn_detector is not None and self._turn_detector.supports_language(self._last_language):
+            if (
+                self._turn_detector is not None
+                and self._turn_detector.supports_language(self._last_language)
+            ):
                 eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
                 unlikely_threshold = self._turn_detector.unlikely_threshold()
                 if eot_prob < unlikely_threshold:

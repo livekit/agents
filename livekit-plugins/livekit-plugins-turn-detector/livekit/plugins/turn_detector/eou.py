@@ -113,18 +113,23 @@ class _EUORunner(_InferenceRunner):
 
 
 class EOUModel:
-    def __init__(self, inference_executor: InferenceExecutor | None = None) -> None:
+    def __init__(
+        self,
+        inference_executor: InferenceExecutor | None = None,
+        unlikely_threshold: float = 0.15,
+    ) -> None:
         self._executor = (
             inference_executor or get_current_job_context().inference_executor
         )
+        self._unlikely_threshold = unlikely_threshold
 
     def unlikely_threshold(self) -> float:
-        return 0.15
+        return self._unlikely_threshold
 
     def supports_language(self, language: str | None) -> bool:
         if language is None:
             return False
-        parts = language.split("-")
+        parts = language.lower().split("-")
         # certain models use language codes (DG, AssemblyAI), others use full names (like OAI)
         return parts[0] == "en" or parts[0] == "english"
 
