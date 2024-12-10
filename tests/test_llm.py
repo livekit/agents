@@ -32,9 +32,7 @@ class FncCtx(FunctionContext):
     @ai_callable(description="Play a music")
     def play_music(
         self,
-        name: Annotated[
-            str, TypeInfo(description="The artist and the name of the song")
-        ],
+        name: Annotated[str, TypeInfo(description="the name of the Artist")],
     ) -> None: ...
 
     # test for cancelled calls
@@ -280,14 +278,14 @@ async def test_optional_args(llm_factory: Callable[[], llm.LLM]):
 test_tool_choice_cases = [
     pytest.param(
         "Default tool_choice (auto)",
-        "Get the weather for New York and play some music.",
+        "Get the weather for New York and play some music from the artist 'The Beatles'.",
         None,
         {"get_weather", "play_music"},
         id="Default tool_choice (auto)",
     ),
     pytest.param(
         "Tool_choice set to 'required'",
-        "Get the weather for Chicago and play some music.",
+        "Get the weather for Chicago and play some music from the artist 'Eminem'.",
         "required",
         {"get_weather", "play_music"},
         id="Tool_choice set to 'required'",
@@ -301,7 +299,7 @@ test_tool_choice_cases = [
     ),
     pytest.param(
         "Tool_choice set to 'none'",
-        "Get the weather for Seattle and play some music.",
+        "Get the weather for Seattle and play some music from the artist 'Frank Sinatra'.",
         "none",
         set(),  # No tool calls expected
         id="Tool_choice set to 'none'",
