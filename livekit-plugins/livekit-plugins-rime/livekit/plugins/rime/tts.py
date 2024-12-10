@@ -57,7 +57,7 @@ class _TTSOptions:
 class Voice:
     name: str
 
-API_URL = "https://users.rime.ai/v1/rime-tts"
+DEFAULT_API_URL = "https://users.rime.ai/v1/rime-tts"
 VOICES_URL = "https://users.rime.ai/data/voices/all.json"
 
 DEFAULT_MODEL_ID = "mist"
@@ -80,6 +80,7 @@ class TTS(tts.TTS):
         reduceLatency: bool = False,
         pauseBetweenBrackets: bool = DEFAULT_PAUSE_BETWEEN_BRACKETS,
         phonemizeBetweenBrackets: bool = DEFAULT_PHONEMIZE_BETWEEN_BRACKETS,
+        api_url: str = DEFAULT_API_URL,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -102,6 +103,7 @@ class TTS(tts.TTS):
             reduceLatency=reduceLatency,
             pauseBetweenBrackets=pauseBetweenBrackets,
             phonemizeBetweenBrackets=phonemizeBetweenBrackets,
+            api_url=api_url,
             api_key=api_key,
         )
         self._session = http_session
@@ -153,7 +155,7 @@ class ChunkedStream(tts.ChunkedStream):
         )
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
         request_id = utils.shortuuid()
-        url = API_URL
+        url = self._opts.api_url
         headers = {
             "accept": ACCEPT_HEADER[self._opts.audioFormat],
             AUTHORIZATION_HEADER: f"Bearer {self._opts.api_key}",
