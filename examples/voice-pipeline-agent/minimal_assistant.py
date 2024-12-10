@@ -13,7 +13,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import deepgram, openai, silero, turn_detector
+from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
 logger = logging.getLogger("voice-assistant")
@@ -50,7 +50,6 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
-        turn_detector=turn_detector.EOUModel(),
     )
 
     agent.start(ctx.room, participant)
