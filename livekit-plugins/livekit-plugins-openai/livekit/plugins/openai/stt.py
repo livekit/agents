@@ -157,7 +157,8 @@ class STT(stt.STT):
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 alternatives=[
                     stt.SpeechData(
-                        text=resp.text or "", language=resp.language or language or ""
+                        text=resp.text or "",
+                        language=resp.language or config.language or "",
                     )
                 ],
             )
