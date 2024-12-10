@@ -707,7 +707,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self._main_task(), name="openai-realtime-session"
         )
         # manage conversation items internally
-        self._remote_converstation_items = remote_items._RemoteConversationItems()
+        self._remote_conversation_items = remote_items._RemoteConversationItems()
 
         # wait for the item to be created or deleted
         self._item_created_futs: dict[str, asyncio.Future[bool]] = {}
@@ -844,7 +844,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         )
 
     def chat_ctx_copy(self) -> llm.ChatContext:
-        return self._remote_converstation_items.to_chat_context()
+        return self._remote_conversation_items.to_chat_context()
 
     async def set_chat_ctx(self, new_ctx: llm.ChatContext) -> None:
         """Sync the chat context with the agent's chat context.
@@ -852,7 +852,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         Compute the minimum number of insertions and deletions to transform the old
         chat context messages to the new chat context messages.
         """
-        original_ctx = self._remote_converstation_items.to_chat_context()
+        original_ctx = self._remote_conversation_items.to_chat_context()
 
         changes = utils._compute_changes(
             original_ctx.messages, new_ctx.messages, key_fnc=lambda x: x.id
@@ -912,10 +912,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self.conversation.item.create(self._create_empty_user_audio_message(1.0))
         self.response.create()
 
-    def _update_converstation_item_content(
+    def _update_conversation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
     ) -> None:
-        item = self._remote_converstation_items.get(item_id)
+        item = self._remote_conversation_items.get(item_id)
         if item is None:
             logger.warning(
                 "conversation item not found, skipping update",
@@ -1185,7 +1185,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             return
 
         # Insert into conversation items
-        self._remote_converstation_items.insert_after(previous_item_id, message)
+        self._remote_conversation_items.insert_after(previous_item_id, message)
         if item_id in self._item_created_futs:
             self._item_created_futs[item_id].set_result(True)
             del self._item_created_futs[item_id]
@@ -1196,7 +1196,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     ):
         # Delete from conversation items
         item_id = item_deleted["item_id"]
-        self._remote_converstation_items.delete(item_id)
+        self._remote_conversation_items.delete(item_id)
         if item_id in self._item_deleted_futs:
             self._item_deleted_futs[item_id].set_result(True)
             del self._item_deleted_futs[item_id]
@@ -1362,7 +1362,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 item["arguments"],
             )
 
-            msg = self._remote_converstation_items.get(output.item_id)
+            msg = self._remote_conversation_items.get(output.item_id)
             if msg is not None:
                 # update the content of the message
                 assert msg.tool_call_id == item["call_id"]
@@ -1491,7 +1491,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             await create_fut
 
         # update the message with the tool call result
-        msg = self._remote_converstation_items.get(tool_call.id)
+        msg = self._remote_conversation_items.get(tool_call.id)
         if msg is not None:
             assert msg.tool_call_id == tool_call.tool_call_id
             assert msg.role == "tool"
