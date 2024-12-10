@@ -142,6 +142,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._api_key = api_key
 
     async def _run(self) -> None:
+        request_id = utils.shortuuid()
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate,
             num_channels=NUM_CHANNELS,
@@ -165,9 +166,9 @@ class ChunkedStream(tts.ChunkedStream):
             ) as res:
                 if res.status != 200:
                     raise APIStatusError(
-                        message=res.err_msg,
-                        status_code=res.err_code,
-                        request_id=res.request_id,
+                        message=res.message,
+                        status_code=res.status,
+                        request_id=request_id,
                         body=await res.json(),
                     )
 
@@ -175,14 +176,14 @@ class ChunkedStream(tts.ChunkedStream):
                     for frame in audio_bstream.write(bytes_data):
                         self._event_ch.send_nowait(
                             tts.SynthesizedAudio(
-                                request_id=res.request_id,
+                                request_id=request_id,
                                 frame=frame,
                             )
                         )
 
                 for frame in audio_bstream.flush():
                     self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(request_id=res.request_id, frame=frame)
+                        tts.SynthesizedAudio(request_id=request_id, frame=frame)
                     )
 
         except asyncio.TimeoutError as e:
@@ -191,7 +192,7 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=None,
+                request_id=request_id,
                 body=None,
             ) from e
         except Exception as e:
