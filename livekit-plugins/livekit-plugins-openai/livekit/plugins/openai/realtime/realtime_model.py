@@ -689,6 +689,41 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         def create(self) -> None:
             self._sess._queue_msg({"type": "response.create"})
 
+        async def acreate(self, *, cancel_existing: bool = True) -> None:
+            # FIXME: should we merge this with `create`?
+            pending_create_fut = self._sess._response_create_fut
+            if pending_create_fut is not None:
+                if not cancel_existing:
+                    return
+                await pending_create_fut
+
+            pending_resp_id = self._sess._active_response_id
+            if pending_resp_id:
+                if not cancel_existing:
+                    logger.warning(
+                        "active response exists, skipping creation",
+                        extra={
+                            "response_id": pending_resp_id,
+                            **self._sess.logging_extra(),
+                        },
+                    )
+                    return
+                logger.warning(
+                    "cancelling in-progress response before creating a new one",
+                    extra={
+                        "response_id": pending_resp_id,
+                        **self._sess.logging_extra(),
+                    },
+                )
+                self.cancel()
+                await self._sess._pending_responses[pending_resp_id].done_fut
+
+            # create a new response and wait for it to be created
+            new_create_fut = asyncio.Future[str]()
+            self._sess._response_create_fut = new_create_fut
+            self.create()
+            await new_create_fut
+
         def cancel(self) -> None:
             self._sess._queue_msg({"type": "response.cancel"})
 
@@ -722,6 +757,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._http_session = http_session
 
         self._pending_responses: dict[str, RealtimeResponse] = {}
+        self._active_response_id: str | None = None
+        self._response_create_fut: asyncio.Future[str] | None = None
 
         self._session_id = "not-connected"
         self.session_update()  # initial session init
@@ -1226,6 +1263,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             _created_timestamp=time.time(),
         )
         self._pending_responses[new_response.id] = new_response
+        self._active_response_id = new_response.id
+
+        # complete the create future if it exists
+        if self._response_create_fut is not None:
+            self._response_create_fut.set_result(new_response.id)
+            self._response_create_fut = None
+
         self.emit("response_created", new_response)
 
     def _handle_response_output_item_added(
@@ -1383,6 +1427,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         response_data = response_done["response"]
         response_id = response_data["id"]
         response = self._pending_responses[response_id]
+        self._active_response_id = None
         response.done_fut.set_result(None)
 
         response.status = response_data["status"]
@@ -1481,13 +1526,18 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         await called_fnc.task
 
         tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
-
+        logger.info(
+            "creating response for tool call",
+            extra={
+                "function": fnc_call_info.function_info.name,
+            },
+        )
         if called_fnc.result is not None:
             create_fut = self.conversation.item.create(
                 tool_call,
                 previous_item_id=item_id,
             )
-            self.response.create()
+            await self.response.acreate()
             await create_fut
 
         # update the message with the tool call result
