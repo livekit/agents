@@ -88,6 +88,7 @@ STREAM_TTS: list[Callable[[], tts.TTS]] = [
         ),
         id="azure.stream",
     ),
+    pytest.param(lambda: deepgram.TTS(), id="deepgram"),
 ]
 
 
