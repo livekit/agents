@@ -51,7 +51,6 @@ async def entrypoint(ctx: JobContext):
         stt=openai.STT(),
         llm=openai.LLM(),
         tts=openai.TTS(),
-        turn_detector=turn_detector.EOUModel(),
         chat_ctx=initial_ctx,
     )
 
