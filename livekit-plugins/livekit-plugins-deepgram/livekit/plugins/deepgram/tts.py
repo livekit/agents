@@ -166,7 +166,7 @@ class ChunkedStream(tts.ChunkedStream):
             ) as res:
                 if res.status != 200:
                     raise APIStatusError(
-                        message=res.message,
+                        message=res.reason,
                         status_code=res.status,
                         request_id=request_id,
                         body=await res.json(),
