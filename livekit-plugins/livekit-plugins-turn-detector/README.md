@@ -33,8 +33,16 @@ This plugin requires model files. Before starting your agent for the first time,
 python my_agent.py download-files
 ```
 
+## Model system requirements
+
+The end-of-turn model is optimized to run on CPUs with modest system requirements. It is designed to run on the same server hosting your agents. On a 4-core server instance, it completes inference in under 100ms with minimal CPU usage.
+
+The model requires 1.5GB of RAM and runs within a shared inference server, supporting multiple concurrent sessions.
+
+We are working to reduce the CPU and memory requirements in future releases.
+
 ## License
 
 The plugin source code is licensed under the Apache-2.0 license.
 
-The end-of-turn model is licensed under the [LiveKit Model License](https://huggingface.co/livekit/opt-125m-endpoint-detector-2/blob/main/LICENSE).
+The end-of-turn model is licensed under the [LiveKit Model License](https://huggingface.co/livekit/turn-detector/blob/main/LICENSE).

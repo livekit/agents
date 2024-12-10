@@ -56,9 +56,10 @@ class STT(stt.STT):
         segmentation_silence_timeout_ms: int | None = None,
         segmentation_max_time_ms: int | None = None,
         segmentation_strategy: str | None = None,
-        languages: list[str] = [
-            "en-US"
-        ],  # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.
+        # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.
+        languages: list[str] = ["en-US"],
+        # for compatibility with other STT plugins
+        language: str | None = None,
     ):
         """
         Create a new instance of Azure STT.
@@ -86,6 +87,9 @@ class STT(stt.STT):
                 "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"
             )
 
+        if language:
+            languages = [language]
+
         self._config = STTOptions(
             speech_key=speech_key,
             speech_region=speech_region,
@@ -112,17 +116,24 @@ class STT(stt.STT):
     def stream(
         self,
         *,
+        languages: list[str] | None = None,
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
         config = deepcopy(self._config)
-        if language:
-            config.languages = [language]
+        if language and not languages:
+            languages = [language]
+        if languages:
+            config.languages = languages
         stream = SpeechStream(stt=self, opts=config, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
-    def update_options(self, *, languages: list[str] | None = None):
+    def update_options(
+        self, *, language: str | None = None, languages: list[str] | None = None
+    ):
+        if language and not languages:
+            languages = [language]
         if languages is not None:
             self._config.languages = languages
             for stream in self._streams:
@@ -145,7 +156,11 @@ class SpeechStream(stt.SpeechStream):
         self._loop = asyncio.get_running_loop()
         self._reconnect_event = asyncio.Event()
 
-    def update_options(self, *, languages: list[str] | None = None):
+    def update_options(
+        self, *, language: str | None = None, languages: list[str] | None = None
+    ):
+        if language and not languages:
+            languages = [language]
         if languages:
             self._opts.languages = languages
             self._reconnect_event.set()
