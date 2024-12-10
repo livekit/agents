@@ -59,6 +59,7 @@ jobs:
                       ./livekit-plugins/livekit-plugins-elevenlabs \
                       ./livekit-plugins/livekit-plugins-cartesia \
                       ./livekit-plugins/livekit-plugins-rag \
+                      ./livekit-plugins/livekit-plugins-rime \
                       ./livekit-plugins/livekit-plugins-azure \
                       ./livekit-plugins/livekit-plugins-anthropic \
                       ./livekit-plugins/livekit-plugins-llama-index \
