@@ -63,6 +63,8 @@ class LLMOptions:
     temperature: float | None
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto"
+    store: bool = False
+    metadata: dict[str, Any] = {}
 
 
 class LLM(llm.LLM):
@@ -77,6 +79,8 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        store: bool = False,
+        metadata: dict[str, Any] = {},
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -93,6 +97,8 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            store=store,
+            metadata=metadata,
         )
         self._client = client or openai.AsyncClient(
             api_key=api_key,
@@ -637,6 +643,8 @@ class LLM(llm.LLM):
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
         | None = None,
+        store: bool | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> "LLMStream":
         if parallel_tool_calls is None:
             parallel_tool_calls = self._opts.parallel_tool_calls
@@ -667,6 +675,12 @@ class LLM(llm.LLM):
 
         messages = _build_oai_context(chat_ctx, id(self))
 
+        if store is None:
+            store = self._opts.store
+
+        if metadata is None:
+            metadata = self._opts.metadata
+
         cmp = self._client.chat.completions.create(
             messages=messages,
             model=self._opts.model,
@@ -675,6 +689,8 @@ class LLM(llm.LLM):
             stream_options={"include_usage": True},
             stream=True,
             user=user,
+            store=store,
+            metadata=metadata,
             **opts,
         )
 
