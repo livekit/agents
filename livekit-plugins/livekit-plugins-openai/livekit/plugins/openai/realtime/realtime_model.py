@@ -6,7 +6,7 @@ import os
 import time
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal, Union, cast, overload
+from typing import AsyncIterable, Literal, Optional, Union, cast, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -139,6 +139,15 @@ class ServerVadOptions:
 @dataclass
 class InputTranscriptionOptions:
     model: api_proto.InputTranscriptionModel | str
+
+
+@dataclass
+class RealtimeError:
+    event_id: str
+    type: str
+    message: str
+    code: Optional[str]
+    param: Optional[str]
 
 
 @dataclass
@@ -1078,6 +1087,17 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             "OpenAI S2S error %s",
             error,
             extra=self.logging_extra(),
+        )
+        error_content = error["error"]
+        self.emit(
+            "error",
+            RealtimeError(
+                event_id=error["event_id"],
+                type=error_content["type"],
+                message=error_content["message"],
+                code=error_content.get("code"),
+                param=error_content.get("param"),
+            ),
         )
 
     def _handle_input_audio_buffer_speech_started(
