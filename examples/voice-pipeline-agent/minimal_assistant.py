@@ -52,6 +52,7 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
+        turn_detector=turn_detector.EOUModel()
     )
 
     agent.start(ctx.room, participant)
