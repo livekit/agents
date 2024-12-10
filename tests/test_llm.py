@@ -45,7 +45,7 @@ class FncCtx(FunctionContext):
         await asyncio.sleep(60)
 
     # used to test arrays as arguments
-    @ai_callable(description="Currencies of a specific area")
+    @ai_callable(description="Select currencies of a specific area")
     def select_currencies(
         self,
         currencies: Annotated[
