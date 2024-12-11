@@ -666,28 +666,6 @@ def prerecorded_transcription_to_speech_event(
     )
 
 
-def _validate_model(
-    model: DeepgramModels, language: DeepgramLanguages | str | None
-) -> DeepgramModels:
-    en_only_models = {
-        "nova-2-meeting",
-        "nova-2-phonecall",
-        "nova-2-finance",
-        "nova-2-conversationalai",
-        "nova-2-voicemail",
-        "nova-2-video",
-        "nova-2-medical",
-        "nova-2-drivethru",
-        "nova-2-automotive",
-    }
-    if language not in ("en-US", "en") and model in en_only_models:
-        logger.warning(
-            f"{model} does not support language {language}, falling back to nova-2-general"
-        )
-        return "nova-2-general"
-    return model
-
-
 def _to_deepgram_url(
     opts: dict,
     base_url: str,
@@ -710,3 +688,25 @@ def _to_deepgram_url(
         base_url = base_url.replace("ws", "http", 1)
 
     return f"{base_url}?{urlencode(opts, doseq=True)}"
+
+
+def _validate_model(
+    model: DeepgramModels, language: DeepgramLanguages | str | None
+) -> DeepgramModels:
+    en_only_models = {
+        "nova-2-meeting",
+        "nova-2-phonecall",
+        "nova-2-finance",
+        "nova-2-conversationalai",
+        "nova-2-voicemail",
+        "nova-2-video",
+        "nova-2-medical",
+        "nova-2-drivethru",
+        "nova-2-automotive",
+    }
+    if language not in ("en-US", "en") and model in en_only_models:
+        logger.warning(
+            f"{model} does not support language {language}, falling back to nova-2-general"
+        )
+        return "nova-2-general"
+    return model
