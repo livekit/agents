@@ -666,12 +666,7 @@ def prerecorded_transcription_to_speech_event(
     )
 
 
-def _to_deepgram_url(
-    opts: dict,
-    base_url: str,
-    *,
-    websocket: bool,
-) -> str:
+def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
     if opts.get("keywords"):
         # convert keywords to a list of "keyword:intensifier"
         opts["keywords"] = [
