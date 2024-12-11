@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, List, Literal
+from typing import List, Literal
 
 import aiohttp
 from livekit.agents import (
