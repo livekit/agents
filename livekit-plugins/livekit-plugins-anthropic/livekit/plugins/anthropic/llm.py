@@ -57,6 +57,7 @@ class LLMOptions:
     temperature: float | None
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None
+    extra_options: dict[str, Any] = {}
 
 
 class LLM(llm.LLM):
@@ -71,6 +72,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        extra_options: dict[str, Any] = {},
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -91,6 +93,7 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            extra_options=extra_options,
         )
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,
@@ -160,6 +163,7 @@ class LLM(llm.LLM):
             top_k=n or anthropic.NOT_GIVEN,
             stream=True,
             **opts,
+            **self._opts.extra_options,
         )
 
         return LLMStream(
