@@ -630,13 +630,15 @@ class LLM(llm.LLM):
 
     @wraps(AsyncCompletions.create)
     def create_chat_completions_stream(self, **kwargs):
-        return self._client.chat.completions.create(**{
-            "model": self._opts.model,
-            "stream_options": {"include_usage": True},
-            "stream": True,
-            "user": self._opts.user or openai.NOT_GIVEN,
-            **kwargs,
-        })
+        return self._client.chat.completions.create(
+            **{
+                "model": self._opts.model,
+                "stream_options": {"include_usage": True},
+                "stream": True,
+                "user": self._opts.user or openai.NOT_GIVEN,
+                **kwargs,
+            }
+        )
 
     def chat(
         self,
