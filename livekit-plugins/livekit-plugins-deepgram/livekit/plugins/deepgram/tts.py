@@ -339,7 +339,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.debug("Unknown message type: %s", resp)
 
-        async def connection_timeout_task():
+        async def _connection_timeout():
             # Deepgram has a 60-minute timeout period for websocket connections
             await asyncio.sleep(3600)
             logger.warning("Deepgram TTS connection timed out. reconnecting...")
@@ -366,13 +366,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                     asyncio.create_task(_tokenize_input()),
                     asyncio.create_task(_run_segments(ws)),
                     asyncio.create_task(recv_task(ws)),
-                    asyncio.create_task(connection_timeout_task()),
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                connection_timeout_task = asyncio.create_task(_connection_timeout())
 
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        [
+                            asyncio.gather(*tasks),
+                            wait_reconnect_task,
+                            connection_timeout_task,
+                        ],
                         return_when=asyncio.FIRST_COMPLETED,
                     )  # type: ignore
                     if wait_reconnect_task not in done:
