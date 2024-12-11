@@ -1166,7 +1166,7 @@ class _DeferredReplyValidation:
         ):
             end_of_speech_time = self._last_recv_transcript_time
 
-        elapsed_time = time.time() - end_of_speech_time
+        elapsed_time = time.perf_counter() - end_of_speech_time
         if elapsed_time < delay:
             delay -= elapsed_time
         else:
@@ -1176,22 +1176,22 @@ class _DeferredReplyValidation:
     def on_human_final_transcript(self, transcript: str, language: str | None) -> None:
         self._last_final_transcript += " " + transcript.strip()  # type: ignore
         self._last_language = language
-        self._last_recv_transcript_time = time.time()
+        self._last_recv_transcript_time = time.perf_counter()
 
         delay = self._compute_delay()
         if delay is not None:
-            self._run(delay)
+            self._run(delay, use_turn_detector=True)
 
     def on_human_start_of_speech(self, ev: vad.VADEvent) -> None:
         self._speaking = True
-        self._last_recv_start_of_speech_time = time.time()
+        self._last_recv_start_of_speech_time = time.perf_counter()
         if self.validating:
             assert self._validating_task is not None
             self._validating_task.cancel()
 
     def on_human_end_of_speech(self, ev: vad.VADEvent) -> None:
         self._speaking = False
-        self._last_recv_end_of_speech_time = time.time()
+        self._last_recv_end_of_speech_time = time.perf_counter()
 
         delay = self._compute_delay()
         if delay is not None:
@@ -1211,7 +1211,7 @@ class _DeferredReplyValidation:
         self._last_final_transcript = ""
         self._last_recv_end_of_speech_time = 0.0
 
-    def _run(self, delay: float) -> None:
+    def _run(self, delay: float, use_turn_detector: bool = False) -> None:
         detect_ctx = self._agent._chat_ctx.copy()
         detect_ctx.messages.append(
             ChatMessage.create(text=self._agent._transcribed_text, role="user")
@@ -1219,15 +1219,18 @@ class _DeferredReplyValidation:
 
         @utils.log_exceptions(logger=logger)
         async def _run_task(chat_ctx: ChatContext, delay: float) -> None:
-            await asyncio.sleep(delay)
             if (
-                self._turn_detector is not None
+                use_turn_detector
+                and self._turn_detector is not None
                 and self._turn_detector.supports_language(self._last_language)
             ):
+                start_time = time.perf_counter()
                 eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
                 unlikely_threshold = self._turn_detector.unlikely_threshold()
+                elasped = time.perf_counter() - start_time
                 if eot_prob < unlikely_threshold:
-                    await asyncio.sleep(self.UNLIKELY_ENDPOINT_DELAY)
+                    delay = max(0, delay - elasped)
+            await asyncio.sleep(delay)
 
             self._reset_states()
             self._validate_fnc()
