@@ -347,7 +347,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "encoding": self._opts.encoding,
                     "model": self._opts.model,
                     "sample_rate": self._opts.sample_rate,
-                    "container": self._opts.container,
                 }
                 ws = await asyncio.wait_for(
                     self._session.ws_connect(
