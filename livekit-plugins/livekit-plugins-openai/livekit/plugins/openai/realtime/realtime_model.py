@@ -689,34 +689,61 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         def create(self) -> None:
             self._sess._queue_msg({"type": "response.create"})
 
-        async def acreate(self, *, cancel_existing: bool = True) -> None:
+        async def acreate(
+            self,
+            *,
+            on_duplicate: Literal[
+                "cancel_existing", "cancel_new", "keep_both"
+            ] = "cancel_existing",
+        ) -> None:
             # FIXME: should we merge this with `create`?
+            if on_duplicate not in ("cancel_existing", "cancel_new", "keep_both"):
+                raise ValueError(
+                    "invalid on_duplicate value, must be one of: "
+                    "cancel_existing, cancel_new, keep_both"
+                )
+
             pending_create_fut = self._sess._response_create_fut
             if pending_create_fut is not None:
-                if not cancel_existing:
+                if on_duplicate == "cancel_new":
+                    logger.warning(
+                        "skip new response creation due to previous pending response creation",
+                        extra=self._sess.logging_extra(),
+                    )
                     return
                 await pending_create_fut
 
             pending_resp_id = self._sess._active_response_id
+            _logging_extra = {
+                "response_id": pending_resp_id,
+                **self._sess.logging_extra(),
+            }
             if pending_resp_id:
-                if not cancel_existing:
+                if on_duplicate == "cancel_new":
                     logger.warning(
-                        "active response exists, skipping creation",
-                        extra={
-                            "response_id": pending_resp_id,
-                            **self._sess.logging_extra(),
-                        },
+                        "skip new response creation due to active response in progress",
+                        extra=_logging_extra,
                     )
                     return
-                logger.warning(
-                    "cancelling in-progress response before creating a new one",
-                    extra={
-                        "response_id": pending_resp_id,
-                        **self._sess.logging_extra(),
-                    },
-                )
-                self.cancel()
+
+                if on_duplicate == "cancel_existing":
+                    self.cancel()
+                    logger.warning(
+                        "cancelling in-progress response before creating a new one",
+                        extra=_logging_extra,
+                    )
+                elif on_duplicate == "keep_both":
+                    logger.warning(
+                        "waiting for in-progress active response to be done",
+                        extra=_logging_extra,
+                    )
+
+                # wait for the in-progress response to be done
                 await self._sess._pending_responses[pending_resp_id].done_fut
+                logger.info(
+                    "in-progress response is done, creating a new one",
+                    extra=_logging_extra,
+                )
 
             # create a new response and wait for it to be created
             new_create_fut = asyncio.Future[str]()
