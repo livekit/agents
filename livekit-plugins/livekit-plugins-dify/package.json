@@ -1,0 +1,8 @@
+{
+  "name": "livekit-plugins-dify",
+  "private": true,
+  "version": "0.2.0",
+  "dependencies": {
+    "livekit-plugins-dify": "file:"
+  }
+}
