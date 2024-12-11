@@ -341,7 +341,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _connection_timeout():
             # Deepgram has a 60-minute timeout period for websocket connections
-            await asyncio.sleep(3600)
+            await asyncio.sleep(3599)
             logger.warning("Deepgram TTS connection timed out. reconnecting...")
             self._reconnect_event.set()
 
