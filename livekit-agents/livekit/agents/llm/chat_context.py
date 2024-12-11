@@ -57,6 +57,10 @@ class ChatImage:
     """
     Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
     """
+    inference_detail: Literal["auto", "high", "low"] = "auto"
+    """
+    Detail parameter for image inference (plugin-dependent)
+    """
     _cache: dict[Any, Any] = field(default_factory=dict, repr=False, init=False)
     """
     _cache is used internally by LLM implementations to store a processed version of the image
