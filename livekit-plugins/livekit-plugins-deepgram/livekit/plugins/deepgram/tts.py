@@ -57,7 +57,7 @@ class TTS(tts.TTS):
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
             base_url (str): Base URL for Deepgram TTS API. Defaults to "https://api.deepgram.com/v1/speak"
-            word_tokenizer (tokenize.WordTokenizer): Tokenizer to use for breaking up text into words.
+            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
 
         """
