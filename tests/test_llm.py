@@ -32,9 +32,7 @@ class FncCtx(FunctionContext):
     @ai_callable(description="Play a music")
     def play_music(
         self,
-        name: Annotated[
-            str, TypeInfo(description="The artist and the name of the song")
-        ],
+        name: Annotated[str, TypeInfo(description="the name of the Artist")],
     ) -> None: ...
 
     # test for cancelled calls
@@ -47,7 +45,7 @@ class FncCtx(FunctionContext):
         await asyncio.sleep(60)
 
     # used to test arrays as arguments
-    @ai_callable(description="Currencies of a specific area")
+    @ai_callable(description="Select currencies of a specific area")
     def select_currencies(
         self,
         currencies: Annotated[
@@ -79,7 +77,7 @@ def test_hashable_typeinfo():
 
 
 LLMS: list[Callable[[], llm.LLM]] = [
-    lambda: openai.LLM(),
+    pytest.param(lambda: openai.LLM(), id="openai"),
     # lambda: openai.beta.AssistantLLM(
     #     assistant_opts=openai.beta.AssistantOptions(
     #         create_options=openai.beta.AssistantCreateOptions(
@@ -89,8 +87,8 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #         )
     #     )
     # ),
-    lambda: anthropic.LLM(),
-    lambda: openai.LLM.with_vertex(),
+    pytest.param(lambda: anthropic.LLM(), id="anthropic"),
+    pytest.param(lambda: openai.LLM.with_vertex(), id="openai.with_vertex"),
 ]
 
 
@@ -205,7 +203,7 @@ async def test_calls_arrays(llm_factory: Callable[[], llm.LLM]):
 
     stream = await _request_fnc_call(
         input_llm,
-        "Can you select all currencies in Europe at once from given choices?",
+        "Can you select all currencies in Europe at once from given choices using function call `select_currencies`?",
         fnc_ctx,
         temperature=0.2,
     )
@@ -280,14 +278,14 @@ async def test_optional_args(llm_factory: Callable[[], llm.LLM]):
 test_tool_choice_cases = [
     pytest.param(
         "Default tool_choice (auto)",
-        "Get the weather for New York and play some music.",
+        "Get the weather for New York and play some music from the artist 'The Beatles'.",
         None,
         {"get_weather", "play_music"},
         id="Default tool_choice (auto)",
     ),
     pytest.param(
         "Tool_choice set to 'required'",
-        "Get the weather for Chicago and play some music.",
+        "Get the weather for Chicago and play some music from the artist 'Eminem'.",
         "required",
         {"get_weather", "play_music"},
         id="Tool_choice set to 'required'",
@@ -301,7 +299,7 @@ test_tool_choice_cases = [
     ),
     pytest.param(
         "Tool_choice set to 'none'",
-        "Get the weather for Seattle and play some music.",
+        "Get the weather for Seattle and play some music from the artist 'Frank Sinatra'.",
         "none",
         set(),  # No tool calls expected
         id="Tool_choice set to 'none'",

@@ -248,7 +248,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             user_msg = ChatMessage.create(
                 text=ev.transcript, role="user", id=ev.item_id
             )
-            self._session._update_converstation_item_content(
+            self._session._update_conversation_item_content(
                 ev.item_id, user_msg.content
             )
 
@@ -330,7 +330,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     role="assistant",
                     id=self._playing_handle.item_id,
                 )
-                self._session._update_converstation_item_content(
+                self._session._update_conversation_item_content(
                     self._playing_handle.item_id, msg.content
                 )
 
