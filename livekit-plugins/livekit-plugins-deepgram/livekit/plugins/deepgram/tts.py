@@ -245,7 +245,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _run_segments(ws: aiohttp.ClientWebSocketResponse):
             async for word_stream in self._segments_ch:
                 async for word in word_stream:
-                    speak_msg = {"type": "Speak", "text": word.token}
+                    speak_msg = {"type": "Speak", "text": f"{word.token} "}
                     await ws.send_str(json.dumps(speak_msg))
 
                 # Always flush after a segment
