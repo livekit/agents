@@ -1180,7 +1180,7 @@ class _DeferredReplyValidation:
 
         delay = self._compute_delay()
         if delay is not None:
-            self._run(delay, use_turn_detector=True)
+            self._run(delay)
 
     def on_human_start_of_speech(self, ev: vad.VADEvent) -> None:
         self._speaking = True
@@ -1210,15 +1210,12 @@ class _DeferredReplyValidation:
     def _reset_states(self) -> None:
         self._last_final_transcript = ""
         self._last_recv_end_of_speech_time = 0.0
+        self._last_recv_transcript_time = 0.0
 
-    def _run(self, delay: float, use_turn_detector: bool = False) -> None:
-        detect_ctx = self._agent._chat_ctx.copy()
-        detect_ctx.messages.append(
-            ChatMessage.create(text=self._agent._transcribed_text, role="user")
-        )
-
+    def _run(self, delay: float) -> None:
         @utils.log_exceptions(logger=logger)
         async def _run_task(chat_ctx: ChatContext, delay: float) -> None:
+            use_turn_detector = self._last_final_transcript and not self._speaking
             if (
                 use_turn_detector
                 and self._turn_detector is not None
@@ -1229,7 +1226,8 @@ class _DeferredReplyValidation:
                 unlikely_threshold = self._turn_detector.unlikely_threshold()
                 elasped = time.perf_counter() - start_time
                 if eot_prob < unlikely_threshold:
-                    delay = max(0, delay - elasped)
+                    delay = self.UNLIKELY_ENDPOINT_DELAY
+                delay = max(0, delay - elasped)
             await asyncio.sleep(delay)
 
             self._reset_states()
@@ -1238,4 +1236,8 @@ class _DeferredReplyValidation:
         if self._validating_task is not None:
             self._validating_task.cancel()
 
+        detect_ctx = self._agent._chat_ctx.copy()
+        detect_ctx.messages.append(
+            ChatMessage.create(text=self._agent._transcribed_text, role="user")
+        )
         self._validating_task = asyncio.create_task(_run_task(detect_ctx, delay))
