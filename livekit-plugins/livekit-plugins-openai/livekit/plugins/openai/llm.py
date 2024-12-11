@@ -63,8 +63,8 @@ class LLMOptions:
     temperature: float | None
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto"
-    store: bool = False
-    metadata: dict[str, Any] = {}
+    store: bool | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class LLM(llm.LLM):
