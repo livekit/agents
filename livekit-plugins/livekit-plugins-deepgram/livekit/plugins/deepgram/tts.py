@@ -95,6 +95,11 @@ class TTS(tts.TTS):
         model: str | None = None,
         sample_rate: int | None = None,
     ) -> None:
+        """
+        args:
+            model (str): TTS model to use.
+            sample_rate (int): Sample rate of audio.
+        """
         if model is not None:
             self._opts.model = model
         if sample_rate is not None:
