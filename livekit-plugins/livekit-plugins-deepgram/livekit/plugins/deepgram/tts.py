@@ -218,6 +218,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
     async def _run(self) -> None:
+        closing_ws = False
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
         audio_bstream = utils.audio.AudioByteStream(
@@ -243,6 +244,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         @utils.log_exceptions(logger=logger)
         async def _run_segments(ws: aiohttp.ClientWebSocketResponse):
+            nonlocal closing_ws
             async for word_stream in self._segments_ch:
                 async for word in word_stream:
                     speak_msg = {"type": "Speak", "text": f"{word.token} "}
@@ -254,6 +256,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             # after all segments, close
             close_msg = {"type": "Close"}
+            closing_ws = True
             await ws.send_str(json.dumps(close_msg))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
@@ -279,6 +282,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    if not closing_ws:
+                        raise Exception(
+                            "Deepgram websocket connection closed unexpectedly"
+                        )
                     return
 
                 if msg.type == aiohttp.WSMsgType.BINARY:
@@ -316,6 +323,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ),
                 self._conn_options.timeout,
             )
+            closing_ws = False
 
             tasks = [
                 asyncio.create_task(_tokenize_input()),
