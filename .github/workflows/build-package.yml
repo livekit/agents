@@ -34,6 +34,7 @@ jobs:
       inputs.package == 'livekit-plugins-minimal' ||
       inputs.package == 'livekit-plugins-nltk' ||
       inputs.package == 'livekit-plugins-openai' ||
+      inputs.package == 'livekit-plugins-rime' ||
       inputs.package == 'livekit-plugins-rag' ||
       inputs.package == 'livekit-plugins-silero' ||
       inputs.package == 'livekit-plugins-anthropic' ||

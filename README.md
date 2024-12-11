@@ -63,6 +63,7 @@ The following plugins are available today:
 | [livekit-plugins-google](https://pypi.org/project/livekit-plugins-google/)         | STT, TTS                                    |
 | [livekit-plugins-nltk](https://pypi.org/project/livekit-plugins-nltk/)             | Utilities for working with text             |
 | [livekit-plugins-rag](https://pypi.org/project/livekit-plugins-rag/)               | Utilities for performing RAG                |
+| [livekit-plugins-rime](https://pypi.org/project/livekit-plugins-rime/)             | TTS                                         |
 | [livekit-plugins-openai](https://pypi.org/project/livekit-plugins-openai/)         | LLM, STT, TTS, Assistants API, Realtime API |
 | [livekit-plugins-silero](https://pypi.org/project/livekit-plugins-silero/)         | VAD                                         |
 
