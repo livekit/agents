@@ -686,23 +686,31 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess
 
-        def create(self) -> None:
-            self._sess._queue_msg({"type": "response.create"})
-
-        async def acreate(
+        def create(
             self,
             *,
             on_duplicate: Literal[
                 "cancel_existing", "cancel_new", "keep_both"
-            ] = "cancel_existing",
-        ) -> None:
-            # FIXME: should we merge this with `create`?
+            ] = "keep_both",
+        ) -> asyncio.Future[bool]:
+            """Creates a new response.
+
+            Args:
+                on_duplicate: How to handle when there is an existing response in progress:
+                    - "cancel_existing": Cancel the existing response before creating new one
+                    - "cancel_new": Skip creating new response if one is in progress
+                    - "keep_both": Wait for the existing response to be done and then create a new one
+
+            Returns:
+                Future that resolves when the response create request is queued
+            """
             if on_duplicate not in ("cancel_existing", "cancel_new", "keep_both"):
                 raise ValueError(
                     "invalid on_duplicate value, must be one of: "
                     "cancel_existing, cancel_new, keep_both"
                 )
 
+            # check if there is a pending response creation request sent
             pending_create_fut = self._sess._response_create_fut
             if pending_create_fut is not None:
                 if on_duplicate == "cancel_new":
@@ -710,46 +718,62 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                         "skip new response creation due to previous pending response creation",
                         extra=self._sess.logging_extra(),
                     )
-                    return
-                await pending_create_fut
+                    _fut = asyncio.Future[bool]()
+                    _fut.set_result(False)
+                    return _fut
 
-            pending_resp_id = self._sess._active_response_id
+            active_resp_id = self._sess._active_response_id
             _logging_extra = {
-                "response_id": pending_resp_id,
+                "existing_response_id": active_resp_id,
                 **self._sess.logging_extra(),
             }
-            if pending_resp_id:
-                if on_duplicate == "cancel_new":
-                    logger.warning(
-                        "skip new response creation due to active response in progress",
-                        extra=_logging_extra,
-                    )
-                    return
 
-                if on_duplicate == "cancel_existing":
-                    self.cancel()
-                    logger.warning(
-                        "cancelling in-progress response before creating a new one",
-                        extra=_logging_extra,
-                    )
-                elif on_duplicate == "keep_both":
-                    logger.warning(
-                        "waiting for in-progress active response to be done",
-                        extra=_logging_extra,
-                    )
+            if (
+                not active_resp_id
+                or self._sess._pending_responses[active_resp_id].done_fut.done()
+            ):
+                # no active response in progress, create a new one
+                self._sess._queue_msg({"type": "response.create"})
+                _fut = asyncio.Future[bool]()
+                _fut.set_result(True)
+                return _fut
 
-                # wait for the in-progress response to be done
-                await self._sess._pending_responses[pending_resp_id].done_fut
+            # there is an active response in progress
+            if on_duplicate == "cancel_new":
+                logger.warning(
+                    "skip new response creation due to active response in progress",
+                    extra=_logging_extra,
+                )
+                _fut = asyncio.Future[bool]()
+                _fut.set_result(False)
+                return _fut
+
+            if on_duplicate == "cancel_existing":
+                self.cancel()
+                logger.warning(
+                    "cancelling in-progress response to create a new one",
+                    extra=_logging_extra,
+                )
+            elif on_duplicate == "keep_both":
+                logger.warning(
+                    "waiting for in-progress response to be done "
+                    "before creating a new one",
+                    extra=_logging_extra,
+                )
+
+            # create a task to wait for the previous response and then create new one
+            async def wait_and_create() -> bool:
+                await self._sess._pending_responses[active_resp_id].done_fut
                 logger.info(
                     "in-progress response is done, creating a new one",
                     extra=_logging_extra,
                 )
+                new_create_fut = asyncio.Future[None]()
+                self._sess._response_create_fut = new_create_fut
+                self._sess._queue_msg({"type": "response.create"})
+                return True
 
-            # create a new response and wait for it to be created
-            new_create_fut = asyncio.Future[str]()
-            self._sess._response_create_fut = new_create_fut
-            self.create()
-            await new_create_fut
+            return asyncio.create_task(wait_and_create())
 
         def cancel(self) -> None:
             self._sess._queue_msg({"type": "response.cancel"})
@@ -785,7 +809,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         self._pending_responses: dict[str, RealtimeResponse] = {}
         self._active_response_id: str | None = None
-        self._response_create_fut: asyncio.Future[str] | None = None
+        self._response_create_fut: asyncio.Future[None] | None = None
 
         self._session_id = "not-connected"
         self.session_update()  # initial session init
@@ -974,7 +998,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             # remove the text response if needed
             self.conversation.item.delete(item_id=item_id)
         self.conversation.item.create(self._create_empty_user_audio_message(1.0))
-        self.response.create()
+        self.response.create(on_duplicate="keep_both")
 
     def _update_converstation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
@@ -1294,7 +1318,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         # complete the create future if it exists
         if self._response_create_fut is not None:
-            self._response_create_fut.set_result(new_response.id)
+            self._response_create_fut.set_result(None)
             self._response_create_fut = None
 
         self.emit("response_created", new_response)
@@ -1564,7 +1588,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 tool_call,
                 previous_item_id=item_id,
             )
-            await self.response.acreate()
+            await self.response.create(on_duplicate="keep_both")
             await create_fut
 
         # update the message with the tool call result
