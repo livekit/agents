@@ -428,17 +428,19 @@ def _build_anthropic_image_content(
     image: llm.ChatImage, cache_key: Any
 ) -> anthropic.types.ImageBlockParam:
     if isinstance(image.image, str):  # image is a URL
-        if not image.image.startswith('data:'):
+        if not image.image.startswith("data:"):
             raise ValueError("LiveKit Anthropic Plugin: Image URLs must be data URLs")
-        
+
         try:
-            header, b64_data = image.image.split(',', 1)
-            media_type = header.split(';')[0].split(':')[1]
-            
-            supported_types = {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}
+            header, b64_data = image.image.split(",", 1)
+            media_type = header.split(";")[0].split(":")[1]
+
+            supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
             if media_type not in supported_types:
-                raise ValueError(f"LiveKit Anthropic Plugin: Unsupported media type {media_type}. Must be jpeg, png, webp, or gif")
-            
+                raise ValueError(
+                    f"LiveKit Anthropic Plugin: Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
+                )
+
             return {
                 "type": "image",
                 "source": {
@@ -448,7 +450,9 @@ def _build_anthropic_image_content(
                 },
             }
         except (ValueError, IndexError) as e:
-            raise ValueError(f"LiveKit Anthropic Plugin: Invalid image data URL {str(e)}")
+            raise ValueError(
+                f"LiveKit Anthropic Plugin: Invalid image data URL {str(e)}"
+            )
     elif isinstance(image.image, rtc.VideoFrame):  # image is a VideoFrame
         if cache_key not in image._cache:
             # inside our internal implementation, we allow to put extra metadata to
@@ -473,7 +477,9 @@ def _build_anthropic_image_content(
             },
         }
 
-    raise ValueError("LiveKit OpenAI Plugin: ChatImage must be an rtc.VideoFrame or a data URL")
+    raise ValueError(
+        "LiveKit OpenAI Plugin: ChatImage must be an rtc.VideoFrame or a data URL"
+    )
 
 
 def _create_ai_function_info(
