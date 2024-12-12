@@ -341,8 +341,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _connection_timeout():
             # Deepgram has a 60-minute timeout period for websocket connections
-            await asyncio.sleep(3599)
-            logger.warning("Deepgram TTS connection timed out. reconnecting...")
+            await asyncio.sleep(3300)
+            logger.warning(
+                "Deepgram TTS maximum connection time reached. Reconnecting..."
+            )
             self._reconnect_event.set()
 
         ws: aiohttp.ClientWebSocketResponse | None = None
@@ -383,7 +385,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         break
                     self._reconnect_event.clear()
                 finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    await utils.aio.gracefully_cancel(
+                        *tasks, wait_reconnect_task, connection_timeout_task
+                    )
 
             except asyncio.TimeoutError as e:
                 raise APITimeoutError() from e
