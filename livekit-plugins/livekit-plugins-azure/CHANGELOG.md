@@ -1,5 +1,11 @@
 # livekit-plugins-azure
 
+## 0.5.0
+
+### Minor Changes
+
+- Improvements to end of turn plugin, ensure STT language settings. - [#1195](https://github.com/livekit/agents/pull/1195) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.4.4
 
 ### Patch Changes
