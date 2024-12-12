@@ -482,7 +482,7 @@ def _build_anthropic_image_content(
         }
 
     raise ValueError(
-        "LiveKit OpenAI Plugin: ChatImage must be an rtc.VideoFrame or a data URL"
+        "LiveKit Anthropic Plugin: ChatImage must be an rtc.VideoFrame or a data URL"
     )
 
 
