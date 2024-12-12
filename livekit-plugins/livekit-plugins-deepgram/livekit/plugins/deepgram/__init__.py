@@ -1,7 +1,8 @@
 from .stt import STT, AudioEnergyFilter, SpeechStream
+from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "SpeechStream", "AudioEnergyFilter", "__version__"]
+__all__ = ["STT", "SpeechStream", "AudioEnergyFilter", "__version__", "TTS"]
 
 
 from livekit.agents import Plugin

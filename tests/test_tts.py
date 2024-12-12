@@ -10,7 +10,7 @@ import pytest
 from livekit import agents
 from livekit.agents import APIConnectionError, tokenize, tts
 from livekit.agents.utils import AudioBuffer, merge_frames
-from livekit.plugins import azure, cartesia, elevenlabs, google, openai
+from livekit.plugins import azure, cartesia, deepgram, elevenlabs, google, openai
 
 from .conftest import TEST_CONNECT_OPTIONS
 from .fake_tts import FakeTTS
@@ -43,6 +43,7 @@ SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: google.TTS(), id="google"),
     pytest.param(lambda: azure.TTS(), id="azure"),
     pytest.param(lambda: cartesia.TTS(), id="cartesia"),
+    pytest.param(lambda: deepgram.TTS(), id="deepgram"),
 ]
 
 
@@ -87,6 +88,7 @@ STREAM_TTS: list[Callable[[], tts.TTS]] = [
         ),
         id="azure.stream",
     ),
+    pytest.param(lambda: deepgram.TTS(), id="deepgram"),
 ]
 
 
