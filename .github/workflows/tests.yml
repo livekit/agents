@@ -132,6 +132,9 @@ jobs:
             tts)
               test_files="test_tts.py"
               ;;
+            build_func_desc)
+              test_files="test_build_func_desc.py"
+              ;;
             *)
               echo "Unknown test group: ${{ matrix.test_group }}"
               exit 1
