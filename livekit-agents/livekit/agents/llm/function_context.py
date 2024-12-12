@@ -304,7 +304,5 @@ def _is_optional_type(typ) -> Tuple[bool, Any]:
         if is_optional and len(non_none_args) == 1:
             # Exactly one non-None type + None means optional
             return True, non_none_args[0]
-        elif len(non_none_args) == 1:
-            return False, non_none_args[0]
 
     return False, None
