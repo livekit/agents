@@ -54,6 +54,7 @@ class FunctionArgInfo:
     type: type
     default: Any
     choices: tuple | None
+    is_optional: bool
 
 
 @dataclass(frozen=True)
@@ -188,6 +189,7 @@ class FunctionContext:
                 type=inner_th,
                 default=param.default,
                 choices=choices,
+                is_optional=is_optional,
             )
 
         self._fncs[metadata.name] = FunctionInfo(
