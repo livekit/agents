@@ -433,17 +433,18 @@ def _build_anthropic_image_content(
         
         try:
             header, b64_data = image.image.split(',', 1)
-            mime_type = header.split(';')[0].split(':')[1]
+            media_type = header.split(';')[0].split(':')[1]
             
-            if mime_type != 'image/jpeg' and mime_type != 'image/png' and mime_type != 'image/webp' and mime_type != 'image/gif':
-                raise ValueError(f"LiveKit Anthropic Plugin: Unsupported image type {mime_type}. Must be jpeg, png, webp, or gif")
+            supported_types = {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}
+            if media_type not in supported_types:
+                raise ValueError(f"LiveKit Anthropic Plugin: Unsupported media type {media_type}. Must be jpeg, png, webp, or gif")
             
             return {
                 "type": "image",
                 "source": {
                     "type": "base64",
                     "data": b64_data,
-                    "media_type": mime_type,
+                    "media_type": media_type,
                 },
             }
         except (ValueError, IndexError) as e:
@@ -472,7 +473,7 @@ def _build_anthropic_image_content(
             },
         }
 
-    raise ValueError(f"LiveKit Anthropic Plugin: unknown image type {type(image.image)}")
+    raise ValueError("LiveKit OpenAI Plugin: ChatImage must be an rtc.VideoFrame or a data URL")
 
 
 def _create_ai_function_info(

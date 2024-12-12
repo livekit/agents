@@ -92,4 +92,4 @@ def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):
             },
         }
 
-    raise ValueError(f"unknown image type {type(image.image)}")
+    raise ValueError("LiveKit OpenAI Plugin: ChatImage must be an rtc.VideoFrame or a URL")
