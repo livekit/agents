@@ -63,6 +63,8 @@ class LLMOptions:
     temperature: float | None
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto"
+    store: bool | None = None
+    metadata: dict[str, str] | None = None
 
 
 class LLM(llm.LLM):
@@ -77,6 +79,8 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        store: bool | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -93,6 +97,8 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            store=store,
+            metadata=metadata,
         )
         self._client = client or openai.AsyncClient(
             api_key=api_key,
@@ -737,6 +743,8 @@ class LLMStream(llm.LLMStream):
                 stream_options={"include_usage": True},
                 stream=True,
                 user=user,
+                store=self._llm._opts.store,
+                metadata=self._llm._opts.metadata,
                 **opts,
             )
 
