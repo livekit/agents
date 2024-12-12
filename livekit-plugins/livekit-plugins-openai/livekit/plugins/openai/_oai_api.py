@@ -64,13 +64,19 @@ def create_ai_function_info(
             inner_type = typing.get_args(arg_info.type)[0]
             sanitized_value = [
                 _sanitize_primitive(
-                    value=v, expected_type=inner_type, choices=arg_info.choices
+                    value=v,
+                    expected_type=inner_type,
+                    choices=arg_info.choices,
+                    is_optional=arg_info.is_optional,
                 )
                 for v in arg_value
             ]
         else:
             sanitized_value = _sanitize_primitive(
-                value=arg_value, expected_type=arg_info.type, choices=arg_info.choices
+                value=arg_value,
+                expected_type=arg_info.type,
+                choices=arg_info.choices,
+                is_optional=arg_info.is_optional,
             )
 
         sanitized_arguments[arg_info.name] = sanitized_value
@@ -147,8 +153,11 @@ def build_oai_function_description(
 
 
 def _sanitize_primitive(
-    *, value: Any, expected_type: type, choices: tuple | None
+    *, value: Any, expected_type: type, choices: tuple | None, is_optional: bool = False
 ) -> Any:
+    if is_optional and value is None:
+        return None
+
     if expected_type is str:
         if not isinstance(value, str):
             raise ValueError(f"expected str, got {type(value)}")
