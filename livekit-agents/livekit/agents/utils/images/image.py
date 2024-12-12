@@ -34,7 +34,16 @@ class ResizeOptions:
     width: int
     height: int
     strategy: Literal[
-        "center_aspect_fit", "center_aspect_cover", "center_aspect_scale", "skew"
+        # Fit the image into the provided dimensions, with letterboxing
+        "center_aspect_fit",
+        # Fill the provided dimensions, with cropping
+        "center_aspect_cover",
+        # Fit the image into the provided dimensions, preserving its original aspect ratio
+        "scale_aspect_fit",
+        # Fill the provided dimensions, preserving its original aspect ratio (image will be larger than the provided dimensions)
+        "scale_aspect_cover",
+        # Precisely resize the image to the provided dimensions
+        "skew",
     ]
 
 
@@ -121,13 +130,24 @@ def _resize_image(image: Any, options: EncodeOptions):
             ),
         )
         return result
-    elif resize_opts.strategy == "center_aspect_scale":
-        # Start with assuming width is the shorter dimension
+    elif resize_opts.strategy == "scale_aspect_fill":
+        # Start with assuming width is the limiting dimension
         new_width = resize_opts.width
         new_height = int(image.height * (resize_opts.width / image.width))
 
-        # If height is actually the shorter dimension
-        if (resize_opts.height / image.height) < (resize_opts.width / image.width):
+        # If height is under the limit, scale based on height instead
+        if new_height < resize_opts.height:
+            new_height = resize_opts.height
+            new_width = int(image.width * (resize_opts.height / image.height))
+
+        return image.resize((new_width, new_height))
+    elif resize_opts.strategy == "scale_aspect_fit":
+        # Start with assuming width is the limiting dimension
+        new_width = resize_opts.width
+        new_height = int(image.height * (resize_opts.width / image.width))
+
+        # If height would exceed the limit, scale based on height instead
+        if new_height > resize_opts.height:
             new_height = resize_opts.height
             new_width = int(image.width * (resize_opts.height / image.height))
 
