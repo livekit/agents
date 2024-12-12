@@ -427,15 +427,27 @@ def _build_anthropic_message(
 def _build_anthropic_image_content(
     image: llm.ChatImage, cache_key: Any
 ) -> anthropic.types.ImageBlockParam:
-    if isinstance(image.image, str): # image is a URL
-        return {
-            "type": "image",
-            "source": {
-                "type": "url",
-                "media_type": "image/jpeg",
-                "url": image.image,
-            },
-        }
+    if isinstance(image.image, str):  # image is a URL
+        if not image.image.startswith('data:'):
+            raise ValueError("LiveKit Anthropic Plugin: Image URLs must be data URLs")
+        
+        try:
+            header, b64_data = image.image.split(',', 1)
+            mime_type = header.split(';')[0].split(':')[1]
+            
+            if mime_type != 'image/jpeg' and mime_type != 'image/png' and mime_type != 'image/webp' and mime_type != 'image/gif':
+                raise ValueError(f"LiveKit Anthropic Plugin: Unsupported image type {mime_type}. Must be jpeg, png, webp, or gif")
+            
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "data": b64_data,
+                    "media_type": mime_type,
+                },
+            }
+        except (ValueError, IndexError) as e:
+            raise ValueError(f"LiveKit Anthropic Plugin: Invalid image data URL {str(e)}")
     elif isinstance(image.image, rtc.VideoFrame):  # image is a VideoFrame
         if cache_key not in image._cache:
             # inside our internal implementation, we allow to put extra metadata to
@@ -460,7 +472,7 @@ def _build_anthropic_image_content(
             },
         }
 
-    raise ValueError(f"unknown image type {type(image.image)}")
+    raise ValueError(f"LiveKit Anthropic Plugin: unknown image type {type(image.image)}")
 
 
 def _create_ai_function_info(
