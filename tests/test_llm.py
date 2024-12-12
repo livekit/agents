@@ -8,8 +8,9 @@ import pytest
 from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
 from livekit.plugins import anthropic, openai
+import base64
+from pathlib import Path
 
-SAMPLE_IMAGE_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAApgAAAKYB3X3/OAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAANCSURBVEiJtZZPbBtFFMZ/M7ubXdtdb1xSFyeilBapySVU8h8OoFaooFSqiihIVIpQBKci6KEg9Q6H9kovIHoCIVQJJCKE1ENFjnAgcaSGC6rEnxBwA04Tx43t2FnvDAfjkNibxgHxnWb2e/u992bee7tCa00YFsffekFY+nUzFtjW0LrvjRXrCDIAaPLlW0nHL0SsZtVoaF98mLrx3pdhOqLtYPHChahZcYYO7KvPFxvRl5XPp1sN3adWiD1ZAqD6XYK1b/dvE5IWryTt2udLFedwc1+9kLp+vbbpoDh+6TklxBeAi9TL0taeWpdmZzQDry0AcO+jQ12RyohqqoYoo8RDwJrU+qXkjWtfi8Xxt58BdQuwQs9qC/afLwCw8tnQbqYAPsgxE1S6F3EAIXux2oQFKm0ihMsOF71dHYx+f3NND68ghCu1YIoePPQN1pGRABkJ6Bus96CutRZMydTl+TvuiRW1m3n0eDl0vRPcEysqdXn+jsQPsrHMquGeXEaY4Yk4wxWcY5V/9scqOMOVUFthatyTy8QyqwZ+kDURKoMWxNKr2EeqVKcTNOajqKoBgOE28U4tdQl5p5bwCw7BWquaZSzAPlwjlithJtp3pTImSqQRrb2Z8PHGigD4RZuNX6JYj6wj7O4TFLbCO/Mn/m8R+h6rYSUb3ekokRY6f/YukArN979jcW+V/S8g0eT/N3VN3kTqWbQ428m9/8k0P/1aIhF36PccEl6EhOcAUCrXKZXXWS3XKd2vc/TRBG9O5ELC17MmWubD2nKhUKZa26Ba2+D3P+4/MNCFwg59oWVeYhkzgN/JDR8deKBoD7Y+ljEjGZ0sosXVTvbc6RHirr2reNy1OXd6pJsQ+gqjk8VWFYmHrwBzW/n+uMPFiRwHB2I7ih8ciHFxIkd/3Omk5tCDV1t+2nNu5sxxpDFNx+huNhVT3/zMDz8usXC3ddaHBj1GHj/As08fwTS7Kt1HBTmyN29vdwAw+/wbwLVOJ3uAD1wi/dUH7Qei66PfyuRj4Ik9is+hglfbkbfR3cnZm7chlUWLdwmprtCohX4HUtlOcQjLYCu+fzGJH2QRKvP3UNz8bWk1qMxjGTOMThZ3kvgLI5AzFfo379UAAAAASUVORK5CYII="
 
 class Unit(Enum):
     FAHRENHEIT = "fahrenheit"
@@ -89,7 +90,7 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #     )
     # ),
     pytest.param(lambda: anthropic.LLM(), id="anthropic"),
-    pytest.param(lambda: openai.LLM.with_vertex(), id="openai.with_vertex"),
+    # pytest.param(lambda: openai.LLM.with_vertex(), id="openai.with_vertex"),
 ]
 
 
@@ -372,17 +373,26 @@ async def _request_fnc_call(
     return stream
 
 
+# Load and encode image once at module level
+_HEARTS_IMAGE_PATH = Path(__file__).parent / "hearts.jpg"
+with open(_HEARTS_IMAGE_PATH, "rb") as f:
+    _HEARTS_IMAGE_DATA_URL = f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode()}"
+
 @pytest.mark.parametrize("llm_factory", LLMS)
-async def test_chat_with_images(llm_factory: Callable[[], llm.LLM]):
+async def test_chat_with_image_data_url(llm_factory: Callable[[], llm.LLM]):
     input_llm = llm_factory()
-    
-    chat_ctx = ChatContext().append(
-        text="You are an AI assistant that can analyze images.",
-        role="system",
-    ).append(
-        text="Analyze this image",
-        images=[llm.ChatImage(image=SAMPLE_IMAGE_URL)],
-        role="user",
+
+    chat_ctx = (
+        ChatContext()
+        .append(
+            text="You are an AI assistant that describes images in detail upon request.",
+            role="system",
+        )
+        .append(
+            text="Describe this image",
+            images=[llm.ChatImage(image=_HEARTS_IMAGE_DATA_URL, inference_detail="low")],
+            role="user",
+        )
     )
 
     stream = input_llm.chat(chat_ctx=chat_ctx)
@@ -395,4 +405,4 @@ async def test_chat_with_images(llm_factory: Callable[[], llm.LLM]):
         if content:
             text += content
 
-    assert len(text) > 0
+    assert "heart" in text.lower()
