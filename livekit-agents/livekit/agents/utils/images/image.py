@@ -33,7 +33,9 @@ class EncodeOptions:
 class ResizeOptions:
     width: int
     height: int
-    strategy: Literal["center_aspect_fit", "center_aspect_cover", "skew"]
+    strategy: Literal[
+        "center_aspect_fit", "center_aspect_cover", "center_aspect_scale", "skew"
+    ]
 
 
 def import_pil():
@@ -83,17 +85,18 @@ def _resize_image(image: Any, options: EncodeOptions):
 
         # If the new image is wider than the original
         if resize_opts.width / resize_opts.height > image.width / image.height:
-            new_width = resize_opts.width
-            new_height = int(image.height * (resize_opts.width / image.width))
+            new_height = resize_opts.height
+            new_width = int(image.width * (resize_opts.height / image.height))
 
         resized = image.resize((new_width, new_height))
+
+        paste_x = (resize_opts.width - new_width) // 2
+        paste_y = (resize_opts.height - new_height) // 2
+
         Image.Image.paste(
             result,
             resized,
-            (
-                (resize_opts.width - new_width) // 2,
-                (resize_opts.height - new_height) // 2,
-            ),
+            (paste_x, paste_y),
         )
         return result
     elif resize_opts.strategy == "center_aspect_cover":
@@ -118,5 +121,16 @@ def _resize_image(image: Any, options: EncodeOptions):
             ),
         )
         return result
+    elif resize_opts.strategy == "center_aspect_scale":
+        # Start with assuming width is the shorter dimension
+        new_width = resize_opts.width
+        new_height = int(image.height * (resize_opts.width / image.width))
+
+        # If height is actually the shorter dimension
+        if (resize_opts.height / image.height) < (resize_opts.width / image.width):
+            new_height = resize_opts.height
+            new_width = int(image.width * (resize_opts.height / image.height))
+
+        return image.resize((new_width, new_height))
 
     raise ValueError(f"Unknown resize strategy: {resize_opts.strategy}")
