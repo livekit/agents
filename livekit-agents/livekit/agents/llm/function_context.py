@@ -18,6 +18,7 @@ import asyncio
 import enum
 import functools
 import inspect
+import types
 import typing
 from dataclasses import dataclass
 from typing import Any, Callable, Tuple
@@ -293,17 +294,17 @@ def is_type_supported(t: type) -> bool:
 def _is_optional_type(typ) -> Tuple[bool, Any]:
     """return is_optional, inner_type"""
     origin = typing.get_origin(typ)
+    if origin is None:
+        return False, typ
 
-    if origin in {typing.Union, getattr(__builtins__, "UnionType", typing.Union)}:
+    if origin in {typing.Union, getattr(types, "UnionType", typing.Union)}:
         args = typing.get_args(typ)
         is_optional = type(None) in args
-
-        inner_arg = None
-        for arg in args:
-            if arg is not type(None):
-                inner_arg = arg
-                break
-
-        return is_optional, inner_arg
+        non_none_args = [a for a in args if a is not type(None)]
+        if is_optional and len(non_none_args) == 1:
+            # Exactly one non-None type + None means optional
+            return True, non_none_args[0]
+        elif len(non_none_args) == 1:
+            return False, non_none_args[0]
 
     return False, None

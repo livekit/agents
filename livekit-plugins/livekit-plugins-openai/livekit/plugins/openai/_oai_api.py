@@ -111,18 +111,29 @@ def build_oai_function_description(
 
         if typing.get_origin(arg_info.type) is list:
             inner_type = typing.get_args(arg_info.type)[0]
-            p["type"] = "array"
+            if arg_info.is_optional:
+                p["type"] = ["array", "null"]
+            else:
+                p["type"] = "array"
+
             p["items"] = {}
             p["items"]["type"] = type2str(inner_type)
 
             if arg_info.choices:
                 p["items"]["enum"] = arg_info.choices
         else:
-            p["type"] = type2str(arg_info.type)
+            if arg_info.is_optional:
+                p["type"] = [type2str(arg_info.type), "null"]
+            else:
+                p["type"] = type2str(arg_info.type)
+
             if arg_info.choices:
                 p["enum"] = arg_info.choices
-            if arg_info.type is int and arg_info.choices and capabilities is not None:
-                if not capabilities.supports_choices_on_int:
+                if (
+                    arg_info.type is int
+                    and capabilities
+                    and not capabilities.supports_choices_on_int
+                ):
                     raise ValueError(
                         f"Parameter '{arg_info.name}' uses 'choices' with 'int', which is not supported by this model."
                     )
