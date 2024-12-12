@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Annotated, Callable, Literal, Optional, Union
 
 import pytest
-from livekit.agents import llm
+from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
 from livekit.plugins import anthropic, openai
 
@@ -235,7 +235,7 @@ async def test_calls_choices(llm_factory: Callable[[], llm.LLM]):
     ) -> None: ...
 
     if not input_llm.capabilities.supports_choices_on_int:
-        with pytest.raises(ValueError, match="which is not supported by this model"):
+        with pytest.raises(APIConnectionError):
             stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
     else:
         stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
