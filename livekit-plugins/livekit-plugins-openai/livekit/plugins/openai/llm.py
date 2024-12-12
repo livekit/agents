@@ -200,7 +200,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_vertex(
         *,
-        model: str | VertexModels = "google/gemini-1.5-pro",
+        model: str | VertexModels = "google/gemini-2.0-flash-exp",
         project_id: str | None = None,
         location: str = "us-central1",
         user: str | None = None,
