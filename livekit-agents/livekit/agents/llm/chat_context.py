@@ -59,7 +59,9 @@ class ChatImage:
     """
     inference_detail: Literal["auto", "high", "low"] = "auto"
     """
-    Detail parameter for image inference (plugin-dependent)
+    Detail parameter for LLM provider, if supported.
+    
+    Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
     """
     _cache: dict[Any, Any] = field(default_factory=dict, repr=False, init=False)
     """

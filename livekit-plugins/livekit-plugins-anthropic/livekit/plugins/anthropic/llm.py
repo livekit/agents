@@ -427,12 +427,16 @@ def _build_anthropic_message(
 def _build_anthropic_image_content(
     image: llm.ChatImage, cache_key: Any
 ) -> anthropic.types.ImageBlockParam:
-    if isinstance(image.image, str):  # image url
-        logger.warning(
-            "ChatImage with url is not yet supported by the LiveKit Anthropic plugin, skipping image '%s'",
-            image.image,
-        )
-    elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
+    if isinstance(image.image, str): # image is a URL
+        return {
+            "type": "image",
+            "source": {
+                "type": "url",
+                "media_type": "image/jpeg",
+                "url": image.image,
+            },
+        }
+    elif isinstance(image.image, rtc.VideoFrame):  # image is a VideoFrame
         if cache_key not in image._cache:
             # inside our internal implementation, we allow to put extra metadata to
             # each ChatImage (avoid to reencode each time we do a chatcompletion request)
