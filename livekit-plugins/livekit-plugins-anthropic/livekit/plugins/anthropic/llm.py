@@ -549,10 +549,7 @@ def _build_function_description(
 
         if get_origin(arg_info.type) is list:
             inner_type = get_args(arg_info.type)[0]
-            if arg_info.is_optional:
-                p["type"] = ["array", "null"]
-            else:
-                p["type"] = "array"
+            p["type"] = "array"
 
             p["items"] = {}
             p["items"]["type"] = type2str(inner_type)
@@ -560,10 +557,7 @@ def _build_function_description(
             if arg_info.choices:
                 p["items"]["enum"] = arg_info.choices
         else:
-            if arg_info.is_optional:
-                p["type"] = [type2str(arg_info.type), "null"]
-            else:
-                p["type"] = type2str(arg_info.type)
+            p["type"] = type2str(arg_info.type)
             if arg_info.choices:
                 p["enum"] = arg_info.choices
 
@@ -588,9 +582,6 @@ def _sanitize_primitive(
     choices: Tuple[Any] | None,
     is_optional: bool = False,
 ) -> Any:
-    if is_optional and value is None:
-        return None
-
     if expected_type is str:
         if not isinstance(value, str):
             raise ValueError(f"expected str, got {type(value)}")
