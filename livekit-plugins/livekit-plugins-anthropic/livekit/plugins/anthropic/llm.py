@@ -26,9 +26,9 @@ from typing import (
     Literal,
     Tuple,
     Union,
+    cast,
     get_args,
     get_origin,
-    cast,
 )
 
 import httpx
