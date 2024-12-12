@@ -656,31 +656,13 @@ class LLM(llm.LLM):
         if temperature is None:
             temperature = self._opts.temperature
 
-
-        messages = _build_oai_context(chat_ctx, id(self))
-
         if store is None:
             if self._opts.store is not None:
-                opts["store"] = self._opts.store
-        else:
-            opts["store"] = store
+                store = self._opts.store
 
         if metadata is None:
             if self._opts.metadata is not None:
-                opts["metadata"] = self._opts.metadata
-        else:
-            opts["metadata"] = metadata
-
-        cmp = self._client.chat.completions.create(
-            messages=messages,
-            model=self._opts.model,
-            n=n,
-            temperature=temperature,
-            stream_options={"include_usage": True},
-            stream=True,
-            user=user,
-            **opts,
-        )
+                metadata = self._opts.metadata
 
         return LLMStream(
             self,
@@ -694,6 +676,8 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            store=store,
+            metadata=metadata,
         )
 
 
@@ -712,6 +696,8 @@ class LLMStream(llm.LLMStream):
         n: int | None,
         parallel_tool_calls: bool | None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]],
+        store: bool | None,
+        metadata: dict[str, Any] | None,
     ) -> None:
         super().__init__(
             llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
@@ -725,6 +711,8 @@ class LLMStream(llm.LLMStream):
         self._n = n
         self._parallel_tool_calls = parallel_tool_calls
         self._tool_choice = tool_choice
+        self._store = store
+        self._metadata = metadata
 
     async def _run(self) -> None:
         if hasattr(self._llm._client, "_refresh_credentials"):
@@ -772,6 +760,8 @@ class LLMStream(llm.LLMStream):
                 stream_options={"include_usage": True},
                 stream=True,
                 user=user,
+                store=self._store,
+                metadata=self._metadata,
                 **opts,
             )
 
