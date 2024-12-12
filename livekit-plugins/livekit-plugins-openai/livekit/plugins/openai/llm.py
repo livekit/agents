@@ -177,6 +177,7 @@ class LLM(llm.LLM):
 
         ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
         the ``CEREBRAS_API_KEY`` environmental variable.
+        @integrations:cerebras:llm
         """
 
         api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
@@ -199,7 +200,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_vertex(
         *,
-        model: str | VertexModels = "google/gemini-1.5-pro",
+        model: str | VertexModels = "google/gemini-2.0-flash-exp",
         project_id: str | None = None,
         location: str = "us-central1",
         user: str | None = None,

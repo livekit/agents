@@ -1,5 +1,11 @@
 # livekit-plugins-deepgram
 
+## 0.6.14
+
+### Patch Changes
+
+- enable deepgram filler words by default to improve end of turn accuracy - [#1190](https://github.com/livekit/agents/pull/1190) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.6.13
 
 ### Patch Changes
