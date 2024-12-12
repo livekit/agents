@@ -18,13 +18,13 @@ def test_typing():
     ("arg_typ", "oai_type"),
     [
         (int, "number"),
-        (Optional[int], ["number", "null"]),
-        (None | int, ["number", "null"]),
-        (Union[None, int], ["number", "null"]),
-        (Union[str, None], ["string", "null"]),
+        (Optional[int], "number"),
+        (None | int, "number"),
+        (Union[None, int], "number"),
+        (Union[str, None], "string"),
     ],
 )
-def test_description_building(arg_typ: type, oai_type: str | list[str]):
+def test_description_building(arg_typ: type, oai_type: str):
     is_optional, inner_type = _is_optional_type(arg_typ)
 
     fi = FunctionInfo(

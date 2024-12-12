@@ -111,10 +111,8 @@ def build_oai_function_description(
 
         if typing.get_origin(arg_info.type) is list:
             inner_type = typing.get_args(arg_info.type)[0]
-            if arg_info.is_optional:
-                p["type"] = ["array", "null"]
-            else:
-                p["type"] = "array"
+
+            p["type"] = "array"
 
             p["items"] = {}
             p["items"]["type"] = type2str(inner_type)
@@ -122,10 +120,7 @@ def build_oai_function_description(
             if arg_info.choices:
                 p["items"]["enum"] = arg_info.choices
         else:
-            if arg_info.is_optional:
-                p["type"] = [type2str(arg_info.type), "null"]
-            else:
-                p["type"] = type2str(arg_info.type)
+            p["type"] = type2str(arg_info.type)
 
             if arg_info.choices:
                 p["enum"] = arg_info.choices
