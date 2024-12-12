@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, Callable, Literal, Optional, Union
 
 import pytest
 from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
 from livekit.plugins import anthropic, openai
-import base64
-from pathlib import Path
+from livekit.rtc import VideoBufferType, VideoFrame
 
 
 class Unit(Enum):
@@ -90,7 +91,7 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #     )
     # ),
     pytest.param(lambda: anthropic.LLM(), id="anthropic"),
-    # pytest.param(lambda: openai.LLM.with_vertex(), id="openai.with_vertex"),
+    pytest.param(lambda: openai.LLM.with_vertex(), id="openai.with_vertex"),
 ]
 
 
@@ -373,10 +374,20 @@ async def _request_fnc_call(
     return stream
 
 
-# Load and encode image once at module level
-_HEARTS_IMAGE_PATH = Path(__file__).parent / "hearts.jpg"
-with open(_HEARTS_IMAGE_PATH, "rb") as f:
-    _HEARTS_IMAGE_DATA_URL = f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode()}"
+_HEARTS_RGBA_PATH = Path(__file__).parent / "hearts.rgba"
+with open(_HEARTS_RGBA_PATH, "rb") as f:
+    image_data = f.read()
+
+    _HEARTS_IMAGE_VIDEO_FRAME = VideoFrame(
+        width=512, height=512, type=VideoBufferType.RGBA, data=image_data
+    )
+
+_HEARTS_JPEG_PATH = Path(__file__).parent / "hearts.jpg"
+with open(_HEARTS_JPEG_PATH, "rb") as f:
+    _HEARTS_IMAGE_DATA_URL = (
+        f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode()}"
+    )
+
 
 @pytest.mark.parametrize("llm_factory", LLMS)
 async def test_chat_with_image_data_url(llm_factory: Callable[[], llm.LLM]):
@@ -390,7 +401,41 @@ async def test_chat_with_image_data_url(llm_factory: Callable[[], llm.LLM]):
         )
         .append(
             text="Describe this image",
-            images=[llm.ChatImage(image=_HEARTS_IMAGE_DATA_URL, inference_detail="low")],
+            images=[
+                llm.ChatImage(image=_HEARTS_IMAGE_DATA_URL, inference_detail="low")
+            ],
+            role="user",
+        )
+    )
+
+    stream = input_llm.chat(chat_ctx=chat_ctx)
+    text = ""
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+
+        content = chunk.choices[0].delta.content
+        if content:
+            text += content
+
+    assert "heart" in text.lower()
+
+
+@pytest.mark.parametrize("llm_factory", LLMS)
+async def test_chat_with_image_frame(llm_factory: Callable[[], llm.LLM]):
+    input_llm = llm_factory()
+
+    chat_ctx = (
+        ChatContext()
+        .append(
+            text="You are an AI assistant that describes images in detail upon request.",
+            role="system",
+        )
+        .append(
+            text="Describe this image",
+            images=[
+                llm.ChatImage(image=_HEARTS_IMAGE_VIDEO_FRAME, inference_detail="low")
+            ],
             role="user",
         )
     )
