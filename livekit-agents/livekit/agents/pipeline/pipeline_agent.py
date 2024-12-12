@@ -1109,11 +1109,10 @@ class _DeferredReplyValidation:
     PUNCTUATION = ".!?"
     PUNCTUATION_REDUCE_FACTOR = 0.75
 
-    LATE_TRANSCRIPT_TOLERANCE = 1.5  # late compared to end of speech
-
     # Long delay to use when the model thinks the user is still speaking
-    # TODO: make this configurable
     UNLIKELY_ENDPOINT_DELAY = 6
+
+    FINAL_TRANSCRIPT_TIMEOUT = 5
 
     def __init__(
         self,
@@ -1127,52 +1126,75 @@ class _DeferredReplyValidation:
         self._validating_task: asyncio.Task | None = None
         self._last_final_transcript: str = ""
         self._last_language: str | None = None
+        self._last_recv_start_of_speech_time: float = 0.0
         self._last_recv_end_of_speech_time: float = 0.0
+        self._last_recv_transcript_time: float = 0.0
         self._speaking = False
 
         self._agent = agent
         self._end_of_speech_delay = min_endpointing_delay
-        self._final_transcript_delay = min_endpointing_delay
 
     @property
     def validating(self) -> bool:
         return self._validating_task is not None and not self._validating_task.done()
 
+    def _compute_delay(self) -> float | None:
+        """Computes the amount of time to wait before validating the agent reply.
+
+        This function should be called after the agent has received final transcript, or after VAD
+        """
+        # never interrupt the user while they are speaking
+        if self._speaking:
+            return None
+
+        # if STT doesn't give us the final transcript after end of speech, we'll still validate the reply
+        # to prevent the agent from getting "stuck"
+        # in this case, the agent will not have final transcript, so it'll trigger the user input with empty
+        if not self._last_final_transcript:
+            return self.FINAL_TRANSCRIPT_TIMEOUT
+
+        delay = self._end_of_speech_delay
+        if self._end_with_punctuation():
+            delay = delay * self.PUNCTUATION_REDUCE_FACTOR
+
+        # the delay should be computed from end of earlier timestamp, that's the true end of user speech
+        end_of_speech_time = self._last_recv_end_of_speech_time
+        if (
+            self._last_recv_transcript_time > 0
+            and self._last_recv_transcript_time > self._last_recv_start_of_speech_time
+            and self._last_recv_transcript_time < end_of_speech_time
+        ):
+            end_of_speech_time = self._last_recv_transcript_time
+
+        elapsed_time = time.perf_counter() - end_of_speech_time
+        if elapsed_time < delay:
+            delay -= elapsed_time
+        else:
+            delay = 0
+        return delay
+
     def on_human_final_transcript(self, transcript: str, language: str | None) -> None:
         self._last_final_transcript += " " + transcript.strip()  # type: ignore
         self._last_language = language
+        self._last_recv_transcript_time = time.perf_counter()
 
-        if self._speaking:
-            return
-
-        has_recent_end_of_speech = (
-            time.time() - self._last_recv_end_of_speech_time
-            < self.LATE_TRANSCRIPT_TOLERANCE
-        )
-        delay = (
-            self._end_of_speech_delay
-            if has_recent_end_of_speech
-            else self._final_transcript_delay
-        )
-        delay = delay * (
-            self.PUNCTUATION_REDUCE_FACTOR if self._end_with_punctuation() else 1.0
-        )
-        self._run(delay)
+        delay = self._compute_delay()
+        if delay is not None:
+            self._run(delay)
 
     def on_human_start_of_speech(self, ev: vad.VADEvent) -> None:
         self._speaking = True
+        self._last_recv_start_of_speech_time = time.perf_counter()
         if self.validating:
             assert self._validating_task is not None
             self._validating_task.cancel()
 
     def on_human_end_of_speech(self, ev: vad.VADEvent) -> None:
         self._speaking = False
-        self._last_recv_end_of_speech_time = time.time()
+        self._last_recv_end_of_speech_time = time.perf_counter()
 
-        if self._last_final_transcript:
-            delay = self._end_of_speech_delay * (
-                self.PUNCTUATION_REDUCE_FACTOR if self._end_with_punctuation() else 1.0
-            )
+        delay = self._compute_delay()
+        if delay is not None:
             self._run(delay)
 
     async def aclose(self) -> None:
@@ -1188,24 +1210,25 @@ class _DeferredReplyValidation:
     def _reset_states(self) -> None:
         self._last_final_transcript = ""
         self._last_recv_end_of_speech_time = 0.0
+        self._last_recv_transcript_time = 0.0
 
     def _run(self, delay: float) -> None:
-        detect_ctx = self._agent._chat_ctx.copy()
-        detect_ctx.messages.append(
-            ChatMessage.create(text=self._agent._transcribed_text, role="user")
-        )
-
         @utils.log_exceptions(logger=logger)
         async def _run_task(chat_ctx: ChatContext, delay: float) -> None:
-            await asyncio.sleep(delay)
+            use_turn_detector = self._last_final_transcript and not self._speaking
             if (
-                self._turn_detector is not None
+                use_turn_detector
+                and self._turn_detector is not None
                 and self._turn_detector.supports_language(self._last_language)
             ):
+                start_time = time.perf_counter()
                 eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
                 unlikely_threshold = self._turn_detector.unlikely_threshold()
+                elasped = time.perf_counter() - start_time
                 if eot_prob < unlikely_threshold:
-                    await asyncio.sleep(self.UNLIKELY_ENDPOINT_DELAY)
+                    delay = self.UNLIKELY_ENDPOINT_DELAY
+                delay = max(0, delay - elasped)
+            await asyncio.sleep(delay)
 
             self._reset_states()
             self._validate_fnc()
@@ -1213,4 +1236,8 @@ class _DeferredReplyValidation:
         if self._validating_task is not None:
             self._validating_task.cancel()
 
+        detect_ctx = self._agent._chat_ctx.copy()
+        detect_ctx.messages.append(
+            ChatMessage.create(text=self._agent._transcribed_text, role="user")
+        )
         self._validating_task = asyncio.create_task(_run_task(detect_ctx, delay))
