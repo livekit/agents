@@ -499,19 +499,13 @@ def _create_ai_function_info(
             inner_type = get_args(arg_info.type)[0]
             sanitized_value = [
                 _sanitize_primitive(
-                    value=v,
-                    expected_type=inner_type,
-                    choices=arg_info.choices,
-                    is_optional=arg_info.is_optional,
+                    value=v, expected_type=inner_type, choices=arg_info.choices
                 )
                 for v in arg_value
             ]
         else:
             sanitized_value = _sanitize_primitive(
-                value=arg_value,
-                expected_type=arg_info.type,
-                choices=arg_info.choices,
-                is_optional=arg_info.is_optional,
+                value=arg_value, expected_type=arg_info.type, choices=arg_info.choices
             )
 
         sanitized_arguments[arg_info.name] = sanitized_value
@@ -550,7 +544,6 @@ def _build_function_description(
         if get_origin(arg_info.type) is list:
             inner_type = get_args(arg_info.type)[0]
             p["type"] = "array"
-
             p["items"] = {}
             p["items"]["type"] = type2str(inner_type)
 
@@ -576,11 +569,7 @@ def _build_function_description(
 
 
 def _sanitize_primitive(
-    *,
-    value: Any,
-    expected_type: type,
-    choices: Tuple[Any] | None,
-    is_optional: bool = False,
+    *, value: Any, expected_type: type, choices: Tuple[Any] | None
 ) -> Any:
     if expected_type is str:
         if not isinstance(value, str):
