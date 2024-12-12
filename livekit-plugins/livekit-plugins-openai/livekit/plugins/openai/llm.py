@@ -64,7 +64,7 @@ class LLMOptions:
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto"
     store: bool | None = None
-    metadata: dict[str, Any] | None = None
+    metadata: dict[str, str] | None = None
 
 
 class LLM(llm.LLM):
@@ -80,7 +80,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
         store: bool | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
