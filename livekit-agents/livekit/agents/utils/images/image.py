@@ -99,13 +99,13 @@ def _resize_image(image: Any, options: EncodeOptions):
 
         resized = image.resize((new_width, new_height))
 
-        paste_x = (resize_opts.width - new_width) // 2
-        paste_y = (resize_opts.height - new_height) // 2
-
         Image.Image.paste(
             result,
             resized,
-            (paste_x, paste_y),
+            (
+                (resize_opts.width - new_width) // 2,
+                (resize_opts.height - new_height) // 2,
+            ),
         )
         return result
     elif resize_opts.strategy == "center_aspect_cover":
