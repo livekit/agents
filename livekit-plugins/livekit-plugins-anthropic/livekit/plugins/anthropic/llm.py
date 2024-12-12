@@ -28,6 +28,7 @@ from typing import (
     Union,
     get_args,
     get_origin,
+    cast,
 )
 
 import httpx
@@ -446,7 +447,10 @@ def _build_anthropic_image_content(
                 "source": {
                     "type": "base64",
                     "data": b64_data,
-                    "media_type": media_type,
+                    "media_type": cast(
+                        Literal["image/jpeg", "image/png", "image/gif", "image/webp"],
+                        media_type,
+                    ),
                 },
             }
         except (ValueError, IndexError) as e:
