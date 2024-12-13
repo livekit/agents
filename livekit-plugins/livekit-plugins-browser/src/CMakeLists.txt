@@ -11,8 +11,21 @@ set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(glfw GIT_REPOSITORY https://github.com/glfw/glfw.git GIT_TAG 3.4)
 FetchContent_MakeAvailable(glfw)
 
-FetchContent_Declare(imgui GIT_REPOSITORY https://github.com/ocornut/imgui GIT_TAG origin/docking)
+FetchContent_Declare(
+  imgui 
+  GIT_REPOSITORY https://github.com/ocornut/imgui 
+  GIT_TAG origin/docking
+  GIT_SHALLOW TRUE
+)
 FetchContent_GetProperties(imgui)
+if(NOT imgui_POPULATED)
+    FetchContent_Populate(imgui)
+    execute_process(
+        COMMAND git fetch --unshallow
+        WORKING_DIRECTORY ${imgui_SOURCE_DIR}
+    )
+endif()
+
 FetchContent_MakeAvailable(imgui)
 file(GLOB IMGUI_SOURCES ${imgui_SOURCE_DIR}/*.cpp)
 add_library(imgui STATIC ${IMGUI_SOURCES}
