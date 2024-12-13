@@ -466,7 +466,7 @@ def _build_anthropic_image_content(
                 opts.resize_options = utils.images.ResizeOptions(
                     width=image.inference_width,
                     height=image.inference_height,
-                    strategy="center_aspect_fit",
+                    strategy="scale_aspect_fit",
                 )
 
             encoded_data = utils.images.encode(image.image, opts)

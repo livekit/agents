@@ -532,7 +532,7 @@ class AssistantLLMStream(llm.LLMStream):
             opts.resize_options = utils.images.ResizeOptions(
                 width=inference_width,
                 height=inference_height,
-                strategy="center_aspect_fit",
+                strategy="scale_aspect_fit",
             )
 
         encoded_data = utils.images.encode(frame, opts)
