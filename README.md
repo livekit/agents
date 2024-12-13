@@ -13,13 +13,15 @@
 <br /><br />
 Looking for the JS/TS library? Check out [AgentsJS](https://github.com/livekit/agents-js)
 
-## ✨ [NEW] Google Gemini 2.0 support
+## ✨ NEW ✨
 
-Introducing Gemini 2.0 support in the Agents framework. Here's an example voice agent running Google STT, TTS, and Gemini 2.0 Flash: [code](./examples/voice-pipeline-agent/gemini_voice_agent.py)
+### Google Gemini 2.0 support
 
-## ✨ [NEW] LiveKit's new turn-detection model
+Introducing support for the new Gemini 2.0 model. Here's an example voice agent running Google STT, TTS, and Gemini 2.0 Flash: [code](./examples/voice-pipeline-agent/gemini_voice_agent.py)
 
-We’re launching a new open-weight end-of-turn model that enhances conversation flow for voice agents by significantly reducing interruptions. Optimized to run on CPUs, it’s available as the [livekit-plugins-turn-detector](https://pypi.org/project/livekit-plugins-turn-detector/) package.
+### In-house phrase endpointing model
+
+We’ve trained a new, open weights phrase endpointing model that significantly improves end-of-turn detection and conversational flow between voice agents and users by reducing agent interruptions. Optimized to run on CPUs, it’s available via [livekit-plugins-turn-detector](https://pypi.org/project/livekit-plugins-turn-detector/) package.
 
 ## What is Agents?
 
