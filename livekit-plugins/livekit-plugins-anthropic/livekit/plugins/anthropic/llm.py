@@ -490,17 +490,15 @@ def _create_ai_function_info(
             continue
 
         arg_value = parsed_arguments[arg_info.name]
-        if is_optional(arg_info.type)[0] and arg_value is None:
-            sanitized_value = _sanitize_primitive(
-                value=arg_value, expected_type=arg_info.type, choices=arg_info.choices
-            )
-        elif get_origin(arg_info.type) is not None:
+        is_optional, inner_th = _is_optional(arg_info.type)
+
+        if get_origin(inner_th) is list:
             if not isinstance(arg_value, list):
                 raise ValueError(
                     f"AI function {fnc_name} argument {arg_info.name} should be a list"
                 )
 
-            inner_type = get_args(arg_info.type)[0]
+            inner_type = get_args(inner_th)[0]
             sanitized_value = [
                 _sanitize_primitive(
                     value=v, expected_type=inner_type, choices=arg_info.choices
@@ -509,7 +507,7 @@ def _create_ai_function_info(
             ]
         else:
             sanitized_value = _sanitize_primitive(
-                value=arg_value, expected_type=arg_info.type, choices=arg_info.choices
+                value=arg_value, expected_type=inner_th, choices=arg_info.choices
             )
 
         sanitized_arguments[arg_info.name] = sanitized_value
@@ -537,7 +535,7 @@ def _build_function_description(
             raise ValueError(f"unsupported type {t} for ai_property")
 
         p: dict[str, Any] = {}
-        if is_required(arg_info):
+        if _is_required(arg_info):
             p["required"] = True
         else:
             p["required"] = False
@@ -545,10 +543,7 @@ def _build_function_description(
         if arg_info.description:
             p["description"] = arg_info.description
 
-        if is_optional(arg_info.type)[0]:
-            inner_th = is_optional(arg_info.type)[1]
-        else:
-            inner_th = arg_info.type
+        is_optional, inner_th = _is_optional(arg_info.type)
 
         if get_origin(inner_th) is list:
             inner_type = get_args(inner_th)[0]
@@ -605,12 +600,12 @@ def _sanitize_primitive(
     return value
 
 
-def is_optional(tp: type) -> tuple[bool, type]:
+def _is_optional(tp: type) -> tuple[bool, type]:
     return function_context._is_optional_type(tp)
 
 
-def is_required(arg_info: function_context.FunctionArgInfo) -> bool:
+def _is_required(arg_info: function_context.FunctionArgInfo) -> bool:
     return (
         arg_info.default is inspect.Parameter.empty
-        and not is_optional(arg_info.type)[0]
+        and not _is_optional(arg_info.type)[0]
     )
