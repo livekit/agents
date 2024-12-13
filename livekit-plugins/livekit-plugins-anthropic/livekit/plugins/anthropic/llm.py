@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import base64
-import inspect
 import json
 import os
 from dataclasses import dataclass
@@ -484,7 +483,7 @@ def _create_ai_function_info(
     sanitized_arguments: dict[str, Any] = {}
     for arg_info in fnc_info.arguments.values():
         if arg_info.name not in parsed_arguments:
-            if arg_info.default is inspect.Parameter.empty:
+            if not _is_optional_type(arg_info.type)[0]:
                 raise ValueError(
                     f"AI function {fnc_name} missing required argument {arg_info.name}"
                 )
@@ -536,7 +535,7 @@ def _build_function_description(
             raise ValueError(f"unsupported type {t} for ai_property")
 
         p: dict[str, Any] = {}
-        if _is_required(arg_info):
+        if not _is_optional_type(arg_info.type)[0]:
             p["required"] = True
         else:
             p["required"] = False
@@ -599,10 +598,3 @@ def _sanitize_primitive(
         raise ValueError(f"invalid value {value}, not in {choices}")
 
     return value
-
-
-def _is_required(arg_info: llm.function_context.FunctionArgInfo) -> bool:
-    return (
-        arg_info.default is inspect.Parameter.empty
-        and not _is_optional_type(arg_info.type)[0]
-    )

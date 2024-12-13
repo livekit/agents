@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 import typing
 from typing import Any
@@ -49,7 +48,7 @@ def create_ai_function_info(
     sanitized_arguments: dict[str, Any] = {}
     for arg_info in fnc_info.arguments.values():
         if arg_info.name not in parsed_arguments:
-            if arg_info.default is inspect.Parameter.empty:
+            if not _is_optional_type(arg_info.type)[0]:
                 raise ValueError(
                     f"AI function {fnc_name} missing required argument {arg_info.name}"
                 )
@@ -139,7 +138,7 @@ def build_oai_function_description(
     required_properties: list[str] = []
 
     for arg_info in fnc_info.arguments.values():
-        if _is_required(arg_info):
+        if not _is_optional_type(arg_info.type)[0]:
             required_properties.append(arg_info.name)
 
         properties_info[arg_info.name] = build_oai_property(arg_info)
@@ -184,10 +183,3 @@ def _sanitize_primitive(
         raise ValueError(f"invalid value {value}, not in {choices}")
 
     return value
-
-
-def _is_required(arg_info: function_context.FunctionArgInfo) -> bool:
-    return (
-        arg_info.default is inspect.Parameter.empty
-        and not _is_optional_type(arg_info.type)[0]
-    )
