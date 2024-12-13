@@ -21,7 +21,7 @@ import inspect
 import types
 import typing
 from dataclasses import dataclass
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from ..log import logger
 
@@ -209,7 +209,7 @@ class _AIFncMetadata:
     auto_retry: bool
 
 
-def _extract_types(annotation: type) -> tuple[type, TypeInfo | None]:
+def _extract_types(annotation: type) -> tuple[type | Optional[type], TypeInfo | None]:
     """Return inner_type, TypeInfo"""
     if typing.get_origin(annotation) is not typing.Annotated:
         # email: Annotated[
@@ -223,7 +223,7 @@ def _extract_types(annotation: type) -> tuple[type, TypeInfo | None]:
         is_optional, optional_inner = _is_optional_type(annotation)
         if is_optional:
             inner_type, info = _extract_types(optional_inner)
-            return typing.Optional[inner_type], info
+            return Optional[inner_type], info
 
         return annotation, None
 
