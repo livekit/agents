@@ -492,7 +492,7 @@ def _create_ai_function_info(
         arg_value = parsed_arguments[arg_info.name]
         is_optional, inner_th = _is_optional(arg_info.type)
 
-        if get_origin(inner_th) is list:
+        if get_origin(inner_th) is not None:
             if not isinstance(arg_value, list):
                 raise ValueError(
                     f"AI function {fnc_name} argument {arg_info.name} should be a list"
