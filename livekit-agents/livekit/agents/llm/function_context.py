@@ -55,7 +55,6 @@ class FunctionArgInfo:
     type: type
     default: Any
     choices: tuple | None
-    is_optional: bool
 
 
 @dataclass(frozen=True)
@@ -170,15 +169,13 @@ class FunctionContext:
                 )
 
             desc = type_info.description if type_info else ""
-            choices = type_info.choices if type_info else None
+            choices = type_info.choices if type_info else ()
 
-            is_optional, optional_inner = _is_optional_type(inner_th)
-            if is_optional:
-                # when the type is optional, only the inner type is relevant
-                # the argument info for default would be None
-                inner_th = optional_inner
-
-            if issubclass(inner_th, enum.Enum) and not choices:
+            if (
+                isinstance(inner_th, type)
+                and issubclass(inner_th, enum.Enum)
+                and not choices
+            ):
                 # the enum must be a str or int (and at least one value)
                 # this is verified by is_type_supported
                 choices = tuple([item.value for item in inner_th])
@@ -190,7 +187,6 @@ class FunctionContext:
                 type=inner_th,
                 default=param.default,
                 choices=choices,
-                is_optional=is_optional,
             )
 
         self._fncs[metadata.name] = FunctionInfo(
@@ -216,18 +212,6 @@ class _AIFncMetadata:
 def _extract_types(annotation: type) -> tuple[type, TypeInfo | None]:
     """Return inner_type, TypeInfo"""
     if typing.get_origin(annotation) is not typing.Annotated:
-        # email: Annotated[
-        #    Optional[str], TypeInfo(description="The user address email")
-        # ] = None,
-        #
-        # An argument like the above will return us:
-        # `typing.Optional[typing.Annotated[typing.Optional[str], TypeInfo(description='The user address email', choices=())]]`
-        # So we ignore the first typing.Optional
-
-        is_optional, optional_inner = _is_optional_type(annotation)
-        if is_optional:
-            return _extract_types(optional_inner)
-
         return annotation, None
 
     # assume the first argument is always the inner type the LLM will use
@@ -294,7 +278,7 @@ def is_type_supported(t: type) -> bool:
 def _is_optional_type(typ) -> Tuple[bool, Any]:
     """return is_optional, inner_type"""
     origin = typing.get_origin(typ)
-    if origin is None:
+    if origin is None or origin is list:
         return False, typ
 
     if origin in {typing.Union, getattr(types, "UnionType", typing.Union)}:

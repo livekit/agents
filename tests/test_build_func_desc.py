@@ -1,5 +1,5 @@
 from inspect import _empty
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import pytest
 from livekit.agents.llm import FunctionArgInfo, FunctionInfo
@@ -17,16 +17,16 @@ def test_typing():
 @pytest.mark.parametrize(
     ("arg_typ", "oai_type"),
     [
-        (int, "number"),
-        (Optional[int], "number"),
-        (None | int, "number"),
-        (Union[None, int], "number"),
-        (Union[str, None], "string"),
+        pytest.param(int, "number", id="int"),
+        pytest.param(Optional[int], "number", id="optional[int]"),
+        pytest.param(None | int, "number", id="none | int"),
+        pytest.param(Union[None, int], "number", id="union[none, int]"),
+        pytest.param(Union[str, None], "string", id="union[str, none]"),
+        pytest.param(List[int], "array", id="list[int]"),
+        pytest.param(Optional[List[int]], "array", id="optional[list[int]]"),
     ],
 )
 def test_description_building(arg_typ: type, oai_type: str):
-    is_optional, inner_type = _is_optional_type(arg_typ)
-
     fi = FunctionInfo(
         name="foo",
         description="foo",
@@ -36,8 +36,7 @@ def test_description_building(arg_typ: type, oai_type: str):
             "arg": FunctionArgInfo(
                 name="foo",
                 description="foo",
-                type=inner_type,
-                is_optional=is_optional,
+                type=arg_typ,
                 default=_empty,
                 choices=(),
             ),
