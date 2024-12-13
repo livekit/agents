@@ -39,7 +39,7 @@ from livekit.agents import (
     llm,
     utils,
 )
-from livekit.agents.llm import ToolChoice
+from livekit.agents.llm import ToolChoice, function_context
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import anthropic
@@ -490,7 +490,11 @@ def _create_ai_function_info(
             continue
 
         arg_value = parsed_arguments[arg_info.name]
-        if get_origin(arg_info.type) is not None:
+        if is_optional(arg_info.type)[0] and arg_value is None:
+            sanitized_value = _sanitize_primitive(
+                value=arg_value, expected_type=arg_info.type, choices=arg_info.choices
+            )
+        elif get_origin(arg_info.type) is not None:
             if not isinstance(arg_value, list):
                 raise ValueError(
                     f"AI function {fnc_name} argument {arg_info.name} should be a list"
@@ -533,7 +537,7 @@ def _build_function_description(
             raise ValueError(f"unsupported type {t} for ai_property")
 
         p: dict[str, Any] = {}
-        if arg_info.default is inspect.Parameter.empty:
+        if is_required(arg_info):
             p["required"] = True
         else:
             p["required"] = False
@@ -541,8 +545,13 @@ def _build_function_description(
         if arg_info.description:
             p["description"] = arg_info.description
 
-        if get_origin(arg_info.type) is list:
-            inner_type = get_args(arg_info.type)[0]
+        if is_optional(arg_info.type)[0]:
+            inner_th = is_optional(arg_info.type)[1]
+        else:
+            inner_th = arg_info.type
+
+        if get_origin(inner_th) is list:
+            inner_type = get_args(inner_th)[0]
             p["type"] = "array"
             p["items"] = {}
             p["items"]["type"] = type2str(inner_type)
@@ -550,7 +559,7 @@ def _build_function_description(
             if arg_info.choices:
                 p["items"]["enum"] = arg_info.choices
         else:
-            p["type"] = type2str(arg_info.type)
+            p["type"] = type2str(inner_th)
             if arg_info.choices:
                 p["enum"] = arg_info.choices
 
@@ -594,3 +603,14 @@ def _sanitize_primitive(
         raise ValueError(f"invalid value {value}, not in {choices}")
 
     return value
+
+
+def is_optional(tp: type) -> tuple[bool, type]:
+    return function_context._is_optional_type(tp)
+
+
+def is_required(arg_info: function_context.FunctionArgInfo) -> bool:
+    return (
+        arg_info.default is inspect.Parameter.empty
+        and not is_optional(arg_info.type)[0]
+    )

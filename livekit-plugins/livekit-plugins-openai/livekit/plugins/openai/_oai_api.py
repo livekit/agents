@@ -131,14 +131,14 @@ def build_oai_function_description(
             p["type"] = type2str(inner_type)
             if arg_info.choices:
                 p["enum"] = arg_info.choices
-            if (
-                inner_type is int
-                and capabilities
-                and not capabilities.supports_choices_on_int
-            ):
-                raise ValueError(
-                    f"Parameter '{arg_info.name}' uses 'choices' with 'int', which is not supported by this model."
-                )
+                if (
+                    inner_type is int
+                    and capabilities
+                    and not capabilities.supports_choices_on_int
+                ):
+                    raise ValueError(
+                        f"Parameter '{arg_info.name}' uses 'choices' with 'int', which is not supported by this model."
+                    )
 
         return p
 
