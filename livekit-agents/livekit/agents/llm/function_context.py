@@ -212,6 +212,18 @@ class _AIFncMetadata:
 def _extract_types(annotation: type) -> tuple[type, TypeInfo | None]:
     """Return inner_type, TypeInfo"""
     if typing.get_origin(annotation) is not typing.Annotated:
+        # email: Annotated[
+        #    Optional[str], TypeInfo(description="The user address email")
+        # ] = None,
+        #
+        # An argument like the above will return us:
+        # `typing.Optional[typing.Annotated[typing.Optional[str], TypeInfo(description='The user address email', choices=())]]`
+        # So we ignore the first typing.Optional
+
+        is_optional, optional_inner = _is_optional_type(annotation)
+        if is_optional:
+            return _extract_types(optional_inner)
+
         return annotation, None
 
     # assume the first argument is always the inner type the LLM will use
