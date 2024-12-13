@@ -39,7 +39,8 @@ from livekit.agents import (
     llm,
     utils,
 )
-from livekit.agents.llm import ToolChoice, function_context
+from livekit.agents.llm import ToolChoice
+from livekit.agents.llm.function_context import _is_optional_type
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import anthropic
@@ -490,7 +491,7 @@ def _create_ai_function_info(
             continue
 
         arg_value = parsed_arguments[arg_info.name]
-        is_optional, inner_th = _is_optional(arg_info.type)
+        is_optional, inner_th = _is_optional_type(arg_info.type)
 
         if get_origin(inner_th) is not None:
             if not isinstance(arg_value, list):
@@ -543,7 +544,7 @@ def _build_function_description(
         if arg_info.description:
             p["description"] = arg_info.description
 
-        is_optional, inner_th = _is_optional(arg_info.type)
+        is_optional, inner_th = _is_optional_type(arg_info.type)
 
         if get_origin(inner_th) is list:
             inner_type = get_args(inner_th)[0]
@@ -600,12 +601,8 @@ def _sanitize_primitive(
     return value
 
 
-def _is_optional(tp: type) -> tuple[bool, type]:
-    return function_context._is_optional_type(tp)
-
-
-def _is_required(arg_info: function_context.FunctionArgInfo) -> bool:
+def _is_required(arg_info: llm.function_context.FunctionArgInfo) -> bool:
     return (
         arg_info.default is inspect.Parameter.empty
-        and not _is_optional(arg_info.type)[0]
+        and not _is_optional_type(arg_info.type)[0]
     )

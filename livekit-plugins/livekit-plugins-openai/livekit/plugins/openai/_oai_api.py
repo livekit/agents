@@ -20,6 +20,7 @@ import typing
 from typing import Any
 
 from livekit.agents.llm import function_context, llm
+from livekit.agents.llm.function_context import _is_optional_type
 
 __all__ = ["build_oai_function_description", "create_ai_function_info"]
 
@@ -55,7 +56,7 @@ def create_ai_function_info(
             continue
 
         arg_value = parsed_arguments[arg_info.name]
-        is_optional, inner_th = _is_optional(arg_info.type)
+        is_optional, inner_th = _is_optional_type(arg_info.type)
 
         if typing.get_origin(inner_th) is not None:
             if not isinstance(arg_value, list):
@@ -109,7 +110,7 @@ def build_oai_function_description(
         if arg_info.description:
             p["description"] = arg_info.description
 
-        is_optional, inner_th = _is_optional(arg_info.type)
+        is_optional, inner_th = _is_optional_type(arg_info.type)
 
         if typing.get_origin(inner_th) is list:
             inner_type = typing.get_args(inner_th)[0]
@@ -185,12 +186,8 @@ def _sanitize_primitive(
     return value
 
 
-def _is_optional(tp: type) -> tuple[bool, type]:
-    return function_context._is_optional_type(tp)
-
-
 def _is_required(arg_info: function_context.FunctionArgInfo) -> bool:
     return (
         arg_info.default is inspect.Parameter.empty
-        and not _is_optional(arg_info.type)[0]
+        and not _is_optional_type(arg_info.type)[0]
     )
