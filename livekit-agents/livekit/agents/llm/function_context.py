@@ -222,7 +222,8 @@ def _extract_types(annotation: type) -> tuple[type, TypeInfo | None]:
 
         is_optional, optional_inner = _is_optional_type(annotation)
         if is_optional:
-            return _extract_types(optional_inner)
+            inner_type, info = _extract_types(optional_inner)
+            return typing.Optional[inner_type], info
 
         return annotation, None
 
