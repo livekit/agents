@@ -735,7 +735,6 @@ class LLMStream(llm.LLMStream):
 
             user = self._user or openai.NOT_GIVEN
             messages = _build_oai_context(self._chat_ctx, id(self))
-
             stream = await self._client.chat.completions.create(
                 messages=messages,
                 model=self._model,

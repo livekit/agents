@@ -57,6 +57,12 @@ class ChatImage:
     """
     Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
     """
+    inference_detail: Literal["auto", "high", "low"] = "auto"
+    """
+    Detail parameter for LLM provider, if supported.
+    
+    Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
+    """
     _cache: dict[Any, Any] = field(default_factory=dict, repr=False, init=False)
     """
     _cache is used internally by LLM implementations to store a processed version of the image

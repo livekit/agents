@@ -26,6 +26,7 @@ from typing import (
     Literal,
     Tuple,
     Union,
+    cast,
     get_args,
     get_origin,
 )
@@ -427,12 +428,36 @@ def _build_anthropic_message(
 def _build_anthropic_image_content(
     image: llm.ChatImage, cache_key: Any
 ) -> anthropic.types.ImageBlockParam:
-    if isinstance(image.image, str):  # image url
-        logger.warning(
-            "ChatImage with url is not yet supported by the LiveKit Anthropic plugin, skipping image '%s'",
-            image.image,
-        )
-    elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
+    if isinstance(image.image, str):  # image is a URL
+        if not image.image.startswith("data:"):
+            raise ValueError("LiveKit Anthropic Plugin: Image URLs must be data URLs")
+
+        try:
+            header, b64_data = image.image.split(",", 1)
+            media_type = header.split(";")[0].split(":")[1]
+
+            supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+            if media_type not in supported_types:
+                raise ValueError(
+                    f"LiveKit Anthropic Plugin: Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
+                )
+
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "data": b64_data,
+                    "media_type": cast(
+                        Literal["image/jpeg", "image/png", "image/gif", "image/webp"],
+                        media_type,
+                    ),
+                },
+            }
+        except (ValueError, IndexError) as e:
+            raise ValueError(
+                f"LiveKit Anthropic Plugin: Invalid image data URL {str(e)}"
+            )
+    elif isinstance(image.image, rtc.VideoFrame):  # image is a VideoFrame
         if cache_key not in image._cache:
             # inside our internal implementation, we allow to put extra metadata to
             # each ChatImage (avoid to reencode each time we do a chatcompletion request)
@@ -456,7 +481,9 @@ def _build_anthropic_image_content(
             },
         }
 
-    raise ValueError(f"unknown image type {type(image.image)}")
+    raise ValueError(
+        "LiveKit Anthropic Plugin: ChatImage must be an rtc.VideoFrame or a data URL"
+    )
 
 
 def _create_ai_function_info(
