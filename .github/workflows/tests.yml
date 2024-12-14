@@ -123,8 +123,9 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          OPENAI_API_VERSION: "2024-05-01-preview" # used by Azure
           FAL_KEY: ${{ secrets.FAL_KEY }}
-          OPENAI_API_VERSION: "2024-05-01-preview"
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
         working-directory: tests
