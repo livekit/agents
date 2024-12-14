@@ -32,7 +32,11 @@ class EOUPlugin(Plugin):
 
         from .eou import HG_MODEL
 
-        ORTModelForCausalLM.from_pretrained(HG_MODEL)
+        ORTModelForCausalLM.from_pretrained(
+            HG_MODEL,
+            use_cache=False, 
+            use_io_binding=False
+            )
         AutoTokenizer.from_pretrained(HG_MODEL)
 
 
