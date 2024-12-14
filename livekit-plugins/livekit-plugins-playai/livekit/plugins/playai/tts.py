@@ -16,7 +16,7 @@ from livekit.agents import (
 from pyht import AsyncClient as PlayHTAsyncClient
 from pyht.client import Format, Language, TTSOptions
 
-from .models import TTSEngines
+from .models import TTSModel
 
 
 @dataclass
@@ -24,7 +24,7 @@ class _TTSOptions:
     voice: str
     format: Format
     sample_rate: int
-    voice_engine: TTSEngines
+    voice_engine: TTSModel
     speed: float
     language: Language
     temperature: float
@@ -45,7 +45,7 @@ class TTS(tts.TTS):
         language: str = "english",
         sample_rate: int = 24000,
         speed: float = 1.0,
-        voice_engine: TTSEngines | str = "Play3.0-mini-http",
+        voice_engine: TTSModel | str = "Play3.0-mini",
         temperature: float | None = None,
         top_p: float | None = None,
         text_guidance: float | None = None,
@@ -111,7 +111,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: str | None = None,
-        voice_engine: TTSEngines | str | None = None,
+        voice_engine: TTSModel | str | None = None,
         language: str | None = None,
         sample_rate: int | None = None,
         speed: float | None = None,

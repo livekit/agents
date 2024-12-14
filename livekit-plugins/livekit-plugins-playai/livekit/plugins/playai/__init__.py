@@ -9,7 +9,7 @@ __all__ = [
 from livekit.agents import Plugin
 
 
-class PlayHTPlugin(Plugin):
+class PlayAIPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__)
 
@@ -17,7 +17,7 @@ class PlayHTPlugin(Plugin):
         self.download_files(self)
 
 
-Plugin.register_plugin(PlayHTPlugin())
+Plugin.register_plugin(PlayAIPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()
