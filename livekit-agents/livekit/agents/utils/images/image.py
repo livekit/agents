@@ -33,7 +33,18 @@ class EncodeOptions:
 class ResizeOptions:
     width: int
     height: int
-    strategy: Literal["center_aspect_fit", "center_aspect_cover", "skew"]
+    strategy: Literal[
+        # Fit the image into the provided dimensions, with letterboxing
+        "center_aspect_fit",
+        # Fill the provided dimensions, with cropping
+        "center_aspect_cover",
+        # Fit the image into the provided dimensions, preserving its original aspect ratio
+        "scale_aspect_fit",
+        # Fill the provided dimensions, preserving its original aspect ratio (image will be larger than the provided dimensions)
+        "scale_aspect_cover",
+        # Precisely resize the image to the provided dimensions
+        "skew",
+    ]
 
 
 def import_pil():
@@ -83,10 +94,11 @@ def _resize_image(image: Any, options: EncodeOptions):
 
         # If the new image is wider than the original
         if resize_opts.width / resize_opts.height > image.width / image.height:
-            new_width = resize_opts.width
-            new_height = int(image.height * (resize_opts.width / image.width))
+            new_height = resize_opts.height
+            new_width = int(image.width * (resize_opts.height / image.height))
 
         resized = image.resize((new_width, new_height))
+
         Image.Image.paste(
             result,
             resized,
@@ -118,5 +130,27 @@ def _resize_image(image: Any, options: EncodeOptions):
             ),
         )
         return result
+    elif resize_opts.strategy == "scale_aspect_fill":
+        # Start with assuming width is the limiting dimension
+        new_width = resize_opts.width
+        new_height = int(image.height * (resize_opts.width / image.width))
+
+        # If height is under the limit, scale based on height instead
+        if new_height < resize_opts.height:
+            new_height = resize_opts.height
+            new_width = int(image.width * (resize_opts.height / image.height))
+
+        return image.resize((new_width, new_height))
+    elif resize_opts.strategy == "scale_aspect_fit":
+        # Start with assuming width is the limiting dimension
+        new_width = resize_opts.width
+        new_height = int(image.height * (resize_opts.width / image.width))
+
+        # If height would exceed the limit, scale based on height instead
+        if new_height > resize_opts.height:
+            new_height = resize_opts.height
+            new_width = int(image.width * (resize_opts.height / image.height))
+
+        return image.resize((new_width, new_height))
 
     raise ValueError(f"Unknown resize strategy: {resize_opts.strategy}")
