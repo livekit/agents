@@ -49,8 +49,13 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=["livekit-agents>=0.11", "transformers>=4.46", "numpy>=1.26"],
-    package_data={"livekit.plugins.eou": ["py.typed"]},
+    install_requires=[
+        "livekit-agents>=0.11",
+        "transformers>=4.46",
+        "numpy>=1.26",
+        "torch>=2.5.1",
+    ],
+    package_data={"livekit.plugins.turn_detector": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

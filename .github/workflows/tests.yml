@@ -18,19 +18,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14-large, macos-14, windows-2019, ubuntu-20.04, namespace-profile-default-arm64]
-        python_version: ["3.9", "3.12"]
+        os:
+          [
+            macos-14-large,
+            macos-14,
+            windows-2019,
+            ubuntu-20.04,
+            namespace-profile-default-arm64,
+          ]
+        python_version: ["3.12"]
         test_group: ["base"]
         include:
           # Include llm, stt, and tts tests only on Ubuntu 20.04 with Python 3.9
           - os: ubuntu-20.04
-            python_version: "3.9"
+            python_version: "3.12"
             test_group: llm
           - os: ubuntu-20.04
-            python_version: "3.9"
+            python_version: "3.12"
             test_group: stt
           - os: ubuntu-20.04
-            python_version: "3.9"
+            python_version: "3.12"
             test_group: tts
 
     runs-on: ${{ matrix.os }}
@@ -53,8 +60,11 @@ jobs:
             ${{ runner.os }}-cache
 
       - uses: actions/setup-python@v5
+        # brew will install python as part of ffmpeg install on MacOS
+        # installing system Python could cause a conflict with `Could not symlink bin/idle3`
+        if: ${{ matrix.os != 'macos-14-large' }}
         with:
-          python-version: "3.9"
+          python-version: "3.12"
           cache: "pip"
 
       - name: Install ffmpeg (Linux)

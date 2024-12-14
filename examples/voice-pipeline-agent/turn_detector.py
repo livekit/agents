@@ -1,8 +1,6 @@
-import asyncio
 import logging
 
 from dotenv import load_dotenv
-from livekit import rtc
 from livekit.agents import (
     AutoSubscribe,
     JobContext,
@@ -13,7 +11,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import deepgram, openai, silero, turn_detector
 
 load_dotenv()
 logger = logging.getLogger("voice-assistant")
@@ -23,6 +21,9 @@ def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
+# This example uses our open-weight turn detection model to detect when the user is
+# done speaking. This approach is more accurate than the default VAD model, reducing
+# false positive interruptions by the agent.
 async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
         role="system",
@@ -39,17 +40,13 @@ async def entrypoint(ctx: JobContext):
     participant = await ctx.wait_for_participant()
     logger.info(f"starting voice assistant for participant {participant.identity}")
 
-    dg_model = "nova-2-general"
-    if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-        # use a model optimized for telephony
-        dg_model = "nova-2-phonecall"
-
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
-        stt=deepgram.STT(model=dg_model),
+        stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
+        turn_detector=turn_detector.EOUModel(),
     )
 
     agent.start(ctx.room, participant)
@@ -66,21 +63,6 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"Usage: ${summary}")
 
     ctx.add_shutdown_callback(log_usage)
-
-    # listen to incoming chat messages, only required if you'd like the agent to
-    # answer incoming messages from Chat
-    chat = rtc.ChatManager(ctx.room)
-
-    async def answer_from_text(txt: str):
-        chat_ctx = agent.chat_ctx.copy()
-        chat_ctx.append(role="user", text=txt)
-        stream = agent.llm.chat(chat_ctx=chat_ctx)
-        await agent.say(stream)
-
-    @chat.on("message_received")
-    def on_chat_received(msg: rtc.ChatMessage):
-        if msg.message:
-            asyncio.create_task(answer_from_text(msg.message))
 
     await agent.say("Hey, how can I help you today?", allow_interruptions=True)
 

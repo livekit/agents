@@ -1,3 +1,3 @@
 import logging
 
-logger = logging.getLogger("livekit.plugins.eou")
+logger = logging.getLogger("livekit.plugins.turn_detector")

@@ -148,14 +148,18 @@ class STT(stt.STT):
                 ),
                 model=self._opts.model,
                 language=config.language,
-                response_format="json",
+                # verbose_json returns language and other details
+                response_format="verbose_json",
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
 
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 alternatives=[
-                    stt.SpeechData(text=resp.text or "", language=language or "")
+                    stt.SpeechData(
+                        text=resp.text or "",
+                        language=resp.language or config.language or "",
+                    )
                 ],
             )
 

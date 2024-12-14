@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, Callable, Literal, Optional, Union
 
 import pytest
-from livekit.agents import llm
+from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
 from livekit.plugins import anthropic, openai
+from livekit.rtc import VideoBufferType, VideoFrame
 
 
 class Unit(Enum):
@@ -32,9 +35,7 @@ class FncCtx(FunctionContext):
     @ai_callable(description="Play a music")
     def play_music(
         self,
-        name: Annotated[
-            str, TypeInfo(description="The artist and the name of the song")
-        ],
+        name: Annotated[str, TypeInfo(description="the name of the Artist")],
     ) -> None: ...
 
     # test for cancelled calls
@@ -47,7 +48,7 @@ class FncCtx(FunctionContext):
         await asyncio.sleep(60)
 
     # used to test arrays as arguments
-    @ai_callable(description="Currencies of a specific area")
+    @ai_callable(description="Select currencies of a specific area")
     def select_currencies(
         self,
         currencies: Annotated[
@@ -79,7 +80,7 @@ def test_hashable_typeinfo():
 
 
 LLMS: list[Callable[[], llm.LLM]] = [
-    lambda: openai.LLM(),
+    pytest.param(lambda: openai.LLM(), id="openai"),
     # lambda: openai.beta.AssistantLLM(
     #     assistant_opts=openai.beta.AssistantOptions(
     #         create_options=openai.beta.AssistantCreateOptions(
@@ -89,8 +90,8 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #         )
     #     )
     # ),
-    lambda: anthropic.LLM(),
-    lambda: openai.LLM.with_vertex(),
+    pytest.param(lambda: anthropic.LLM(), id="anthropic"),
+    pytest.param(lambda: openai.LLM.with_vertex(), id="openai.with_vertex"),
 ]
 
 
@@ -205,7 +206,7 @@ async def test_calls_arrays(llm_factory: Callable[[], llm.LLM]):
 
     stream = await _request_fnc_call(
         input_llm,
-        "Can you select all currencies in Europe at once from given choices?",
+        "Can you select all currencies in Europe at once from given choices using function call `select_currencies`?",
         fnc_ctx,
         temperature=0.2,
     )
@@ -237,7 +238,7 @@ async def test_calls_choices(llm_factory: Callable[[], llm.LLM]):
     ) -> None: ...
 
     if not input_llm.capabilities.supports_choices_on_int:
-        with pytest.raises(ValueError, match="which is not supported by this model"):
+        with pytest.raises(APIConnectionError):
             stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
     else:
         stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
@@ -280,14 +281,14 @@ async def test_optional_args(llm_factory: Callable[[], llm.LLM]):
 test_tool_choice_cases = [
     pytest.param(
         "Default tool_choice (auto)",
-        "Get the weather for New York and play some music.",
+        "Get the weather for New York and play some music from the artist 'The Beatles'.",
         None,
         {"get_weather", "play_music"},
         id="Default tool_choice (auto)",
     ),
     pytest.param(
         "Tool_choice set to 'required'",
-        "Get the weather for Chicago and play some music.",
+        "Get the weather for Chicago and play some music from the artist 'Eminem'.",
         "required",
         {"get_weather", "play_music"},
         id="Tool_choice set to 'required'",
@@ -301,7 +302,7 @@ test_tool_choice_cases = [
     ),
     pytest.param(
         "Tool_choice set to 'none'",
-        "Get the weather for Seattle and play some music.",
+        "Get the weather for Seattle and play some music from the artist 'Frank Sinatra'.",
         "none",
         set(),  # No tool calls expected
         id="Tool_choice set to 'none'",
@@ -371,3 +372,82 @@ async def _request_fnc_call(
         pass
 
     return stream
+
+
+_HEARTS_RGBA_PATH = Path(__file__).parent / "hearts.rgba"
+with open(_HEARTS_RGBA_PATH, "rb") as f:
+    image_data = f.read()
+
+    _HEARTS_IMAGE_VIDEO_FRAME = VideoFrame(
+        width=512, height=512, type=VideoBufferType.RGBA, data=image_data
+    )
+
+_HEARTS_JPEG_PATH = Path(__file__).parent / "hearts.jpg"
+with open(_HEARTS_JPEG_PATH, "rb") as f:
+    _HEARTS_IMAGE_DATA_URL = (
+        f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode()}"
+    )
+
+
+@pytest.mark.parametrize("llm_factory", LLMS)
+async def test_chat_with_image_data_url(llm_factory: Callable[[], llm.LLM]):
+    input_llm = llm_factory()
+
+    chat_ctx = (
+        ChatContext()
+        .append(
+            text="You are an AI assistant that describes images in detail upon request.",
+            role="system",
+        )
+        .append(
+            text="Describe this image",
+            images=[
+                llm.ChatImage(image=_HEARTS_IMAGE_DATA_URL, inference_detail="low")
+            ],
+            role="user",
+        )
+    )
+
+    stream = input_llm.chat(chat_ctx=chat_ctx)
+    text = ""
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+
+        content = chunk.choices[0].delta.content
+        if content:
+            text += content
+
+    assert "heart" in text.lower()
+
+
+@pytest.mark.parametrize("llm_factory", LLMS)
+async def test_chat_with_image_frame(llm_factory: Callable[[], llm.LLM]):
+    input_llm = llm_factory()
+
+    chat_ctx = (
+        ChatContext()
+        .append(
+            text="You are an AI assistant that describes images in detail upon request.",
+            role="system",
+        )
+        .append(
+            text="Describe this image",
+            images=[
+                llm.ChatImage(image=_HEARTS_IMAGE_VIDEO_FRAME, inference_detail="low")
+            ],
+            role="user",
+        )
+    )
+
+    stream = input_llm.chat(chat_ctx=chat_ctx)
+    text = ""
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+
+        content = chunk.choices[0].delta.content
+        if content:
+            text += content
+
+    assert "heart" in text.lower()

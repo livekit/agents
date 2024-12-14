@@ -48,7 +48,7 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "click~=8.1",
-        "livekit>=0.17.6",
+        "livekit>=0.18.1",
         "livekit-api~=0.8",
         "livekit-protocol~=0.7",
         "protobuf>=3",

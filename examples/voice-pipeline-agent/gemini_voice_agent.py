@@ -1,8 +1,6 @@
-import asyncio
 import logging
 
 from dotenv import load_dotenv
-from livekit import rtc
 from livekit.agents import (
     AutoSubscribe,
     JobContext,
@@ -13,7 +11,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import google, openai, silero
 
 load_dotenv()
 logger = logging.getLogger("voice-assistant")
@@ -21,6 +19,16 @@ logger = logging.getLogger("voice-assistant")
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
+
+
+# An example Voice Agent using Google STT, Gemini 2.0 Flash, and Google TTS.
+# Prerequisites:
+# 1. livekit-plugins-openai[vertex] package installed
+# 2. save your service account credentials and set the following environments:
+#    * GOOGLE_APPLICATION_CREDENTIALS to the path of the service account key file
+#    * GOOGLE_CLOUD_PROJECT to your Google Cloud project ID
+#
+# Read more about authentication with Google: https://cloud.google.com/docs/authentication/application-default-credentials
 
 
 async def entrypoint(ctx: JobContext):
@@ -39,16 +47,13 @@ async def entrypoint(ctx: JobContext):
     participant = await ctx.wait_for_participant()
     logger.info(f"starting voice assistant for participant {participant.identity}")
 
-    dg_model = "nova-2-general"
-    if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-        # use a model optimized for telephony
-        dg_model = "nova-2-phonecall"
-
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
-        stt=deepgram.STT(model=dg_model),
-        llm=openai.LLM(),
-        tts=openai.TTS(),
+        stt=google.STT(),
+        llm=openai.LLM.with_vertex(model="google/gemini-2.0-flash-exp"),
+        tts=google.TTS(
+            voice_name="en-US-Journey-D",
+        ),
         chat_ctx=initial_ctx,
     )
 
@@ -67,22 +72,9 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(log_usage)
 
-    # listen to incoming chat messages, only required if you'd like the agent to
-    # answer incoming messages from Chat
-    chat = rtc.ChatManager(ctx.room)
-
-    async def answer_from_text(txt: str):
-        chat_ctx = agent.chat_ctx.copy()
-        chat_ctx.append(role="user", text=txt)
-        stream = agent.llm.chat(chat_ctx=chat_ctx)
-        await agent.say(stream)
-
-    @chat.on("message_received")
-    def on_chat_received(msg: rtc.ChatMessage):
-        if msg.message:
-            asyncio.create_task(answer_from_text(msg.message))
-
-    await agent.say("Hey, how can I help you today?", allow_interruptions=True)
+    await agent.say(
+        "Hi there, this is Gemini, how can I help you today?", allow_interruptions=False
+    )
 
 
 if __name__ == "__main__":
