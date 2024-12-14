@@ -14,8 +14,8 @@ from livekit.agents import (
     tts,
     utils,
 )
-from pyht import AsyncClient as PlayHTAsyncClient
-from pyht.client import Format, Language, TTSOptions
+from pyht import AsyncClient as PlayHTAsyncClient  # type: ignore
+from pyht.client import Format, Language, TTSOptions  # type: ignore
 
 from .models import TTSModel
 
@@ -25,15 +25,15 @@ class _TTSOptions:
     voice: str
     format: Format
     sample_rate: int
-    model: TTSModel
-    speed: float
+    model: TTSModel | str
+    speed: float | None
     language: Language
-    temperature: float
-    top_p: float
-    text_guidance: float
-    voice_guidance: float
-    style_guidance: float
-    repetition_penalty: float
+    temperature: float | None
+    top_p: float | None
+    text_guidance: float | None
+    voice_guidance: float | None
+    style_guidance: float | None
+    repetition_penalty: float | None
 
 
 class TTS(tts.TTS):
@@ -270,7 +270,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for chunk in self._client.stream_tts_input(
                 text_stream=text_stream,
                 options=tts_options,
-                voice_engine=self._opts.voice_engine,
+                voice_engine=self._opts.model + "-ws",
             ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
                     for frame in bstream.write(frame.data.tobytes()):
