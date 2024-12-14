@@ -93,19 +93,7 @@ jobs:
         run: |
           pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
           pip3 install -r ./tests/test-requirements.txt
-          pip3 install ./livekit-agents \
-                      ./livekit-plugins/livekit-plugins-openai \
-                      ./livekit-plugins/livekit-plugins-deepgram \
-                      ./livekit-plugins/livekit-plugins-google \
-                      ./livekit-plugins/livekit-plugins-nltk \
-                      ./livekit-plugins/livekit-plugins-silero \
-                      ./livekit-plugins/livekit-plugins-elevenlabs \
-                      ./livekit-plugins/livekit-plugins-cartesia \
-                      ./livekit-plugins/livekit-plugins-azure \
-                      ./livekit-plugins/livekit-plugins-anthropic \
-                      ./livekit-plugins/livekit-plugins-assemblyai \
-                      ./livekit-plugins/livekit-plugins-fal \
-                      ./livekit-plugins/livekit-plugins-playht
+          ./livekit-plugins/install_local.sh
 
       - name: Run tests
         shell: bash
@@ -124,8 +112,8 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
           FAL_KEY: ${{ secrets.FAL_KEY }}
-          PLAYHT_API_KEY: ${{ secrets.PLAYHT_API_KEY }}
-          PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
+          PLAYAI_API_KEY: ${{ secrets.PLAYAI_API_KEY }}
+          PLAYAI_USER_ID: ${{ secrets.PLAYAI_USER_ID }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
         working-directory: tests

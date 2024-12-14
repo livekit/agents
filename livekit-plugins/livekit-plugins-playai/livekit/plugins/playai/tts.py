@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
+import logging
 
 from livekit import rtc
 from livekit.agents import (
@@ -24,7 +25,7 @@ class _TTSOptions:
     voice: str
     format: Format
     sample_rate: int
-    voice_engine: TTSModel
+    model: TTSModel
     speed: float
     language: Language
     temperature: float
@@ -45,7 +46,7 @@ class TTS(tts.TTS):
         language: str = "english",
         sample_rate: int = 24000,
         speed: float = 1.0,
-        voice_engine: TTSModel | str = "Play3.0-mini",
+        model: TTSModel | str = "Play3.0-mini",
         temperature: float | None = None,
         top_p: float | None = None,
         text_guidance: float | None = None,
@@ -54,17 +55,17 @@ class TTS(tts.TTS):
         repetition_penalty: float | None = None,
     ) -> None:
         """
-        Initialize the PlayHT TTS engine.
+        Initialize the PlayAI TTS engine.
 
         Args:
-            api_key (str): The PlayHT API key. Can be set via environment variable PLAYHT_API_KEY.
-            user_id (str): The PlayHT user ID. Can be set via environment variable PLAYHT_USER_ID.
+            api_key (str): The PlayAI API key. Can be set via environment variable PLAYAI_API_KEY.
+            user_id (str): The PlayAI user ID. Can be set via environment variable PLAYAI_USER_ID.
             voice (str): A URL pointing to a Play voice manifest file. (e.g. "s3://voice-cloning-zero-shot/775ae416-49bb-4fb6-bd45-740f205d20a1/jennifersaad/manifest.json").
             language (str): The language of the text. Default is 'english'.
             sample_rate (int): The sample rate in Hz. Options are 8000, 16000, 24000, 44100, 48000.
             speed (float): The speed of the audio. Default is 1.0.
-            voice_engine (str): The voice engine to use. Default is "Play3.0-mini-http".
-            > The following options are inference-time hyperparameters of the text-to-speech model; if unset, the model will use default values chosen by PlayHT.
+            model (str): The voice engine to use. Default is "Play3.0-mini".
+            > The following options are inference-time hyperparameters of the text-to-speech model; if unset, the model will use default values chosen by PlayAI.
             temperature (float): The temperature of the model.
             top_p (float): The top-p value of the model.
             text_guidance (float): The text guidance of the model.
@@ -80,21 +81,23 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        api_key = api_key or os.environ.get("PLAYHT_API_KEY")
-        user_id = user_id or os.environ.get("PLAYHT_USER_ID")
+        api_key = api_key or os.environ.get("PLAYAI_API_KEY")
+        user_id = user_id or os.environ.get("PLAYAI_USER_ID")
 
         if not api_key or not user_id:
             raise ValueError(
-                "PlayHT API key and user ID are required, either as arguments or set PLAYHT_API_KEY and PLAYHT_USER_ID environment variables"
+                "PlayAI API key and user ID are required, either as arguments or set PLAYAI_API_KEY and PLAYAI_USER_ID environment variables"
             )
 
         self._client = PlayHTAsyncClient(
             user_id=user_id,
             api_key=api_key,
         )
+        # suppress verbose websocket logs
+        logging.getLogger("websockets.client").setLevel(logging.INFO)
         self._opts = _TTSOptions(
             voice=voice,
-            voice_engine=voice_engine,
+            model=model,
             format=Format.FORMAT_MP3,  # default for now
             sample_rate=sample_rate,
             speed=speed,
@@ -111,7 +114,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: str | None = None,
-        voice_engine: TTSModel | str | None = None,
+        model: TTSModel | str | None = None,
         language: str | None = None,
         sample_rate: int | None = None,
         speed: float | None = None,
@@ -127,7 +130,7 @@ class TTS(tts.TTS):
 
         Args:
             voice (str, optional): The voice to use.
-            voice_engine (str, optional): The voice engine to use.
+            model (str, optional): The model to use.
             language (str, optional): The language of the text.
             sample_rate (int, optional): The sample rate of the audio.
             speed (float, optional): The speed of the audio.
@@ -140,7 +143,7 @@ class TTS(tts.TTS):
         """
         updates = {
             "voice": voice,
-            "voice_engine": voice_engine,
+            "model": model,
             "language": Language(language) if language else None,
             "sample_rate": sample_rate,
             "speed": speed,
@@ -205,11 +208,15 @@ class ChunkedStream(tts.ChunkedStream):
             language=self._opts.language,
         )
 
+        # only use websocket streaming
+        voice_engine = self._opts.model + "-ws"
+
         try:
             async for chunk in self._client.tts(
                 text=self._input_text,
                 options=tts_options,
-                voice_engine=self._opts.voice_engine,
+                voice_engine=voice_engine,
+                streaming=True,
             ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
                     for frame in bstream.write(frame.data.tobytes()):
