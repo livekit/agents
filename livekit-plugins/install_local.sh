@@ -17,5 +17,6 @@ pip install \
   "${SCRIPT_DIR}/livekit-plugins-nltk" \
   "${SCRIPT_DIR}/livekit-plugins-openai" \
   "${SCRIPT_DIR}/livekit-plugins-rag" \
+  "${SCRIPT_DIR}/livekit-plugins-playai" \
   "${SCRIPT_DIR}/livekit-plugins-silero" \
   "${SCRIPT_DIR}/livekit-plugins-turn-detector"
