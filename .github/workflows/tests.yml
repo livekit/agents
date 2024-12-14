@@ -124,6 +124,7 @@ jobs:
           ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           FAL_KEY: ${{ secrets.FAL_KEY }}
+          OPENAI_API_VERSION: "2024-05-01-preview"
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
         working-directory: tests
