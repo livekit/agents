@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass
-import logging
 
 from livekit import rtc
 from livekit.agents import (
