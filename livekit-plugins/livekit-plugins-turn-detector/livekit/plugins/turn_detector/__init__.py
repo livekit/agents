@@ -29,7 +29,7 @@ class EOUPlugin(Plugin):
     def download_files(self) -> None:
         from optimum.onnxruntime import ORTModelForCausalLM
         from transformers import AutoTokenizer
-        
+
         from .eou import HG_MODEL
 
         ORTModelForCausalLM.from_pretrained(HG_MODEL)

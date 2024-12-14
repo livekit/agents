@@ -59,10 +59,9 @@ class _EUORunner(_InferenceRunner):
         from optimum.onnxruntime import ORTModelForCausalLM
         from transformers import AutoTokenizer
 
-
         try:
             self._model = ORTModelForCausalLM.from_pretrained(
-                HG_MODEL, 
+                HG_MODEL,
                 local_files_only=True,
                 use_io_binding=False,
                 use_cache=False,
