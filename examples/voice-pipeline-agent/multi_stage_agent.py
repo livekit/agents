@@ -175,9 +175,7 @@ class RestaurantBot:
         call_ctx = AgentCallContext.get_current()
 
         self._transfer_to_spec("CustomerDetails", call_ctx)
-        await call_ctx.agent.say(
-            "Great! I'll collect your contact information now."
-        )
+        await call_ctx.agent.say("Great! I'll collect your contact information now.")
         return (
             f"Transferred to collecting customer details, "
             f"the current collected name is {self._customer_name} "
@@ -219,6 +217,7 @@ def prewarm_process(proc: JobProcess):
 async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
+    chat_log_file = "multi_stage_chat_log.txt"
     menu = "Pizza, Salad, Ice Cream, Coffee"
     multi_stage_ctx = RestaurantBot(menu)
 
@@ -233,6 +232,7 @@ async def entrypoint(ctx: JobContext):
         max_nested_fnc_calls=2,  # may call functions in the transition function
     )
 
+    # For testing with text input
     @ctx.room.on("data_received")
     def on_data_received(packet: rtc.DataPacket):
         if packet.topic == "lk-chat-topic":
@@ -246,6 +246,25 @@ async def entrypoint(ctx: JobContext):
                     alternatives=[SpeechData(language="en", text=data["message"])],
                 ),
             )
+
+    @agent.on("user_speech_committed")
+    @agent.on("agent_speech_interrupted")
+    @agent.on("agent_speech_committed")
+    def on_speech_committed(message: llm.ChatMessage):
+        with open(chat_log_file, "a") as f:
+            f.write(f"{message.role}: {message.content}\n")
+
+    @agent.on("function_calls_collected")
+    def on_function_calls_collected(calls: list[llm.FunctionCallInfo]):
+        fnc_infos = [{fnc.function_info.name: fnc.arguments} for fnc in calls]
+        with open(chat_log_file, "a") as f:
+            f.write(f"fnc_calls_collected: {fnc_infos}\n")
+
+    @agent.on("function_calls_finished")
+    def on_function_calls_finished(calls: list[llm.CalledFunction]):
+        called_infos = [{fnc.call_info.function_info.name: fnc.result} for fnc in calls]
+        with open(chat_log_file, "a") as f:
+            f.write(f"fnc_calls_finished: {called_infos}\n")
 
     # Start the assistant. This will automatically publish a microphone track and listen to the participant.
     agent.start(ctx.room, participant)
