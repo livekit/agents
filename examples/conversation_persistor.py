@@ -1,6 +1,9 @@
 from datetime import datetime
 from dataclasses import dataclass
 
+import aiofiles
+import asyncio
+
 @dataclass
 class EventLog:
     eventname: str | None 
@@ -25,7 +28,8 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         self,
         *,
         model: multimodal.MultimodalAgent | None,
-        log: str | None
+        log: str | None,
+        transcriptions_only: bool = False
     ):
         """
         Initializes a ConversationPersistor instance which records the events and transcriptions of a MultimodalAgent.
@@ -33,12 +37,14 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         Args:
             model (multimodal.MultimodalAgent): an instance of a MultiModalAgent
             log (str): name of the external file to record events in
+            transcriptions_only (bool): a boolean variable to determine if only transcriptions will be recorded, False by default
         
         """
         super().__init__()
 
         self._model = model
         self._log = log
+        self._transcriptions_only = transcriptions_only
 
         self._user_transcriptions = []
         self._agent_transcriptions = []
@@ -70,77 +76,77 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
     def log(self, newlog: str | None) -> None:
         self._log = newlog 
     
-    def writelog(
+    async def writelog(
             self,
             *, 
             event: EventLog | None = None, 
             transcription: TranscriptionLog | None = None
     ) -> None:
         """
-        Writes events and transcriptions to an external file.
+        Asynchronously writes events and transcriptions to an external file.
 
         Args:
             event (EventLog, optional): an instance of an EventLog
             transcription (TranscriptionLog, optional): an instance of a TranscriptionLog
 
         """
-        with open(self._log, "a+") as file:
-            if event:
-                file.write("\n" + event.time + " " + event.eventname)
+        async with aiofiles.open(self._log, "a") as file:
+            if event and not self._transcriptions_only:
+                await file.write("\n" + event.time + " " + event.eventname)
             if transcription:
-                file.write("\n" + transcription.time + " " + transcription.role + " " + transcription.transcription)
+                await file.write("\n" + transcription.time + " " + transcription.role + " " + transcription.transcription)
             
     
     def start(self) -> None:
         @self._model.on("user_started_speaking")
         def _user_started_speaking():
             event = EventLog(eventname="user_started_speaking")
-            self.writelog(event=event)
+            asyncio.create_task(self.writelog(event=event))
 
         @self._model.on("user_stopped_speaking")
         def _user_stopped_speaking():
             event = EventLog(eventname="user_stopped_speaking")
-            self.writelog(event=event)
+            asyncio.create_task(self.writelog(event=event))
         
         @self._model.on("agent_started_speaking")
         def _agent_started_speaking():
             event = EventLog(eventname="agent_started_speaking")
-            self.writelog(event=event)
+            asyncio.create_task(self.writelog(event=event))
         
         @self._model.on("agent_stopped_speaking")
         def _agent_stopped_speaking():
             transcription = TranscriptionLog(role="agent", transcription=(self._model._playing_handle._tr_fwd.played_text)[1:])
-            self.writelog(transcription=transcription)
+            asyncio.create_task(self.writelog(transcription=transcription))
 
             event = EventLog(eventname="agent_stopped_speaking")
-            self.writelog(event=event)
+            asyncio.create_task(self.writelog(event=event))
 
         from livekit.agents.llm import ChatMessage
 
         @self._model.on("user_speech_committed")
         def _user_speech_committed(user_msg: ChatMessage):
             transcription = TranscriptionLog(role="user", transcription=user_msg.content)
-            self.writelog(transcription=transcription)
+            asyncio.create_task(self.writelog(transcription=transcription))
 
             event = EventLog(eventname="user_speech_committed")
-            self.writelog(event=event)
+            asyncio.create_task(self.writelog(event=event))
 
         @self._model.on("agent_speech_committed")
         def _agent_speech_committed():
             event = EventLog(eventname="agent_speech_committed")
-            self.writelog(event=event)
+            asyncio.create_task(self.writelog(event=event))
 
         @self._model.on("agent_speech_interrupted")
         def _agent_speech_interrupted():
             event = EventLog(eventname="agent_speech_interrupted")
-            self.writelog(event=event)
+            asyncio.create_task(self.writelog(event=event))
 
         @self._model.on("function_calls_collected")
         def _function_calls_collected():
             event = EventLog(eventname="function_calls_collected")
-            self.writelog(event=event)
+            asyncio.create_task(self.writelog(event=event))
 
         @self._model.on("function_calls_finished")
         def _function_calls_collected():
             event = EventLog(eventname="function_calls_finished")
-            self.writelog(event=event)
+            asyncio.create_task(self.writelog(event=event))
