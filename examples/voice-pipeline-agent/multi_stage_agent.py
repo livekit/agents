@@ -103,11 +103,11 @@ class RestaurantBot:
     def _transfer_to_spec(self, spec_name: str, call_ctx: AgentCallContext) -> None:
         agent = call_ctx.agent
 
+        # keep the last n messages for the next stage
         keep_last_n = 6
-        prev_messages = agent.chat_ctx.messages.copy()
+        prev_messages = agent.chat_ctx.messages.copy()[-keep_last_n:]
         while prev_messages and prev_messages[0].role in ["system", "tool"]:
             prev_messages.pop(0)
-        prev_messages = prev_messages[-keep_last_n:]
 
         self._cur_spec = spec_name
         agent._fnc_ctx = self.spec.fnc_ctx
@@ -148,10 +148,10 @@ class RestaurantBot:
         phone: Annotated[str, llm.TypeInfo(description="The customer's phone number")],
     ):
         """Called when the user provides their phone number."""
-        # validate phone number
+        # validate phone number (optional)
         phone = phone.strip().replace("-", "")
         if not phone.isdigit() or len(phone) != 10:
-            return "The phone number is not valid, please try again."
+            return "The phone number is invalid, it should be a 10-digit number, please try again."
 
         self._customer_phone = phone
         logger.info("Collected phone", extra={"customer_phone": phone})
@@ -161,14 +161,23 @@ class RestaurantBot:
     async def transfer_to_ordering(self):
         """Called to transfer the call to order taking."""
         call_ctx = AgentCallContext.get_current()
+
         self._transfer_to_spec("OrderTaking", call_ctx)
+        await call_ctx.agent.say(
+            "I'll transfer you to our order taker who will help you with your selections."
+        )
+
         return f"Transferred to order taking, the current order is {self._order}"
 
     @llm.ai_callable()
     async def transfer_to_info_collection(self):
         """Called to transfer the call to collect the customer's details."""
         call_ctx = AgentCallContext.get_current()
+
         self._transfer_to_spec("CustomerDetails", call_ctx)
+        await call_ctx.agent.say(
+            "Great! I'll collect your contact information now."
+        )
         return (
             f"Transferred to collecting customer details, "
             f"the current collected name is {self._customer_name} "
