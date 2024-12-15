@@ -93,18 +93,7 @@ jobs:
         run: |
           pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
           pip3 install -r ./tests/test-requirements.txt
-          pip3 install ./livekit-agents \
-                      ./livekit-plugins/livekit-plugins-openai \
-                      ./livekit-plugins/livekit-plugins-deepgram \
-                      ./livekit-plugins/livekit-plugins-google \
-                      ./livekit-plugins/livekit-plugins-nltk \
-                      ./livekit-plugins/livekit-plugins-silero \
-                      ./livekit-plugins/livekit-plugins-elevenlabs \
-                      ./livekit-plugins/livekit-plugins-cartesia \
-                      ./livekit-plugins/livekit-plugins-azure \
-                      ./livekit-plugins/livekit-plugins-anthropic \
-                      ./livekit-plugins/livekit-plugins-assemblyai \
-                      ./livekit-plugins/livekit-plugins-fal
+          ./livekit-plugins/install_local.sh
 
       - name: Run tests
         shell: bash
@@ -131,7 +120,7 @@ jobs:
 
           case "${{ matrix.test_group }}" in
             base)
-              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_tts_fallback.py test_stt_fallback.py test_message_change.py"
+              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_tts_fallback.py test_stt_fallback.py test_message_change.py test_decoder.py"
               ;;
             llm)
               test_files="test_llm.py"
