@@ -23,22 +23,7 @@ on:
 jobs:
   build_plugins:
     runs-on: ubuntu-latest
-    if: |
-      inputs.package == 'livekit-agents' ||
-      inputs.package == 'livekit-plugins-assemblyai' ||
-      inputs.package == 'livekit-plugins-azure' ||
-      inputs.package == 'livekit-plugins-cartesia' ||
-      inputs.package == 'livekit-plugins-deepgram' ||
-      inputs.package == 'livekit-plugins-elevenlabs' ||
-      inputs.package == 'livekit-plugins-google' ||
-      inputs.package == 'livekit-plugins-minimal' ||
-      inputs.package == 'livekit-plugins-nltk' ||
-      inputs.package == 'livekit-plugins-openai' ||
-      inputs.package == 'livekit-plugins-rag' ||
-      inputs.package == 'livekit-plugins-silero' ||
-      inputs.package == 'livekit-plugins-anthropic' ||
-      inputs.package == 'livekit-plugins-llama-index'
-
+    if: inputs.package != 'livekit-plugins-browser'
     defaults:
       run:
         working-directory: "${{ startsWith(inputs.package, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ inputs.package }}"
@@ -62,7 +47,7 @@ jobs:
         run: python -m build
 
       - name: Upload distribution package
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact_name }}
           path: "${{ startsWith(inputs.package, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ inputs.package }}/dist/"
@@ -97,7 +82,7 @@ jobs:
           CIBW_BUILD_VERBOSITY: 3
 
       - name: Upload distribution package
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact_name }}
           path: livekit-plugins/livekit-plugins-browser/dist/

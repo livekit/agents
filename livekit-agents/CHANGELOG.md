@@ -1,5 +1,17 @@
 # livekit-agents
 
+## 0.12.2
+
+### Patch Changes
+
+- improvements to endpointing latency - [#1212](https://github.com/livekit/agents/pull/1212) ([@davidzhao](https://github.com/davidzhao))
+
+- Improvements to end of turn plugin, ensure STT language settings. - [#1195](https://github.com/livekit/agents/pull/1195) ([@davidzhao](https://github.com/davidzhao))
+
+- fix duplicated agent speech commit for message with function call - [#1192](https://github.com/livekit/agents/pull/1192) ([@longcw](https://github.com/longcw))
+
+- fix: Handle optional func args in tool calls when set to `None` - [#1211](https://github.com/livekit/agents/pull/1211) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.12.1
 
 ### Patch Changes
