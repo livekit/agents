@@ -845,6 +845,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     extra={
                         "speech_id": speech_handle.id,
                         "fnc_nested_depth": speech_handle.fnc_nested_depth,
+                        "fnc_names": [
+                            fnc.function_info.name
+                            for fnc in speech_handle.source.function_calls
+                        ],
                     },
                 )
                 return
@@ -920,8 +924,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             chat_ctx = call_ctx.chat_ctx.copy()
             chat_ctx.messages.extend(extra_tools_messages)
             chat_ctx.messages.extend(call_ctx.extra_chat_messages)
-            # answer_llm_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx)
-            answer_llm_stream = self._opts.before_llm_cb(self, chat_ctx)
+            answer_llm_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx)
 
             synthesis_handle = self._synthesize_agent_speech(
                 new_speech_handle.id, answer_llm_stream
