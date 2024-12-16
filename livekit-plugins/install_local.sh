@@ -7,7 +7,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # Use $PIP if set, otherwise default to 'pip'
 : "${PIP:=pip}"
 
-which $PIP
+echo `which $PIP`
 
 $PIP install \
   "${SCRIPT_DIR}/livekit-plugins-anthropic" \
