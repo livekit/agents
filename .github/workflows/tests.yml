@@ -88,11 +88,11 @@ jobs:
 
       - name: Debug Python and pip
         run: |
-          which python3
-          python3 --version
-          which pip3
-          pip3 --version
-          python3 -m site
+          which python
+          python --version
+          which pip
+          pip --version
+          python -m site
 
       - name: Install ffmpeg (Windows)
         if: ${{ matrix.os == 'windows-2019' }}
@@ -101,7 +101,7 @@ jobs:
       - name: Install packages
         shell: bash
         run: |
-          export PIP=pip${{ matrix.python_version }}
+          export PIP=pip
           $PIP install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
           $PIP install -r ./tests/test-requirements.txt
           which pip${{ matrix.python_version }}
