@@ -86,7 +86,10 @@ jobs:
 
       - name: Install ffmpeg (macOS)
         if: ${{ startsWith(matrix.os, 'macos') }}
-        run: brew install ffmpeg
+        run: |
+          echo $PATH
+          which python
+          brew install ffmpeg
 
       - name: Install ffmpeg (Windows)
         if: ${{ matrix.os == 'windows-2019' }}
