@@ -13,6 +13,7 @@ from typing import (
     Literal,
     TypeVar,
     Union,
+    override,
 )
 
 from livekit import rtc
@@ -71,22 +72,35 @@ T = TypeVar("T")
 
 class TrackedChannel(aio.Chan[T]):
     """
-    A channel that tracks if it has sent a value. We use this to handle
-    timeouts from the LLM - if it has sent a value, we don't want to retry
-    because the audio stream will have already received the chat chunk.
+    A channel that tracks if it has sent or receiveda value. We use this to handle
+    timeouts from the LLM - someone has received a value from the LLM, we don't want
+    to retry because the audio stream will have already received the chat chunk.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.has_sent = False
+        self.has_received = False
 
+    @override
     def send_nowait(self, value: T) -> None:
         self.has_sent = True
         return super().send_nowait(value)
 
+    @override
     async def send(self, value: T) -> None:
         self.has_sent = True
         await super().send(value)
+
+    @override
+    async def recv(self) -> T:
+        self.has_received = True
+        return await super().recv()
+
+    @override
+    async def recv_nowait(self) -> T:
+        self.has_received = True
+        return await super().recv_nowait()
 
 
 class LLM(
@@ -169,9 +183,9 @@ class LLMStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
-                if self._event_ch.has_sent:
+                if self._event_ch.has_received:
                     logger.warning(
-                        "LLM already sent a value, not retrying",
+                        "LLM already sent a value that was used, not retrying",
                         exc_info=e,
                         extra={
                             "llm": self._llm._label,
