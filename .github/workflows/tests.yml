@@ -64,8 +64,14 @@ jobs:
         # installing system Python could cause a conflict with `Could not symlink bin/idle3`
         if: ${{ matrix.os != 'macos-14-large' }}
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python_version}}
           cache: "pip"
+
+      - name: Install Python For MacOS
+        if: ${{ matrix.os == 'macos-14-large' }}
+        run: |
+          brew install python@${{ matrix.python_version }}
+          brew link --force --overwrite python@${{ matrix.python_version }}
 
       - name: Install ffmpeg (Linux)
         if: ${{ matrix.os == 'ubuntu-20.04' || matrix.os == 'namespace-profile-default-arm64' }}

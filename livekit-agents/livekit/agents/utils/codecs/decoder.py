@@ -104,7 +104,7 @@ class AudioStreamDecoder:
         self._input_buf = StreamBuffer()
         self._loop = asyncio.get_event_loop()
 
-    async def push(self, chunk: bytes):
+    def push(self, chunk: bytes):
         self._input_buf.write(chunk)
         if not self._started:
             self._started = True

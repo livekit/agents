@@ -23,7 +23,7 @@ async def test_decode_and_transcribe():
     decoder = AudioStreamDecoder()
     with open(TEST_AUDIO_FILEPATH, "rb") as f:
         opus_data = f.read()
-    await decoder.push(opus_data)
+    decoder.push(opus_data)
     decoder.end_input()
 
     session = aiohttp.ClientSession()
