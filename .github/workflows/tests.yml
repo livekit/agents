@@ -65,7 +65,7 @@ jobs:
         if: ${{ matrix.os != 'macos-14-large' }}
         with:
           python-version: ${{ matrix.python_version }}
-          cache: "pip"
+          cache: "pip-${{ matrix.python_version }}"
 
       - name: Install ffmpeg (Linux)
         if: ${{ matrix.os == 'ubuntu-20.04' || matrix.os == 'namespace-profile-default-arm64' }}
@@ -76,6 +76,7 @@ jobs:
         run: |
           brew install python@${{ matrix.python_version }}
           brew link --force --overwrite python@${{ matrix.python_version }}
+          brew unlink python@${{ matrix.python_version }} && brew link python@${{ matrix.python_version }}
           echo "PATH=/opt/homebrew/bin:$PATH" >> $GITHUB_PATH
 
       # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
