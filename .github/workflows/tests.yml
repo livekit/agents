@@ -73,7 +73,7 @@ jobs:
 
       - name: "Ensure using homebrew python"
         if: ${{ matrix.os == 'macos-14-large' }}
-        run: echo "/opt/homebrew/bin" >> $GITHUB_PATH
+        run: echo "PATH=/opt/homebrew/bin:$PATH" >> $GITHUB_PATH
 
       # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
       - name: Install libssl 1.1 (Linux 22.04)
