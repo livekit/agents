@@ -26,7 +26,7 @@ jobs:
             ubuntu-20.04,
             namespace-profile-default-arm64,
           ]
-        python_version: ["3.12"]
+        python_version: ["3.11"]
         test_group: ["base"]
         include:
           # Include llm, stt, and tts tests only on Ubuntu 20.04 with Python 3.9
