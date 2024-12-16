@@ -28,6 +28,48 @@ EventTypes = Literal[
 ]
 
 
+class S2SModel(Protocol):
+    """Protocol that both OpenAI and Gemini realtime models must implement."""
+
+    def session(
+        self,
+        *,
+        chat_ctx: llm.ChatContext | None = None,
+        fnc_ctx: llm.FunctionContext | None = None,
+    ) -> "S2SSession": ...
+
+
+class S2SSession(Protocol):
+    """A protocol for a session object returned by S2SModel.session().
+
+    The session should:
+    - Provide events: "response_content_added", "response_content_done", etc.
+    - Provide methods like input_audio_buffer.append(), response.create(), etc.
+    """
+
+    @property
+    def fnc_ctx(self) -> llm.FunctionContext | None: ...
+
+    @fnc_ctx.setter
+    def fnc_ctx(self, value: llm.FunctionContext | None) -> None: ...
+
+    def chat_ctx_copy(self) -> llm.ChatContext: ...
+
+    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None: ...
+
+    @property
+    def input_audio_buffer(self): ...
+
+    @property
+    def response(self): ...
+
+    def _update_conversation_item_content(
+        self, item_id: str, content: str | list | None
+    ) -> None: ...
+
+    def _recover_from_text_response(self, item_id: str | None) -> None: ...
+
+
 @dataclass(frozen=True)
 class AgentTranscriptionOptions:
     user_transcription: bool = True
@@ -48,9 +90,6 @@ class AgentTranscriptionOptions:
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
     """A function that takes a string (word) as input and returns a list of strings,
     representing the hyphenated parts of the word."""
-
-
-class S2SModel(Protocol): ...
 
 
 @dataclass(frozen=True)
@@ -89,9 +128,9 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
 
-        from livekit.plugins.openai import realtime
-
-        assert isinstance(model, realtime.RealtimeModel)
+        # Remove OpenAI-specific assertion
+        # Instead, just rely on the S2SModel protocol.
+        # assert isinstance(model, realtime.RealtimeModel)
 
         self._model = model
         self._vad = vad
@@ -177,13 +216,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         # Schedule the initialization and start task
         asyncio.create_task(_init_and_start())
 
-        from livekit.plugins.openai import realtime
+        # No import from openai code here.
+        # Just rely on session events defined by S2SSession.
 
         @self._session.on("response_content_added")
-        def _on_content_added(message: realtime.RealtimeContent):
-            if message.content_type == "text":
-                return
-
+        def _on_content_added(message):
+            # message must follow the same interface for either OpenAI or Gemini
             tr_fwd = transcription.TTSSegmentsForwarder(
                 room=self._room,
                 participant=self._room.local_participant,
@@ -202,7 +240,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("response_content_done")
-        def _response_content_done(message: realtime.RealtimeContent):
+        def _response_content_done(message):
             if message.content_type == "text":
                 if self._text_response_retries >= self._max_text_response_retries:
                     raise RuntimeError(
@@ -214,8 +252,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
                 self._text_response_retries += 1
                 logger.warning(
-                    "The OpenAI Realtime API returned a text response instead of audio. "
-                    "Attempting to recover to audio mode...",
+                    "The Realtime API returned a text response instead of audio.",
                     extra={
                         "item_id": message.item_id,
                         "text": message.text,
@@ -236,9 +273,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("input_speech_transcription_completed")
-        def _input_speech_transcription_completed(
-            ev: realtime.InputTranscriptionCompleted,
-        ):
+        def _input_speech_transcription_completed(ev):
             self._stt_forwarder.update(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,

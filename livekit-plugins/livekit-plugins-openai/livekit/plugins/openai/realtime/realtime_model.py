@@ -13,6 +13,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
+from livekit.agents.multimodal import S2SModel, S2SSession
 from typing_extensions import TypedDict
 
 from .._oai_api import build_oai_function_description, create_ai_function_info
@@ -185,7 +186,7 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
-class RealtimeModel:
+class RealtimeModel(S2SModel):
     @overload
     def __init__(
         self,
@@ -438,7 +439,7 @@ class RealtimeModel:
         turn_detection: ServerVadOptions | None = None,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
-    ) -> RealtimeSession:
+    ) -> S2SSession:
         opts = deepcopy(self._default_opts)
         if modalities is not None:
             opts.modalities = modalities
@@ -476,7 +477,7 @@ class RealtimeModel:
             await session.aclose()
 
 
-class RealtimeSession(utils.EventEmitter[EventTypes]):
+class RealtimeSession(utils.EventEmitter[EventTypes], S2SSession):
     class InputAudioBuffer:
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess
