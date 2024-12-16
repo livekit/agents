@@ -60,9 +60,6 @@ jobs:
             ${{ runner.os }}-cache
 
       - uses: actions/setup-python@v5
-        # brew will install python as part of ffmpeg install on MacOS
-        # installing system Python could cause a conflict with `Could not symlink bin/idle3`
-        # if: ${{ matrix.os != 'macos-14-large' }}
         with:
           python-version: ${{ matrix.python_version }}
           cache: "pip"
@@ -70,14 +67,6 @@ jobs:
       - name: Install ffmpeg (Linux)
         if: ${{ matrix.os == 'ubuntu-20.04' || matrix.os == 'namespace-profile-default-arm64' }}
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      - name: "Ensure using homebrew python"
-        if: ${{ matrix.os == 'macos-14-large' }}
-        run: |
-          # brew install python@${{ matrix.python_version }}
-          # brew unlink python@${{ matrix.python_version }}
-          # brew link --force --overwrite python@${{ matrix.python_version }}
-          echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
       # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
       - name: Install libssl 1.1 (Linux 22.04)
@@ -93,6 +82,8 @@ jobs:
         run: |
           echo $PATH
           which python
+          which pip${{ matrix.python_version }}
+          which pip
           brew install ffmpeg
 
       - name: Install ffmpeg (Windows)
@@ -105,6 +96,7 @@ jobs:
           export PIP=pip${{ matrix.python_version }}
           $PIP install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
           $PIP install -r ./tests/test-requirements.txt
+          which pip${{ matrix.python_version }}
           ./livekit-plugins/install_local.sh
 
       - name: Run tests
