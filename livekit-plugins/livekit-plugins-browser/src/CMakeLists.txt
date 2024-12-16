@@ -19,10 +19,6 @@ FetchContent_Declare(
 )
 FetchContent_GetProperties(imgui)
 FetchContent_Populate(imgui)
-execute_process(
-    COMMAND git fetch --unshallow
-    WORKING_DIRECTORY ${imgui_SOURCE_DIR}
-)
 
 FetchContent_MakeAvailable(imgui)
 file(GLOB IMGUI_SOURCES ${imgui_SOURCE_DIR}/*.cpp)
