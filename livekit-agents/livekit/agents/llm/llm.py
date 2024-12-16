@@ -66,6 +66,27 @@ class ToolChoice:
 
 
 TEvent = TypeVar("TEvent")
+T = TypeVar("T")
+
+
+class TrackedChannel(aio.Chan[T]):
+    """
+    A channel that tracks if it has sent a value. We use this to handle
+    timeouts from the LLM - if it has sent a value, we don't want to retry
+    because the audio stream will have already received the chat chunk.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.has_sent = False
+
+    def send_nowait(self, value: T) -> None:
+        self.has_sent = True
+        return super().send_nowait(value)
+
+    async def send(self, value: T) -> None:
+        self.has_sent = True
+        await super().send(value)
 
 
 class LLM(
@@ -128,7 +149,7 @@ class LLMStream(ABC):
         self._fnc_ctx = fnc_ctx
         self._conn_options = conn_options
 
-        self._event_ch = aio.Chan[ChatChunk]()
+        self._event_ch = TrackedChannel[ChatChunk]()
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
@@ -148,6 +169,17 @@ class LLMStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
+                if self._event_ch.has_sent:
+                    logger.warning(
+                        "LLM already sent a value, not retrying",
+                        exc_info=e,
+                        extra={
+                            "llm": self._llm._label,
+                            "attempt": i + 1,
+                        },
+                    )
+                    raise
+
                 if self._conn_options.max_retry == 0:
                     raise
                 elif i == self._conn_options.max_retry:
