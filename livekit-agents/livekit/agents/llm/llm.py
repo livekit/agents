@@ -13,11 +13,11 @@ from typing import (
     Literal,
     TypeVar,
     Union,
-    override,
 )
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
+from typing_extensions import override
 
 from .. import utils
 from ..log import logger
