@@ -4,7 +4,10 @@ set -e
 # Get the directory where the script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-pip install \
+# Use $PIP if set, otherwise default to 'pip'
+: "${PIP:=pip}"
+
+$PIP install \
   "${SCRIPT_DIR}/livekit-plugins-anthropic" \
   "${SCRIPT_DIR}/livekit-plugins-assemblyai" \
   "${SCRIPT_DIR}/livekit-plugins-azure" \

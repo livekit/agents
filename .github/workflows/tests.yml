@@ -64,7 +64,7 @@ jobs:
         # installing system Python could cause a conflict with `Could not symlink bin/idle3`
         if: ${{ matrix.os != 'macos-14-large' }}
         with:
-          python-version: ${{ matrix.python_version}}
+          python-version: ${{ matrix.python_version }}
           cache: "pip"
 
       - name: Install ffmpeg (Linux)
@@ -95,8 +95,9 @@ jobs:
       - name: Install packages
         shell: bash
         run: |
-          pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
-          pip3 install -r ./tests/test-requirements.txt
+          export PIP=pip${{ matrix.python_version }}
+          $PIP install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
+          $PIP install -r ./tests/test-requirements.txt
           ./livekit-plugins/install_local.sh
 
       - name: Run tests
