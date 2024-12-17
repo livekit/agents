@@ -18,15 +18,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          [
-            macos-14-large,
+        os: [
+            # disabled Intel Macs due to pytorch 2.3+ not supporting it
+            # macos-14-large,
             macos-14,
             windows-2019,
             ubuntu-20.04,
             namespace-profile-default-arm64,
           ]
-        python_version: ["3.11"]
+        python_version: ["3.9", "3.12"]
         test_group: ["base"]
         include:
           # Include llm, stt, and tts tests only on Ubuntu 20.04 with Python 3.9
@@ -79,20 +79,7 @@ jobs:
 
       - name: Install ffmpeg (macOS)
         if: ${{ startsWith(matrix.os, 'macos') }}
-        run: |
-          echo $PATH
-          which python
-          which pip${{ matrix.python_version }}
-          which pip
-          brew install ffmpeg
-
-      - name: Debug Python and pip
-        run: |
-          which python
-          python --version
-          which pip
-          pip --version
-          python -m site
+        run: brew install ffmpeg
 
       - name: Install ffmpeg (Windows)
         if: ${{ matrix.os == 'windows-2019' }}
@@ -101,10 +88,8 @@ jobs:
       - name: Install packages
         shell: bash
         run: |
-          export PIP=pip
-          $PIP install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
-          $PIP install -r ./tests/test-requirements.txt
-          which pip${{ matrix.python_version }}
+          pip install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
+          pip install -r ./tests/test-requirements.txt
           ./livekit-plugins/install_local.sh
 
       - name: Run tests
