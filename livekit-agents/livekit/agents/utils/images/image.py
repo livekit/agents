@@ -16,7 +16,6 @@ import io
 from dataclasses import dataclass
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Literal, Optional
-import base64
 
 from livekit import rtc
 
@@ -76,7 +75,7 @@ def import_pil():
 
 def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:
     """Encode a rtc.VideoFrame to a portable image format (JPEG or PNG).
-    
+
     See EncodeOptions for more details.
     """
     import_pil()
