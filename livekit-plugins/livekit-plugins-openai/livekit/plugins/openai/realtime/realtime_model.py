@@ -1568,6 +1568,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 audio_tokens=usage.get("input_token_details", {}).get(
                     "audio_tokens", 0
                 ),
+                cached_tokens_details=MultimodalLLMMetrics.CachedTokenDetails(
+                    text_tokens=usage.get("input_token_details", {}).get("cached_tokens_details", {}).get("text_tokens", 0),
+                    audio_tokens=usage.get("input_token_details", {}).get("cached_tokens_details", {}).get("audio_tokens", 0),
+                ),
             ),
             output_token_details=MultimodalLLMMetrics.OutputTokenDetails(
                 text_tokens=usage.get("output_token_details", {}).get("text_tokens", 0),
