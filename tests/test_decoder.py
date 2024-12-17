@@ -90,29 +90,37 @@ def test_stream_buffer():
 
 
 def test_stream_buffer_large_chunks():
+    import hashlib
+
     buffer = StreamBuffer()
-    large_chunk = b"x" * 1024 * 1024  # 1MB chunk
+    large_chunk = os.urandom(1024 * 1024)  # 1MB of random bytes
     num_chunks = 5
     total_size = 0
     write_completed = threading.Event()
+    input_hasher = hashlib.sha256()
 
     def writer():
         nonlocal total_size
         for _ in range(num_chunks):
             buffer.write(large_chunk)
             total_size += len(large_chunk)
+            input_hasher.update(large_chunk)
         buffer.end_input()
         write_completed.set()
 
     received_size = 0
+    output_hasher = hashlib.sha256()
 
     def reader():
         nonlocal received_size
+        # allow writer to start first
+        time.sleep(1)
         while True:
             chunk = buffer.read(8192)  # Read in 8KB chunks
             if not chunk:
                 break
             received_size += len(chunk)
+            output_hasher.update(chunk)
 
     # Run writer and reader in separate threads
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -125,6 +133,7 @@ def test_stream_buffer_large_chunks():
 
     assert received_size == total_size
     assert total_size == num_chunks * len(large_chunk)
+    assert input_hasher.hexdigest() == output_hasher.hexdigest()
 
 
 def test_stream_buffer_early_close():
