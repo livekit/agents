@@ -14,7 +14,8 @@
 
 import asyncio
 import io
-from typing import AsyncIterator
+import queue
+from typing import AsyncIterator, Literal
 
 from livekit.agents.utils import aio
 
@@ -82,8 +83,77 @@ class StreamBuffer:
         self._buffer.close()
 
 
-class AudioStreamDecoder:
-    """A class that can be used to decode audio stream into PCM AudioFrames.
+AudioCodecType = Literal["opus", "mp3"]
+
+
+class AudioRawStreamDecoder:
+    """Decode a raw stream of audio data without a container."""
+
+    def __init__(self, codec_type: AudioCodecType):
+        self._codec_type = codec_type
+        self._codec = av.CodecContext.create(self._codec_type, "r")
+        self._queue = queue.Queue()
+        self._input_finished = False
+        self._loop = asyncio.get_event_loop()
+        self._started = False
+        self._output_ch = aio.Chan[rtc.AudioFrame]()
+        self._output_finished = False
+
+    def push(self, chunk: bytes):
+        self._queue.put(chunk)
+        if not self._started:
+            self._started = True
+            self._loop.run_in_executor(None, self._decode_loop)
+
+    def end_input(self):
+        self._input_finished = True
+
+    def _decode_loop(self):
+        while not (self._input_finished and self._queue.empty()):
+            chunk = self._queue.get(timeout=0.05)
+            print(f"read {len(chunk)} bytes")
+            if not chunk:
+                continue
+
+            # Decode the audio packets
+            rtc_frames: list[rtc.AudioFrame] = []
+            packets = self._codec.parse(chunk)
+            print(f"parsed {len(packets)} packets")
+            for packet in packets:
+                frames: list[av.AudioFrame] = self._codec.decode(packet)
+                for frame in frames:
+                    nchannels = len(frame.layout.channels)
+                    data = frame.to_ndarray().tobytes()
+                    rtc_frames.append(
+                        rtc.AudioFrame(
+                            data=data,
+                            num_channels=nchannels,
+                            sample_rate=frame.sample_rate,
+                            samples_per_channel=frame.samples / nchannels,
+                        )
+                    )
+            num_frames = len(rtc_frames)
+            if num_frames == 1:
+                return rtc_frames[0]
+            elif num_frames > 1:
+                return rtc.combine_audio_frames(rtc_frames)
+        self._output_finished = True
+
+    def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
+        return self
+
+    async def __anext__(self) -> rtc.AudioFrame:
+        if self._output_finished and self._output_ch.empty():
+            raise StopAsyncIteration
+        return await self._output_ch.__anext__()
+
+    async def aclose(self):
+        self._end_input()
+        self._output_ch.close()
+
+
+class AudioContainerStreamDecoder:
+    """A class that can be used to decode audio stream (in a container) into PCM AudioFrames.
 
     Decoders are stateful, and it should not be reused across multiple streams. Each decoder
     is designed to decode a single stream.
