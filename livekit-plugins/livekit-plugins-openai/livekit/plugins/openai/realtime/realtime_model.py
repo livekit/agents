@@ -949,7 +949,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         # filter out messages that are not function calls and content is None
         filtered_messages = [
-            msg for msg in new_ctx.messages if msg.tool_call_id or msg.content is not None
+            msg
+            for msg in new_ctx.messages
+            if msg.tool_call_id or msg.content is not None
         ]
         changes = utils._compute_changes(
             original_ctx.messages, filtered_messages, key_fnc=lambda x: x.id
