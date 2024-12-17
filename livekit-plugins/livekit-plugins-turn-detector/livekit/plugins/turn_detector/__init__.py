@@ -27,11 +27,14 @@ class EOUPlugin(Plugin):
         super().__init__(__name__, __version__, __package__, logger)
 
     def download_files(self) -> None:
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from optimum.onnxruntime import ORTModelForCausalLM
+        from transformers import AutoTokenizer
 
         from .eou import HG_MODEL
 
-        AutoModelForCausalLM.from_pretrained(HG_MODEL)
+        ORTModelForCausalLM.from_pretrained(
+            HG_MODEL, use_cache=False, use_io_binding=False
+        )
         AutoTokenizer.from_pretrained(HG_MODEL)
 
 

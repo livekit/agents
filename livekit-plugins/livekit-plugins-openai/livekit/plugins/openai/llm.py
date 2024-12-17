@@ -290,7 +290,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_fireworks(
         *,
-        model: str = "accounts/fireworks/models/llama-v3p1-70b-instruct",
+        model: str = "accounts/fireworks/models/llama-v3p3-70b-instruct",
         api_key: str | None = None,
         base_url: str | None = "https://api.fireworks.ai/inference/v1",
         client: openai.AsyncClient | None = None,
