@@ -16,6 +16,7 @@ import io
 from dataclasses import dataclass
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Literal, Optional
+import base64
 
 from livekit import rtc
 
@@ -25,26 +26,42 @@ if TYPE_CHECKING:
 
 @dataclass
 class EncodeOptions:
+    """Options for encoding rtc.VideoFrame to portable image formats."""
+
     format: Literal["JPEG", "PNG"] = "JPEG"
+    """The format to encode the image."""
+
     resize_options: Optional["ResizeOptions"] = None
+    """Options for resizing the image."""
+
+    quality: int | None = 75
+    """Image compression quality, 0-100. Only applies to JPEG."""
 
 
 @dataclass
 class ResizeOptions:
+    """Options for resizing rtc.VideoFrame as part of encoding to a portable image format."""
+
     width: int
+    """The desired resize width (in)"""
+
     height: int
+    """The desired height to resize the image to."""
+
     strategy: Literal[
-        # Fit the image into the provided dimensions, with letterboxing
         "center_aspect_fit",
-        # Fill the provided dimensions, with cropping
         "center_aspect_cover",
-        # Fit the image into the provided dimensions, preserving its original aspect ratio
         "scale_aspect_fit",
-        # Fill the provided dimensions, preserving its original aspect ratio (image will be larger than the provided dimensions)
         "scale_aspect_cover",
-        # Precisely resize the image to the provided dimensions
         "skew",
     ]
+    """The strategy to use when resizing the image:
+    - center_aspect_fit: Fit the image into the provided dimensions, with letterboxing
+    - center_aspect_cover: Fill the provided dimensions, with cropping
+    - scale_aspect_fit: Fit the image into the provided dimensions, preserving its original aspect ratio
+    - scale_aspect_cover: Fill the provided dimensions, preserving its original aspect ratio (image will be larger than the provided dimensions)
+    - skew: Precisely resize the image to the provided dimensions
+    """
 
 
 def import_pil():
@@ -57,12 +74,19 @@ def import_pil():
         )
 
 
-def encode(frame: rtc.VideoFrame, options: EncodeOptions):
+def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:
+    """Encode a rtc.VideoFrame to a portable image format (JPEG or PNG).
+    
+    See EncodeOptions for more details.
+    """
     import_pil()
     img = _image_from_frame(frame)
     resized = _resize_image(img, options)
     buffer = io.BytesIO()
-    resized.save(buffer, options.format)
+    kwargs = {}
+    if options.format == "JPEG":
+        kwargs["quality"] = options.quality
+    resized.save(buffer, options.format, **kwargs)
     buffer.seek(0)
     return buffer.read()
 

@@ -32,13 +32,14 @@ class ChatImage:
     You may need to consult your LLM provider's documentation on supported URL types.
 
     ```python
-    # With a VideoFrame, which will be automatically converted to a data URL internally
+    # Pass a VideoFrame directly, which will be automatically converted to a JPEG data URL internally
     async for event in rtc.VideoStream(video_track):
         chat_image = ChatImage(image=event.frame)
         # this instance is now available for your ChatContext
 
-    # With a data URL
-    chat_image = ChatImage(image=f"data:image/jpeg;base64,{base64_encoded_image}")
+    # Encode your VideoFrame with more control, and pass the result as a data URL
+    image_bytes = agents.utils.images.encode(event.frame, agents.utils.images.EncodeOptions(format="PNG", quality=80))
+    chat_image = ChatImage(image=f"data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}")
 
     # With an external URL
     chat_image = ChatImage(image="https://example.com/image.jpg")
