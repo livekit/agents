@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Literal, Protocol
+from typing import Callable, Literal
 
 import aiohttp
 from livekit import rtc
@@ -28,46 +29,45 @@ EventTypes = Literal[
 ]
 
 
-class S2SModel(Protocol):
-    """Protocol that both OpenAI and Gemini realtime models must implement."""
+class MultimodalModel(ABC):
+    """Abstract Base Class for multimodal models."""
 
+    @abstractmethod
     def session(
         self,
         *,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
-    ) -> "S2SSession": ...
+    ) -> MultimodalSession:
+        """Create a new session."""
+        pass
 
 
-class S2SSession(Protocol):
-    """A protocol for a session object returned by S2SModel.session().
-
-    The session should:
-    - Provide events: "response_content_added", "response_content_done", etc.
-    - Provide methods like input_audio_buffer.append(), response.create(), etc.
-    """
+class MultimodalSession(ABC):
+    """Abstract Base Class for a session object returned by S2SModel.session()."""
 
     @property
-    def fnc_ctx(self) -> llm.FunctionContext | None: ...
+    @abstractmethod
+    def fnc_ctx(self) -> llm.FunctionContext | None:
+        pass
 
     @fnc_ctx.setter
-    def fnc_ctx(self, value: llm.FunctionContext | None) -> None: ...
+    @abstractmethod
+    def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
+        pass
 
-    def chat_ctx_copy(self) -> llm.ChatContext: ...
+    @abstractmethod
+    def chat_ctx_copy(self) -> llm.ChatContext:
+        pass
 
-    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None: ...
+    @abstractmethod
+    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
+        pass
 
-    @property
-    def input_audio_buffer(self): ...
-
-    @property
-    def response(self): ...
-
-    def _update_conversation_item_content(
-        self, item_id: str, content: str | list | None
-    ) -> None: ...
-
-    def _recover_from_text_response(self, item_id: str | None) -> None: ...
+    @abstractmethod
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        """Push an audio frame to the model for processing."""
+        pass
 
 
 @dataclass(frozen=True)
@@ -101,7 +101,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        model: S2SModel,
+        model: MultimodalModel,
         vad: vad.VAD | None = None,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
@@ -112,7 +112,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         """Create a new MultimodalAgent.
 
         Args:
-            model: S2SModel instance.
+            model: MultimodalModel instance.
             vad: Voice Activity Detection (VAD) instance.
             chat_ctx: Chat context for the assistant.
             fnc_ctx: Function context for the assistant.
@@ -401,7 +401,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         )
         async for frame in self._input_audio_ch:
             for f in bstream.write(frame.data.tobytes()):
-                self._session.input_audio_buffer.append(f)
+                self._session.push_audio(f)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if self._linked_participant is None:
