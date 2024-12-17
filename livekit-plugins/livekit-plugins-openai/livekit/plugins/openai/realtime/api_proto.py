@@ -27,6 +27,16 @@ ResponseStatus = Literal[
     "in_progress", "completed", "incomplete", "cancelled", "failed"
 ]
 
+# https://platform.openai.com/docs/models/gp#gpt-4o-realtime
+OpenAIModel = Literal[
+    "gpt-4o-realtime-preview",
+    "gpt-4o-realtime-preview-2024-10-01",
+    "gpt-4o-realtime-preview-2024-12-17",
+    "gpt-4o-mini-realtime-preview",
+    "gpt-4o-mini-realtime-preview-2024-12-17",
+]
+DefaultOpenAIModel = "gpt-4o-realtime-preview"
+
 
 class TextContent(TypedDict):
     type: Literal["text"]

@@ -38,11 +38,6 @@ EventTypes = Literal[
     "metrics_collected",
 ]
 
-OpenAIModel = Literal[
-    "gpt-4o-realtime-preview-2024-12-17", "gpt-4o-mini-realtime-preview-2024-12-17"
-]
-DefaultOpenAIModel = "gpt-4o-realtime-preview-2024-12-17"
-
 
 @dataclass
 class InputTranscriptionCompleted:
@@ -157,7 +152,7 @@ class RealtimeError:
 
 @dataclass
 class _ModelOptions:
-    model: OpenAIModel | str
+    model: api_proto.OpenAIModel | str
     modalities: list[api_proto.Modality]
     instructions: str
     voice: api_proto.Voice
@@ -197,7 +192,7 @@ class RealtimeModel:
         *,
         instructions: str = "",
         modalities: list[api_proto.Modality] = ["text", "audio"],
-        model: OpenAIModel | str = DefaultOpenAIModel,
+        model: api_proto.OpenAIModel | str = api_proto.DefaultOpenAIModel,
         voice: api_proto.Voice = "alloy",
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
@@ -240,7 +235,7 @@ class RealtimeModel:
         *,
         instructions: str = "",
         modalities: list[api_proto.Modality] = ["text", "audio"],
-        model: OpenAIModel | None = DefaultOpenAIModel,
+        model: api_proto.OpenAIModel | None = api_proto.DefaultOpenAIModel,
         voice: api_proto.Voice = "alloy",
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
