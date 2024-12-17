@@ -98,7 +98,7 @@ def test_func_with_optional_parameter():
 
     assert arg_info.name == "param"
     assert arg_info.description == "An optional integer parameter"
-    assert arg_info.type is Optional[int]
+    assert arg_info.type == Optional[int]
     assert arg_info.default is None
     assert arg_info.choices == ()
     assert build_arg_info["description"] == arg_info.description
@@ -110,7 +110,7 @@ def test_func_with_optional_parameter():
 
     assert arg_info.name == "param2"
     assert arg_info.description == ""
-    assert arg_info.type is Optional[List[str]]
+    assert arg_info.type == Optional[List[str]]
     assert arg_info.default is None
     assert arg_info.choices == ()
     assert build_arg_info["type"] == "array"
