@@ -37,8 +37,12 @@ class ChatImage:
         chat_image = ChatImage(image=event.frame)
         # this instance is now available for your ChatContext
 
-    # Encode your VideoFrame with more control, and pass the result as a data URL
-    image_bytes = agents.utils.images.encode(event.frame, agents.utils.images.EncodeOptions(format="PNG", quality=80))
+    # Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)
+    from livekit.agents.utils.images import encode, EncodeOptions, ResizeOptions
+    image_bytes = encode(event.frame, EncodeOptions(
+        format="PNG",
+        resize_options=ResizeOptions(width=512, height=512, strategy="scale_aspect_fit")
+    ))
     chat_image = ChatImage(image=f"data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}")
 
     # With an external URL
