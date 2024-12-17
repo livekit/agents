@@ -68,6 +68,7 @@ def test_func_with_optional_parameter():
                 Optional[int], llm.TypeInfo(description="An optional integer parameter")
             ] = None,
             param2: Optional[List[str]] = None,
+            param3: str = 5,
         ):
             pass
 
@@ -78,14 +79,18 @@ def test_func_with_optional_parameter():
 
     fnc_info = fnc_ctx.ai_functions["optional_function"]
     build_info = _oai_api.build_oai_function_description(fnc_info)
+    print(build_info)
     assert fnc_info.name == build_info["function"]["name"]
     assert fnc_info.description == build_info["function"]["description"]
     assert "param" in fnc_info.arguments
     assert "param2" in fnc_info.arguments
+    assert "param3" in fnc_info.arguments
     assert "param" in build_info["function"]["parameters"]["properties"]
     assert "param2" in build_info["function"]["parameters"]["properties"]
+    assert "param3" in build_info["function"]["parameters"]["properties"]
     assert "param" not in build_info["function"]["parameters"]["required"]
     assert "param2" not in build_info["function"]["parameters"]["required"]
+    assert "param3" not in build_info["function"]["parameters"]["required"]
 
     # Check 'param'
     arg_info = fnc_info.arguments["param"]
@@ -94,7 +99,7 @@ def test_func_with_optional_parameter():
     assert arg_info.name == "param"
     assert arg_info.description == "An optional integer parameter"
     assert arg_info.type is Optional[int]
-    assert arg_info.default is _empty
+    assert arg_info.default is None
     assert arg_info.choices == ()
     assert build_arg_info["description"] == arg_info.description
     assert build_arg_info["type"] == "number"
@@ -110,6 +115,17 @@ def test_func_with_optional_parameter():
     assert arg_info.choices == ()
     assert build_arg_info["type"] == "array"
     assert build_arg_info["items"]["type"] == "string"
+
+    # check 'param3'
+    arg_info = fnc_info.arguments["param3"]
+    build_arg_info = build_info["function"]["parameters"]["properties"]["param3"]
+
+    assert arg_info.name == "param3"
+    assert arg_info.description == ""
+    assert arg_info.type is str
+    assert arg_info.default == 5
+    assert arg_info.choices == ()
+    assert build_arg_info["type"] == "string"
 
 
 def test_func_with_list_parameter():
