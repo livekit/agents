@@ -20,6 +20,7 @@ import typing
 from typing import Any
 
 from livekit.agents.llm import function_context, llm
+from livekit.agents.llm.function_context import _is_optional_type
 
 __all__ = ["build_oai_function_description", "create_ai_function_info"]
 
@@ -55,28 +56,28 @@ def create_ai_function_info(
             continue
 
         arg_value = parsed_arguments[arg_info.name]
-        if typing.get_origin(arg_info.type) is not None:
+        is_optional, inner_th = _is_optional_type(arg_info.type)
+
+        if typing.get_origin(inner_th) is not None:
             if not isinstance(arg_value, list):
                 raise ValueError(
                     f"AI function {fnc_name} argument {arg_info.name} should be a list"
                 )
 
-            inner_type = typing.get_args(arg_info.type)[0]
+            inner_type = typing.get_args(inner_th)[0]
             sanitized_value = [
                 _sanitize_primitive(
                     value=v,
                     expected_type=inner_type,
                     choices=arg_info.choices,
-                    is_optional=arg_info.is_optional,
                 )
                 for v in arg_value
             ]
         else:
             sanitized_value = _sanitize_primitive(
                 value=arg_value,
-                expected_type=arg_info.type,
+                expected_type=inner_th,
                 choices=arg_info.choices,
-                is_optional=arg_info.is_optional,
             )
 
         sanitized_arguments[arg_info.name] = sanitized_value
@@ -109,8 +110,10 @@ def build_oai_function_description(
         if arg_info.description:
             p["description"] = arg_info.description
 
-        if typing.get_origin(arg_info.type) is list:
-            inner_type = typing.get_args(arg_info.type)[0]
+        is_optional, inner_th = _is_optional_type(arg_info.type)
+
+        if typing.get_origin(inner_th) is list:
+            inner_type = typing.get_args(inner_th)[0]
             p["type"] = "array"
             p["items"] = {}
             p["items"]["type"] = type2str(inner_type)
@@ -118,11 +121,14 @@ def build_oai_function_description(
             if arg_info.choices:
                 p["items"]["enum"] = arg_info.choices
         else:
-            p["type"] = type2str(arg_info.type)
+            p["type"] = type2str(inner_th)
             if arg_info.choices:
                 p["enum"] = arg_info.choices
-            if arg_info.type is int and arg_info.choices and capabilities is not None:
-                if not capabilities.supports_choices_on_int:
+                if (
+                    inner_th is int
+                    and capabilities
+                    and not capabilities.supports_choices_on_int
+                ):
                     raise ValueError(
                         f"Parameter '{arg_info.name}' uses 'choices' with 'int', which is not supported by this model."
                     )
@@ -153,11 +159,8 @@ def build_oai_function_description(
 
 
 def _sanitize_primitive(
-    *, value: Any, expected_type: type, choices: tuple | None, is_optional: bool = False
+    *, value: Any, expected_type: type, choices: tuple | None
 ) -> Any:
-    if is_optional and value is None:
-        return None
-
     if expected_type is str:
         if not isinstance(value, str):
             raise ValueError(f"expected str, got {type(value)}")

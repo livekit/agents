@@ -41,6 +41,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.llm import ToolChoice
+from livekit.agents.llm.function_context import _is_optional_type
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import anthropic
@@ -517,13 +518,15 @@ def _create_ai_function_info(
             continue
 
         arg_value = parsed_arguments[arg_info.name]
-        if get_origin(arg_info.type) is not None:
+        is_optional, inner_th = _is_optional_type(arg_info.type)
+
+        if get_origin(inner_th) is not None:
             if not isinstance(arg_value, list):
                 raise ValueError(
                     f"AI function {fnc_name} argument {arg_info.name} should be a list"
                 )
 
-            inner_type = get_args(arg_info.type)[0]
+            inner_type = get_args(inner_th)[0]
             sanitized_value = [
                 _sanitize_primitive(
                     value=v, expected_type=inner_type, choices=arg_info.choices
@@ -532,7 +535,7 @@ def _create_ai_function_info(
             ]
         else:
             sanitized_value = _sanitize_primitive(
-                value=arg_value, expected_type=arg_info.type, choices=arg_info.choices
+                value=arg_value, expected_type=inner_th, choices=arg_info.choices
             )
 
         sanitized_arguments[arg_info.name] = sanitized_value
@@ -568,8 +571,10 @@ def _build_function_description(
         if arg_info.description:
             p["description"] = arg_info.description
 
-        if get_origin(arg_info.type) is list:
-            inner_type = get_args(arg_info.type)[0]
+        is_optional, inner_th = _is_optional_type(arg_info.type)
+
+        if get_origin(inner_th) is list:
+            inner_type = get_args(inner_th)[0]
             p["type"] = "array"
             p["items"] = {}
             p["items"]["type"] = type2str(inner_type)
@@ -577,7 +582,7 @@ def _build_function_description(
             if arg_info.choices:
                 p["items"]["enum"] = arg_info.choices
         else:
-            p["type"] = type2str(arg_info.type)
+            p["type"] = type2str(inner_th)
             if arg_info.choices:
                 p["enum"] = arg_info.choices
 
