@@ -83,7 +83,7 @@ def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:
     resized = _resize_image(img, options)
     buffer = io.BytesIO()
     kwargs = {}
-    if options.format == "JPEG":
+    if options.format == "JPEG" and options.quality is not None:
         kwargs["quality"] = options.quality
     resized.save(buffer, options.format, **kwargs)
     buffer.seek(0)
