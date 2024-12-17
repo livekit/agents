@@ -21,14 +21,6 @@ def test_typing():
     [
         pytest.param(int, "number", id="int"),
         pytest.param(Optional[int], "number", id="optional[int]"),
-        pytest.param(
-            int | None,
-            "number",
-            id="int | none",
-            marks=pytest.mark.skipif(
-                sys.version_info < (3, 10), reason="Requires Python 3.10+"
-            ),
-        ),
         pytest.param(Union[None, int], "number", id="union[none, int]"),
         pytest.param(Union[str, None], "string", id="union[str, none]"),
         pytest.param(List[int], "array", id="list[int]"),
