@@ -66,7 +66,7 @@ def test_func_with_optional_parameter():
             self,
             param: Annotated[
                 Optional[int], llm.TypeInfo(description="An optional integer parameter")
-            ],
+            ] = None,
             param2: Optional[List[str]] = None,
         ):
             pass
