@@ -27,7 +27,11 @@ def prewarm(proc: JobProcess):
 # 2. save your service account credentials and set the following environments:
 #    * GOOGLE_APPLICATION_CREDENTIALS to the path of the service account key file
 #    * GOOGLE_CLOUD_PROJECT to your Google Cloud project ID
-#
+# 3. the following services are enabled on your Google Cloud project:
+#    * Vertex AI
+#    * Cloud Speech-to-Text API
+#    * Cloud Text-to-Speech API
+
 # Read more about authentication with Google: https://cloud.google.com/docs/authentication/application-default-credentials
 
 
