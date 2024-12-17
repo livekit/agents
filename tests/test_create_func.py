@@ -68,7 +68,7 @@ def test_func_with_optional_parameter():
                 Optional[int], llm.TypeInfo(description="An optional integer parameter")
             ] = None,
             param2: Optional[List[str]] = None,
-            param3: str = 5,
+            param3: str = "A string",
         ):
             pass
 
@@ -123,7 +123,7 @@ def test_func_with_optional_parameter():
     assert arg_info.name == "param3"
     assert arg_info.description == ""
     assert arg_info.type is str
-    assert arg_info.default == 5
+    assert arg_info.default == "A string"
     assert arg_info.choices == ()
     assert build_arg_info["type"] == "string"
 
