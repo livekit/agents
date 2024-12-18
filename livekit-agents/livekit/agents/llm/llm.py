@@ -191,6 +191,8 @@ class LLMStream(ABC):
                         extra={
                             "llm": self._llm._label,
                             "attempt": i + 1,
+                            "num_sends": self._event_ch.num_sends,
+                            "num_receives": self._event_ch.num_receives,
                         },
                     )
                     raise
