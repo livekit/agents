@@ -33,7 +33,6 @@ from livekit.agents import (
 from livekit.agents.multimodal.multimodal_agent import EventTypes
 from livekit.agents.llm import ChatMessage
 
-
 class ConversationPersistor(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
@@ -69,7 +68,6 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         
         self._main_task = asyncio.create_task(self._main_atask())
         self.main_task()
-   
 
     @property
     def log(self) -> str | None:
@@ -96,6 +94,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         self._log = newlog 
     
     async def _main_atask(self) -> None:
+    # Writes to file asynchronously 
         while True:
             log = await self._log_q.get()
 
@@ -116,35 +115,37 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
                     await file.write("\n" + log.time + " " + log.role + " " + log.transcription)
 
     async def aclose(self) -> None:
+    # Exits 
         self._log_q.put_nowait(None)
         await self._main_task
 
     def main_task(self) -> None:
+    # Listens for emitted MultimodalAgent events
         @self._model.on("user_started_speaking")
-        def _user_started_speaking(self):
+        def _user_started_speaking():
             event = EventLog(eventname="user_started_speaking")
             self._log_q.put_nowait(event)
 
         @self._model.on("user_stopped_speaking")
-        def _user_stopped_speaking(self):
+        def _user_stopped_speaking():
             event = EventLog(eventname="user_stopped_speaking")
             self._log_q.put_nowait(event)
         
         @self._model.on("agent_started_speaking")
-        def _agent_started_speaking(self):
+        def _agent_started_speaking():
             event = EventLog(eventname="agent_started_speaking")
             self._log_q.put_nowait(event)
         
         @self._model.on("agent_stopped_speaking")
-        def _agent_stopped_speaking(self):
+        def _agent_stopped_speaking():
             transcription = TranscriptionLog(role="agent", transcription=(self._model._playing_handle._tr_fwd.played_text)[1:])
             self._log_q.put_nowait(transcription)
 
             event = EventLog(eventname="agent_stopped_speaking")
-            self._log_q.put_nowait(transcription)
+            self._log_q.put_nowait(event)
 
         @self._model.on("user_speech_committed")
-        def _user_speech_committed(self, *, user_msg: ChatMessage):
+        def _user_speech_committed(user_msg: ChatMessage):
             transcription = TranscriptionLog(role="user", transcription=user_msg.content)
             self._log_q.put_nowait(transcription)
 
@@ -152,23 +153,22 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
             self._log_q.put_nowait(event)
 
         @self._model.on("agent_speech_committed")
-        def _agent_speech_committed(self):
+        def _agent_speech_committed():
             event = EventLog(eventname="agent_speech_committed")
             self._log_q.put_nowait(event)
 
         @self._model.on("agent_speech_interrupted")
-        def _agent_speech_interrupted(self):
+        def _agent_speech_interrupted():
             event = EventLog(eventname="agent_speech_interrupted")
             self._log_q.put_nowait(event)
 
         @self._model.on("function_calls_collected")
-        def _function_calls_collected(self):
+        def _function_calls_collected():
             event = EventLog(eventname="function_calls_collected")
             self._log_q.put_nowait(event)
 
-
         @self._model.on("function_calls_finished")
-        def _function_calls_finished(self):
+        def _function_calls_finished():
             event = EventLog(eventname="function_calls_finished")
             self._log_q.put_nowait(event)
 
