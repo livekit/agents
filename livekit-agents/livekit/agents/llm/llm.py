@@ -98,9 +98,9 @@ class TrackedChannel(aio.Chan[T]):
         return await super().recv()
 
     @override
-    async def recv_nowait(self) -> T:
+    def recv_nowait(self) -> T:
         self.has_received = True
-        return await super().recv_nowait()
+        return super().recv_nowait()
 
 
 class LLM(
