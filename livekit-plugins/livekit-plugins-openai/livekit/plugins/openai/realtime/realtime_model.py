@@ -235,7 +235,7 @@ class RealtimeModel:
         *,
         instructions: str = "",
         modalities: list[api_proto.Modality] = ["text", "audio"],
-        model: api_proto.OpenAIModel | None = api_proto.DefaultOpenAIModel,
+        model: api_proto.OpenAIModel | str = api_proto.DefaultOpenAIModel,
         voice: api_proto.Voice = "alloy",
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
