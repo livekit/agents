@@ -905,7 +905,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             # create a nested speech handle
             extra_tools_messages = [
-                ChatMessage.create_tool_calls(tool_calls_info, text=collected_text)
+                ChatMessage.create_tool_calls(tool_calls_info)
             ]
             extra_tools_messages.extend(tool_calls_results)
 
