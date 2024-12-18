@@ -507,10 +507,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
             message_content = message.content
             tool_call_id = message.tool_call_id
-            if not tool_call_id and message_content is None:
-                # not a function call while the message content is None
-                fut.set_result(False)
-                return fut
             event: api_proto.ClientEvent.ConversationItemCreate | None = None
             if tool_call_id:
                 if message.role == "tool":
@@ -952,8 +948,14 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         """
         original_ctx = self._remote_conversation_items.to_chat_context()
 
+        # filter out messages that are not function calls and content is None
+        filtered_messages = [
+            msg
+            for msg in new_ctx.messages
+            if msg.tool_call_id or msg.content is not None
+        ]
         changes = utils._compute_changes(
-            original_ctx.messages, new_ctx.messages, key_fnc=lambda x: x.id
+            original_ctx.messages, filtered_messages, key_fnc=lambda x: x.id
         )
         logger.debug(
             "sync chat context",
