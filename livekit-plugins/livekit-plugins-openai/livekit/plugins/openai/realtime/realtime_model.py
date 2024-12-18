@@ -1549,6 +1549,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         duration = time.time() - response._created_timestamp
 
         usage = response.usage or {}  # type: ignore
+        input_token_details = usage.get("input_token_details", {})
         metrics = MultimodalLLMMetrics(
             timestamp=response._created_timestamp,
             request_id=response.id,
@@ -1562,16 +1563,18 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             tokens_per_second=usage.get("output_tokens", 0) / duration,
             error=metrics_error,
             input_token_details=MultimodalLLMMetrics.InputTokenDetails(
-                cached_tokens=usage.get("input_token_details", {}).get(
-                    "cached_tokens", 0
-                ),
+                cached_tokens=input_token_details.get("cached_tokens", 0),
                 text_tokens=usage.get("input_token_details", {}).get("text_tokens", 0),
                 audio_tokens=usage.get("input_token_details", {}).get(
                     "audio_tokens", 0
                 ),
                 cached_tokens_details=MultimodalLLMMetrics.CachedTokenDetails(
-                    text_tokens=usage.get("input_token_details", {}).get("cached_tokens_details", {}).get("text_tokens", 0),
-                    audio_tokens=usage.get("input_token_details", {}).get("cached_tokens_details", {}).get("audio_tokens", 0),
+                    text_tokens=input_token_details.get(
+                        "cached_tokens_details", {}
+                    ).get("text_tokens", 0),
+                    audio_tokens=input_token_details.get(
+                        "cached_tokens_details", {}
+                    ).get("audio_tokens", 0),
                 ),
             ),
             output_token_details=MultimodalLLMMetrics.OutputTokenDetails(

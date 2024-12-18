@@ -155,6 +155,12 @@ class InputTokenDetails(TypedDict):
     cached_tokens: int
     text_tokens: int
     audio_tokens: int
+    cached_tokens_details: CachedTokenDetails
+
+
+class CachedTokenDetails(TypedDict):
+    text_tokens: int
+    audio_tokens: int
 
 
 class OutputTokenDetails(TypedDict):
