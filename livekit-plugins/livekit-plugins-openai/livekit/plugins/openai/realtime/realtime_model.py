@@ -182,6 +182,7 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
     prefix_padding_ms=300,
     silence_duration_ms=500,
 )
+
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
