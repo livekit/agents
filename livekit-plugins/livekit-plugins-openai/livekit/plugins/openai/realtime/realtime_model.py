@@ -152,7 +152,7 @@ class RealtimeError:
 
 @dataclass
 class _ModelOptions:
-    model: str | None
+    model: api_proto.OpenAIModel | str
     modalities: list[api_proto.Modality]
     instructions: str
     voice: api_proto.Voice
@@ -182,6 +182,7 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
     prefix_padding_ms=300,
     silence_duration_ms=500,
 )
+
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
@@ -192,7 +193,7 @@ class RealtimeModel:
         *,
         instructions: str = "",
         modalities: list[api_proto.Modality] = ["text", "audio"],
-        model: str = "gpt-4o-realtime-preview-2024-10-01",
+        model: api_proto.OpenAIModel | str = api_proto.DefaultOpenAIModel,
         voice: api_proto.Voice = "alloy",
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
@@ -235,7 +236,7 @@ class RealtimeModel:
         *,
         instructions: str = "",
         modalities: list[api_proto.Modality] = ["text", "audio"],
-        model: str | None = "gpt-4o-realtime-preview-2024-10-01",
+        model: api_proto.OpenAIModel | str = api_proto.DefaultOpenAIModel,
         voice: api_proto.Voice = "alloy",
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
@@ -1548,6 +1549,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         duration = time.time() - response._created_timestamp
 
         usage = response.usage or {}  # type: ignore
+        input_token_details = usage.get("input_token_details", {})
         metrics = MultimodalLLMMetrics(
             timestamp=response._created_timestamp,
             request_id=response.id,
@@ -1561,16 +1563,18 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             tokens_per_second=usage.get("output_tokens", 0) / duration,
             error=metrics_error,
             input_token_details=MultimodalLLMMetrics.InputTokenDetails(
-                cached_tokens=usage.get("input_token_details", {}).get(
-                    "cached_tokens", 0
-                ),
+                cached_tokens=input_token_details.get("cached_tokens", 0),
                 text_tokens=usage.get("input_token_details", {}).get("text_tokens", 0),
                 audio_tokens=usage.get("input_token_details", {}).get(
                     "audio_tokens", 0
                 ),
                 cached_tokens_details=MultimodalLLMMetrics.CachedTokenDetails(
-                    text_tokens=usage.get("input_token_details", {}).get("cached_tokens_details", {}).get("text_tokens", 0),
-                    audio_tokens=usage.get("input_token_details", {}).get("cached_tokens_details", {}).get("audio_tokens", 0),
+                    text_tokens=input_token_details.get(
+                        "cached_tokens_details", {}
+                    ).get("text_tokens", 0),
+                    audio_tokens=input_token_details.get(
+                        "cached_tokens_details", {}
+                    ).get("audio_tokens", 0),
                 ),
             ),
             output_token_details=MultimodalLLMMetrics.OutputTokenDetails(
