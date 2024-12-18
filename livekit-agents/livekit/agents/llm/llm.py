@@ -72,34 +72,35 @@ T = TypeVar("T")
 
 class TrackedChannel(aio.Chan[T]):
     """
-    A channel that tracks if it has sent or receiveda value. We use this to handle
-    timeouts from the LLM - someone has received a value from the LLM, we don't want
-    to retry because the audio stream will have already received the chat chunk.
+    A channel that tracks the number of times it has sent or received a value. We
+    use this to handle timeouts from the LLM - someone has received a value from
+    the LLM, we don't want to retry because the audio stream will have already
+    received the chat chunk.
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self.has_sent = False
-        self.has_received = False
+        self.num_sends = 0
+        self.num_receives = 0
 
     @override
     def send_nowait(self, value: T) -> None:
-        self.has_sent = True
+        self.num_sends += 1
         return super().send_nowait(value)
 
     @override
     async def send(self, value: T) -> None:
-        self.has_sent = True
+        self.num_sends += 1
         await super().send(value)
 
     @override
     async def recv(self) -> T:
-        self.has_received = True
+        self.num_receives += 1
         return await super().recv()
 
     @override
     def recv_nowait(self) -> T:
-        self.has_received = True
+        self.num_receives += 1
         return super().recv_nowait()
 
 
@@ -183,7 +184,7 @@ class LLMStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
-                if self._event_ch.has_received:
+                if self._event_ch.num_receives > 0:
                     logger.warning(
                         "LLM already sent a value that was used, not retrying",
                         exc_info=e,
