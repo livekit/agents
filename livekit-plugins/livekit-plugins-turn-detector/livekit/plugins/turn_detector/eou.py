@@ -66,8 +66,8 @@ class _EUORunner(_InferenceRunner):
         return text
 
     def initialize(self) -> None:
-        from huggingface_hub import errors
         import onnxruntime as ort
+        from huggingface_hub import errors
         from transformers import AutoTokenizer
 
         try:
