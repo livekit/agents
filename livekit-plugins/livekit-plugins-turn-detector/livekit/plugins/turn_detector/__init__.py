@@ -30,6 +30,7 @@ class EOUPlugin(Plugin):
         from transformers import AutoTokenizer
 
         from .eou import HG_MODEL
+
         AutoTokenizer.from_pretrained(HG_MODEL)
 
 
