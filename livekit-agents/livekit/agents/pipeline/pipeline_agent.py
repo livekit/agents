@@ -801,12 +801,20 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
+        message_id_committed: str | None = None
         if (
             collected_text
             and speech_handle.add_to_chat_ctx
             and (not user_question or speech_handle.user_committed)
         ):
             if speech_handle.extra_tools_messages:
+                msgs = self._chat_ctx.messages
+                if msgs and msgs[-1].id == speech_handle.fnc_text_message_id:
+                    # remove text message alongside function calls if it's the last in the ctx
+                    msgs.pop()
+                elif speech_handle.extra_tools_messages[0].tool_calls:
+                    # remove the content of the tool call message
+                    speech_handle.extra_tools_messages[0].content = ""
                 self._chat_ctx.messages.extend(speech_handle.extra_tools_messages)
 
             if interrupted:
@@ -814,7 +822,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             msg = ChatMessage.create(text=collected_text, role="assistant")
             self._chat_ctx.messages.append(msg)
-
+            message_id_committed = msg.id
             speech_handle.mark_speech_committed()
 
             if interrupted:
@@ -904,7 +912,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             # create a nested speech handle
-            extra_tools_messages = [ChatMessage.create_tool_calls(tool_calls_info)]
+            extra_tools_messages = [
+                ChatMessage.create_tool_calls(tool_calls_info, text=collected_text)
+            ]
             extra_tools_messages.extend(tool_calls_results)
 
             new_speech_handle = SpeechHandle.create_tool_speech(
@@ -912,6 +922,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 add_to_chat_ctx=speech_handle.add_to_chat_ctx,
                 extra_tools_messages=extra_tools_messages,
                 fnc_nested_depth=speech_handle.fnc_nested_depth + 1,
+                fnc_text_message_id=message_id_committed,
             )
 
             # synthesize the tool speech with the chat ctx from llm_stream
