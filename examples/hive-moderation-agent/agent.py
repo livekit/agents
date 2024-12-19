@@ -15,16 +15,16 @@ of 0.9 or higher for any of the positive classes, it will log the result.
 """
 
 import asyncio
-from io import BytesIO
 import logging
 import os
 import time
+from io import BytesIO
 
 import aiohttp
-from livekit import agents, rtc
-from PIL import Image
 from dotenv import load_dotenv
 from hive_data_classes import HiveResponse, from_dict
+from livekit import agents, rtc
+from PIL import Image
 
 load_dotenv()
 

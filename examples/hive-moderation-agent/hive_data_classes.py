@@ -1,7 +1,5 @@
 from dataclasses import dataclass, is_dataclass
-from typing import get_type_hints, List
-
-from typing import get_type_hints, List, Any
+from typing import List, get_type_hints
 
 
 def from_dict(cls, data):
