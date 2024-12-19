@@ -15,7 +15,7 @@ from livekit.agents import (
     llm,
     multimodal,
 )
-from livekit.plugins import openai
+from livekit.plugins import google
 
 load_dotenv()
 
@@ -82,13 +82,13 @@ async def entrypoint(ctx: JobContext):
     )
 
     agent = multimodal.MultimodalAgent(
-        model=openai.realtime.RealtimeModel(
+        model=google.multimodal.RealtimeModel(
             voice="alloy",
             temperature=0.8,
             instructions="You are a helpful assistant",
-            turn_detection=openai.realtime.ServerVadOptions(
-                threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
-            ),
+            # turn_detection=openai.realtime.ServerVadOptions(
+            #     threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
+            # ),
         ),
         fnc_ctx=fnc_ctx,
         chat_ctx=chat_ctx,

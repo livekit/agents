@@ -15,10 +15,7 @@ from google import genai
 from google.genai.types import (
     GenerationConfigDict,
     LiveConnectConfigDict,
-    PrebuiltVoiceConfig,
-    SpeechConfig,
     Tool,
-    VoiceConfig,
 )
 
 from ..log import logger
@@ -76,7 +73,7 @@ class RealtimeModel(MultimodalModel):
         instructions: str = "",
         model: MultimodalModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
-        voice: Voice | str = "Puck",
+        # voice: Voice | str = "Puck",
         response_modalities: ResponseModality = "AUDIO",
         vertexai: bool = False,
         project: str | None = None,
@@ -105,7 +102,7 @@ class RealtimeModel(MultimodalModel):
         self._opts = ModelOptions(
             model=model,
             api_key=api_key,
-            voice=voice,
+            # voice=voice,
             response_modalities=response_modalities,
             vertexai=vertexai,
             project=project,
@@ -166,13 +163,13 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
                 frequency_penalty=self._opts.frequency_penalty,
             ),
             system_instruction=self._opts.instructions,
-            speech_config=SpeechConfig(
-                voice_config=VoiceConfig(
-                    prebuilt_voice_config=PrebuiltVoiceConfig(
-                        voice_name=self._opts.voice
-                    )
-                )
-            ),
+            # speech_config=SpeechConfig(
+            #     voice_config=VoiceConfig(
+            #         prebuilt_voice_config=PrebuiltVoiceConfig(
+            #             voice_name=self._opts.voice
+            #         )
+            #     )
+            # ),
         )
         self._client = genai.Client(
             http_options={"api_version": "v1alpha"},
@@ -255,16 +252,12 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
                                 if part.text:
                                     text_stream.send_nowait(part.text)
                                 if part.inline_data:
-                                    audio_data = base64.b64decode(part.inline_data.data)
-                                    if len(audio_data) == 0:
-                                        continue
-                                    if len(audio_data) % 2 != 0:
-                                        audio_data = audio_data[:-1]
                                     frame = rtc.AudioFrame(
-                                        data=audio_data,
+                                        data=part.inline_data.data,
                                         sample_rate=24000,
                                         num_channels=1,
-                                        samples_per_channel=len(audio_data) // 2,
+                                        samples_per_channel=len(part.inline_data.data)
+                                        // 2,
                                     )
                                     content.audio_stream.send_nowait(frame)
                     if response.server_content.interrupted:
@@ -279,22 +272,20 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
 
                     # TODO: handle tool calls
 
-        try:
-            async with self._client.aio.live.connect(
-                model=self._opts.model, config=self._config
-            ) as session:
-                self._session = session
-                tasks = [
-                    asyncio.create_task(_send_task(), name="gemini-realtime-send"),
-                    asyncio.create_task(_recv_task(), name="gemini-realtime-recv"),
-                ]
+        async with self._client.aio.live.connect(
+            model=self._opts.model, config=self._config
+        ) as session:
+            self._session = session
+            tasks = [
+                asyncio.create_task(_send_task(), name="gemini-realtime-send"),
+                asyncio.create_task(_recv_task(), name="gemini-realtime-recv"),
+            ]
 
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks)
-        finally:
-            await self._session.close()
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
+                await self._session.close()
 
     # TODO: remove
     def _update_conversation_item_content(
