@@ -69,6 +69,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         transcription: AgentTranscriptionOptions = AgentTranscriptionOptions(),
         max_text_response_retries: int = 5,
         loop: asyncio.AbstractEventLoop | None = None,
+        auto_link_on_connect: bool = True,  # Add this flag with a default value
     ):
         """Create a new MultimodalAgent.
 
@@ -88,6 +89,9 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
+
+        # Set the flag
+        self._auto_link_on_connect = auto_link_on_connect
 
         from livekit.plugins.openai import realtime
 
@@ -150,15 +154,20 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         self._room, self._participant = room, participant
 
         if participant is not None:
-            if isinstance(participant, rtc.RemoteParticipant):
-                self._link_participant(participant.identity)
+            # Check if we should auto-link when a participant is provided
+            if self._auto_link_on_connect:
+                if isinstance(participant, rtc.RemoteParticipant):
+                    self._link_participant(participant.identity)
+                else:
+                    self._link_participant(participant)
             else:
-                self._link_participant(participant)
+                logger.info(f"Auto-linking disabled. Not linking participant {participant}")
         else:
-            # no participant provided, try to find the first participant in the room
-            for participant in self._room.remote_participants.values():
-                self._link_participant(participant.identity)
-                break
+            # No participant provided, only auto-link if the flag is enabled
+            if self._auto_link_on_connect:
+                for participant in self._room.remote_participants.values():
+                    self._link_participant(participant.identity)
+                    break
 
         self._session = self._model.session(
             chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx
@@ -369,20 +378,40 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 self._session.input_audio_buffer.append(f)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
-        if self._linked_participant is None:
+        """Handler for when a participant connects."""
+        if not self._auto_link_on_connect:
+            logger.info(f"Auto-linking disabled. Participant {participant.identity} connected but not linking.")
             return
 
-        self._link_participant(participant.identity)
+        # Existing behavior: auto-link if the flag is enabled
+        if self._linked_participant is None:
+            self._link_participant(participant.identity)
+
 
     def _link_participant(self, participant_identity: str) -> None:
-        self._linked_participant = self._room.remote_participants.get(
-            participant_identity
-        )
+        """Link a participant to the voice assistant.
+
+        Args:
+            participant_identity: The identity of the participant to link.
+        """
+        # Unlink the current participant if one is already linked
+        if self._linked_participant is not None and self._linked_participant.identity != participant_identity:
+            logger.info(f"Unlinking current participant: {self._linked_participant.identity}")
+            if self._read_micro_atask:
+                self._read_micro_atask.cancel()  # Stop reading from the previous participant's track
+            self._subscribed_track = None
+            self._linked_participant = None
+
+        # Link the new participant
+        self._linked_participant = self._room.remote_participants.get(participant_identity)
+        
         if self._linked_participant is None:
-            logger.error("_link_participant must be called with a valid identity")
+            logger.error(f"_link_participant must be called with a valid identity: {participant_identity}")
             return
 
-        self._subscribe_to_microphone()
+        logger.info(f"Linking new participant: {participant_identity}")
+        self._subscribe_to_microphone()  # Subscribe to the new participant's microphone
+
 
     async def _micro_task(self, track: rtc.LocalAudioTrack) -> None:
         stream_24khz = rtc.AudioStream(track, sample_rate=24000, num_channels=1)
