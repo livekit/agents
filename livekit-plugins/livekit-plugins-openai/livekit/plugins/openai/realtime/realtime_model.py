@@ -22,6 +22,7 @@ from .log import logger
 
 EventTypes = Literal[
     "start_session",
+    "session_updated",
     "error",
     "input_speech_started",
     "input_speech_stopped",
@@ -152,18 +153,22 @@ class RealtimeError:
 
 
 @dataclass
-class _ModelOptions:
-    model: str | None
+class RealtimeSessionOptions:
+    model: api_proto.OpenAIModel | str
     modalities: list[api_proto.Modality]
     instructions: str
     voice: api_proto.Voice
     input_audio_format: api_proto.AudioFormat
     output_audio_format: api_proto.AudioFormat
-    input_audio_transcription: InputTranscriptionOptions
-    turn_detection: ServerVadOptions
+    input_audio_transcription: InputTranscriptionOptions | None
+    turn_detection: ServerVadOptions | None
     tool_choice: api_proto.ToolChoice
     temperature: float
     max_response_output_tokens: int | Literal["inf"]
+
+
+@dataclass
+class _ModelOptions(RealtimeSessionOptions):
     api_key: str | None
     base_url: str
     entra_token: str | None
@@ -183,6 +188,7 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
     prefix_padding_ms=300,
     silence_duration_ms=500,
 )
+
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
@@ -193,7 +199,7 @@ class RealtimeModel(MultimodalModel):
         *,
         instructions: str = "",
         modalities: list[api_proto.Modality] = ["text", "audio"],
-        model: str = "gpt-4o-realtime-preview-2024-10-01",
+        model: api_proto.OpenAIModel | str = api_proto.DefaultOpenAIModel,
         voice: api_proto.Voice = "alloy",
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
@@ -236,7 +242,7 @@ class RealtimeModel(MultimodalModel):
         *,
         instructions: str = "",
         modalities: list[api_proto.Modality] = ["text", "audio"],
-        model: str | None = "gpt-4o-realtime-preview-2024-10-01",
+        model: api_proto.OpenAIModel | str = api_proto.DefaultOpenAIModel,
         voice: api_proto.Voice = "alloy",
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
@@ -507,10 +513,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
 
             message_content = message.content
             tool_call_id = message.tool_call_id
-            if not tool_call_id and message_content is None:
-                # not a function call while the message content is None
-                fut.set_result(False)
-                return fut
             event: api_proto.ClientEvent.ConversationItemCreate | None = None
             if tool_call_id:
                 if message.role == "tool":
@@ -904,12 +906,19 @@ class RealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
                 function_data["type"] = "function"
                 tools.append(function_data)
 
-        server_vad_opts: api_proto.ServerVad = {
-            "type": "server_vad",
-            "threshold": self._opts.turn_detection.threshold,
-            "prefix_padding_ms": self._opts.turn_detection.prefix_padding_ms,
-            "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
-        }
+        server_vad_opts: api_proto.ServerVad | None = None
+        if self._opts.turn_detection is not None:
+            server_vad_opts = {
+                "type": "server_vad",
+                "threshold": self._opts.turn_detection.threshold,
+                "prefix_padding_ms": self._opts.turn_detection.prefix_padding_ms,
+                "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
+            }
+        input_audio_transcription_opts: api_proto.InputAudioTranscription | None = None
+        if self._opts.input_audio_transcription is not None:
+            input_audio_transcription_opts = {
+                "model": self._opts.input_audio_transcription.model,
+            }
 
         session_data: api_proto.ClientEvent.SessionUpdateData = {
             "modalities": self._opts.modalities,
@@ -917,9 +926,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
             "voice": self._opts.voice,
             "input_audio_format": self._opts.input_audio_format,
             "output_audio_format": self._opts.output_audio_format,
-            "input_audio_transcription": {
-                "model": self._opts.input_audio_transcription.model,
-            },
+            "input_audio_transcription": input_audio_transcription_opts,
             "turn_detection": server_vad_opts,
             "tools": tools,
             "tool_choice": self._opts.tool_choice,
@@ -955,8 +962,14 @@ class RealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
         """
         original_ctx = self._remote_conversation_items.to_chat_context()
 
+        # filter out messages that are not function calls and content is None
+        filtered_messages = [
+            msg
+            for msg in new_ctx.messages
+            if msg.tool_call_id or msg.content is not None
+        ]
         changes = utils._compute_changes(
-            original_ctx.messages, new_ctx.messages, key_fnc=lambda x: x.id
+            original_ctx.messages, filtered_messages, key_fnc=lambda x: x.id
         )
         logger.debug(
             "sync chat context",
@@ -1106,6 +1119,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
 
                     if event == "session.created":
                         self._handle_session_created(data)
+                    if event == "session.updated":
+                        self._handle_session_updated(data)
                     elif event == "error":
                         self._handle_error(data)
                     elif event == "input_audio_buffer.speech_started":
@@ -1173,6 +1188,42 @@ class RealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
         self, session_created: api_proto.ServerEvent.SessionCreated
     ):
         self._session_id = session_created["session"]["id"]
+
+    def _handle_session_updated(
+        self, session_updated: api_proto.ServerEvent.SessionUpdated
+    ):
+        session = session_updated["session"]
+        if session["turn_detection"] is None:
+            turn_detection = None
+        else:
+            turn_detection = ServerVadOptions(
+                threshold=session["turn_detection"]["threshold"],
+                prefix_padding_ms=session["turn_detection"]["prefix_padding_ms"],
+                silence_duration_ms=session["turn_detection"]["silence_duration_ms"],
+            )
+        if session["input_audio_transcription"] is None:
+            input_audio_transcription = None
+        else:
+            input_audio_transcription = InputTranscriptionOptions(
+                model=session["input_audio_transcription"]["model"],
+            )
+
+        self.emit(
+            "session_updated",
+            RealtimeSessionOptions(
+                model=session["model"],
+                modalities=session["modalities"],
+                instructions=session["instructions"],
+                voice=session["voice"],
+                input_audio_format=session["input_audio_format"],
+                output_audio_format=session["output_audio_format"],
+                input_audio_transcription=input_audio_transcription,
+                turn_detection=turn_detection,
+                tool_choice=session["tool_choice"],
+                temperature=session["temperature"],
+                max_response_output_tokens=session["max_response_output_tokens"],
+            ),
+        )
 
     def _handle_error(self, error: api_proto.ServerEvent.Error):
         logger.error(
@@ -1552,6 +1603,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
         duration = time.time() - response._created_timestamp
 
         usage = response.usage or {}  # type: ignore
+        input_token_details = usage.get("input_token_details", {})
         metrics = MultimodalLLMMetrics(
             timestamp=response._created_timestamp,
             request_id=response.id,
@@ -1565,12 +1617,18 @@ class RealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
             tokens_per_second=usage.get("output_tokens", 0) / duration,
             error=metrics_error,
             input_token_details=MultimodalLLMMetrics.InputTokenDetails(
-                cached_tokens=usage.get("input_token_details", {}).get(
-                    "cached_tokens", 0
-                ),
+                cached_tokens=input_token_details.get("cached_tokens", 0),
                 text_tokens=usage.get("input_token_details", {}).get("text_tokens", 0),
                 audio_tokens=usage.get("input_token_details", {}).get(
                     "audio_tokens", 0
+                ),
+                cached_tokens_details=MultimodalLLMMetrics.CachedTokenDetails(
+                    text_tokens=input_token_details.get(
+                        "cached_tokens_details", {}
+                    ).get("text_tokens", 0),
+                    audio_tokens=input_token_details.get(
+                        "cached_tokens_details", {}
+                    ).get("audio_tokens", 0),
                 ),
             ),
             output_token_details=MultimodalLLMMetrics.OutputTokenDetails(

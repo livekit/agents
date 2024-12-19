@@ -51,9 +51,9 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents>=0.11",
-        "transformers>=4.46",
+        "transformers>=4.47.1",
         "numpy>=1.26",
-        "torch>=2.5.1",
+        "onnxruntime>=1.18",
     ],
     package_data={"livekit.plugins.turn_detector": ["py.typed"]},
     project_urls={

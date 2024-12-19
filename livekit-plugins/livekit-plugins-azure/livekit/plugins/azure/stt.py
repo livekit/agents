@@ -330,7 +330,7 @@ def _create_speech_recognizer(
         )
 
     auto_detect_source_language_config = None
-    if config.languages and len(config.languages) > 1:
+    if config.languages and len(config.languages) >= 1:
         auto_detect_source_language_config = (
             speechsdk.languageconfig.AutoDetectSourceLanguageConfig(
                 languages=config.languages
