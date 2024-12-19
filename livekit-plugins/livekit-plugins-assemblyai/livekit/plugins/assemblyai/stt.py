@@ -289,6 +289,8 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("failed to process AssemblyAI message")
 
+        ws: aiohttp.ClientWebSocketResponse | None = None
+
         while True:
             try:
                 ws = await self._connect_ws()

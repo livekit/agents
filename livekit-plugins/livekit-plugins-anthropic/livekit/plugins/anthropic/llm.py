@@ -24,7 +24,6 @@ from typing import (
     Awaitable,
     List,
     Literal,
-    Tuple,
     Union,
     cast,
     get_args,
@@ -41,7 +40,10 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.llm import ToolChoice
-from livekit.agents.llm.function_context import _is_optional_type
+from livekit.agents.llm.function_context import (
+    _is_optional_type,
+    create_ai_function_info,
+)
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import anthropic
@@ -283,7 +285,7 @@ class LLMStream(llm.LLMStream):
                 assert self._fnc_name is not None
                 assert self._fnc_raw_arguments is not None
 
-                fnc_info = _create_ai_function_info(
+                fnc_info = create_ai_function_info(
                     self._fnc_ctx,
                     self._tool_call_id,
                     self._fnc_name,
@@ -487,67 +489,6 @@ def _build_anthropic_image_content(
     )
 
 
-def _create_ai_function_info(
-    fnc_ctx: llm.function_context.FunctionContext,
-    tool_call_id: str,
-    fnc_name: str,
-    raw_arguments: str,  # JSON string
-) -> llm.function_context.FunctionCallInfo:
-    if fnc_name not in fnc_ctx.ai_functions:
-        raise ValueError(f"AI function {fnc_name} not found")
-
-    parsed_arguments: dict[str, Any] = {}
-    try:
-        if raw_arguments:  # ignore empty string
-            parsed_arguments = json.loads(raw_arguments)
-    except json.JSONDecodeError:
-        raise ValueError(
-            f"AI function {fnc_name} received invalid JSON arguments - {raw_arguments}"
-        )
-
-    fnc_info = fnc_ctx.ai_functions[fnc_name]
-
-    # Ensure all necessary arguments are present and of the correct type.
-    sanitized_arguments: dict[str, Any] = {}
-    for arg_info in fnc_info.arguments.values():
-        if arg_info.name not in parsed_arguments:
-            if arg_info.default is inspect.Parameter.empty:
-                raise ValueError(
-                    f"AI function {fnc_name} missing required argument {arg_info.name}"
-                )
-            continue
-
-        arg_value = parsed_arguments[arg_info.name]
-        is_optional, inner_th = _is_optional_type(arg_info.type)
-
-        if get_origin(inner_th) is not None:
-            if not isinstance(arg_value, list):
-                raise ValueError(
-                    f"AI function {fnc_name} argument {arg_info.name} should be a list"
-                )
-
-            inner_type = get_args(inner_th)[0]
-            sanitized_value = [
-                _sanitize_primitive(
-                    value=v, expected_type=inner_type, choices=arg_info.choices
-                )
-                for v in arg_value
-            ]
-        else:
-            sanitized_value = _sanitize_primitive(
-                value=arg_value, expected_type=inner_th, choices=arg_info.choices
-            )
-
-        sanitized_arguments[arg_info.name] = sanitized_value
-
-    return llm.function_context.FunctionCallInfo(
-        tool_call_id=tool_call_id,
-        raw_arguments=raw_arguments,
-        function_info=fnc_info,
-        arguments=sanitized_arguments,
-    )
-
-
 def _build_function_description(
     fnc_info: llm.function_context.FunctionInfo,
 ) -> anthropic.types.ToolParam:
@@ -598,31 +539,3 @@ def _build_function_description(
         "description": fnc_info.description,
         "input_schema": input_schema,
     }
-
-
-def _sanitize_primitive(
-    *, value: Any, expected_type: type, choices: Tuple[Any] | None
-) -> Any:
-    if expected_type is str:
-        if not isinstance(value, str):
-            raise ValueError(f"expected str, got {type(value)}")
-    elif expected_type in (int, float):
-        if not isinstance(value, (int, float)):
-            raise ValueError(f"expected number, got {type(value)}")
-
-        if expected_type is int:
-            if value % 1 != 0:
-                raise ValueError("expected int, got float")
-
-            value = int(value)
-        elif expected_type is float:
-            value = float(value)
-
-    elif expected_type is bool:
-        if not isinstance(value, bool):
-            raise ValueError(f"expected bool, got {type(value)}")
-
-    if choices and value not in choices:
-        raise ValueError(f"invalid value {value}, not in {choices}")
-
-    return value
