@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Literal, Protocol
+from typing import Callable, Literal
 
 import aiohttp
 from livekit import rtc
@@ -25,7 +26,54 @@ EventTypes = Literal[
     "function_calls_collected",
     "function_calls_finished",
     "metrics_collected",
+    "response_content_added",
+    "response_content_done",
+    "input_speech_committed",
+    "input_speech_transcription_completed",
+    "input_speech_started",
+    "input_speech_stopped",
 ]
+
+
+class MultimodalModel(ABC):
+    """Abstract Base Class for multimodal models."""
+
+    @abstractmethod
+    def session(
+        self,
+        *,
+        chat_ctx: llm.ChatContext | None = None,
+        fnc_ctx: llm.FunctionContext | None = None,
+    ) -> MultimodalSession:
+        """Create a new session."""
+        pass
+
+
+class MultimodalSession(ABC, utils.EventEmitter[EventTypes]):
+    """Abstract Base Class for a session object returned by MultimodalModel.session()."""
+
+    @property
+    @abstractmethod
+    def fnc_ctx(self) -> llm.FunctionContext | None:
+        pass
+
+    @fnc_ctx.setter
+    @abstractmethod
+    def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
+        pass
+
+    @abstractmethod
+    def chat_ctx_copy(self) -> llm.ChatContext:
+        pass
+
+    @abstractmethod
+    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
+        pass
+
+    @abstractmethod
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        """Push an audio frame to the model for processing."""
+        pass
 
 
 @dataclass(frozen=True)
@@ -50,9 +98,6 @@ class AgentTranscriptionOptions:
     representing the hyphenated parts of the word."""
 
 
-class S2SModel(Protocol): ...
-
-
 @dataclass(frozen=True)
 class _ImplOptions:
     transcription: AgentTranscriptionOptions
@@ -62,7 +107,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        model: S2SModel,
+        model: MultimodalModel,
         vad: vad.VAD | None = None,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
@@ -73,7 +118,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         """Create a new MultimodalAgent.
 
         Args:
-            model: S2SModel instance.
+            model: MultimodalModel instance.
             vad: Voice Activity Detection (VAD) instance.
             chat_ctx: Chat context for the assistant.
             fnc_ctx: Function context for the assistant.
@@ -89,9 +134,9 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
 
-        from livekit.plugins.openai import realtime
-
-        assert isinstance(model, realtime.RealtimeModel)
+        # Remove OpenAI-specific assertion
+        # Instead, just rely on the S2SModel protocol.
+        # assert isinstance(model, realtime.RealtimeModel)
 
         self._model = model
         self._vad = vad
@@ -177,13 +222,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         # Schedule the initialization and start task
         asyncio.create_task(_init_and_start())
 
-        from livekit.plugins.openai import realtime
+        # No import from openai code here.
+        # Just rely on session events defined by S2SSession.
 
         @self._session.on("response_content_added")
-        def _on_content_added(message: realtime.RealtimeContent):
-            if message.content_type == "text":
-                return
-
+        def _on_content_added(message):
+            # message must follow the same interface for either OpenAI or Gemini
             tr_fwd = transcription.TTSSegmentsForwarder(
                 room=self._room,
                 participant=self._room.local_participant,
@@ -202,7 +246,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("response_content_done")
-        def _response_content_done(message: realtime.RealtimeContent):
+        def _response_content_done(message):
             if message.content_type == "text":
                 if self._text_response_retries >= self._max_text_response_retries:
                     raise RuntimeError(
@@ -214,8 +258,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
                 self._text_response_retries += 1
                 logger.warning(
-                    "The OpenAI Realtime API returned a text response instead of audio. "
-                    "Attempting to recover to audio mode...",
+                    "The Realtime API returned a text response instead of audio.",
                     extra={
                         "item_id": message.item_id,
                         "text": message.text,
@@ -236,9 +279,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("input_speech_transcription_completed")
-        def _input_speech_transcription_completed(
-            ev: realtime.InputTranscriptionCompleted,
-        ):
+        def _input_speech_transcription_completed(ev):
             self._stt_forwarder.update(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -366,7 +407,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         )
         async for frame in self._input_audio_ch:
             for f in bstream.write(frame.data.tobytes()):
-                self._session.input_audio_buffer.append(f)
+                self._session.push_audio(f)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if self._linked_participant is None:

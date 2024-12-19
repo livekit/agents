@@ -13,6 +13,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
+from livekit.agents.multimodal import MultimodalModel, MultimodalSession
 from typing_extensions import TypedDict
 
 from .._oai_api import build_oai_function_description, create_ai_function_info
@@ -191,7 +192,7 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
-class RealtimeModel:
+class RealtimeModel(MultimodalModel):
     @overload
     def __init__(
         self,
@@ -444,7 +445,7 @@ class RealtimeModel:
         turn_detection: ServerVadOptions | None = None,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
-    ) -> RealtimeSession:
+    ) -> MultimodalSession:
         opts = deepcopy(self._default_opts)
         if modalities is not None:
             opts.modalities = modalities
@@ -482,7 +483,7 @@ class RealtimeModel:
             await session.aclose()
 
 
-class RealtimeSession(utils.EventEmitter[EventTypes]):
+class RealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
     class InputAudioBuffer:
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess
@@ -852,6 +853,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     @property
     def input_audio_buffer(self) -> InputAudioBuffer:
         return RealtimeSession.InputAudioBuffer(self)
+
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        self.input_audio_buffer.append(frame)
 
     @property
     def response(self) -> Response:
