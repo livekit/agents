@@ -26,6 +26,12 @@ EventTypes = Literal[
     "function_calls_collected",
     "function_calls_finished",
     "metrics_collected",
+    "response_content_added",
+    "response_content_done",
+    "input_speech_committed",
+    "input_speech_transcription_completed",
+    "input_speech_started",
+    "input_speech_stopped",
 ]
 
 
@@ -43,7 +49,7 @@ class MultimodalModel(ABC):
         pass
 
 
-class MultimodalSession(ABC):
+class MultimodalSession(ABC, utils.EventEmitter[EventTypes]):
     """Abstract Base Class for a session object returned by MultimodalModel.session()."""
 
     @property
