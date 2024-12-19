@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 from dataclasses import dataclass
 from typing import AsyncIterable, Literal
@@ -9,6 +10,7 @@ from typing import AsyncIterable, Literal
 import aiohttp
 from livekit import rtc
 from livekit.agents import llm, utils
+from livekit.agents.llm.function_context import create_ai_function_info
 from livekit.agents.multimodal import MultimodalModel, MultimodalSession
 
 from google import genai
@@ -27,6 +29,7 @@ from .api_proto import (
     MultimodalModels,
     ResponseModality,
     Voice,
+    _build_tools,
 )
 
 EventTypes = Literal[
@@ -153,6 +156,11 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
         self._fnc_ctx = fnc_ctx
         self._fnc_tasks = utils.aio.TaskSet()
 
+        tools = []
+        if self._fnc_ctx is not None:
+            functions = _build_tools(self._fnc_ctx)
+            tools.append({"function_declarations": functions})
+
         self._config = LiveConnectConfigDict(
             model=self._opts.model,
             response_modalities=self._opts.response_modalities,
@@ -173,6 +181,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
                     )
                 )
             ),
+            tools=tools,
         )
         self._client = genai.Client(
             http_options={"api_version": "v1alpha"},
@@ -263,17 +272,34 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
                                         // 2,
                                     )
                                     content.audio_stream.send_nowait(frame)
-                    if response.server_content.interrupted:
-                        self.emit("input_speech_started")
-                    if response.server_content.turn_complete:
-                        if isinstance(content.text_stream, utils.aio.Chan):
-                            content.text_stream.close()
-                        if isinstance(content.audio_stream, utils.aio.Chan):
-                            content.audio_stream.close()
-                        self.emit("response_content_done", content)
-                        self._active_response_id = None
+                        if response.server_content.interrupted:
+                            self.emit("input_speech_started")
+                        if response.server_content.turn_complete:
+                            if isinstance(content.text_stream, utils.aio.Chan):
+                                content.text_stream.close()
+                            if isinstance(content.audio_stream, utils.aio.Chan):
+                                content.audio_stream.close()
+                            self.emit("response_content_done", content)
+                            self._active_response_id = None
+                    if response.tool_call:
+                        if self._fnc_ctx is None:
+                            raise ValueError("Function context is not set")
+                        fnc_calls = []
+                        for fnc_call in response.tool_call.function_calls:
+                            fnc_call_info = create_ai_function_info(
+                                self._fnc_ctx,
+                                fnc_call.id,
+                                fnc_call.name,
+                                json.dumps(fnc_call.args),
+                            )
+                            fnc_calls.append(fnc_call_info)
 
-                    # TODO: handle tool calls
+                        self.emit("function_calls_collected", fnc_calls)
+
+                        for fnc_call_info in fnc_calls:
+                            self._fnc_tasks.create_task(
+                                self._run_fnc_task(fnc_call_info, content.item_id)
+                            )
 
         async with self._client.aio.live.connect(
             model=self._opts.model, config=self._config
@@ -289,6 +315,40 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
                 await self._session.close()
+
+    @utils.log_exceptions(logger=logger)
+    async def _run_fnc_task(self, fnc_call_info: llm.FunctionCallInfo, item_id: str):
+        logger.debug(
+            "executing ai function",
+            extra={
+                "function": fnc_call_info.function_info.name,
+            },
+        )
+
+        called_fnc = fnc_call_info.execute()
+        await called_fnc.task
+
+        tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
+        logger.info(
+            "creating response for tool call",
+            extra={
+                "function": fnc_call_info.function_info.name,
+            },
+        )
+        if called_fnc.result is not None:
+            tool_response = genai.types.LiveClientToolResponse(
+                function_responses=[
+                    genai.types.FunctionResponse(
+                        name=tool_call.name,
+                        id=tool_call.tool_call_id,
+                        response={"result": tool_call.content},
+                    )
+                ]
+            )
+
+            await self._session.send(tool_response)
+
+        self.emit("function_calls_finished", [called_fnc])
 
     # TODO: remove
     def _update_conversation_item_content(
