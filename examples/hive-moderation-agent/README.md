@@ -1,6 +1,6 @@
 # LiveKit realtime moderation agent using Hive
 
-This is an agent that performs visual moderation of every participant's video in a room.  It does this moderation using the Visual Content Moderation model from [Hive](https://thehive.ai) [[docs](https://docs.thehive.ai/docs/visual-content-moderation#visual-content-moderation).
+This is an agent that performs visual moderation of every participant's video in a room.  It does this moderation using the Visual Content Moderation model from [Hive](https://thehive.ai) [[docs](https://docs.thehive.ai/docs/visual-content-moderation#visual-content-moderation)].
 
 ## Prerequisites
 
