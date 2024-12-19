@@ -16,6 +16,7 @@ from .function_context import (
     FunctionInfo,
     TypeInfo,
     ai_callable,
+    create_ai_function_info,
 )
 from .llm import (
     LLM,
@@ -54,4 +55,5 @@ __all__ = [
     "FallbackAdapter",
     "AvailabilityChangedEvent",
     "ToolChoice",
+    "create_ai_function_info",
 ]
