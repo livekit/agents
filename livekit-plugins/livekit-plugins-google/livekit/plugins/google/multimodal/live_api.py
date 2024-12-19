@@ -40,6 +40,7 @@ EventTypes = Literal[
     "response_content_done",
     "function_calls_collected",
     "function_calls_finished",
+    "function_calls_cancelled",
 ]
 
 
@@ -302,6 +303,17 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
                             self._fnc_tasks.create_task(
                                 self._run_fnc_task(fnc_call_info, content.item_id)
                             )
+                    if response.tool_call_cancellation:
+                        logger.warning(
+                            "function call cancelled",
+                            extra={
+                                "function_call_ids": response.tool_call_cancellation.function_call_ids,
+                            },
+                        )
+                        self.emit(
+                            "function_calls_cancelled",
+                            response.tool_call_cancellation.function_call_ids,
+                        )
 
         async with self._client.aio.live.connect(
             model=self._opts.model, config=self._config
