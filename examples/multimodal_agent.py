@@ -83,7 +83,7 @@ async def entrypoint(ctx: JobContext):
 
     agent = multimodal.MultimodalAgent(
         model=google.multimodal.RealtimeModel(
-            voice="alloy",
+            voice="Charon",
             temperature=0.8,
             instructions="You are a helpful assistant",
             # turn_detection=openai.realtime.ServerVadOptions(

@@ -15,7 +15,10 @@ from google import genai
 from google.genai.types import (
     GenerationConfigDict,
     LiveConnectConfigDict,
+    PrebuiltVoiceConfig,
+    SpeechConfig,
     Tool,
+    VoiceConfig,
 )
 
 from ..log import logger
@@ -73,7 +76,7 @@ class RealtimeModel(MultimodalModel):
         instructions: str = "",
         model: MultimodalModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
-        # voice: Voice | str = "Puck",
+        voice: Voice | str = "Puck",
         response_modalities: ResponseModality = "AUDIO",
         vertexai: bool = False,
         project: str | None = None,
@@ -102,7 +105,7 @@ class RealtimeModel(MultimodalModel):
         self._opts = ModelOptions(
             model=model,
             api_key=api_key,
-            # voice=voice,
+            voice=voice,
             response_modalities=response_modalities,
             vertexai=vertexai,
             project=project,
@@ -163,13 +166,13 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
                 frequency_penalty=self._opts.frequency_penalty,
             ),
             system_instruction=self._opts.instructions,
-            # speech_config=SpeechConfig(
-            #     voice_config=VoiceConfig(
-            #         prebuilt_voice_config=PrebuiltVoiceConfig(
-            #             voice_name=self._opts.voice
-            #         )
-            #     )
-            # ),
+            speech_config=SpeechConfig(
+                voice_config=VoiceConfig(
+                    prebuilt_voice_config=PrebuiltVoiceConfig(
+                        voice_name=self._opts.voice
+                    )
+                )
+            ),
         )
         self._client = genai.Client(
             http_options={"api_version": "v1alpha"},
