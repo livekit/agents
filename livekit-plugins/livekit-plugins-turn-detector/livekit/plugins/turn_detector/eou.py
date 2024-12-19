@@ -18,12 +18,13 @@ PUNCS = string.punctuation.replace("'", "")
 MAX_HISTORY = 4
 
 
-def _download_from_hf_hub(repo_id, filename):
+def _download_from_hf_hub(repo_id, filename, **kwargs):
     from huggingface_hub import hf_hub_download
 
     local_path = hf_hub_download(
         repo_id=repo_id,
         filename=filename,
+        **kwargs
     )
     return local_path
 
@@ -71,7 +72,11 @@ class _EUORunner(_InferenceRunner):
         from transformers import AutoTokenizer
 
         try:
-            local_path_onnx = _download_from_hf_hub(HG_MODEL, ONNX_FILENAME)
+            local_path_onnx = _download_from_hf_hub(
+                HG_MODEL, 
+                ONNX_FILENAME,
+                local_files_only=True
+            )
             self._session = ort.InferenceSession(
                 local_path_onnx, providers=["CPUExecutionProvider"]
             )
