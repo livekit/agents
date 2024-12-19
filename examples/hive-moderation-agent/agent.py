@@ -51,6 +51,7 @@ https://docs.thehive.ai/docs/visual-content-moderation#choosing-thresholds-for-v
 logger = logging.getLogger("hive-moderation-agent")
 logger.setLevel(logging.INFO)
 
+
 async def request_fnc(req: agents.JobRequest):
     """
     The request handler for the agent.  We use this to set the name of the
@@ -61,6 +62,7 @@ async def request_fnc(req: agents.JobRequest):
         name="Moderator",
         identity="hive-moderator",
     )
+
 
 async def entrypoint(ctx: agents.JobContext):
     """
@@ -119,14 +121,13 @@ async def entrypoint(ctx: agents.JobContext):
         data.add_field("image", buffer, filename="image.png", content_type="image/png")
 
         # submit the image to Hive
-        logger.info('submitting image to hive')
+        logger.info("submitting image to hive")
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "https://api.thehive.ai/api/v2/task/sync",
                 headers=HIVE_HEADERS,
                 data=data,
             ) as response:
-
                 response.raise_for_status()
                 response_dict = await response.json()
                 hive_response: HiveResponse = from_dict(HiveResponse, response_dict)
@@ -138,11 +139,18 @@ async def entrypoint(ctx: agents.JobContext):
                     results = hive_response.status[0].response.output[0].classes
                     # filter to anything with a confidence score > threshold
                     for mod_class in results:
-                        if mod_class.class_[0:4] == 'yes_':
+                        if mod_class.class_[0:4] == "yes_":
                             # TODO: should also include "general_nsfw" class
                             if mod_class.score >= CONFIDENCE_THRESHOLD:
                                 class_name = mod_class.class_[4:]
-                                message = 'FOUND %s for participant "%s" (confidence score: %0.3f)' % (class_name, participant.identity, mod_class.score)
+                                message = (
+                                    'FOUND %s for participant "%s" (confidence score: %0.3f)'
+                                    % (
+                                        class_name,
+                                        participant.identity,
+                                        mod_class.score,
+                                    )
+                                )
                                 logger.info(message)
                                 await chat.send_message(message)
 
@@ -152,8 +160,8 @@ async def entrypoint(ctx: agents.JobContext):
         "I will detect and notify you of all inappropriate material in your video stream"
     )
 
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    agents.cli.run_app(agents.WorkerOptions(entrypoint,
-                                            request_fnc=request_fnc))
+    agents.cli.run_app(agents.WorkerOptions(entrypoint, request_fnc=request_fnc))
