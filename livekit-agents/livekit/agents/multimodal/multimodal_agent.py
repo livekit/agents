@@ -44,7 +44,7 @@ class MultimodalModel(ABC):
 
 
 class MultimodalSession(ABC):
-    """Abstract Base Class for a session object returned by S2SModel.session()."""
+    """Abstract Base Class for a session object returned by MultimodalModel.session()."""
 
     @property
     @abstractmethod
