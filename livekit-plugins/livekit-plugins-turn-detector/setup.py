@@ -51,7 +51,7 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents>=0.11",
-        "transformers[torch]>=4.46",
+        "transformers>=4.47.1",
         "numpy>=1.26",        
         "onnxruntime==1.20.1"
     ],
