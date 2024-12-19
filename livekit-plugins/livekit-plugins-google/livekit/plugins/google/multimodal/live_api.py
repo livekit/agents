@@ -149,7 +149,6 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
         super().__init__()
         self._loop = loop
         self._opts = opts
-
         self._chat_ctx = chat_ctx
         self._fnc_ctx = fnc_ctx
         self._fnc_tasks = utils.aio.TaskSet()
@@ -261,7 +260,6 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
                                         continue
                                     if len(audio_data) % 2 != 0:
                                         audio_data = audio_data[:-1]
-                                    print(audio_data)
                                     frame = rtc.AudioFrame(
                                         data=audio_data,
                                         sample_rate=24000,
