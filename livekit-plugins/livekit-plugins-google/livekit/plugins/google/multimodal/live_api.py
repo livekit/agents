@@ -7,7 +7,6 @@ import os
 from dataclasses import dataclass
 from typing import AsyncIterable, Literal
 
-import aiohttp
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import create_ai_function_info
@@ -21,7 +20,6 @@ from google.genai.types import (
     LiveConnectConfigDict,
     PrebuiltVoiceConfig,
     SpeechConfig,
-    Tool,
     VoiceConfig,
 )
 
@@ -52,7 +50,6 @@ class RealtimeContent:
     content_index: int
     text_stream: AsyncIterable[str]
     audio_stream: AsyncIterable[rtc.AudioFrame]
-    tool_calls: list[Tool]
     content_type: ResponseModality
 
 
@@ -94,11 +91,9 @@ class RealtimeModel(MultimodalModel):
         top_k: int | None = None,
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
-        http_session: aiohttp.ClientSession | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
     ):
         self._model = model
-        self._http_session = http_session
         self._loop = loop or asyncio.get_event_loop()
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
         self._vertexai = vertexai
@@ -126,6 +121,10 @@ class RealtimeModel(MultimodalModel):
             instructions=instructions,
         )
 
+    @property
+    def sessions(self) -> list[GeminiRealtimeSession]:
+        return self._rt_sessions
+
     def session(
         self,
         *,
@@ -141,6 +140,10 @@ class RealtimeModel(MultimodalModel):
         self._rt_sessions.append(session)
 
         return session
+
+    async def aclose(self) -> None:
+        for session in self._rt_sessions:
+            await session.aclose()
 
 
 class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
@@ -258,7 +261,6 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
                                     content_index=0,
                                     text_stream=text_stream,
                                     audio_stream=audio_stream,
-                                    tool_calls=[],
                                     content_type="audio",
                                 )
                                 self.emit("response_content_added", content)
