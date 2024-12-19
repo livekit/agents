@@ -1,17 +1,13 @@
 """
-## What is this code?
-This file contains a LiveKit agent that connects to a room and performs visual
- moderation on the video of all participants using Hive (thehive.ai).
-It uses the Visual Content Moderation model from Hive
-(docs: https://docs.thehive.ai/docs/visual-content-moderation#visual-content-moderation).
-Currently, it is only logging when it finds a high confidence and adding a message to the
-room's chat.  This could easily be extended to do more actions like removing a
-participant or ending a livestream, etc.
+LiveKit agent that connects to a room and performs visual moderation on the video
+of all participants using the Visual Content Moderation model from Hive
+(https://docs.thehive.ai/docs/visual-content-moderation#visual-content-moderation).
 
-## How does this work?
-This agent peridically sends a frame from the participant's video to Hive's API
-for a moderation check.  If the results of that check show a confidence score
-of 0.9 or higher for any of the positive classes, it will log the result.
+The agent periodically sends a frame from the participant's video to Hive's API
+for a moderation check. If the results of that check show a confidence score
+of 0.9 or higher for any of the positive classes, it logs the result and adds a
+message to the room's chat. This can easily be extended to take additional
+actions like removing a participant or ending a livestream, etc.
 """
 
 import asyncio
