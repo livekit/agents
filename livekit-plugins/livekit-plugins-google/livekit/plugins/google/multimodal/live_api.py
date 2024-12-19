@@ -13,9 +13,11 @@ from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import create_ai_function_info
 from livekit.agents.multimodal import MultimodalModel, MultimodalSession
 
-from google import genai
+import google
 from google.genai.types import (
+    FunctionResponse,
     GenerationConfigDict,
+    LiveClientToolResponse,
     LiveConnectConfigDict,
     PrebuiltVoiceConfig,
     SpeechConfig,
@@ -183,7 +185,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
             ),
             tools=tools,
         )
-        self._client = genai.Client(
+        self._client = google.genai.Client(
             http_options={"api_version": "v1alpha"},
             api_key=self._opts.api_key,
             vertexai=self._opts.vertexai,
@@ -336,9 +338,9 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
             },
         )
         if called_fnc.result is not None:
-            tool_response = genai.types.LiveClientToolResponse(
+            tool_response = LiveClientToolResponse(
                 function_responses=[
-                    genai.types.FunctionResponse(
+                    FunctionResponse(
                         name=tool_call.name,
                         id=tool_call.tool_call_id,
                         response={"result": tool_call.content},
