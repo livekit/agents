@@ -20,6 +20,7 @@ MAX_HISTORY = 4
 
 def _download_from_hf_hub(repo_id, filename):
     from huggingface_hub import hf_hub_download
+
     local_path = hf_hub_download(
         repo_id=repo_id,
         filename=filename,
@@ -72,8 +73,7 @@ class _EUORunner(_InferenceRunner):
         try:
             local_path_onnx = _download_from_hf_hub(HG_MODEL, ONNX_FILENAME)
             self._session = ort.InferenceSession(
-                local_path_onnx,
-                providers=['CPUExecutionProvider']
+                local_path_onnx, providers=["CPUExecutionProvider"]
             )
 
             self._tokenizer = AutoTokenizer.from_pretrained(
@@ -106,15 +106,12 @@ class _EUORunner(_InferenceRunner):
             add_special_tokens=False,
             return_tensors="np",
         )
-        
+
         input_dict = {"input_ids": inputs["input_ids"]}
 
         # Run inference
-        outputs = self._session.run(
-            ["logits"],
-            input_dict
-        )
-        
+        outputs = self._session.run(["logits"], input_dict)
+
         logits = outputs[0][0, -1, :]
         probs = _softmax(logits)
         eou_probability = probs[self._eou_index]
