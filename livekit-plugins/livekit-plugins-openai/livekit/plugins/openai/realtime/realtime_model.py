@@ -20,26 +20,6 @@ from .._oai_api import build_oai_function_description, create_ai_function_info
 from . import api_proto, remote_items
 from .log import logger
 
-EventTypes = Literal[
-    "start_session",
-    "session_updated",
-    "error",
-    "input_speech_started",
-    "input_speech_stopped",
-    "input_speech_committed",
-    "input_speech_transcription_completed",
-    "input_speech_transcription_failed",
-    "response_created",
-    "response_output_added",  # message & assistant
-    "response_content_added",  # message type (audio/text)
-    "response_content_done",
-    "response_output_done",
-    "response_done",
-    "function_calls_collected",
-    "function_calls_finished",
-    "metrics_collected",
-]
-
 
 @dataclass
 class InputTranscriptionCompleted:
@@ -483,7 +463,7 @@ class RealtimeModel(MultimodalModel):
             await session.aclose()
 
 
-class RealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
+class RealtimeSession(MultimodalSession):
     class InputAudioBuffer:
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess

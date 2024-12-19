@@ -5,7 +5,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal
+from typing import AsyncIterable
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -31,15 +31,6 @@ from .api_proto import (
     Voice,
     _build_tools,
 )
-
-EventTypes = Literal[
-    "input_speech_started",
-    "response_content_added",
-    "response_content_done",
-    "function_calls_collected",
-    "function_calls_finished",
-    "function_calls_cancelled",
-]
 
 
 @dataclass
@@ -146,7 +137,7 @@ class RealtimeModel(MultimodalModel):
             await session.aclose()
 
 
-class GeminiRealtimeSession(utils.EventEmitter[EventTypes], MultimodalSession):
+class GeminiRealtimeSession(MultimodalSession):
     def __init__(
         self,
         *,

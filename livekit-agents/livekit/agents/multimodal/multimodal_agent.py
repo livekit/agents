@@ -16,6 +16,20 @@ from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from . import agent_playout
 
 EventTypes = Literal[
+    "start_session",
+    "session_updated",
+    "error",
+    "input_speech_started",
+    "input_speech_stopped",
+    "input_speech_committed",
+    "input_speech_transcription_completed",
+    "input_speech_transcription_failed",
+    "response_created",
+    "response_output_added",  # message & assistant
+    "response_content_added",  # message type (audio/text)
+    "response_content_done",
+    "response_output_done",
+    "response_done",
     "user_started_speaking",
     "user_stopped_speaking",
     "agent_started_speaking",
@@ -25,13 +39,8 @@ EventTypes = Literal[
     "agent_speech_interrupted",
     "function_calls_collected",
     "function_calls_finished",
+    "function_calls_cancelled",
     "metrics_collected",
-    "response_content_added",
-    "response_content_done",
-    "input_speech_committed",
-    "input_speech_transcription_completed",
-    "input_speech_started",
-    "input_speech_stopped",
 ]
 
 
