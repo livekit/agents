@@ -1,5 +1,11 @@
 # livekit-plugins-azure
 
+## 0.5.1
+
+### Patch Changes
+
+- fix azure stt language autodetection - [#1246](https://github.com/livekit/agents/pull/1246) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.5.0
 
 ### Minor Changes

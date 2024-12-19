@@ -1,5 +1,19 @@
 # livekit-plugins-anthropic
 
+## 0.2.8
+
+### Patch Changes
+
+- Add support for OpenAI's "detail" parameter to ChatImage - [#1213](https://github.com/livekit/agents/pull/1213) ([@bcherry](https://github.com/bcherry))
+
+  Add support for data URLs on ChatImage in the Anthropic plugin.
+
+- fix: correctly parse function argument types - [#1221](https://github.com/livekit/agents/pull/1221) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Fix center_aspect_fit bug, add scale_aspect_fit and scale_aspect_fill resizing options. - [#1222](https://github.com/livekit/agents/pull/1222) ([@bcherry](https://github.com/bcherry))
+
+  Make scale_aspect_fit the new default resizing option for video frames.
+
 ## 0.2.7
 
 ### Patch Changes
