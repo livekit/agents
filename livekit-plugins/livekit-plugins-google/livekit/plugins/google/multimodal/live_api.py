@@ -12,8 +12,8 @@ from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import create_ai_function_info
 from livekit.agents.multimodal import MultimodalModel, MultimodalSession
 
-import google
-from google.genai.types import (
+from google import genai  # type: ignore
+from google.genai.types import (  # type: ignore
     FunctionResponse,
     GenerationConfigDict,
     LiveClientToolResponse,
@@ -180,7 +180,7 @@ class GeminiRealtimeSession(MultimodalSession):
             ),
             tools=tools,
         )
-        self._client = google.genai.Client(
+        self._client = genai.Client(
             http_options={"api_version": "v1alpha"},
             api_key=self._opts.api_key,
             vertexai=self._opts.vertexai,
