@@ -356,12 +356,3 @@ class GeminiRealtimeSession(MultimodalSession):
             await self._session.send(tool_response)
 
         self.emit("function_calls_finished", [called_fnc])
-
-    # TODO: remove
-    def _update_conversation_item_content(
-        self, item_id: str, content: str | list | None
-    ) -> None:
-        pass
-
-    def _recover_from_text_response(self, item_id: str | None) -> None:
-        pass

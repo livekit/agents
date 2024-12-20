@@ -1,5 +1,6 @@
 from .multimodal_agent import (
     AgentTranscriptionOptions,
+    ConversationManipulationSession,
     MultimodalAgent,
     MultimodalModel,
     MultimodalSession,
@@ -10,4 +11,5 @@ __all__ = [
     "AgentTranscriptionOptions",
     "MultimodalModel",
     "MultimodalSession",
+    "ConversationManipulationSession",
 ]

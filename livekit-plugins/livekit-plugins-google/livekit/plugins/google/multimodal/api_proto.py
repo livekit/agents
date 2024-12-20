@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Dict, List, Literal, Sequence, Union
 
-from google.genai import types
+from google.genai import types  # type: ignore
 
 MultimodalModels = Literal["gemini-2.0-flash-exp"]
 

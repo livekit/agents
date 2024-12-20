@@ -14,7 +14,11 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
-from livekit.agents.multimodal import MultimodalModel, MultimodalSession
+from livekit.agents.multimodal import (
+    ConversationManipulationSession,
+    MultimodalModel,
+    MultimodalSession,
+)
 from typing_extensions import TypedDict
 
 from .._oai_api import build_oai_function_description
@@ -464,7 +468,7 @@ class RealtimeModel(MultimodalModel):
             await session.aclose()
 
 
-class RealtimeSession(MultimodalSession):
+class RealtimeSession(MultimodalSession, ConversationManipulationSession):
     class InputAudioBuffer:
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess
@@ -779,6 +783,7 @@ class RealtimeSession(MultimodalSession):
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
         loop: asyncio.AbstractEventLoop,
+        max_text_response_retries: int = 5,
     ) -> None:
         super().__init__()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
@@ -810,6 +815,9 @@ class RealtimeSession(MultimodalSession):
         # sync the chat context to the session
         self._init_sync_task = asyncio.create_task(self.set_chat_ctx(chat_ctx))
 
+        self._text_response_retries = 0
+        self._max_text_response_retries = max_text_response_retries
+        self.on("response_content_done", self._handle_response_content_done)
         self._fnc_tasks = utils.aio.TaskSet()
 
     async def aclose(self) -> None:
@@ -818,6 +826,9 @@ class RealtimeSession(MultimodalSession):
 
         self._send_ch.close()
         await self._main_atask
+
+    def supports_conversation_manipulation(self) -> bool:
+        return True
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
@@ -1006,6 +1017,38 @@ class RealtimeSession(MultimodalSession):
             self.conversation.item.delete(item_id=item_id)
         self.conversation.item.create(self._create_empty_user_audio_message(1.0))
         self.response.create(on_duplicate="keep_both")
+
+    def _truncate_conversation_item(
+        self, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None:
+        self.conversation.item.truncate(
+            item_id=item_id,
+            content_index=content_index,
+            audio_end_ms=audio_end_ms,
+        )
+
+    def _handle_response_content_done(self, message):
+        if message.content_type == "text":
+            if self._text_response_retries >= self._max_text_response_retries:
+                raise RuntimeError(
+                    f"The OpenAI Realtime API returned a text response "
+                    f"after {self._max_text_response_retries} retries. "
+                    f"Please try to reduce the number of text system or "
+                    f"assistant messages in the chat context."
+                )
+
+            self._text_response_retries += 1
+            logger.warning(
+                "The Realtime API returned a text response instead of audio.",
+                extra={
+                    "item_id": message.item_id,
+                    "text": message.text,
+                    "retries": self._text_response_retries,
+                },
+            )
+            self._recover_from_text_response(message.item_id)
+        else:
+            self._text_response_retries = 0
 
     def _update_conversation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
