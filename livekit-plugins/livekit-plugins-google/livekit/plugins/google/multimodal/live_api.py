@@ -9,7 +9,7 @@ from typing import AsyncIterable
 
 from livekit import rtc
 from livekit.agents import llm, utils
-from livekit.agents.llm.function_context import create_ai_function_info
+from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.multimodal import MultimodalModel, MultimodalSession
 
 from google import genai  # type: ignore
@@ -282,7 +282,7 @@ class GeminiRealtimeSession(MultimodalSession):
                             raise ValueError("Function context is not set")
                         fnc_calls = []
                         for fnc_call in response.tool_call.function_calls:
-                            fnc_call_info = create_ai_function_info(
+                            fnc_call_info = _create_ai_function_info(
                                 self._fnc_ctx,
                                 fnc_call.id,
                                 fnc_call.name,
