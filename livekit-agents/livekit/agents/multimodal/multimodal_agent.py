@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Literal, Protocol
+from typing import Callable, Literal
 
 import aiohttp
 from livekit import rtc
@@ -15,6 +16,20 @@ from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from . import agent_playout
 
 EventTypes = Literal[
+    "start_session",
+    "session_updated",
+    "error",
+    "input_speech_started",
+    "input_speech_stopped",
+    "input_speech_committed",
+    "input_speech_transcription_completed",
+    "input_speech_transcription_failed",
+    "response_created",
+    "response_output_added",  # message & assistant
+    "response_content_added",  # message type (audio/text)
+    "response_content_done",
+    "response_output_done",
+    "response_done",
     "user_started_speaking",
     "user_stopped_speaking",
     "agent_started_speaking",
@@ -24,8 +39,78 @@ EventTypes = Literal[
     "agent_speech_interrupted",
     "function_calls_collected",
     "function_calls_finished",
+    "function_calls_cancelled",
     "metrics_collected",
 ]
+
+
+class MultimodalModel(ABC):
+    """Abstract Base Class for multimodal models."""
+
+    @abstractmethod
+    def session(
+        self,
+        *,
+        chat_ctx: llm.ChatContext | None = None,
+        fnc_ctx: llm.FunctionContext | None = None,
+    ) -> MultimodalSession:
+        """
+        Create a new multimodal session with the given chat and function contexts.
+        """
+        pass
+
+
+class MultimodalSession(ABC, utils.EventEmitter[EventTypes]):
+    """
+    Abstract base class for a session object returned by `MultimodalModel.session()`.
+    """
+
+    @property
+    @abstractmethod
+    def fnc_ctx(self) -> llm.FunctionContext | None:
+        """
+        Get or set the function context associated with this session.
+        """
+        pass
+
+    @fnc_ctx.setter
+    @abstractmethod
+    def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
+        pass
+
+    @abstractmethod
+    def chat_ctx_copy(self) -> llm.ChatContext:
+        """
+        Returns a copy of the current chat context.
+        """
+        pass
+
+    @abstractmethod
+    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
+        """
+        Sync the given chat context with the current session state.
+        """
+        pass
+
+    def supports_conversation_manipulation(self) -> bool:
+        return False
+
+    def _update_conversation_item_content(
+        self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
+    ) -> None:
+        raise NotImplementedError
+
+    def _truncate_conversation_item(
+        self, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        """
+        Push an audio frame to the model for processing.
+        """
+        pass
 
 
 @dataclass(frozen=True)
@@ -50,9 +135,6 @@ class AgentTranscriptionOptions:
     representing the hyphenated parts of the word."""
 
 
-class S2SModel(Protocol): ...
-
-
 @dataclass(frozen=True)
 class _ImplOptions:
     transcription: AgentTranscriptionOptions
@@ -62,7 +144,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        model: S2SModel,
+        model: MultimodalModel,
         vad: vad.VAD | None = None,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
@@ -73,7 +155,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         """Create a new MultimodalAgent.
 
         Args:
-            model: S2SModel instance.
+            model: MultimodalModel instance.
             vad: Voice Activity Detection (VAD) instance.
             chat_ctx: Chat context for the assistant.
             fnc_ctx: Function context for the assistant.
@@ -88,10 +170,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
-
-        from livekit.plugins.openai import realtime
-
-        assert isinstance(model, realtime.RealtimeModel)
 
         self._model = model
         self._vad = vad
@@ -177,13 +255,9 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         # Schedule the initialization and start task
         asyncio.create_task(_init_and_start())
 
-        from livekit.plugins.openai import realtime
-
         @self._session.on("response_content_added")
-        def _on_content_added(message: realtime.RealtimeContent):
-            if message.content_type == "text":
-                return
-
+        def _on_content_added(message):
+            # message must follow the same interface for either OpenAI or Gemini
             tr_fwd = transcription.TTSSegmentsForwarder(
                 room=self._room,
                 participant=self._room.local_participant,
@@ -201,31 +275,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 audio_stream=message.audio_stream,
             )
 
-        @self._session.on("response_content_done")
-        def _response_content_done(message: realtime.RealtimeContent):
-            if message.content_type == "text":
-                if self._text_response_retries >= self._max_text_response_retries:
-                    raise RuntimeError(
-                        f"The OpenAI Realtime API returned a text response "
-                        f"after {self._max_text_response_retries} retries. "
-                        f"Please try to reduce the number of text system or "
-                        f"assistant messages in the chat context."
-                    )
-
-                self._text_response_retries += 1
-                logger.warning(
-                    "The OpenAI Realtime API returned a text response instead of audio. "
-                    "Attempting to recover to audio mode...",
-                    extra={
-                        "item_id": message.item_id,
-                        "text": message.text,
-                        "retries": self._text_response_retries,
-                    },
-                )
-                self._session._recover_from_text_response(message.item_id)
-            else:
-                self._text_response_retries = 0
-
         @self._session.on("input_speech_committed")
         def _input_speech_committed():
             self._stt_forwarder.update(
@@ -236,9 +285,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("input_speech_transcription_completed")
-        def _input_speech_transcription_completed(
-            ev: realtime.InputTranscriptionCompleted,
-        ):
+        def _input_speech_transcription_completed(ev):
             self._stt_forwarder.update(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -248,9 +295,11 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             user_msg = ChatMessage.create(
                 text=ev.transcript, role="user", id=ev.item_id
             )
-            self._session._update_conversation_item_content(
-                ev.item_id, user_msg.content
-            )
+
+            if self._session.supports_conversation_manipulation():
+                self._session._update_conversation_item_content(
+                    ev.item_id, user_msg.content
+                )
 
             self.emit("user_speech_committed", user_msg)
             logger.debug(
@@ -265,11 +314,14 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             if self._playing_handle is not None and not self._playing_handle.done():
                 self._playing_handle.interrupt()
 
-                self._session.conversation.item.truncate(
-                    item_id=self._playing_handle.item_id,
-                    content_index=self._playing_handle.content_index,
-                    audio_end_ms=int(self._playing_handle.audio_samples / 24000 * 1000),
-                )
+                if self._session.supports_conversation_manipulation():
+                    self._session._truncate_conversation_item(
+                        item_id=self._playing_handle.item_id,
+                        content_index=self._playing_handle.content_index,
+                        audio_end_ms=int(
+                            self._playing_handle.audio_samples / 24000 * 1000
+                        ),
+                    )
 
         @self._session.on("input_speech_stopped")
         def _input_speech_stopped():
@@ -330,9 +382,10 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     role="assistant",
                     id=self._playing_handle.item_id,
                 )
-                self._session._update_conversation_item_content(
-                    self._playing_handle.item_id, msg.content
-                )
+                if self._session.supports_conversation_manipulation():
+                    self._session._update_conversation_item_content(
+                        self._playing_handle.item_id, msg.content
+                    )
 
                 if interrupted:
                     self.emit("agent_speech_interrupted", msg)
@@ -366,7 +419,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         )
         async for frame in self._input_audio_ch:
             for f in bstream.write(frame.data.tobytes()):
-                self._session.input_audio_buffer.append(f)
+                self._session.push_audio(f)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if self._linked_participant is None:

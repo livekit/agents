@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from . import multimodal
 from .stt import STT, SpeechStream
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "TTS", "SpeechStream", "__version__"]
-
+__all__ = ["STT", "TTS", "SpeechStream", "__version__", "multimodal"]
 from livekit.agents import Plugin
 
 from .log import logger

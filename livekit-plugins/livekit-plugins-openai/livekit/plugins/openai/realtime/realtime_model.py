@@ -14,31 +14,15 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
+from livekit.agents.multimodal import (
+    MultimodalModel,
+    MultimodalSession,
+)
 from typing_extensions import TypedDict
 
 from .._oai_api import build_oai_function_description
 from . import api_proto, remote_items
 from .log import logger
-
-EventTypes = Literal[
-    "start_session",
-    "session_updated",
-    "error",
-    "input_speech_started",
-    "input_speech_stopped",
-    "input_speech_committed",
-    "input_speech_transcription_completed",
-    "input_speech_transcription_failed",
-    "response_created",
-    "response_output_added",  # message & assistant
-    "response_content_added",  # message type (audio/text)
-    "response_content_done",
-    "response_output_done",
-    "response_done",
-    "function_calls_collected",
-    "function_calls_finished",
-    "metrics_collected",
-]
 
 
 @dataclass
@@ -192,7 +176,7 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
-class RealtimeModel:
+class RealtimeModel(MultimodalModel):
     @overload
     def __init__(
         self,
@@ -445,7 +429,7 @@ class RealtimeModel:
         turn_detection: ServerVadOptions | None = None,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
-    ) -> RealtimeSession:
+    ) -> MultimodalSession:
         opts = deepcopy(self._default_opts)
         if modalities is not None:
             opts.modalities = modalities
@@ -483,7 +467,7 @@ class RealtimeModel:
             await session.aclose()
 
 
-class RealtimeSession(utils.EventEmitter[EventTypes]):
+class RealtimeSession(MultimodalSession):
     class InputAudioBuffer:
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess
@@ -798,6 +782,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
         loop: asyncio.AbstractEventLoop,
+        max_text_response_retries: int = 5,
     ) -> None:
         super().__init__()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
@@ -829,6 +814,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         # sync the chat context to the session
         self._init_sync_task = asyncio.create_task(self.set_chat_ctx(chat_ctx))
 
+        self._text_response_retries = 0
+        self._max_text_response_retries = max_text_response_retries
+        self.on("response_content_done", self._handle_response_content_done)
         self._fnc_tasks = utils.aio.TaskSet()
 
     async def aclose(self) -> None:
@@ -837,6 +825,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         self._send_ch.close()
         await self._main_atask
+
+    def supports_conversation_manipulation(self) -> bool:
+        return True
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
@@ -853,6 +844,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     @property
     def input_audio_buffer(self) -> InputAudioBuffer:
         return RealtimeSession.InputAudioBuffer(self)
+
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        self.input_audio_buffer.append(frame)
 
     @property
     def response(self) -> Response:
@@ -1022,6 +1016,38 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self.conversation.item.delete(item_id=item_id)
         self.conversation.item.create(self._create_empty_user_audio_message(1.0))
         self.response.create(on_duplicate="keep_both")
+
+    def _truncate_conversation_item(
+        self, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None:
+        self.conversation.item.truncate(
+            item_id=item_id,
+            content_index=content_index,
+            audio_end_ms=audio_end_ms,
+        )
+
+    def _handle_response_content_done(self, message):
+        if message.content_type == "text":
+            if self._text_response_retries >= self._max_text_response_retries:
+                raise RuntimeError(
+                    f"The OpenAI Realtime API returned a text response "
+                    f"after {self._max_text_response_retries} retries. "
+                    f"Please try to reduce the number of text system or "
+                    f"assistant messages in the chat context."
+                )
+
+            self._text_response_retries += 1
+            logger.warning(
+                "The Realtime API returned a text response instead of audio.",
+                extra={
+                    "item_id": message.item_id,
+                    "text": message.text,
+                    "retries": self._text_response_retries,
+                },
+            )
+            self._recover_from_text_response(message.item_id)
+        else:
+            self._text_response_retries = 0
 
     def _update_conversation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
