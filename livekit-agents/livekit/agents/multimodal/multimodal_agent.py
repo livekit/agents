@@ -95,6 +95,16 @@ class MultimodalSession(ABC, utils.EventEmitter[EventTypes]):
     def supports_conversation_manipulation(self) -> bool:
         return False
 
+    def _update_conversation_item_content(
+        self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
+    ) -> None:
+        raise NotImplementedError
+
+    def _truncate_conversation_item(
+        self, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None:
+        raise NotImplementedError
+
     @abstractmethod
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         """
@@ -128,20 +138,6 @@ class AgentTranscriptionOptions:
 @dataclass(frozen=True)
 class _ImplOptions:
     transcription: AgentTranscriptionOptions
-
-
-class ConversationManipulationSession(ABC):
-    @abstractmethod
-    def _update_conversation_item_content(
-        self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
-    ) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def _truncate_conversation_item(
-        self, item_id: str, content_index: int, audio_end_ms: int
-    ) -> None:
-        raise NotImplementedError
 
 
 class MultimodalAgent(utils.EventEmitter[EventTypes]):

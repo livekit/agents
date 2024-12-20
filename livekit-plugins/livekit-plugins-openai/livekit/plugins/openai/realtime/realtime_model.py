@@ -15,7 +15,6 @@ from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
 from livekit.agents.multimodal import (
-    ConversationManipulationSession,
     MultimodalModel,
     MultimodalSession,
 )
@@ -468,7 +467,7 @@ class RealtimeModel(MultimodalModel):
             await session.aclose()
 
 
-class RealtimeSession(MultimodalSession, ConversationManipulationSession):
+class RealtimeSession(MultimodalSession):
     class InputAudioBuffer:
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess

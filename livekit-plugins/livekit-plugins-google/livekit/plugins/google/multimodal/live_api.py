@@ -190,7 +190,7 @@ class GeminiRealtimeSession(MultimodalSession):
         self._main_atask = asyncio.create_task(
             self._main_task(), name="gemini-realtime-session"
         )
-        # dummy task to wait for the session to be initialized # TODO: remove
+        # dummy task to wait for the session to be initialized # TODO: sync chat ctx
         self._init_sync_task = asyncio.create_task(
             asyncio.sleep(0), name="gemini-realtime-session-init"
         )
