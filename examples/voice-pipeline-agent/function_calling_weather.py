@@ -67,8 +67,8 @@ class AssistantFnc(llm.FunctionContext):
                         f"Failed to get weather data, status code: {response.status}"
                     )
 
-        # To wait for the speech to finish before giving results of the function call
-        await speech_handle.join()
+        # (optional) To wait for the speech to finish before giving results of the function call
+        # await speech_handle.join()
         return weather_data
 
 
