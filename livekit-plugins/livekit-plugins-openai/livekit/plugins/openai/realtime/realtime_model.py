@@ -12,10 +12,11 @@ from urllib.parse import urlencode
 import aiohttp
 from livekit import rtc
 from livekit.agents import llm, utils
+from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
 from typing_extensions import TypedDict
 
-from .._oai_api import build_oai_function_description, create_ai_function_info
+from .._oai_api import build_oai_function_description
 from . import api_proto, remote_items
 from .log import logger
 
@@ -1521,7 +1522,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             item = response_output_done["item"]
             assert item["type"] == "function_call"
 
-            fnc_call_info = create_ai_function_info(
+            fnc_call_info = _create_ai_function_info(
                 self._fnc_ctx,
                 item["call_id"],
                 item["name"],
