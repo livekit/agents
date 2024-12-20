@@ -41,8 +41,8 @@ from livekit.agents import (
 )
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.function_context import (
+    _create_ai_function_info,
     _is_optional_type,
-    create_ai_function_info,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
@@ -285,7 +285,7 @@ class LLMStream(llm.LLMStream):
                 assert self._fnc_name is not None
                 assert self._fnc_raw_arguments is not None
 
-                fnc_info = create_ai_function_info(
+                fnc_info = _create_ai_function_info(
                     self._fnc_ctx,
                     self._tool_call_id,
                     self._fnc_name,

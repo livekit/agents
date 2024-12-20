@@ -19,12 +19,9 @@ import typing
 from typing import Any
 
 from livekit.agents.llm import function_context, llm
-from livekit.agents.llm.function_context import (
-    _is_optional_type,
-    create_ai_function_info,
-)
+from livekit.agents.llm.function_context import _is_optional_type
 
-__all__ = ["build_oai_function_description", "create_ai_function_info"]
+__all__ = ["build_oai_function_description"]
 
 
 def build_oai_function_description(

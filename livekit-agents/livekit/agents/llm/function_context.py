@@ -306,7 +306,7 @@ def _is_optional_type(typ) -> Tuple[bool, Any]:
     return False, None
 
 
-def create_ai_function_info(
+def _create_ai_function_info(
     fnc_ctx: FunctionContext,
     tool_call_id: str,
     fnc_name: str,
