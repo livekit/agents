@@ -81,6 +81,7 @@ def test_hashable_typeinfo():
 
 LLMS: list[Callable[[], llm.LLM]] = [
     pytest.param(lambda: openai.LLM(), id="openai"),
+    pytest.param(lambda: openai.LLM.with_azure(), id="openai.with_azure"),
     # lambda: openai.beta.AssistantLLM(
     #     assistant_opts=openai.beta.AssistantOptions(
     #         create_options=openai.beta.AssistantCreateOptions(
