@@ -6,7 +6,7 @@ import os
 import time
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal, Optional, Union, cast, overload
+from typing import Literal, Optional, Union, cast, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -15,30 +15,16 @@ from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
 from livekit.agents.multimodal import (
+    Content,
     MultimodalModel,
     MultimodalSession,
+    Transcription,
 )
 from typing_extensions import TypedDict
 
 from .._oai_api import build_oai_function_description
 from . import api_proto, remote_items
 from .log import logger
-
-
-@dataclass
-class InputTranscriptionCompleted:
-    item_id: str
-    """id of the item"""
-    transcript: str
-    """transcript of the input audio"""
-
-
-@dataclass
-class InputTranscriptionFailed:
-    item_id: str
-    """id of the item"""
-    message: str
-    """error message"""
 
 
 @dataclass
@@ -89,30 +75,10 @@ class RealtimeToolCall:
     """id of the tool call"""
 
 
-# TODO(theomonnom): add the content type directly inside RealtimeContent?
-# text/audio/transcript?
 @dataclass
-class RealtimeContent:
-    response_id: str
-    """id of the response"""
-    item_id: str
-    """id of the item"""
-    output_index: int
-    """index of the output"""
-    content_index: int
-    """index of the content"""
-    text: str
-    """accumulated text content"""
-    audio: list[rtc.AudioFrame]
-    """accumulated audio content"""
-    text_stream: AsyncIterable[str]
-    """stream of text content"""
-    audio_stream: AsyncIterable[rtc.AudioFrame]
-    """stream of audio content"""
+class RealtimeContent(Content):
     tool_calls: list[RealtimeToolCall]
     """pending tool calls"""
-    content_type: api_proto.Modality
-    """type of the content"""
 
 
 @dataclass
@@ -845,7 +811,7 @@ class RealtimeSession(MultimodalSession):
     def input_audio_buffer(self) -> InputAudioBuffer:
         return RealtimeSession.InputAudioBuffer(self)
 
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
+    def _push_audio(self, frame: rtc.AudioFrame) -> None:
         self.input_audio_buffer.append(frame)
 
     @property
@@ -1288,7 +1254,7 @@ class RealtimeSession(MultimodalSession):
         transcript = transcription_completed["transcript"]
         self.emit(
             "input_speech_transcription_completed",
-            InputTranscriptionCompleted(
+            Transcription(
                 item_id=transcription_completed["item_id"],
                 transcript=transcript,
             ),
@@ -1306,9 +1272,10 @@ class RealtimeSession(MultimodalSession):
         )
         self.emit(
             "input_speech_transcription_failed",
-            InputTranscriptionFailed(
+            Transcription(
                 item_id=transcription_failed["item_id"],
-                message=error["message"],
+                transcript=None,
+                error=error["message"],
             ),
         )
 

@@ -5,12 +5,11 @@ import base64
 import json
 import os
 from dataclasses import dataclass
-from typing import AsyncIterable
 
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
-from livekit.agents.multimodal import MultimodalModel, MultimodalSession
+from livekit.agents.multimodal import Content, MultimodalModel, MultimodalSession
 
 from google import genai  # type: ignore
 from google.genai.types import (  # type: ignore
@@ -34,14 +33,8 @@ from .api_proto import (
 
 
 @dataclass
-class RealtimeContent:
-    response_id: str
-    item_id: str
-    output_index: int
-    content_index: int
-    text_stream: AsyncIterable[str]
-    audio_stream: AsyncIterable[rtc.AudioFrame]
-    content_type: ResponseModality
+class GeminiContent(Content):
+    pass
 
 
 @dataclass
@@ -212,7 +205,7 @@ class GeminiRealtimeSession(MultimodalSession):
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
         self._fnc_ctx = value
 
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
+    def _push_audio(self, frame: rtc.AudioFrame) -> None:
         data = base64.b64encode(frame.data).decode("utf-8")
         self._queue_msg({"mime_type": "audio/pcm", "data": data})
 
@@ -245,20 +238,21 @@ class GeminiRealtimeSession(MultimodalSession):
                                 self._active_response_id = utils.shortuuid()
                                 text_stream = utils.aio.Chan[str]()
                                 audio_stream = utils.aio.Chan[rtc.AudioFrame]()
-                                content = RealtimeContent(
+                                content = GeminiContent(
                                     response_id=self._active_response_id,
-                                    item_id=utils.shortuuid(),
+                                    item_id=self._active_response_id,
                                     output_index=0,
                                     content_index=0,
                                     text_stream=text_stream,
                                     audio_stream=audio_stream,
-                                    content_type="audio",
+                                    content_type=self._opts.response_modalities,
                                 )
                                 self.emit("response_content_added", content)
 
                             for part_index, part in enumerate(model_turn.parts):
                                 if part.text:
-                                    text_stream.send_nowait(part.text)
+                                    content.text += part.text
+                                    content.text_stream.send_nowait(part.text)
                                 if part.inline_data:
                                     frame = rtc.AudioFrame(
                                         data=part.inline_data.data,
@@ -267,6 +261,7 @@ class GeminiRealtimeSession(MultimodalSession):
                                         samples_per_channel=len(part.inline_data.data)
                                         // 2,
                                     )
+                                    content.audio.append(frame)
                                     content.audio_stream.send_nowait(frame)
                         if response.server_content.interrupted:
                             self.emit("input_speech_started")

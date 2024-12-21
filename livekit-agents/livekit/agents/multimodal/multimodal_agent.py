@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import AsyncIterable, Callable, Literal
 
 import aiohttp
 from livekit import rtc
@@ -42,6 +42,28 @@ EventTypes = Literal[
     "function_calls_cancelled",
     "metrics_collected",
 ]
+
+
+@dataclass
+class Transcription:
+    item_id: str
+    """id of the item"""
+    transcript: str
+    """transcript of the input audio"""
+    error: str | None = None
+
+
+@dataclass
+class Content:
+    response_id: str
+    item_id: str
+    output_index: int
+    content_index: int
+    text: str
+    audio: list[rtc.AudioFrame]
+    text_stream: AsyncIterable[str]
+    audio_stream: AsyncIterable[rtc.AudioFrame]
+    content_type: Literal["text", "audio"]
 
 
 class MultimodalModel(ABC):
@@ -106,7 +128,7 @@ class MultimodalSession(ABC, utils.EventEmitter[EventTypes]):
         raise NotImplementedError
 
     @abstractmethod
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
+    def _push_audio(self, frame: rtc.AudioFrame) -> None:
         """
         Push an audio frame to the model for processing.
         """
@@ -256,8 +278,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         asyncio.create_task(_init_and_start())
 
         @self._session.on("response_content_added")
-        def _on_content_added(message):
-            # message must follow the same interface for either OpenAI or Gemini
+        def _on_content_added(message: Content):
             tr_fwd = transcription.TTSSegmentsForwarder(
                 room=self._room,
                 participant=self._room.local_participant,
@@ -285,7 +306,11 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("input_speech_transcription_completed")
-        def _input_speech_transcription_completed(ev):
+        def _input_speech_transcription_completed(ev: Transcription):
+            if ev.error is not None:
+                self.emit("input_speech_transcription_failed", ev)
+                return
+
             self._stt_forwarder.update(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -419,7 +444,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         )
         async for frame in self._input_audio_ch:
             for f in bstream.write(frame.data.tobytes()):
-                self._session.push_audio(f)
+                self._session._push_audio(f)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if self._linked_participant is None:
