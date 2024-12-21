@@ -35,7 +35,7 @@ class AgentTask:
     def can_enter(self, agent: "VoicePipelineAgent") -> bool:
         return True
 
-    @ai_callable(name="enter_task", description=USE_DOCSTRING)
+    @ai_callable(name="transfer_to_task", description=USE_DOCSTRING)
     async def enter(self) -> Union["AgentTask", tuple["AgentTask", str]]:
         """Called to enter the task."""
         return self

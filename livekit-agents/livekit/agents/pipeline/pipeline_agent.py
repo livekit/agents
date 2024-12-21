@@ -888,6 +888,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if not is_using_tools or interrupted:
                 return
 
+            assert isinstance(speech_handle.source, LLMStream)
+            assert (
+                not user_question or speech_handle.user_committed
+            ), "user speech should have been committed before using tools"
+
+            llm_stream = speech_handle.source
+
             if speech_handle.fnc_nested_depth >= self._opts.max_nested_fnc_calls:
                 logger.warning(
                     "max function calls nested depth reached",
@@ -895,19 +902,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         "speech_id": speech_handle.id,
                         "fnc_nested_depth": speech_handle.fnc_nested_depth,
                         "fnc_names": [
-                            fnc.function_info.name
-                            for fnc in speech_handle.source.function_calls
+                            fnc.function_info.name for fnc in llm_stream.function_calls
                         ],
                     },
                 )
                 return
-
-            assert isinstance(speech_handle.source, LLMStream)
-            assert (
-                not user_question or speech_handle.user_committed
-            ), "user speech should have been committed before using tools"
-
-            llm_stream = speech_handle.source
 
             # execute functions
             call_ctx = AgentCallContext(self, llm_stream)
