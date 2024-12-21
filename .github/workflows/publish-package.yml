@@ -27,7 +27,7 @@ jobs:
           submodules: true
           lfs: true
         env:
-          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_DEPLOY_KEY }}
 
       - uses: pnpm/action-setup@v4
       - name: Use Node.js 20
