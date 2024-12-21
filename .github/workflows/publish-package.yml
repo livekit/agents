@@ -20,8 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       #packages: ${{ steps.changesets.outputs.publishedPackages }}
-      packages:
-        - livekit-agents
+      packages: >-
+        [
+          "livekit-agents",
+        ]
 
     steps:
       - uses: actions/checkout@v4
