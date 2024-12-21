@@ -77,7 +77,7 @@ jobs:
           echo "publishedPackages=['livekit-agents']" >> $GITHUB_OUTPUT
 
       - name: debug packages
-        run: echo "${{ steps.changesets.outputs.publishedPackages }}"
+        run: echo "${{ steps.override.outputs.publishedPackages }}"
 
   build:
     needs:
