@@ -47,7 +47,7 @@ jobs:
         run: python -m build
 
       - name: Upload distribution package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: ${{ inputs.artifact_name }}
           path: "${{ startsWith(inputs.package, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ inputs.package }}/dist/"
@@ -82,7 +82,7 @@ jobs:
           CIBW_BUILD_VERBOSITY: 3
 
       - name: Upload distribution package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: ${{ inputs.artifact_name }}
           path: livekit-plugins/livekit-plugins-browser/dist/
