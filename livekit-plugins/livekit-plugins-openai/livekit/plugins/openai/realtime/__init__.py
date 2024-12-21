@@ -11,6 +11,7 @@ from .realtime_model import (
     RealtimeOutput,
     RealtimeResponse,
     RealtimeSession,
+    RealtimeSessionOptions,
     RealtimeToolCall,
     ServerVadOptions,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "RealtimeSession",
     "RealtimeModel",
     "RealtimeError",
+    "RealtimeSessionOptions",
     "ServerVadOptions",
     "InputTranscriptionOptions",
     "ConversationItemCreated",
