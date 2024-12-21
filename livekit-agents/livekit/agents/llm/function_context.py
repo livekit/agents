@@ -22,9 +22,12 @@ import json
 import types
 import typing
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
 
 from ..log import logger
+
+if TYPE_CHECKING:
+    from ..pipeline.agent_task import AgentTask
 
 
 class _UseDocMarker:
@@ -101,6 +104,28 @@ class CalledFunction:
     result: Any | None = None
     exception: BaseException | None = None
 
+    def get_agent_task(self) -> "AgentTask" | None:
+        assert self.task.done()
+
+        if isinstance(self.result, tuple):
+            assert len(self.result) == 2 and isinstance(self.result[0], AgentTask)
+            return self.result[0]
+        elif isinstance(self.result, AgentTask):
+            return self.result
+        return None
+
+    def get_content(self) -> Any | None:
+        assert self.task.done()
+
+        if self.exception:
+            return f"Error: {self.exception}"
+        if isinstance(self.result, tuple):
+            assert len(self.result) == 2 and isinstance(self.result[1], str)
+            return self.result[1]
+        elif not isinstance(self.result, AgentTask):
+            return self.result
+        return None
+
 
 def ai_callable(
     *,
@@ -136,16 +161,13 @@ class FunctionContext:
 
         return deco
 
-    def _register_ai_function(self, fnc: Callable) -> None:
+    @staticmethod
+    def _callable_to_fnc_info(fnc: Callable) -> FunctionInfo | None:
         if not hasattr(fnc, METADATA_ATTR):
-            logger.warning(f"function {fnc.__name__} does not have ai metadata")
-            return
+            return None
 
         metadata: _AIFncMetadata = getattr(fnc, METADATA_ATTR)
         fnc_name = metadata.name
-        if fnc_name in self._fncs:
-            raise ValueError(f"duplicate ai_callable name: {fnc_name}")
-
         sig = inspect.signature(fnc)
 
         # get_type_hints with include_extra=True is needed when using Annotated
@@ -190,7 +212,7 @@ class FunctionContext:
                 choices=choices,
             )
 
-        self._fncs[metadata.name] = FunctionInfo(
+        return FunctionInfo(
             name=metadata.name,
             description=metadata.description,
             auto_retry=metadata.auto_retry,
@@ -198,9 +220,25 @@ class FunctionContext:
             arguments=args,
         )
 
+    def _register_ai_function(self, fnc: Callable) -> None:
+        fnc_info = self._callable_to_fnc_info(fnc)
+        if not fnc_info:
+            logger.warning(f"function {fnc.__name__} does not have ai metadata")
+            return
+
+        if fnc_info.name in self._fncs:
+            raise ValueError(f"duplicate ai_callable name: {fnc_info.name}")
+
+        self._fncs[fnc_info.name] = fnc_info
+
     @property
     def ai_functions(self) -> dict[str, FunctionInfo]:
         return self._fncs
+
+    def copy(self) -> "FunctionContext":
+        new_fnc_ctx = FunctionContext()
+        new_fnc_ctx._fncs.update(self._fncs)
+        return new_fnc_ctx
 
 
 @dataclass(frozen=True)

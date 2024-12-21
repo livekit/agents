@@ -19,10 +19,18 @@ from typing import (
 from livekit import rtc
 
 from .. import metrics, stt, tokenize, tts, utils, vad
-from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from ..llm import (
+    LLM,
+    CalledFunction,
+    ChatContext,
+    ChatMessage,
+    FunctionContext,
+    LLMStream,
+)
 from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
+from .agent_task import AgentTask
 from .human_input import HumanInput
 from .log import logger
 from .plotter import AssistantPlotter
@@ -184,8 +192,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         llm: LLM,
         tts: tts.TTS,
         turn_detector: _TurnDetector | None = None,
-        chat_ctx: ChatContext | None = None,
-        fnc_ctx: FunctionContext | None = None,
+        # chat_ctx: ChatContext | None = None,
+        # fnc_ctx: FunctionContext | None = None,
+        initial_task: AgentTask | None = None,
+        available_tasks: list[AgentTask] | None = None,
         allow_interruptions: bool = True,
         interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
@@ -275,8 +285,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._stt, self._vad, self._llm, self._tts = stt, vad, llm, tts
         self._turn_detector = turn_detector
-        self._chat_ctx = chat_ctx or ChatContext()
-        self._fnc_ctx = fnc_ctx
+        # self._chat_ctx = chat_ctx or ChatContext()
+        # self._fnc_ctx = fnc_ctx
         self._started, self._closed = False, False
 
         self._human_input: HumanInput | None = None
@@ -306,13 +316,51 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._last_final_transcript_time: float | None = None
         self._last_speech_time: float | None = None
 
+        # agent tasks
+        self._user_data: dict[str, Any] = {}
+        self._current_agent_task = initial_task or AgentTask()
+        self._agent_tasks: list[AgentTask] = available_tasks or []
+
+    @property
+    def user_data(self) -> dict[str, Any]:
+        return self._user_data
+
+    @property
+    def agent_tasks(self) -> list[AgentTask]:
+        return self._agent_tasks
+
+    @property
+    def current_agent_task(self) -> AgentTask:
+        return self._current_agent_task
+
+    @current_agent_task.setter
+    def current_agent_task(self, task: AgentTask | None) -> None:
+        self._current_agent_task = task
+
     @property
     def fnc_ctx(self) -> FunctionContext | None:
-        return self._fnc_ctx
+        available_tasks = [task for task in self._agent_tasks if task.can_enter()]
+        if not available_tasks:
+            # no transition available, return the current function context
+            return self._current_agent_task.fnc_ctx
 
-    @fnc_ctx.setter
-    def fnc_ctx(self, fnc_ctx: FunctionContext | None) -> None:
-        self._fnc_ctx = fnc_ctx
+        new_fnc_ctx = (
+            self._current_agent_task.fnc_ctx.copy()
+            if self._current_agent_task.fnc_ctx
+            else FunctionContext()
+        )
+        for task in available_tasks:
+            if task.enter_fnc_info.name in new_fnc_ctx._fncs:
+                raise ValueError(
+                    f"duplicate ai_callable name: {task.enter_fnc_info.name}"
+                )
+            new_fnc_ctx._fncs[task.enter_fnc_info.name] = task.enter_fnc_info
+
+        return new_fnc_ctx
+
+    @property
+    def _chat_ctx(self) -> ChatContext:
+        return self._current_agent_task.chat_ctx
 
     @property
     def chat_ctx(self) -> ChatContext:
@@ -320,7 +368,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     @property
     def llm(self) -> LLM:
-        return self._llm
+        return self._current_agent_task.llm or self._llm
 
     @property
     def tts(self) -> tts.TTS:
@@ -382,6 +430,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     sequence_id=speech_data.sequence_id,
                 ),
             )
+
+        for agent_task in self._agent_tasks:
+            if agent_task.llm:
+                agent_task.llm.on("metrics_collected", _on_llm_metrics)
 
         @self._vad.on("metrics_collected")
         def _on_vad_metrics(vad_metrics: vad.VADMetrics) -> None:
@@ -631,10 +683,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         agent_playout = AgentPlayout(audio_source=audio_source)
         self._agent_output = AgentOutput(
-            room=self._room,
-            agent_playout=agent_playout,
-            llm=self._llm,
-            tts=self._tts,
+            room=self._room, agent_playout=agent_playout, tts=self._tts
         )
 
         def _on_playout_started() -> None:
@@ -868,7 +917,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             self.emit("function_calls_collected", new_function_calls)
 
-            called_fncs = []
+            called_fncs: list[CalledFunction] = []
             for fnc in new_function_calls:
                 called_fnc = fnc.execute()
                 called_fncs.append(called_fnc)
@@ -893,11 +942,24 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             tool_calls_info = []
             tool_calls_results = []
-
+            tool_calls_chat_ctx = call_ctx.chat_ctx
             for called_fnc in called_fncs:
                 # ignore the function calls that returns None
                 if called_fnc.result is None and called_fnc.exception is None:
                     continue
+
+                new_task = called_fnc.get_agent_task()
+                if new_task:
+                    logger.debug(
+                        "switching to next agent task",
+                        extra={
+                            "current_task": self.current_agent_task.task_name,
+                            "new_task": new_task.task_name,
+                        },
+                    )
+                    self.current_agent_task = new_task
+                    # use the new chat ctx for the next task
+                    tool_calls_chat_ctx = self._chat_ctx
 
                 tool_calls_info.append(called_fnc.call_info)
                 tool_calls_results.append(
@@ -921,10 +983,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             )
 
             # synthesize the tool speech with the chat ctx from llm_stream
-            chat_ctx = call_ctx.chat_ctx.copy()
+            chat_ctx = tool_calls_chat_ctx.copy()
             chat_ctx.messages.extend(extra_tools_messages)
             chat_ctx.messages.extend(call_ctx.extra_chat_messages)
-            answer_llm_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx)
+            answer_llm_stream = self.llm.chat(chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx)
 
             synthesis_handle = self._synthesize_agent_speech(
                 new_speech_handle.id, answer_llm_stream
