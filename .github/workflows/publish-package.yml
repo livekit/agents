@@ -19,7 +19,9 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     outputs:
-      packages: ${{ steps.changesets.outputs.publishedPackages }}
+      #packages: ${{ steps.changesets.outputs.publishedPackages }}
+      packages:
+        - livekit-agents
 
     steps:
       - uses: actions/checkout@v4
