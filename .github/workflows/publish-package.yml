@@ -74,7 +74,7 @@ jobs:
       - name: override packages
         id: override
         run: |
-          echo 'publishedPackages=[{"name":"livekit-agents","version":"0.12.3"}]' >> $GITHUB_OUTPUT
+          echo 'publishedPackages=[{"name":"livekit-plugins-anthropic","version":"0.2.8"},{"name":"livekit-plugins-azure","version":"0.5.1"},{"name":"livekit-plugins-browser","version":"0.0.5"},{"name":"livekit-plugins-deepgram","version":"0.6.15"},{"name":"livekit-plugins-openai","version":"0.10.11"},{"name":"livekit-plugins-turn-detector","version":"0.3.3"}]' >> $GITHUB_OUTPUT
 
       - name: debug packages
         run: echo "${{ steps.override.outputs.publishedPackages }}"
