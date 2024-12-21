@@ -334,12 +334,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         return self._current_agent_task
 
     @current_agent_task.setter
-    def current_agent_task(self, task: AgentTask | None) -> None:
+    def current_agent_task(self, task: AgentTask) -> None:
         self._current_agent_task = task
 
     @property
     def fnc_ctx(self) -> FunctionContext | None:
-        available_tasks = [task for task in self._agent_tasks if task.can_enter()]
+        available_tasks = [task for task in self._agent_tasks if task.can_enter(self)]
         if not available_tasks:
             # no transition available, return the current function context
             return self._current_agent_task.fnc_ctx
@@ -953,8 +953,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     logger.debug(
                         "switching to next agent task",
                         extra={
-                            "current_task": self.current_agent_task.task_name,
-                            "new_task": new_task.task_name,
+                            "current_task": self.current_agent_task.name,
+                            "new_task": new_task.name,
                         },
                     )
                     self.current_agent_task = new_task

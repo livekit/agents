@@ -105,6 +105,8 @@ class CalledFunction:
     exception: BaseException | None = None
 
     def get_agent_task(self) -> "AgentTask" | None:
+        from ..pipeline.agent_task import AgentTask
+
         assert self.task.done()
 
         if isinstance(self.result, tuple):
@@ -115,6 +117,8 @@ class CalledFunction:
         return None
 
     def get_content(self) -> Any | None:
+        from ..pipeline.agent_task import AgentTask
+
         assert self.task.done()
 
         if self.exception:
@@ -130,7 +134,7 @@ class CalledFunction:
 def ai_callable(
     *,
     name: str | None = None,
-    description: str | _UseDocMarker | None = None,
+    description: str | _UseDocMarker | None = USE_DOCSTRING,
     auto_retry: bool = False,
 ) -> Callable:
     def deco(f):
@@ -152,7 +156,7 @@ class FunctionContext:
         self,
         *,
         name: str | None = None,
-        description: str | _UseDocMarker | None = None,
+        description: str | _UseDocMarker | None = USE_DOCSTRING,
         auto_retry: bool = True,
     ) -> Callable:
         def deco(f):
