@@ -48,9 +48,10 @@ EventTypes = Literal[
 class Transcription:
     item_id: str
     """id of the item"""
-    transcript: str
+    transcript: str | None
     """transcript of the input audio"""
     error: str | None = None
+    """error message"""
 
 
 @dataclass
