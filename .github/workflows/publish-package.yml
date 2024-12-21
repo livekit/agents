@@ -20,10 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       #packages: ${{ steps.changesets.outputs.publishedPackages }}
-      packages: >-
-        [
-          "livekit-agents",
-        ]
+      packages: ${{ steps.override.outputs.publishedPackages }}
 
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +70,11 @@ jobs:
           publish: pnpm ci:publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: override packages
+        id: override
+        run: |
+          echo "publishedPackages=['livekit-agents']" >> $GITHUB_OUTPUT
 
       - name: debug packages
         run: echo "${{ steps.changesets.outputs.publishedPackages }}"
