@@ -49,18 +49,16 @@ def _transfer_to(task: AgentTask, message: str | None = None) -> tuple[AgentTask
 
 
 class Greeter(AgentTask):
-    def __init__(self, menu: str = "Pizza, Salad, Ice Cream, Coffee"):
+    def __init__(self, menu: str):
         super().__init__(
             instructions=(
                 "You are a professional restaurant receptionist handling incoming calls. "
                 "Warmly greet the caller and ask if they would like to place an order. "
                 f"Available menu items: {menu}. "
-                "Guide the conversation as follows:\n"
-                "- If they want to place an order, transfer them to order taking\n"
-                "- If they have completed their order, transfer them to customer details\n"
-                "- For any other inquiries, assist them directly\n"
-                "Maintain a friendly and professional tone throughout the conversation."
-                "Use the functions to transfer the call to the next step."
+                "Maintain a friendly and professional tone throughout the conversation.\n"
+                "Guide the conversation as follows: order taking, customer details, checkout. "
+                "Use the functions to transfer the call to OrderTaking, CustomerDetails, or Checkout. "
+                "For any other inquiries, assist them directly."
             ),
         )
 
@@ -88,7 +86,7 @@ class Greeter(AgentTask):
 
 
 class OrderTaking(AgentTask):
-    def __init__(self, menu: str = "Pizza, Salad, Ice Cream, Coffee"):
+    def __init__(self, menu: str):
         super().__init__(
             instructions=(
                 "You are a professional order taker at a restaurant. "
@@ -96,8 +94,9 @@ class OrderTaking(AgentTask):
                 f"1. Take their order selections one at a time from our menu: {menu}\n"
                 "2. Clarify any special requests or modifications\n"
                 "3. Repeat back the complete order to confirm accuracy\n"
-                "4. Once confirmed, transfer them back to the greeter\n"
+                "4. Once confirmed, transfer them to collect customer details.\n"
                 "Be attentive and ensure order accuracy before proceeding."
+                "Use the functions to transfer the call to the next step."
             ),
             functions=[self.update_order],
         )
@@ -139,8 +138,9 @@ class CustomerDetails(AgentTask):
                 "1. Ask for the customer's name and confirm the spelling\n"
                 "2. Request their phone number and verify it's correct\n"
                 "3. Repeat both pieces of information back to ensure accuracy\n"
-                "4. Once confirmed, transfer back to the greeter\n"
+                "4. Once confirmed, transfer to checkout.\n"
                 "Handle personal information professionally and courteously."
+                "Use the functions to transfer the call to the next step."
             ),
             functions=[self.collect_name, self.collect_phone],
         )
@@ -179,6 +179,48 @@ class CustomerDetails(AgentTask):
         return f"The phone number is updated to {phone}"
 
 
+class Checkout(AgentTask):
+    def __init__(self, menu: str):
+        super().__init__(
+            instructions=(
+                "You are a checkout agent. Ask the customer if they want to checkout. "
+                f"The menu items and prices are: {menu}. "
+                "If they confirm, call the checkout function and transfer them back to the greeter."
+            ),
+            functions=[self.checkout],
+        )
+
+    def can_enter(self, agent: "VoicePipelineAgent") -> bool:
+        checked_out = agent.user_data.get("checked_out", False)
+        order = agent.user_data.get("order", None)
+        customer_name = agent.user_data.get("customer_name", None)
+        customer_phone = agent.user_data.get("customer_phone", None)
+
+        return order and customer_name and customer_phone and not checked_out
+
+    @llm.ai_callable(name="enter_checkout")
+    async def enter(self) -> tuple[Self, str]:
+        """Called to transfer to the checkout."""
+        agent = AgentCallContext.get_current().agent
+        message = f"Transferred from {agent.current_agent_task.name} to {self.name}. "
+        message += f"The current order is {agent.user_data.get('order', 'empty')}. "
+        message += f"The customer name is {agent.user_data.get('customer_name', 'unknown')}, "
+        message += f"phone number is {agent.user_data.get('customer_phone', 'unknown')}"
+        return _transfer_to(self, message)
+
+    @llm.ai_callable()
+    async def checkout(
+        self,
+        expense: Annotated[float, llm.TypeInfo(description="The expense of the order")],
+    ) -> str:
+        """Called when the user confirms the checkout."""
+        agent = AgentCallContext.get_current().agent
+        agent.user_data["checked_out"] = True
+        agent.user_data["expense"] = expense
+        logger.info("Checked out", extra=agent.user_data)
+        return "Checked out"
+
+
 def prewarm_process(proc: JobProcess):
     # preload silero VAD in memory to speed up session start
     proc.userdata["vad"] = silero.VAD.load()
@@ -188,8 +230,8 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     chat_log_file = "multi_stage_chat_log.txt"
-    menu = "Pizza, Salad, Ice Cream, Coffee"
-    agent_tasks = [Greeter(menu), OrderTaking(menu), CustomerDetails()]
+    menu = "Pizza: $10, Salad: $5, Ice Cream: $3, Coffee: $2"
+    agent_tasks = [Greeter(menu), OrderTaking(menu), CustomerDetails(), Checkout(menu)]
 
     participant = await ctx.wait_for_participant()
     agent = VoicePipelineAgent(
