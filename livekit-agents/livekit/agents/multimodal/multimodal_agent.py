@@ -308,7 +308,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         @self._session.on("input_speech_transcription_completed")
         def _input_speech_transcription_completed(ev: Transcription):
-            if ev.error is not None:
+            if ev.error is not None or ev.transcript is None:
                 self.emit("input_speech_transcription_failed", ev)
                 return
 
