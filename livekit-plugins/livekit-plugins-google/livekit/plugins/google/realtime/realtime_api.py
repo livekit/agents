@@ -88,7 +88,7 @@ class RealtimeModel(RealtimeAPI):
         Args:
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
             api_key (str or None, optional): OpenAI API key. If None, will attempt to read from the environment variable OPENAI_API_KEY
-            modalities (ResponseModality): Modalities to use, such as ["text", "audio"]. Defaults to ["AUDIO"].
+            modalities (ResponseModality): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
             model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
@@ -124,7 +124,7 @@ class RealtimeModel(RealtimeAPI):
             model=model,
             api_key=api_key,
             voice=voice,
-            response_modalities=modalities.upper(),
+            response_modalities=modalities,
             vertexai=vertexai,
             project=project,
             location=location,
