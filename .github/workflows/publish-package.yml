@@ -49,6 +49,8 @@ jobs:
           set +e
           pnpm changeset pre ${{ github.ref == 'refs/heads/main' && 'exit' || 'enter dev' }}
           echo "exitcode=$?" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add changes
         if: ${{ steps.release_mode.outputs.exitcode == '0' }}
@@ -64,6 +66,8 @@ jobs:
         with:
           version: pnpm ci:version
           publish: pnpm ci:publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: debug packages
         run: echo "${{ steps.changesets.outputs.publishedPackages }}"
