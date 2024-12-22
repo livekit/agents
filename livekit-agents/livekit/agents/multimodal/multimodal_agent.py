@@ -75,9 +75,9 @@ class Capabilities:
 class RealtimeAPI(ABC):
     """Abstract Base Class for realtime models."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, capabilities: Capabilities) -> None:
         super().__init__()
-        self._capabilities = Capabilities()
+        self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
