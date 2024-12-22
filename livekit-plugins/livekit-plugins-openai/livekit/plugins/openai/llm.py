@@ -732,18 +732,28 @@ class LLMStream(llm.LLMStream):
 
             user = self._user or openai.NOT_GIVEN
             messages = _build_oai_context(self._chat_ctx, id(self))
-            stream = await self._client.chat.completions.create(
-                messages=messages,
-                model=self._model,
-                n=self._n,
-                temperature=self._temperature,
-                stream_options={"include_usage": True},
-                stream=True,
-                user=user,
-                store=self._llm._opts.store,
-                metadata=self._llm._opts.metadata,
+                        # Prepare the arguments for the API call
+            api_args = {
+                "messages": messages,
+                "model": self._model,
+                "n": self._n,
+                "temperature": self._temperature,
+                "stream_options": {"include_usage": True},
+                "stream": True,
+                "user": user,
                 **opts,
-            )
+            }
+
+            # Conditionally add store if it's not None
+            if self._llm._opts.store is not None:
+                api_args["store"] = self._llm._opts.store
+
+            # Conditionally add metadata if it's not None
+            if self._llm._opts.metadata is not None:
+                api_args["metadata"] = self._llm._opts.metadata
+
+            # Make the API call with the prepared arguments
+            stream = await self._client.chat.completions.create(**api_args)
 
             async with stream:
                 async for chunk in stream:
