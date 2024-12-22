@@ -19,7 +19,7 @@ from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
 
-logger = logging.getLogger("multi-stage-agent")
+logger = logging.getLogger("multi-task-agent")
 logger.setLevel(logging.INFO)
 
 
@@ -49,7 +49,9 @@ def _transfer_to(task: AgentTask, message: str | None = None) -> tuple[AgentTask
     task.chat_ctx.messages.extend(
         get_last_n_messages(agent.chat_ctx.messages, keep_last_n)
     )
+
     if not message:
+        # add the current user data to the message
         user_data = user_data_template.copy()
         user_data.update(agent.user_data)
         message = (
@@ -228,12 +230,7 @@ class Checkout(AgentTask):
     @llm.ai_callable(name="transfer_to_checkout")
     async def enter(self) -> tuple[Self, str]:
         """Called to transfer to the checkout."""
-        agent = AgentCallContext.get_current().agent
-        message = f"Transferred from {agent.current_agent_task.name} to {self.name}. "
-        message += f"The current order is {agent.user_data.get('order')}. "
-        message += f"The customer name is {agent.user_data.get('customer_name')}, "
-        message += f"phone number is {agent.user_data.get('customer_phone')}"
-        return _transfer_to(self, message)
+        return _transfer_to(self)
 
     @llm.ai_callable()
     async def checkout(
@@ -248,16 +245,20 @@ class Checkout(AgentTask):
         return "Checked out"
 
 
-def prewarm_process(proc: JobProcess):
-    # preload silero VAD in memory to speed up session start
-    proc.userdata["vad"] = silero.VAD.load()
-
-
 async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     chat_log_file = "multi_task_chat_log.txt"
     menu = "Pizza: $10, Salad: $5, Ice Cream: $3, Coffee: $2"
+
+    # Set up chat logger
+    chat_logger = logging.getLogger("chat_logger")
+    chat_logger.setLevel(logging.INFO)
+    handler = logging.FileHandler(chat_log_file)
+    formatter = logging.Formatter("%(message)s")
+    handler.setFormatter(formatter)
+    chat_logger.addHandler(handler)
+
     agent_tasks = [
         Greeter(menu),
         OrderTaking(menu),
@@ -276,7 +277,7 @@ async def entrypoint(ctx: JobContext):
         max_nested_fnc_calls=3,  # may call functions in the transition function
     )
 
-    # For testing with text input
+    # read text input from the room for easy testing
     @ctx.room.on("data_received")
     def on_data_received(packet: rtc.DataPacket):
         if packet.topic == "lk-chat-topic":
@@ -291,28 +292,31 @@ async def entrypoint(ctx: JobContext):
                 ),
             )
 
+    # write the chat log to a file
     @agent.on("user_speech_committed")
     @agent.on("agent_speech_interrupted")
     @agent.on("agent_speech_committed")
     def on_speech_committed(message: llm.ChatMessage):
-        with open(chat_log_file, "a") as f:
-            f.write(f"{message.role}: {message.content}\n")
+        chat_logger.info(f"{message.role}: {message.content}")
 
     @agent.on("function_calls_collected")
     def on_function_calls_collected(calls: list[llm.FunctionCallInfo]):
         fnc_infos = [{fnc.function_info.name: fnc.arguments} for fnc in calls]
-        with open(chat_log_file, "a") as f:
-            f.write(f"fnc_calls_collected: {fnc_infos}\n")
+        chat_logger.info(f"fnc_calls_collected: {fnc_infos}")
 
     @agent.on("function_calls_finished")
     def on_function_calls_finished(calls: list[llm.CalledFunction]):
         called_infos = [{fnc.call_info.function_info.name: fnc.result} for fnc in calls]
-        with open(chat_log_file, "a") as f:
-            f.write(f"fnc_calls_finished: {called_infos}\n")
+        chat_logger.info(f"fnc_calls_finished: {called_infos}")
 
     # Start the assistant. This will automatically publish a microphone track and listen to the participant.
     agent.start(ctx.room, participant)
     await agent.say("Welcome to our restaurant! How may I assist you today?")
+
+
+def prewarm_process(proc: JobProcess):
+    # preload silero VAD in memory to speed up session start
+    proc.userdata["vad"] = silero.VAD.load()
 
 
 if __name__ == "__main__":
