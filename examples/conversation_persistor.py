@@ -71,7 +71,6 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         self._log_q = asyncio.Queue[Union[EventLog, TranscriptionLog, None]]()
 
         self._main_task = asyncio.create_task(self._main_atask())
-        self.main_task()
 
     @property
     def log(self) -> str | None:
@@ -125,7 +124,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         self._log_q.put_nowait(None)
         await self._main_task
 
-    def main_task(self) -> None:
+    def start(self) -> None:
         # Listens for emitted MultimodalAgent events
         @self._model.on("user_started_speaking")
         def _user_started_speaking():
@@ -202,6 +201,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     cp = ConversationPersistor(model=agent, log="log.txt")
+    cp.start()
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()
