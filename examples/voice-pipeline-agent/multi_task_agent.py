@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Annotated, Self
+from typing import Annotated
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -13,7 +13,11 @@ from livekit.agents import (
     llm,
 )
 from livekit.agents.pipeline import AgentCallContext, VoicePipelineAgent
-from livekit.agents.pipeline.agent_task import AgentTask
+from livekit.agents.pipeline.agent_task import (
+    AgentTask,
+    AgentTaskOptions,
+    _default_before_enter_cb,
+)
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.plugins import deepgram, openai, silero
 
@@ -21,15 +25,6 @@ load_dotenv()
 
 logger = logging.getLogger("multi-task-agent")
 logger.setLevel(logging.INFO)
-
-
-def get_last_n_messages(
-    messages: list[llm.ChatMessage], n: int
-) -> list[llm.ChatMessage]:
-    collected_messages = messages.copy()[-n:]
-    while collected_messages and collected_messages[0].role in ["system", "tool"]:
-        collected_messages.pop(0)
-    return collected_messages
 
 
 user_data_template = {
@@ -41,24 +36,15 @@ user_data_template = {
 }
 
 
-def _transfer_to(task: AgentTask, message: str | None = None) -> tuple[AgentTask, str]:
-    agent = AgentCallContext.get_current().agent
+async def before_enter_cb(
+    agent: VoicePipelineAgent, task: AgentTask
+) -> tuple[AgentTask, str]:
+    task, message = await _default_before_enter_cb(agent, task)
 
-    # keep the last n messages for the next stage
-    keep_last_n = 6
-    task.chat_ctx.messages.extend(
-        get_last_n_messages(agent.chat_ctx.messages, keep_last_n)
-    )
-
-    if not message:
-        # add the current user data to the message
-        user_data = user_data_template.copy()
-        user_data.update(agent.user_data)
-        message = (
-            f"Transferred from {agent.current_agent_task.name} to {task.name}. "
-            f"The current user data is {json.dumps(user_data)}"
-        )
-
+    # additionally add the current user data to the message
+    user_data = user_data_template.copy()
+    user_data.update(agent.user_data)
+    message += f" The current user data is {json.dumps(user_data)}"
     logger.info(message)
     return task, message
 
@@ -66,6 +52,7 @@ def _transfer_to(task: AgentTask, message: str | None = None) -> tuple[AgentTask
 class Greeter(AgentTask):
     def __init__(self, menu: str):
         super().__init__(
+            name="greeter",
             instructions=(
                 "You are a friendly restaurant receptionist. Your tasks:\n"
                 "1. Warmly greet the caller\n"
@@ -81,15 +68,8 @@ class Greeter(AgentTask):
                 "For non-order inquiries, assist directly while maintaining a professional tone."
             ),
             functions=[self.start_new_order],
+            options=AgentTaskOptions(before_enter_cb=before_enter_cb),
         )
-
-    def can_enter(self, agent: "VoicePipelineAgent") -> bool:
-        return True
-
-    @llm.ai_callable(name="transfer_to_greeter")
-    async def enter(self) -> tuple[Self, str]:
-        """Called to transfer to the greeter."""
-        return _transfer_to(self)
 
     @llm.ai_callable()
     async def start_new_order(self) -> str:
@@ -100,9 +80,32 @@ class Greeter(AgentTask):
         return "Started a new order"
 
 
+"""
+Another way to create a task
+
+@llm.ai_callable()
+async def start_new_order() -> str:
+    ...
+
+def can_enter_greeter(agent: VoicePipelineAgent) -> bool:
+    return True
+
+greeter = AgentTask(
+    name="greeter",
+    instructions="...",
+    functions=[start_new_order],
+    options=AgentTaskOptions(
+        can_enter_cb=can_enter_greeter,
+        before_enter_cb=before_enter_cb,
+    ),
+)
+"""
+
+
 class OrderTaking(AgentTask):
     def __init__(self, menu: str):
         super().__init__(
+            name="order_taking",
             instructions=(
                 "You are a professional order taker at a restaurant. Your tasks:\n"
                 f"1. Take orders from our menu: {menu}\n"
@@ -117,16 +120,15 @@ class OrderTaking(AgentTask):
                 "- For non-order questions, transfer to greeter"
             ),
             functions=[self.update_order],
+            options=AgentTaskOptions(
+                can_enter_cb=self.can_enter,
+                before_enter_cb=before_enter_cb,
+            ),
         )
 
     def can_enter(self, agent: "VoicePipelineAgent") -> bool:
         checked_out = agent.user_data.get("checked_out", False)
         return not checked_out
-
-    @llm.ai_callable(name="transfer_to_order_taking")
-    async def enter(self) -> tuple[Self, str]:
-        """Called to transfer to the order taking."""
-        return _transfer_to(self)
 
     @llm.ai_callable()
     async def update_order(
@@ -148,6 +150,7 @@ class OrderTaking(AgentTask):
 class CustomerRegistration(AgentTask):
     def __init__(self):
         super().__init__(
+            name="customer_registration",
             instructions=(
                 "You are collecting customer information for their order. Your tasks:\n"
                 "1. Get and confirm customer's name and comfirm the spelling\n"
@@ -163,17 +166,16 @@ class CustomerRegistration(AgentTask):
                 "- For non-detail questions, transfer to greeter"
             ),
             functions=[self.collect_name, self.collect_phone],
+            options=AgentTaskOptions(
+                can_enter_cb=self.can_enter,
+                before_enter_cb=before_enter_cb,
+            ),
         )
 
     def can_enter(self, agent: "VoicePipelineAgent") -> bool:
         checked_out = agent.user_data.get("checked_out", False)
         order = agent.user_data.get("order", None)
         return order and not checked_out
-
-    @llm.ai_callable(name="transfer_to_customer_registration")
-    async def enter(self) -> tuple[Self, str]:
-        """Called to transfer to the customer registration."""
-        return _transfer_to(self)
 
     @llm.ai_callable()
     async def collect_name(
@@ -202,6 +204,7 @@ class CustomerRegistration(AgentTask):
 class Checkout(AgentTask):
     def __init__(self, menu: str):
         super().__init__(
+            name="checkout",
             instructions=(
                 "You are a checkout agent at a restaurant. Your tasks:\n"
                 f"1. Review order and prices ({menu})\n"
@@ -217,6 +220,10 @@ class Checkout(AgentTask):
                 "- For non-checkout questions, transfer to greeter"
             ),
             functions=[self.checkout],
+            options=AgentTaskOptions(
+                can_enter_cb=self.can_enter,
+                before_enter_cb=before_enter_cb,
+            ),
         )
 
     def can_enter(self, agent: "VoicePipelineAgent") -> bool:
@@ -226,11 +233,6 @@ class Checkout(AgentTask):
         customer_phone = agent.user_data.get("customer_phone")
 
         return order and customer_name and customer_phone and not checked_out
-
-    @llm.ai_callable(name="transfer_to_checkout")
-    async def enter(self) -> tuple[Self, str]:
-        """Called to transfer to the checkout."""
-        return _transfer_to(self)
 
     @llm.ai_callable()
     async def checkout(

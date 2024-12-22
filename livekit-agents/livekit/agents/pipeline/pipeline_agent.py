@@ -339,7 +339,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     @property
     def fnc_ctx(self) -> FunctionContext | None:
-        available_tasks = [task for task in self._agent_tasks if task.can_enter(self)]
+        available_tasks = [task for task in self._agent_tasks if task._can_enter(self)]
         if not available_tasks:
             # no transition available, return the current function context
             return self._current_agent_task.fnc_ctx
@@ -350,11 +350,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             else FunctionContext()
         )
         for task in available_tasks:
-            if task.enter_fnc_info.name in new_fnc_ctx._fncs:
+            if task.transfer_fnc_info.name in new_fnc_ctx._fncs:
                 raise ValueError(
-                    f"duplicate ai_callable name: {task.enter_fnc_info.name}"
+                    f"duplicate ai_callable name: {task.transfer_fnc_info.name}"
                 )
-            new_fnc_ctx._fncs[task.enter_fnc_info.name] = task.enter_fnc_info
+            new_fnc_ctx._fncs[task.transfer_fnc_info.name] = task.transfer_fnc_info
 
         return new_fnc_ctx
 

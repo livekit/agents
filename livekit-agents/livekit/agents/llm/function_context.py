@@ -34,6 +34,10 @@ class _UseDocMarker:
     pass
 
 
+class _NoMetadataError(Exception):
+    pass
+
+
 METADATA_ATTR = "__livekit_ai_metadata__"
 USE_DOCSTRING = _UseDocMarker()
 
@@ -166,9 +170,9 @@ class FunctionContext:
         return deco
 
     @staticmethod
-    def _callable_to_fnc_info(fnc: Callable) -> FunctionInfo | None:
+    def _callable_to_fnc_info(fnc: Callable) -> FunctionInfo:
         if not hasattr(fnc, METADATA_ATTR):
-            return None
+            raise _NoMetadataError("function must be decorated with ai_callable")
 
         metadata: _AIFncMetadata = getattr(fnc, METADATA_ATTR)
         fnc_name = metadata.name
@@ -225,8 +229,9 @@ class FunctionContext:
         )
 
     def _register_ai_function(self, fnc: Callable) -> None:
-        fnc_info = self._callable_to_fnc_info(fnc)
-        if not fnc_info:
+        try:
+            fnc_info = self._callable_to_fnc_info(fnc)
+        except _NoMetadataError:
             logger.warning(f"function {fnc.__name__} does not have ai metadata")
             return
 
