@@ -29,17 +29,14 @@ from livekit.agents import (
     APITimeoutError,
     llm,
 )
-from livekit.agents.llm import ToolChoice
+from livekit.agents.llm import ToolChoice, _create_ai_function_info
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
 
-from ._oai_api import (
-    build_oai_function_description,
-    create_ai_function_info,
-)
+from ._oai_api import build_oai_function_description
 from .log import logger
 from .models import (
     CerebrasChatModels,
@@ -290,7 +287,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_fireworks(
         *,
-        model: str = "accounts/fireworks/models/llama-v3p1-70b-instruct",
+        model: str = "accounts/fireworks/models/llama-v3p3-70b-instruct",
         api_key: str | None = None,
         base_url: str | None = "https://api.fireworks.ai/inference/v1",
         client: openai.AsyncClient | None = None,
@@ -840,7 +837,7 @@ class LLMStream(llm.LLMStream):
             )
             return None
 
-        fnc_info = create_ai_function_info(
+        fnc_info = _create_ai_function_info(
             self._fnc_ctx, self._tool_call_id, self._fnc_name, self._fnc_raw_arguments
         )
 

@@ -1,5 +1,6 @@
 import logging
 import random
+import urllib
 from typing import Annotated
 
 import aiohttp
@@ -34,14 +35,11 @@ class AssistantFnc(llm.FunctionContext):
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
-
-        # Example of a filler message while waiting for the function call to complete.
-        # NOTE: This message illustrates how the agent can engage users by using the `say()` method
-        # while awaiting the completion of the function call. To create a more dynamic and engaging
-        # interaction, consider varying the responses based on context or user input.
+        # When a function call is running, there are a couple of options to inform the user
+        # that it might take awhile:
+        # Option 1: you can use .say filler message immediately after the call is triggered
+        # Option 2: you can prompt the agent to return a text response when it's making a function call
         call_ctx = AgentCallContext.get_current()
-        # message = f"Let me check the weather in {location} for you."
-        message = f"Here is the weather in {location}: "
         filler_messages = [
             "Let me check the weather in {location} for you.",
             "Let me see what the weather is like in {location} right now.",
@@ -54,21 +52,24 @@ class AssistantFnc(llm.FunctionContext):
         #   of the chat context of the function call for answer synthesis
         speech_handle = await call_ctx.agent.say(message, add_to_chat_ctx=True)  # noqa: F841
 
-        # To wait for the speech to finish
-        # await speech_handle.join()
-
         logger.info(f"getting weather for {location}")
-        url = f"https://wttr.in/{location}?format=%C+%t"
+        url = f"https://wttr.in/{urllib.parse.quote(location)}?format=%C+%t"
+        weather_data = ""
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status == 200:
-                    weather_data = await response.text()
                     # response from the function call is returned to the LLM
-                    return f"The weather in {location} is {weather_data}."
+                    weather_data = (
+                        f"The weather in {location} is {await response.text()}."
+                    )
                 else:
                     raise Exception(
                         f"Failed to get weather data, status code: {response.status}"
                     )
+
+        # (optional) To wait for the speech to finish before giving results of the function call
+        # await speech_handle.join()
+        return weather_data
 
 
 def prewarm_process(proc: JobProcess):
@@ -82,7 +83,11 @@ async def entrypoint(ctx: JobContext):
     initial_chat_ctx = llm.ChatContext().append(
         text=(
             "You are a weather assistant created by LiveKit. Your interface with users will be voice. "
-            "You will provide weather information for a given location."
+            "You will provide weather information for a given location. "
+            # when using option 1, you can suppress from the agent with prompt
+            "do not say anything while waiting for the function call to complete."
+            # uncomment this to use option 2
+            # "when performing function calls, let user know that you are checking the weather."
         ),
         role="system",
     )
@@ -95,6 +100,7 @@ async def entrypoint(ctx: JobContext):
         fnc_ctx=fnc_ctx,
         chat_ctx=initial_chat_ctx,
     )
+
     # Start the assistant. This will automatically publish a microphone track and listen to the participant.
     agent.start(ctx.room, participant)
     await agent.say(

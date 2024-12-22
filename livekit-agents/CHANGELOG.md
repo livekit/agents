@@ -1,5 +1,25 @@
 # livekit-agents
 
+## 0.12.3
+
+### Patch Changes
+
+- Moved create_ai_function_info to function_context.py for better reusability and reduce repetation - [#1260](https://github.com/livekit/agents/pull/1260) ([@jayeshp19](https://github.com/jayeshp19))
+
+- added streaming audio decoder for compressed audio. - [#1236](https://github.com/livekit/agents/pull/1236) ([@davidzhao](https://github.com/davidzhao))
+
+- Add JPEG quality param to image encoder - [#1249](https://github.com/livekit/agents/pull/1249) ([@bcherry](https://github.com/bcherry))
+
+- Add support for OpenAI's "detail" parameter to ChatImage - [#1213](https://github.com/livekit/agents/pull/1213) ([@bcherry](https://github.com/bcherry))
+
+  Add support for data URLs on ChatImage in the Anthropic plugin.
+
+- fix: correctly parse function argument types - [#1221](https://github.com/livekit/agents/pull/1221) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Fix center_aspect_fit bug, add scale_aspect_fit and scale_aspect_fill resizing options. - [#1222](https://github.com/livekit/agents/pull/1222) ([@bcherry](https://github.com/bcherry))
+
+  Make scale_aspect_fit the new default resizing option for video frames.
+
 ## 0.12.2
 
 ### Patch Changes

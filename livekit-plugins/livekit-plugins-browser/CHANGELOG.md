@@ -1,5 +1,11 @@
 # livekit-plugins-browser
 
+## 0.0.5
+
+### Patch Changes
+
+- fix: fix `imgui` setup - [#1226](https://github.com/livekit/agents/pull/1226) ([@mbukeRepo](https://github.com/mbukeRepo))
+
 ## 0.0.4
 
 ### Patch Changes
