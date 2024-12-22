@@ -69,7 +69,7 @@ class RealtimeModel(RealtimeAPI):
         model: LiveAPIModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
-        response_modalities: ResponseModality = "AUDIO",
+        modalities: ResponseModality = "AUDIO",
         vertexai: bool = False,
         project: str | None = None,
         location: str | None = None,
@@ -82,6 +82,29 @@ class RealtimeModel(RealtimeAPI):
         frequency_penalty: float | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
     ):
+        """
+        Initializes a RealtimeModel instance for interacting with Google's Realtime API.
+
+        Args:
+            instructions (str, optional): Initial system instructions for the model. Defaults to "".
+            api_key (str or None, optional): OpenAI API key. If None, will attempt to read from the environment variable OPENAI_API_KEY
+            modalities (ResponseModality): Modalities to use, such as ["text", "audio"]. Defaults to ["AUDIO"].
+            model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
+            voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
+            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+            vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
+                project (str or None, optional): The project to use for the API. Defaults to None. (for vertexai)
+                location (str or None, optional): The location to use for the API. Defaults to None. (for vertexai)
+            candidate_count (int, optional): The number of candidate responses to generate. Defaults to 1.
+            top_p (float, optional): The top-p value for response generation
+            top_k (int, optional): The top-k value for response generation
+            presence_penalty (float, optional): The presence penalty for response generation
+            frequency_penalty (float, optional): The frequency penalty for response generation
+            loop (asyncio.AbstractEventLoop or None, optional): Event loop to use for async operations. If None, the current event loop is used.
+
+        Raises:
+            ValueError: If the API key is not provided and cannot be found in environment variables.
+        """
         super().__init__(
             capabilities=Capabilities(
                 supports_chat_ctx_manipulation=False,
@@ -101,7 +124,7 @@ class RealtimeModel(RealtimeAPI):
             model=model,
             api_key=api_key,
             voice=voice,
-            response_modalities=response_modalities,
+            response_modalities=modalities.upper(),
             vertexai=vertexai,
             project=project,
             location=location,
