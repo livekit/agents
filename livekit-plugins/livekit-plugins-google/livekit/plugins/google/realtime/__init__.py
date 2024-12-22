@@ -1,15 +1,15 @@
 from .api_proto import (
     ClientEvents,
-    MultimodalModels,
+    LiveAPIModels,
     ResponseModality,
     Voice,
 )
-from .live_api import RealtimeModel
+from .realtime_api import RealtimeModel
 
 __all__ = [
     "RealtimeModel",
     "ClientEvents",
-    "MultimodalModels",
+    "LiveAPIModels",
     "ResponseModality",
     "Voice",
 ]
