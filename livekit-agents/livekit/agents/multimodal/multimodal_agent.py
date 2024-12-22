@@ -45,7 +45,7 @@ EventTypes = Literal[
 
 
 @dataclass
-class Transcription:
+class InputTranscription:
     item_id: str
     """id of the item"""
     transcript: str | None
@@ -67,7 +67,12 @@ class Content:
     content_type: Literal["text", "audio"]
 
 
-class MultimodalModel(ABC):
+@dataclass
+class Capabilities:
+    supports_chat_ctx_manipulation: bool = False
+
+
+class RealtimeAPI(ABC):
     """Abstract Base Class for multimodal models."""
 
     @abstractmethod
@@ -76,17 +81,26 @@ class MultimodalModel(ABC):
         *,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
-    ) -> MultimodalSession:
+    ) -> RealTimeSession:
         """
         Create a new multimodal session with the given chat and function contexts.
         """
         pass
 
 
-class MultimodalSession(ABC, utils.EventEmitter[EventTypes]):
+class RealTimeSession(ABC, utils.EventEmitter[EventTypes]):
     """
-    Abstract base class for a session object returned by `MultimodalModel.session()`.
+    Abstract base class for a session object returned by `RealtimeAPI.session()`.
     """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._capabilities = Capabilities()
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
+
+    @property
+    def capabilities(self) -> Capabilities:
+        return self._capabilities
 
     @property
     @abstractmethod
@@ -114,9 +128,6 @@ class MultimodalSession(ABC, utils.EventEmitter[EventTypes]):
         Sync the given chat context with the current session state.
         """
         pass
-
-    def supports_conversation_manipulation(self) -> bool:
-        return False
 
     def _update_conversation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
@@ -167,7 +178,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        model: MultimodalModel,
+        model: RealtimeAPI,
         vad: vad.VAD | None = None,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
@@ -178,7 +189,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         """Create a new MultimodalAgent.
 
         Args:
-            model: MultimodalModel instance.
+            model: RealtimeAPI instance.
             vad: Voice Activity Detection (VAD) instance.
             chat_ctx: Chat context for the assistant.
             fnc_ctx: Function context for the assistant.
@@ -307,7 +318,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("input_speech_transcription_completed")
-        def _input_speech_transcription_completed(ev: Transcription):
+        def _input_speech_transcription_completed(ev: InputTranscription):
             if ev.error is not None or ev.transcript is None:
                 self.emit("input_speech_transcription_failed", ev)
                 return
@@ -322,7 +333,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 text=ev.transcript, role="user", id=ev.item_id
             )
 
-            if self._session.supports_conversation_manipulation():
+            if self._session.capabilities.supports_chat_ctx_manipulation:
                 self._session._update_conversation_item_content(
                     ev.item_id, user_msg.content
                 )
@@ -340,7 +351,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             if self._playing_handle is not None and not self._playing_handle.done():
                 self._playing_handle.interrupt()
 
-                if self._session.supports_conversation_manipulation():
+                if self._session.capabilities.supports_chat_ctx_manipulation:
                     self._session._truncate_conversation_item(
                         item_id=self._playing_handle.item_id,
                         content_index=self._playing_handle.content_index,

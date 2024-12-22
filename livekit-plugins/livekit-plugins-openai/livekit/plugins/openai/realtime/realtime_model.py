@@ -16,9 +16,9 @@ from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
 from livekit.agents.multimodal import (
     Content,
-    MultimodalModel,
-    MultimodalSession,
-    Transcription,
+    InputTranscription,
+    RealtimeAPI,
+    RealTimeSession,
 )
 from typing_extensions import TypedDict
 
@@ -142,7 +142,7 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
-class RealtimeModel(MultimodalModel):
+class RealtimeModel(RealtimeAPI):
     @overload
     def __init__(
         self,
@@ -395,7 +395,7 @@ class RealtimeModel(MultimodalModel):
         turn_detection: ServerVadOptions | None = None,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
-    ) -> MultimodalSession:
+    ) -> RealTimeSession:
         opts = deepcopy(self._default_opts)
         if modalities is not None:
             opts.modalities = modalities
@@ -433,7 +433,7 @@ class RealtimeModel(MultimodalModel):
             await session.aclose()
 
 
-class RealtimeSession(MultimodalSession):
+class RealtimeSession(RealTimeSession):
     class InputAudioBuffer:
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess
@@ -1254,7 +1254,7 @@ class RealtimeSession(MultimodalSession):
         transcript = transcription_completed["transcript"]
         self.emit(
             "input_speech_transcription_completed",
-            Transcription(
+            InputTranscription(
                 item_id=transcription_completed["item_id"],
                 transcript=transcript,
             ),
@@ -1272,7 +1272,7 @@ class RealtimeSession(MultimodalSession):
         )
         self.emit(
             "input_speech_transcription_failed",
-            Transcription(
+            InputTranscription(
                 item_id=transcription_failed["item_id"],
                 transcript=None,
                 error=error["message"],

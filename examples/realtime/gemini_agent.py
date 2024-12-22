@@ -51,23 +51,6 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()
 
-    # to use Microsoft Azure, uncomment the following lines
-    # agent = multimodal.MultimodalAgent(
-    #     model=openai.realtime.RealtimeModel.with_azure(
-    #         azure_deployment="<model-deployment>",
-    #         azure_endpoint="wss://<endpoint>.openai.azure.com/", # or AZURE_OPENAI_ENDPOINT
-    #         api_key="<api-key>", # or AZURE_OPENAI_API_KEY
-    #         api_version="2024-10-01-preview", # or OPENAI_API_VERSION
-    #         voice="alloy",
-    #         temperature=0.8,
-    #         instructions="You are a helpful assistant",
-    #         turn_detection=openai.realtime.ServerVadOptions(
-    #             threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
-    #         ),
-    #     ),
-    #     fnc_ctx=fnc_ctx,
-    # )
-
     # create a chat context with chat history
     chat_ctx = llm.ChatContext()
     chat_ctx.append(text="I'm planning a trip to Paris next month.", role="user")
@@ -82,13 +65,10 @@ async def entrypoint(ctx: JobContext):
     )
 
     agent = multimodal.MultimodalAgent(
-        model=google.multimodal.RealtimeModel(
+        model=google.realtime.RealtimeAPI(
             voice="Charon",
             temperature=0.8,
             instructions="You are a helpful assistant",
-            # turn_detection=openai.realtime.ServerVadOptions(
-            #     threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
-            # ),
         ),
         fnc_ctx=fnc_ctx,
         chat_ctx=chat_ctx,

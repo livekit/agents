@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
-from livekit.agents.multimodal import Content, MultimodalModel, MultimodalSession
+from livekit.agents.multimodal import Content, RealtimeAPI, RealTimeSession
 
 from google import genai  # type: ignore
 from google.genai.types import (  # type: ignore
@@ -25,7 +25,7 @@ from google.genai.types import (  # type: ignore
 from ..log import logger
 from .api_proto import (
     ClientEvents,
-    MultimodalModels,
+    LiveAPIModels,
     ResponseModality,
     Voice,
     _build_tools,
@@ -39,7 +39,7 @@ class GeminiContent(Content):
 
 @dataclass
 class ModelOptions:
-    model: MultimodalModels | str
+    model: LiveAPIModels | str
     api_key: str | None
     voice: Voice | str
     response_modalities: ResponseModality
@@ -56,12 +56,12 @@ class ModelOptions:
     instructions: str
 
 
-class RealtimeModel(MultimodalModel):
+class RealtimeModel(RealtimeAPI):
     def __init__(
         self,
         *,
         instructions: str = "",
-        model: MultimodalModels | str = "gemini-2.0-flash-exp",
+        model: LiveAPIModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
         response_modalities: ResponseModality = "AUDIO",
@@ -114,7 +114,7 @@ class RealtimeModel(MultimodalModel):
         *,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
-    ) -> MultimodalSession:
+    ) -> RealTimeSession:
         session = GeminiRealtimeSession(
             opts=self._opts,
             chat_ctx=chat_ctx or llm.ChatContext(),
@@ -130,7 +130,7 @@ class RealtimeModel(MultimodalModel):
             await session.aclose()
 
 
-class GeminiRealtimeSession(MultimodalSession):
+class GeminiRealtimeSession(RealTimeSession):
     def __init__(
         self,
         *,
@@ -231,8 +231,15 @@ class GeminiRealtimeSession(MultimodalSession):
         async def _recv_task():
             while True:
                 async for response in self._session.receive():
-                    if response.server_content:
-                        model_turn = response.server_content.model_turn
+                    server_content = response.server_content
+
+                    content = None
+                    text_stream = None
+                    audio_stream = None
+
+                    if server_content:
+                        model_turn = server_content.model_turn
+
                         if model_turn:
                             if self._active_response_id is None:
                                 self._active_response_id = utils.shortuuid()
@@ -249,9 +256,8 @@ class GeminiRealtimeSession(MultimodalSession):
                                 )
                                 self.emit("response_content_added", content)
 
-                            for part_index, part in enumerate(model_turn.parts):
+                            for part in model_turn.parts:
                                 if part.text:
-                                    content.text += part.text
                                     content.text_stream.send_nowait(part.text)
                                 if part.inline_data:
                                     frame = rtc.AudioFrame(
@@ -261,17 +267,20 @@ class GeminiRealtimeSession(MultimodalSession):
                                         samples_per_channel=len(part.inline_data.data)
                                         // 2,
                                     )
-                                    content.audio.append(frame)
                                     content.audio_stream.send_nowait(frame)
-                        if response.server_content.interrupted:
-                            self.emit("input_speech_started")
-                        if response.server_content.turn_complete:
-                            if isinstance(content.text_stream, utils.aio.Chan):
-                                content.text_stream.close()
-                            if isinstance(content.audio_stream, utils.aio.Chan):
-                                content.audio_stream.close()
-                            self.emit("response_content_done", content)
+
+                        if server_content.interrupted or server_content.turn_complete:
+                            for stream in (content.text_stream, content.audio_stream):
+                                if isinstance(stream, utils.aio.Chan):
+                                    stream.close()
+
+                            if server_content.interrupted:
+                                self.emit("input_speech_started")
+                            elif server_content.turn_complete:
+                                self.emit("response_content_done", content)
+
                             self._active_response_id = None
+
                     if response.tool_call:
                         if self._fnc_ctx is None:
                             raise ValueError("Function context is not set")
@@ -291,6 +300,8 @@ class GeminiRealtimeSession(MultimodalSession):
                             self._fnc_tasks.create_task(
                                 self._run_fnc_task(fnc_call_info, content.item_id)
                             )
+
+                    # Handle function call cancellations
                     if response.tool_call_cancellation:
                         logger.warning(
                             "function call cancelled",
