@@ -15,6 +15,7 @@ from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
 from livekit.agents.multimodal import (
+    Capabilities,
     Content,
     InputTranscription,
     RealtimeAPI,
@@ -233,7 +234,11 @@ class RealtimeModel(RealtimeAPI):
         Raises:
             ValueError: If the API key is not provided and cannot be found in environment variables.
         """
-        super().__init__()
+        super().__init__(
+            capabilities=Capabilities(
+                supports_chat_ctx_manipulation=True,
+            )
+        )
         self._base_url = base_url
 
         is_azure = (
@@ -791,9 +796,6 @@ class RealtimeSession(RealTimeSession):
 
         self._send_ch.close()
         await self._main_atask
-
-    def supports_conversation_manipulation(self) -> bool:
-        return True
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:

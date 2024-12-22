@@ -9,7 +9,12 @@ from dataclasses import dataclass
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
-from livekit.agents.multimodal import Content, RealtimeAPI, RealTimeSession
+from livekit.agents.multimodal import (
+    Capabilities,
+    Content,
+    RealtimeAPI,
+    RealTimeSession,
+)
 
 from google import genai  # type: ignore
 from google.genai.types import (  # type: ignore
@@ -77,6 +82,11 @@ class RealtimeModel(RealtimeAPI):
         frequency_penalty: float | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
     ):
+        super().__init__(
+            capabilities=Capabilities(
+                supports_chat_ctx_manipulation=False,
+            )
+        )
         self._model = model
         self._loop = loop or asyncio.get_event_loop()
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")

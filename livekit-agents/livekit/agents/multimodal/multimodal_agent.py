@@ -73,25 +73,7 @@ class Capabilities:
 
 
 class RealtimeAPI(ABC):
-    """Abstract Base Class for multimodal models."""
-
-    @abstractmethod
-    def session(
-        self,
-        *,
-        chat_ctx: llm.ChatContext | None = None,
-        fnc_ctx: llm.FunctionContext | None = None,
-    ) -> RealTimeSession:
-        """
-        Create a new multimodal session with the given chat and function contexts.
-        """
-        pass
-
-
-class RealTimeSession(ABC, utils.EventEmitter[EventTypes]):
-    """
-    Abstract base class for a session object returned by `RealtimeAPI.session()`.
-    """
+    """Abstract Base Class for realtime models."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -101,6 +83,24 @@ class RealTimeSession(ABC, utils.EventEmitter[EventTypes]):
     @property
     def capabilities(self) -> Capabilities:
         return self._capabilities
+
+    @abstractmethod
+    def session(
+        self,
+        *,
+        chat_ctx: llm.ChatContext | None = None,
+        fnc_ctx: llm.FunctionContext | None = None,
+    ) -> RealTimeSession:
+        """
+        Create a new realtime session with the given chat and function contexts.
+        """
+        pass
+
+
+class RealTimeSession(ABC, utils.EventEmitter[EventTypes]):
+    """
+    Abstract base class for a session object returned by `RealtimeAPI.session()`.
+    """
 
     @property
     @abstractmethod
@@ -333,7 +333,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 text=ev.transcript, role="user", id=ev.item_id
             )
 
-            if self._session.capabilities.supports_chat_ctx_manipulation:
+            if self._model.capabilities.supports_chat_ctx_manipulation:
                 self._session._update_conversation_item_content(
                     ev.item_id, user_msg.content
                 )
@@ -351,7 +351,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             if self._playing_handle is not None and not self._playing_handle.done():
                 self._playing_handle.interrupt()
 
-                if self._session.capabilities.supports_chat_ctx_manipulation:
+                if self._model.capabilities.supports_chat_ctx_manipulation:
                     self._session._truncate_conversation_item(
                         item_id=self._playing_handle.item_id,
                         content_index=self._playing_handle.content_index,
@@ -419,7 +419,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     role="assistant",
                     id=self._playing_handle.item_id,
                 )
-                if self._session.supports_conversation_manipulation():
+                if self._model.capabilities.supports_chat_ctx_manipulation:
                     self._session._update_conversation_item_content(
                         self._playing_handle.item_id, msg.content
                     )
