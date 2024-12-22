@@ -808,13 +808,15 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             and (not user_question or speech_handle.user_committed)
         ):
             if speech_handle.extra_tools_messages:
-                msgs = self._chat_ctx.messages
-                if msgs and msgs[-1].id == speech_handle.fnc_text_message_id:
-                    # remove text message alongside function calls if it's the last in the ctx
-                    msgs.pop()
-                elif speech_handle.extra_tools_messages[0].tool_calls:
-                    # remove the content of the tool call message
-                    speech_handle.extra_tools_messages[0].content = ""
+                if speech_handle.fnc_text_message_id is not None:
+                    # there is a message alongside the function calls
+                    msgs = self._chat_ctx.messages
+                    if msgs and msgs[-1].id == speech_handle.fnc_text_message_id:
+                        # replace it with the tool call message if it's the last in the ctx
+                        msgs.pop()
+                    elif speech_handle.extra_tools_messages[0].tool_calls:
+                        # remove the content of the tool call message
+                        speech_handle.extra_tools_messages[0].content = ""
                 self._chat_ctx.messages.extend(speech_handle.extra_tools_messages)
 
             if interrupted:
