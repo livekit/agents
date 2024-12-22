@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Sequence, Union
 
 from google.genai import types  # type: ignore
 
-MultimodalModels = Literal["gemini-2.0-flash-exp"]
+LiveAPIModels = Literal["gemini-2.0-flash-exp"]
 
 Voice = Literal["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
 ResponseModality = Literal["AUDIO", "TEXT"]
