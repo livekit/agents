@@ -730,6 +730,13 @@ class LLMStream(llm.LLMStream):
                     else:
                         opts["tool_choice"] = self._tool_choice
 
+            if self._llm._opts.metadata is not None:
+                # some OpenAI-like API doesn't support having a `metadata` field. (Even None)
+                opts["metadata"] = self._llm._opts.metadata
+
+            if self._llm._opts.store is not None:
+                opts["store"] = self._llm._opts.store
+
             user = self._user or openai.NOT_GIVEN
             messages = _build_oai_context(self._chat_ctx, id(self))
             stream = await self._client.chat.completions.create(
@@ -740,8 +747,6 @@ class LLMStream(llm.LLMStream):
                 stream_options={"include_usage": True},
                 stream=True,
                 user=user,
-                store=self._llm._opts.store,
-                metadata=self._llm._opts.metadata,
                 **opts,
             )
 
