@@ -105,7 +105,7 @@ class CalledFunction:
 def ai_callable(
     *,
     name: str | None = None,
-    description: str | _UseDocMarker | None = None,
+    description: str | _UseDocMarker | None = USE_DOCSTRING,
     auto_retry: bool = False,
 ) -> Callable:
     def deco(f):
@@ -127,7 +127,7 @@ class FunctionContext:
         self,
         *,
         name: str | None = None,
-        description: str | _UseDocMarker | None = None,
+        description: str | _UseDocMarker | None = USE_DOCSTRING,
         auto_retry: bool = True,
     ) -> Callable:
         def deco(f):

@@ -27,7 +27,7 @@ class AssistantFnc(llm.FunctionContext):
     The class defines a set of LLM functions that the assistant can execute.
     """
 
-    @llm.ai_callable(description=llm.USE_DOCSTRING)
+    @llm.ai_callable()
     async def get_weather(
         self,
         location: Annotated[
