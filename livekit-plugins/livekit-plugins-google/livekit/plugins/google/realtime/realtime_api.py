@@ -273,31 +273,27 @@ class GeminiRealtimeSession(RealTimeSession):
         async def _recv_task():
             while True:
                 async for response in self._session.receive():
+                    if self._active_response_id is None:
+                        self._active_response_id = utils.shortuuid()
+                        text_stream = utils.aio.Chan[str]()
+                        audio_stream = utils.aio.Chan[rtc.AudioFrame]()
+                        content = GeminiContent(
+                            response_id=self._active_response_id,
+                            item_id=self._active_response_id,
+                            output_index=0,
+                            content_index=0,
+                            text="",
+                            audio=[],
+                            text_stream=text_stream,
+                            audio_stream=audio_stream,
+                            content_type=self._opts.response_modalities,
+                        )
+                        self.emit("response_content_added", content)
+
                     server_content = response.server_content
-
-                    content = None
-                    text_stream = None
-                    audio_stream = None
-
                     if server_content:
                         model_turn = server_content.model_turn
-
                         if model_turn:
-                            if self._active_response_id is None:
-                                self._active_response_id = utils.shortuuid()
-                                text_stream = utils.aio.Chan[str]()
-                                audio_stream = utils.aio.Chan[rtc.AudioFrame]()
-                                content = GeminiContent(
-                                    response_id=self._active_response_id,
-                                    item_id=self._active_response_id,
-                                    output_index=0,
-                                    content_index=0,
-                                    text_stream=text_stream,
-                                    audio_stream=audio_stream,
-                                    content_type=self._opts.response_modalities,
-                                )
-                                self.emit("response_content_added", content)
-
                             for part in model_turn.parts:
                                 if part.text:
                                     content.text_stream.send_nowait(part.text)

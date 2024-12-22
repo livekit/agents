@@ -82,7 +82,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     agent = multimodal.MultimodalAgent(
-        model=openai.realtime.RealtimeAPI(
+        model=openai.realtime.RealtimeModel(
             voice="alloy",
             temperature=0.8,
             instructions="You are a helpful assistant",

@@ -65,7 +65,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     agent = multimodal.MultimodalAgent(
-        model=google.realtime.RealtimeAPI(
+        model=google.realtime.RealtimeModel(
             voice="Charon",
             temperature=0.8,
             instructions="You are a helpful assistant",
