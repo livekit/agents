@@ -172,6 +172,15 @@ class GeminiRealtimeSession(RealTimeSession):
         fnc_ctx: llm.FunctionContext | None,
         loop: asyncio.AbstractEventLoop,
     ):
+        """
+        Initializes a GeminiRealtimeSession instance for interacting with Google's Realtime API.
+
+        Args:
+            opts (ModelOptions): The model options for the session.
+            chat_ctx (llm.ChatContext): The chat context for the session.
+            fnc_ctx (llm.FunctionContext or None): The function context for the session.
+            loop (asyncio.AbstractEventLoop): The event loop for the session.
+        """
         super().__init__()
         self._loop = loop
         self._opts = opts
