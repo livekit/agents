@@ -19,8 +19,6 @@ from livekit.agents.multimodal import (
     Capabilities,
     Content,
     InputTranscription,
-    RealtimeAPI,
-    RealtimeAPISession,
 )
 from typing_extensions import TypedDict
 
@@ -164,7 +162,7 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
-class RealtimeModel(RealtimeAPI):
+class RealtimeModel:
     @overload
     def __init__(
         self,
@@ -400,7 +398,7 @@ class RealtimeModel(RealtimeAPI):
         return self._http_session
 
     @property
-    def sessions(self) -> list[RealtimeSession]:
+    def sessions(self) -> weakref.WeakSet[RealtimeSession]:
         return self._rt_sessions
 
     @property
@@ -460,7 +458,7 @@ class RealtimeModel(RealtimeAPI):
             await session.aclose()
 
 
-class RealtimeSession(utils.EventEmitter[EventTypes], RealtimeAPISession):
+class RealtimeSession(utils.EventEmitter[EventTypes]):
     class InputAudioBuffer:
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess
