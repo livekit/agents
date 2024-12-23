@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import AsyncIterable, Callable, Literal
+from typing import AsyncIterable, Callable, Literal, Protocol
 
 import aiohttp
 from livekit import rtc
@@ -16,20 +15,6 @@ from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from . import agent_playout
 
 EventTypes = Literal[
-    "start_session",
-    "session_updated",
-    "error",
-    "input_speech_started",
-    "input_speech_stopped",
-    "input_speech_committed",
-    "input_speech_transcription_completed",
-    "input_speech_transcription_failed",
-    "response_created",
-    "response_output_added",  # message & assistant
-    "response_content_added",  # message type (audio/text)
-    "response_content_done",
-    "response_output_done",
-    "response_done",
     "user_started_speaking",
     "user_stopped_speaking",
     "agent_started_speaking",
@@ -39,7 +24,6 @@ EventTypes = Literal[
     "agent_speech_interrupted",
     "function_calls_collected",
     "function_calls_finished",
-    "function_calls_cancelled",
     "metrics_collected",
 ]
 
@@ -72,79 +56,32 @@ class Capabilities:
     supports_chat_ctx_manipulation: bool = False
 
 
-class RealtimeAPI(ABC):
-    """Abstract Base Class for realtime models."""
-
-    def __init__(self, *, capabilities: Capabilities) -> None:
-        super().__init__()
-        self._capabilities = capabilities
-        self._label = f"{type(self).__module__}.{type(self).__name__}"
+class RealtimeAPI(Protocol):
+    """Realtime API protocol"""
 
     @property
-    def capabilities(self) -> Capabilities:
-        return self._capabilities
+    def capabilities(self) -> Capabilities: ...
 
-    @abstractmethod
     def session(
         self,
         *,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
-    ) -> RealTimeSession:
+    ) -> RealtimeAPISession:
         """
         Create a new realtime session with the given chat and function contexts.
         """
         pass
 
 
-class RealTimeSession(ABC, utils.EventEmitter[EventTypes]):
-    """
-    Abstract base class for a session object returned by `RealtimeAPI.session()`.
-    """
-
+class RealtimeAPISession(Protocol):
+    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None: ...
+    def _push_audio(self, frame: rtc.AudioFrame) -> None: ...
     @property
-    @abstractmethod
-    def fnc_ctx(self) -> llm.FunctionContext | None:
-        """
-        Get or set the function context associated with this session.
-        """
-        pass
-
+    def fnc_ctx(self) -> llm.FunctionContext | None: ...
     @fnc_ctx.setter
-    @abstractmethod
-    def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
-        pass
-
-    @abstractmethod
-    def chat_ctx_copy(self) -> llm.ChatContext:
-        """
-        Returns a copy of the current chat context.
-        """
-        pass
-
-    @abstractmethod
-    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
-        """
-        Sync the given chat context with the current session state.
-        """
-        pass
-
-    def _update_conversation_item_content(
-        self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
-    ) -> None:
-        raise NotImplementedError
-
-    def _truncate_conversation_item(
-        self, item_id: str, content_index: int, audio_end_ms: int
-    ) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def _push_audio(self, frame: rtc.AudioFrame) -> None:
-        """
-        Push an audio frame to the model for processing.
-        """
-        pass
+    def fnc_ctx(self, value: llm.FunctionContext | None) -> None: ...
+    def chat_ctx_copy(self) -> llm.ChatContext: ...
 
 
 @dataclass(frozen=True)

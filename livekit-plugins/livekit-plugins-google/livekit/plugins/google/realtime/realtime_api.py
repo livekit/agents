@@ -5,6 +5,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -13,7 +14,7 @@ from livekit.agents.multimodal import (
     Capabilities,
     Content,
     RealtimeAPI,
-    RealTimeSession,
+    RealtimeAPISession,
 )
 
 from google import genai  # type: ignore
@@ -35,6 +36,16 @@ from .api_proto import (
     Voice,
     _build_tools,
 )
+
+EventTypes = Literal[
+    "start_session",
+    "input_speech_started",
+    "response_content_added",
+    "response_content_done",
+    "function_calls_collected",
+    "function_calls_finished",
+    "function_calls_cancelled",
+]
 
 
 @dataclass
@@ -105,10 +116,9 @@ class RealtimeModel(RealtimeAPI):
         Raises:
             ValueError: If the API key is not provided and cannot be found in environment variables.
         """
-        super().__init__(
-            capabilities=Capabilities(
-                supports_chat_ctx_manipulation=False,
-            )
+        super().__init__()
+        self._capabilities = Capabilities(
+            supports_chat_ctx_manipulation=False,
         )
         self._model = model
         self._loop = loop or asyncio.get_event_loop()
@@ -142,12 +152,16 @@ class RealtimeModel(RealtimeAPI):
     def sessions(self) -> list[GeminiRealtimeSession]:
         return self._rt_sessions
 
+    @property
+    def capabilities(self) -> Capabilities:
+        return self._capabilities
+
     def session(
         self,
         *,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
-    ) -> RealTimeSession:
+    ) -> RealtimeAPISession:
         session = GeminiRealtimeSession(
             opts=self._opts,
             chat_ctx=chat_ctx or llm.ChatContext(),
@@ -163,7 +177,7 @@ class RealtimeModel(RealtimeAPI):
             await session.aclose()
 
 
-class GeminiRealtimeSession(RealTimeSession):
+class GeminiRealtimeSession(utils.EventEmitter[EventTypes], RealtimeAPISession):
     def __init__(
         self,
         *,

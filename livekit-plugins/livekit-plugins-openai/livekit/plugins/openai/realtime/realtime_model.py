@@ -4,6 +4,7 @@ import asyncio
 import base64
 import os
 import time
+import weakref
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal, Optional, Union, cast, overload
@@ -19,13 +20,33 @@ from livekit.agents.multimodal import (
     Content,
     InputTranscription,
     RealtimeAPI,
-    RealTimeSession,
+    RealtimeAPISession,
 )
 from typing_extensions import TypedDict
 
 from .._oai_api import build_oai_function_description
 from . import api_proto, remote_items
 from .log import logger
+
+EventTypes = Literal[
+    "start_session",
+    "session_updated",
+    "error",
+    "input_speech_started",
+    "input_speech_stopped",
+    "input_speech_committed",
+    "input_speech_transcription_completed",
+    "input_speech_transcription_failed",
+    "response_created",
+    "response_output_added",  # message & assistant
+    "response_content_added",  # message type (audio/text)
+    "response_content_done",
+    "response_output_done",
+    "response_done",
+    "function_calls_collected",
+    "function_calls_finished",
+    "metrics_collected",
+]
 
 
 @dataclass
@@ -234,11 +255,8 @@ class RealtimeModel(RealtimeAPI):
         Raises:
             ValueError: If the API key is not provided and cannot be found in environment variables.
         """
-        super().__init__(
-            capabilities=Capabilities(
-                supports_chat_ctx_manipulation=True,
-            )
-        )
+        super().__init__()
+        self._capabilities = Capabilities(supports_chat_ctx_manipulation=True)
         self._base_url = base_url
 
         is_azure = (
@@ -277,7 +295,7 @@ class RealtimeModel(RealtimeAPI):
         )
 
         self._loop = loop or asyncio.get_event_loop()
-        self._rt_sessions: list[RealtimeSession] = []
+        self._rt_sessions = weakref.WeakSet[RealtimeSession]()
         self._http_session = http_session
 
     @classmethod
@@ -385,6 +403,10 @@ class RealtimeModel(RealtimeAPI):
     def sessions(self) -> list[RealtimeSession]:
         return self._rt_sessions
 
+    @property
+    def capabilities(self) -> Capabilities:
+        return self._capabilities
+
     def session(
         self,
         *,
@@ -400,7 +422,7 @@ class RealtimeModel(RealtimeAPI):
         turn_detection: ServerVadOptions | None = None,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
-    ) -> RealTimeSession:
+    ) -> RealtimeSession:
         opts = deepcopy(self._default_opts)
         if modalities is not None:
             opts.modalities = modalities
@@ -430,7 +452,7 @@ class RealtimeModel(RealtimeAPI):
             http_session=self._ensure_session(),
             loop=self._loop,
         )
-        self._rt_sessions.append(new_session)
+        self._rt_sessions.add(new_session)
         return new_session
 
     async def aclose(self) -> None:
@@ -438,7 +460,7 @@ class RealtimeModel(RealtimeAPI):
             await session.aclose()
 
 
-class RealtimeSession(RealTimeSession):
+class RealtimeSession(utils.EventEmitter[EventTypes], RealtimeAPISession):
     class InputAudioBuffer:
         def __init__(self, sess: RealtimeSession) -> None:
             self._sess = sess
