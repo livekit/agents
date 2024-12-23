@@ -115,8 +115,8 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
           FAL_KEY: ${{ secrets.FAL_KEY }}
-          PLAYAI_API_KEY: ${{ secrets.PLAYAI_API_KEY }}
-          PLAYAI_USER_ID: ${{ secrets.PLAYAI_USER_ID }}
+          PLAYHT_API_KEY: ${{ secrets.PLAYHT_API_KEY }}
+          PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
         working-directory: tests
