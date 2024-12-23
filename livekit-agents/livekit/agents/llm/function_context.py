@@ -105,7 +105,7 @@ class CalledFunction:
 def ai_callable(
     *,
     name: str | None = None,
-    description: str | _UseDocMarker | None = None,
+    description: str | _UseDocMarker = USE_DOCSTRING,
     auto_retry: bool = False,
 ) -> Callable:
     def deco(f):
@@ -127,7 +127,7 @@ class FunctionContext:
         self,
         *,
         name: str | None = None,
-        description: str | _UseDocMarker | None = None,
+        description: str | _UseDocMarker = USE_DOCSTRING,
         auto_retry: bool = True,
     ) -> Callable:
         def deco(f):
@@ -243,19 +243,17 @@ def _extract_types(annotation: type) -> tuple[type, TypeInfo | None]:
 def _set_metadata(
     f: Callable,
     name: str | None = None,
-    desc: str | _UseDocMarker | None = None,
+    desc: str | _UseDocMarker = USE_DOCSTRING,
     auto_retry: bool = False,
 ) -> None:
-    if desc is None:
-        desc = ""
-
     if isinstance(desc, _UseDocMarker):
-        desc = inspect.getdoc(f)
-        if desc is None:
+        docstring = inspect.getdoc(f)
+        if docstring is None:
             raise ValueError(
                 f"missing docstring for function {f.__name__}, "
                 "use explicit description or provide docstring"
             )
+        desc = docstring
 
     metadata = _AIFncMetadata(
         name=name or f.__name__, description=desc, auto_retry=auto_retry
