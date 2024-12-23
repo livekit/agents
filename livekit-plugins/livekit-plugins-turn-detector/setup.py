@@ -54,6 +54,7 @@ setuptools.setup(
         "transformers>=4.47.1",
         "numpy>=1.26",
         "onnxruntime>=1.18",
+        "jinja2",
     ],
     package_data={"livekit.plugins.turn_detector": ["py.typed"]},
     project_urls={
