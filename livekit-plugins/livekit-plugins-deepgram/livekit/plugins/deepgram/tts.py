@@ -153,7 +153,12 @@ class ChunkedStream(tts.ChunkedStream):
         conn_options: APIConnectOptions,
         session: aiohttp.ClientSession,
     ) -> None:
-        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        super().__init__(
+            tts=tts,
+            input_text=input_text,
+            conn_options=conn_options,
+            tokenizer=opts.word_tokenizer,
+        )
         self._opts = opts
         self._session = session
         self._base_url = base_url
@@ -227,7 +232,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
     ):
-        super().__init__(tts=tts, conn_options=conn_options)
+        super().__init__(
+            tts=tts,
+            conn_options=conn_options,
+            tokenizer=opts.word_tokenizer,
+        )
         self._opts = opts
         self._session = session
         self._base_url = base_url
@@ -248,40 +257,32 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         self._reconnect_event.set()
 
-    async def _run(self) -> None:
-        closing_ws = False
+    async def _run(
+        self,
+        input_stream: tokenize.WordStream,
+        max_retry: int = 3,
+    ):
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
-        audio_bstream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
-        )
 
-        @utils.log_exceptions(logger=logger)
-        async def _tokenize_input():
-            # Converts incoming text into WordStreams and sends them into _segments_ch
-            word_stream = None
-            async for input in self._input_ch:
-                if isinstance(input, str):
-                    if word_stream is None:
-                        word_stream = self._opts.word_tokenizer.stream()
-                        self._segments_ch.send_nowait(word_stream)
-                    word_stream.push_text(input)
-                elif isinstance(input, self._FlushSentinel):
-                    if word_stream:
-                        word_stream.end_input()
-                    word_stream = None
-            self._segments_ch.close()
-
-        @utils.log_exceptions(logger=logger)
-        async def _run_segments(ws: aiohttp.ClientWebSocketResponse):
+        async def send_task(
+            ws: aiohttp.ClientWebSocketResponse,
+            flush_after_words: int = 30,
+        ):
             nonlocal closing_ws
-            async for word_stream in self._segments_ch:
-                async for word in word_stream:
-                    speak_msg = {"type": "Speak", "text": f"{word.token} "}
-                    await ws.send_str(json.dumps(speak_msg))
+            word_count = 0
+            async for word in input_stream:
+                speak_msg = {"type": "Speak", "text": f"{word.token} "}
+                await ws.send_str(json.dumps(speak_msg))
+                word_count += 1
 
-                # Always flush after a segment
+                if word_count >= flush_after_words:
+                    flush_msg = {"type": "Flush"}
+                    await ws.send_str(json.dumps(flush_msg))
+                    word_count = 0
+
+            # flush remaining words
+            if word_count > 0:
                 flush_msg = {"type": "Flush"}
                 await ws.send_str(json.dumps(flush_msg))
 
@@ -292,6 +293,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             last_frame: rtc.AudioFrame | None = None
+            nonlocal closing_ws
+            audio_bstream = utils.audio.AudioByteStream(
+                sample_rate=self._opts.sample_rate,
+                num_channels=1,
+            )
 
             def _send_last_frame(*, segment_id: str, is_final: bool) -> None:
                 nonlocal last_frame
@@ -365,8 +371,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 closing_ws = False
 
                 tasks = [
-                    asyncio.create_task(_tokenize_input()),
-                    asyncio.create_task(_run_segments(ws)),
+                    asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())

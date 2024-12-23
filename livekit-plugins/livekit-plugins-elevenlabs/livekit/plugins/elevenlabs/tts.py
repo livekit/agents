@@ -318,50 +318,17 @@ class SynthesizeStream(tts.SynthesizeStream):
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
     ):
-        super().__init__(tts=tts, conn_options=conn_options)
+        super().__init__(
+            tts=tts,
+            conn_options=conn_options,
+            tokenizer=opts.word_tokenizer,
+        )
         self._opts, self._session = opts, session
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
-    async def _run(self) -> None:
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
-
-        @utils.log_exceptions(logger=logger)
-        async def _tokenize_input():
-            """tokenize text from the input_ch to words"""
-            word_stream = None
-            async for input in self._input_ch:
-                if isinstance(input, str):
-                    if word_stream is None:
-                        # new segment (after flush for e.g)
-                        word_stream = self._opts.word_tokenizer.stream()
-                        self._segments_ch.send_nowait(word_stream)
-
-                    word_stream.push_text(input)
-                elif isinstance(input, self._FlushSentinel):
-                    if word_stream is not None:
-                        word_stream.end_input()
-
-                    word_stream = None
-
-            self._segments_ch.close()
-
-        @utils.log_exceptions(logger=logger)
-        async def _run():
-            async for word_stream in self._segments_ch:
-                await self._run_ws(word_stream)
-
-        tasks = [
-            asyncio.create_task(_tokenize_input()),
-            asyncio.create_task(_run()),
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
-
-    async def _run_ws(
+    async def _run(
         self,
-        word_stream: tokenize.WordStream,
+        input_stream: tokenize.WordStream,
         max_retry: int = 3,
     ) -> None:
         ws_conn: aiohttp.ClientWebSocketResponse | None = None
@@ -406,7 +373,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal eos_sent
 
             xml_content = []
-            async for data in word_stream:
+            async for data in input_stream:
                 text = data.token
 
                 # send the xml phoneme in one go

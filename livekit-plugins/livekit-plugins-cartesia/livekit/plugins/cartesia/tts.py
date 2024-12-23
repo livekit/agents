@@ -49,6 +49,8 @@ API_VERSION = "2024-06-10"
 
 NUM_CHANNELS = 1
 BUFFERED_WORDS_COUNT = 8
+WSS_URL = "wss://api.cartesia.ai/tts/websocket"
+BYTES_URL = "https://api.cartesia.ai/tts/bytes"
 
 
 @dataclass
@@ -61,6 +63,7 @@ class _TTSOptions:
     emotion: list[TTSVoiceEmotion | str] | None
     api_key: str
     language: str
+    word_tokenizer: tokenize.WordTokenizer
 
 
 class TTS(tts.TTS):
@@ -76,6 +79,9 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
+            ignore_punctuation=False,
+        ),
     ) -> None:
         """
         Create a new instance of Cartesia TTS.
@@ -92,6 +98,7 @@ class TTS(tts.TTS):
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
+            word_tokenizer (tokenize.WordTokenizer, optional): The word tokenizer to use. Defaults to a basic tokenizer.
         """
 
         super().__init__(
@@ -113,6 +120,7 @@ class TTS(tts.TTS):
             speed=speed,
             emotion=emotion,
             api_key=api_key,
+            word_tokenizer=word_tokenizer,
         )
         self._session = http_session
 
@@ -207,7 +215,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with self._session.post(
-                "https://api.cartesia.ai/tts/bytes",
+                BYTES_URL,
                 headers=headers,
                 json=json,
                 timeout=aiohttp.ClientTimeout(
@@ -251,18 +259,24 @@ class SynthesizeStream(tts.SynthesizeStream):
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
     ):
-        super().__init__(tts=tts, conn_options=conn_options)
+        super().__init__(
+            tts=tts,
+            conn_options=conn_options,
+            tokenizer=opts.word_tokenizer,
+        )
         self._opts, self._session = opts, session
-        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
-            min_sentence_len=BUFFERED_WORDS_COUNT
-        ).stream()
 
-    async def _run(self) -> None:
+    async def _run(
+        self,
+        input_stream: tokenize.WordStream,
+        max_retry: int = 3,
+    ) -> None:
         request_id = utils.shortuuid()
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse):
+            nonlocal close_ws
             base_pkt = _to_cartesia_options(self._opts)
-            async for ev in self._sent_tokenizer_stream:
+            async for ev in input_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = request_id
                 token_pkt["transcript"] = ev.token + " "
@@ -273,17 +287,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             end_pkt["context_id"] = request_id
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
+            close_ws = True
             await ws.send_str(json.dumps(end_pkt))
 
-        async def _input_task():
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    self._sent_tokenizer_stream.flush()
-                    continue
-                self._sent_tokenizer_stream.push_text(data)
-            self._sent_tokenizer_stream.end_input()
-
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
+            nonlocal close_ws
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=NUM_CHANNELS,
@@ -312,7 +320,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise Exception("Cartesia connection closed unexpectedly")
+                    if not close_ws:
+                        raise Exception("Cartesia connection closed unexpectedly")
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Cartesia message type %s", msg.type)
@@ -340,17 +350,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.error("unexpected Cartesia message %s", data)
 
-        url = f"wss://api.cartesia.ai/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
-
         ws: aiohttp.ClientWebSocketResponse | None = None
 
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(url), self._conn_options.timeout
+                self._session.ws_connect(
+                    _to_cartesia_url(api_key=self._opts.api_key, version=API_VERSION)
+                ),
+                self._conn_options.timeout,
             )
+            close_ws = False
 
             tasks = [
-                asyncio.create_task(_input_task()),
                 asyncio.create_task(_sentence_stream_task(ws)),
                 asyncio.create_task(_recv_task(ws)),
             ]
@@ -362,6 +373,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             if ws is not None:
                 await ws.close()
+
+
+def _to_cartesia_url(api_key: str, version: str) -> str:
+    return f"{WSS_URL}?api_key={api_key}&cartesia_version={version}"
 
 
 def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:

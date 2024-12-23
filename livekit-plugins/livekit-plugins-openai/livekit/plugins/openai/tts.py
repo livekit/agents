@@ -178,6 +178,7 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         request_id = utils.shortuuid()
+        segment_id = utils.shortuuid()
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=OPENAI_TTS_SAMPLE_RATE,
             num_channels=OPENAI_TTS_CHANNELS,
@@ -191,6 +192,7 @@ class ChunkedStream(tts.ChunkedStream):
                             tts.SynthesizedAudio(
                                 frame=frame,
                                 request_id=request_id,
+                                segment_id=segment_id,
                             )
                         )
 
@@ -199,6 +201,7 @@ class ChunkedStream(tts.ChunkedStream):
                         tts.SynthesizedAudio(
                             frame=frame,
                             request_id=request_id,
+                            segment_id=segment_id,
                         )
                     )
 
