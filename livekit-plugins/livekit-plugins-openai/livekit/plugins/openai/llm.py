@@ -221,7 +221,7 @@ class LLM(llm.LLM):
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if _gac is None:
             logger.warning(
-                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file."
+                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file. Otherwise, use any of the other Google Cloud auth methods."
             )
 
         try:
