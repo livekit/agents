@@ -113,7 +113,7 @@ class ChatMessage:
 
         tool_exception: Exception | None = None
         try:
-            content = called_function.task.result()
+            content = called_function.get_content()
         except BaseException as e:
             if isinstance(e, Exception):
                 tool_exception = e
