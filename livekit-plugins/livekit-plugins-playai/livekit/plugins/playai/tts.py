@@ -18,7 +18,7 @@ from pyht import AsyncClient as PlayHTAsyncClient  # type: ignore
 from pyht.client import Format, Language, TTSOptions  # type: ignore
 
 from .log import logger
-from .models import TTSModel, format_mapping
+from .models import FORMAT, TTSModel, format_mapping
 
 NUM_CHANNELS = 1
 
@@ -39,6 +39,7 @@ class TTS(tts.TTS):
         voice: str = "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
         language: str = "english",
         sample_rate: int = 24000,
+        format: FORMAT = "mp3",
         model: TTSModel | str = "Play3.0-mini-ws",
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False
@@ -52,8 +53,9 @@ class TTS(tts.TTS):
             api_key (str): PlayAI API key.
             user_id (str): PlayAI user ID.
             voice (str): Voice manifest URL.
-            model (str): TTS model.
-            language (str): language.
+            format (FORMAT): Audio format. Defaults to "mp3".
+            model (TTSModel): TTS model, defaults to "Play3.0-mini-ws".
+            language (str): language, defaults to "english".
             sample_rate (int): sample rate (Hz), A number greater than or equal to 8000, and must be less than or equal to 48000
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             **kwargs: Additional options.
@@ -77,7 +79,7 @@ class TTS(tts.TTS):
         _validate_kwargs(kwargs)
         self._config = TTSOptions(
             voice=voice,
-            format=format_mapping.get(str(format), Format.FORMAT_MP3),
+            format=format_mapping.get(format, Format.FORMAT_MP3),
             sample_rate=sample_rate,
             language=Language(language),
             **kwargs,
@@ -106,22 +108,23 @@ class TTS(tts.TTS):
     ) -> None:
         """
         Update the TTS options.
-
-        Args:
-            voice (str, optional): The voice to use.
-            model (str, optional): The model to use.
-            language (str, optional): The language of the text.
-            **kwargs: Additional keyword arguments to update the options.
         """
-        updates = {
-            "voice": voice,
-            "model": model,
-            "language": Language(language) if language else None,
-        }
-        updates.update({k: v for k, v in kwargs.items()})
-        self._config = _update_options(self._config, **updates)
+        updates = {}
+        if voice is not None:
+            updates["voice"] = voice
+        if language is not None:
+            updates["language"] = Language(language)
+        tts_kwargs = {k: v for k, v in kwargs.items()}
+
+        self._config = _update_options(self._config, **updates, **tts_kwargs)
+
+        if model is not None:
+            self._opts.model = model
+
         for stream in self._streams:
-            stream._config = _update_options(stream._config, **updates)
+            stream._config = _update_options(stream._config, **updates, **tts_kwargs)
+            if model is not None:
+                stream._opts.model = model
 
     def synthesize(
         self,
@@ -250,6 +253,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(input_task)
+            self._client.close()
 
     @utils.log_exceptions(logger=logger)
     async def _tokenize_input(self):
