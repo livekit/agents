@@ -1,3 +1,14 @@
 from typing import Literal
 
-TTSModel = Literal["Play3.0-mini", "PlayDialog"]
+from pyht.client import Format
+
+TTSModel = Literal["Play3.0-mini-ws", "PlayDialog-ws", "Play3.0-mini", "PlayDialog"]
+format_mapping = {
+    "raw": Format.FORMAT_RAW,
+    "mp3": Format.FORMAT_MP3,
+    "wav": Format.FORMAT_WAV,
+    "ogg": Format.FORMAT_OGG,
+    "flac": Format.FORMAT_FLAC,
+    "mulaw": Format.FORMAT_MULAW,
+    "pcm": Format.FORMAT_PCM,
+}
