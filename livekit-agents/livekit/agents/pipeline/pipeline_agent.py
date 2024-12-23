@@ -130,6 +130,7 @@ class _ImplOptions:
     int_speech_duration: float
     int_min_words: int
     min_endpointing_delay: float
+    max_endpointing_delay: float
     max_nested_fnc_calls: int
     preemptive_synthesis: bool
     before_llm_cb: BeforeLLMCallback
@@ -190,6 +191,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
         min_endpointing_delay: float = 0.5,
+        max_endpointing_delay: float = 6.0,
         max_nested_fnc_calls: int = 1,
         preemptive_synthesis: bool = False,
         transcription: AgentTranscriptionOptions = AgentTranscriptionOptions(),
@@ -247,6 +249,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             int_speech_duration=interrupt_speech_duration,
             int_min_words=interrupt_min_words,
             min_endpointing_delay=min_endpointing_delay,
+            max_endpointing_delay=max_endpointing_delay,
             max_nested_fnc_calls=max_nested_fnc_calls,
             preemptive_synthesis=preemptive_synthesis,
             transcription=transcription,
@@ -293,7 +296,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._deferred_validation = _DeferredReplyValidation(
             self._validate_reply_if_possible,
-            self._opts.min_endpointing_delay,
+            min_endpointing_delay=self._opts.min_endpointing_delay,
+            max_endpointing_delay=self._opts.max_endpointing_delay,
             turn_detector=self._turn_detector,
             agent=self,
         )
@@ -1118,15 +1122,13 @@ class _DeferredReplyValidation:
     PUNCTUATION = ".!?"
     PUNCTUATION_REDUCE_FACTOR = 0.75
 
-    # Long delay to use when the model thinks the user is still speaking
-    UNLIKELY_ENDPOINT_DELAY = 6
-
     FINAL_TRANSCRIPT_TIMEOUT = 5
 
     def __init__(
         self,
         validate_fnc: Callable[[], None],
         min_endpointing_delay: float,
+        max_endpointing_delay: float,
         turn_detector: _TurnDetector | None,
         agent: VoicePipelineAgent,
     ) -> None:
@@ -1142,6 +1144,7 @@ class _DeferredReplyValidation:
 
         self._agent = agent
         self._end_of_speech_delay = min_endpointing_delay
+        self._max_endpointing_delay = max_endpointing_delay
 
     @property
     def validating(self) -> bool:
@@ -1235,7 +1238,7 @@ class _DeferredReplyValidation:
                 unlikely_threshold = self._turn_detector.unlikely_threshold()
                 elasped = time.perf_counter() - start_time
                 if eot_prob < unlikely_threshold:
-                    delay = self.UNLIKELY_ENDPOINT_DELAY
+                    delay = self._max_endpointing_delay
                 delay = max(0, delay - elasped)
             await asyncio.sleep(delay)
 
