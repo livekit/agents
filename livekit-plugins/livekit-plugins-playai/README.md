@@ -1,4 +1,4 @@
-# LiveKit Plugins PlayAI
+# LiveKit Plugins PlayAI/PlayHT
 
 Agent Framework plugin for voice synthesis with [PlayAI](https://play.ai/) API.
 
@@ -10,4 +10,4 @@ pip install livekit-plugins-playai
 
 ## Pre-requisites
 
-You'll need USER ID and API Secret KEY from PlayAI. It can be set as an environment variable: `PLAYAI_USER_ID`, `PLAYAI_API_KEY`
+You'll need USER ID and API Secret KEY from PlayHT. It can be set as an environment variable: `PLAYHT_USER_ID`, `PLAYHT_API_KEY` get it from [here](https://play.ht/studio/api-access)
