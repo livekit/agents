@@ -378,11 +378,16 @@ class SupervisedProc(ABC):
                     )
 
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                if self._closing or self._kill_sent:
+                    return
+
                 logger.warning(
                     "Failed to get memory info for process",
                     extra=self.logging_extra(),
                     exc_info=e,
                 )
+                # don't bother rechecking if we cannot get process info
+                return
             except Exception:
                 if self._closing or self._kill_sent:
                     return
