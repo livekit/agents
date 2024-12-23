@@ -106,7 +106,7 @@ class _EUORunner(_InferenceRunner):
             return_tensors="np",
         )
 
-        input_dict = {"input_ids": inputs["input_ids"]}
+        input_dict = {"input_ids": np.array(inputs["input_ids"], dtype=np.int64)}
 
         # Run inference
         outputs = self._session.run(["logits"], input_dict)
