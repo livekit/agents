@@ -70,8 +70,6 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
 
         self._log_q = asyncio.Queue[Union[EventLog, TranscriptionLog, None]]()
 
-        self._main_task = asyncio.create_task(self._main_atask())
-
     @property
     def log(self) -> str | None:
         return self._log
@@ -126,6 +124,8 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
 
     def start(self) -> None:
         # Listens for emitted MultimodalAgent events
+        self._main_task = asyncio.create_task(self._main_atask())
+
         @self._model.on("user_started_speaking")
         def _user_started_speaking():
             event = EventLog(eventname="user_started_speaking")
