@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import weakref
 from dataclasses import dataclass, fields
 
 from livekit import rtc
@@ -76,7 +77,7 @@ class TTS(tts.TTS):
         _validate_kwargs(kwargs)
         self._config = TTSOptions(
             voice=voice,
-            format=format_mapping.get(format, Format.FORMAT_MP3),
+            format=format_mapping.get(str(format), Format.FORMAT_MP3),
             sample_rate=sample_rate,
             language=Language(language),
             **kwargs,
@@ -93,6 +94,7 @@ class TTS(tts.TTS):
             user_id=user_id,
             api_key=api_key,
         )
+        self._streams = weakref.WeakSet[SynthesizeStream]()
 
     def update_options(
         self,
@@ -111,16 +113,15 @@ class TTS(tts.TTS):
             language (str, optional): The language of the text.
             **kwargs: Additional keyword arguments to update the options.
         """
-        _validate_kwargs(kwargs)
         updates = {
             "voice": voice,
             "model": model,
             "language": Language(language) if language else None,
         }
         updates.update({k: v for k, v in kwargs.items()})
-        for k, v in updates.items():
-            if v is not None:
-                setattr(self._config, k, v)
+        self._config = _update_options(self._config, **updates)
+        for stream in self._streams:
+            stream._config = _update_options(stream._config, **updates)
 
     def synthesize(
         self,
@@ -138,11 +139,13 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> "SynthesizeStream":
-        return SynthesizeStream(
+        stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
             opts=self._opts,
         )
+        self._streams.add(stream)
+        return stream
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -272,6 +275,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                     yield word.token
 
         return text_stream()
+
+
+def _update_options(config: TTSOptions, **kwargs) -> TTSOptions:
+    _validate_kwargs(kwargs)
+    for k, v in kwargs.items():
+        if v is not None:
+            setattr(config, k, v)
+    return config
 
 
 def _validate_kwargs(kwargs: dict) -> None:
