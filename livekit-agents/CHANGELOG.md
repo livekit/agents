@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.12.4
+
+### Patch Changes
+
+- avoid duplicated chat ctx for function calls with messages - [#1254](https://github.com/livekit/agents/pull/1254) ([@longcw](https://github.com/longcw))
+
 ## 0.12.3
 
 ### Patch Changes
