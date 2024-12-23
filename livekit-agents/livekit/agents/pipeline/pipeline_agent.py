@@ -702,6 +702,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 not playing_speech.user_question or playing_speech.user_committed
             ) and not playing_speech.speech_committed:
                 # the speech is playing but not committed yet, add it to the chat context for this new reply synthesis
+                # First add the previous function call message if any
+                if playing_speech.extra_tools_messages:
+                    copied_ctx.messages.extend(playing_speech.extra_tools_messages)
+
+                # Then add the previous assistant message
                 copied_ctx.messages.append(
                     ChatMessage.create(
                         text=playing_speech.synthesis_handle.tts_forwarder.played_text,
