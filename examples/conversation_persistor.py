@@ -182,6 +182,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
             event = EventLog(eventname="function_calls_finished")
             self._log_q.put_nowait(event)
 
+
 load_dotenv()
 
 logger = logging.getLogger("my-worker")
