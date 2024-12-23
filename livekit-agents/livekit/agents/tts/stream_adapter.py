@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from typing import AsyncIterable
 
 from .. import tokenize
@@ -77,11 +76,15 @@ class StreamAdapterWrapper(SynthesizeStream):
     ) -> None:
         pass  # do nothing
 
-    async def _run(self, input_stream: tokenize.WordStream) -> None:
+    async def _run(
+        self, input_stream: tokenize.WordStream | tokenize.SentenceStream
+    ) -> None:
         async def _synthesize():
             async for ev in input_stream:
                 last_audio: SynthesizedAudio | None = None
-                async for audio in self._wrapped_tts.synthesize(ev.token):
+                async for audio in self._wrapped_tts.synthesize(
+                    ev.token, segment_id=ev.segment_id
+                ):
                     if last_audio is not None:
                         self._event_ch.send_nowait(last_audio)
 
@@ -91,4 +94,4 @@ class StreamAdapterWrapper(SynthesizeStream):
                     last_audio.is_final = True
                     self._event_ch.send_nowait(last_audio)
 
-        asyncio.create_task(_synthesize())
+        await _synthesize()

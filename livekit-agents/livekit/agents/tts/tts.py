@@ -76,6 +76,7 @@ class TTS(
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        segment_id: str | None = None,
     ) -> ChunkedStream: ...
 
     def stream(
@@ -240,7 +241,7 @@ class SynthesizeStream(ABC):
         *,
         tts: TTS,
         conn_options: APIConnectOptions,
-        tokenizer: tokenize.WordTokenizer,
+        tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__()
         self._tts = tts
@@ -259,10 +260,15 @@ class SynthesizeStream(ABC):
         self._mtc_text = ""
 
     @abstractmethod
-    async def _run(self, input_stream: tokenize.WordStream) -> None: ...
+    async def _run(
+        self, input_stream: tokenize.WordStream | tokenize.SentenceStream
+    ) -> None: ...
 
     async def _main_task(self) -> None:
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        if isinstance(self._tokenizer, tokenize.SentenceTokenizer):
+            self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+        elif isinstance(self._tokenizer, tokenize.WordTokenizer):
+            self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
         @utils.log_exceptions(logger=logger)
         async def _tokenize_input():

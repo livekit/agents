@@ -70,6 +70,11 @@ STREAM_TTS: list[Callable[[], tts.TTS]] = [
         lambda: elevenlabs.TTS(encoding="pcm_44100"), id="elevenlabs.pcm_44100"
     ),
     pytest.param(lambda: cartesia.TTS(), id="cartesia"),
+    pytest.param(lambda: deepgram.TTS(), id="deepgram"),
+]
+
+
+STREAM_ADAPTER_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(
         lambda: agents.tts.StreamAdapter(
             tts=openai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
@@ -88,8 +93,48 @@ STREAM_TTS: list[Callable[[], tts.TTS]] = [
         ),
         id="azure.stream",
     ),
-    pytest.param(lambda: deepgram.TTS(), id="deepgram"),
 ]
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("tts_factory", STREAM_ADAPTER_TTS)
+async def test_stream_adapter(tts_factory):
+    tts: agents.tts.TTS = tts_factory()
+
+    synthesize_transcript = make_test_synthesize()
+
+    # Split the transcript into two segments
+    text_segments = [
+        synthesize_transcript[: len(synthesize_transcript) // 2],
+        synthesize_transcript[len(synthesize_transcript) // 2 :],
+    ]
+
+    stream = tts.stream()
+
+    segments = set()
+    for i in range(2):  # Testing 2 segments
+        text = text_segments[i]
+        stream.push_text(text)
+        stream.flush()
+        if i == 1:
+            stream.end_input()
+
+    frames = []
+    is_final = False
+    async for audio in stream:
+        is_final = audio.is_final
+        segments.add(audio.segment_id)
+        frames.append(audio.frame)
+
+    assert is_final, "final audio should be marked as final"
+
+    # Combine the segments for expected text
+    expected_text = "".join(text_segments)
+
+    await _assert_valid_synthesized_audio(frames, tts, expected_text, WER_THRESHOLD)
+
+    assert len(segments) == 2, "should have 2 segments"
+    await stream.aclose()
 
 
 @pytest.mark.usefixtures("job_process")

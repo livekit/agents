@@ -157,7 +157,6 @@ class ChunkedStream(tts.ChunkedStream):
             tts=tts,
             input_text=input_text,
             conn_options=conn_options,
-            tokenizer=opts.word_tokenizer,
         )
         self._opts = opts
         self._session = session
@@ -259,19 +258,20 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run(
         self,
-        input_stream: tokenize.WordStream,
+        input_stream: tokenize.WordStream | tokenize.SentenceStream,
         max_retry: int = 3,
     ):
         request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
+        segment_id = None
 
         async def send_task(
             ws: aiohttp.ClientWebSocketResponse,
             flush_after_words: int = 30,
         ):
-            nonlocal closing_ws
+            nonlocal closing_ws, segment_id
             word_count = 0
             async for word in input_stream:
+                segment_id = word.segment_id
                 speak_msg = {"type": "Speak", "text": f"{word.token} "}
                 await ws.send_str(json.dumps(speak_msg))
                 word_count += 1
@@ -293,7 +293,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             last_frame: rtc.AudioFrame | None = None
-            nonlocal closing_ws
+            nonlocal closing_ws, segment_id
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
