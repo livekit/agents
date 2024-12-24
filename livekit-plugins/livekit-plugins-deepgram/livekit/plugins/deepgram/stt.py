@@ -471,7 +471,7 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    raise Exception("deepgram connection closed unexpectedly")
+                    raise APIStatusError("deepgram connection closed unexpectedly")
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
@@ -498,6 +498,14 @@ class SpeechStream(stt.SpeechStream):
                         [asyncio.gather(*tasks), wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )  # type: ignore
+
+                    # need to propagate exceptions from completed tasks
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            exc = task.exception()
+                            if exc is not None:
+                                raise exc
+
                     if wait_reconnect_task not in done:
                         break
 
