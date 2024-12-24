@@ -199,10 +199,13 @@ class SpeechStream(stt.SpeechStream):
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
-                    await asyncio.wait(
+                    done, _ = await asyncio.wait(
                         [process_input_task, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            task.result()
                 finally:
                     await utils.aio.gracefully_cancel(
                         process_input_task, wait_reconnect_task

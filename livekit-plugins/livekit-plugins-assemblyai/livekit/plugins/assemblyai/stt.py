@@ -305,6 +305,10 @@ class SpeechStream(stt.SpeechStream):
                         [asyncio.gather(*tasks), wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )  # type: ignore
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            task.result()
+
                     if wait_reconnect_task not in done:
                         break
 

@@ -499,12 +499,10 @@ class SpeechStream(stt.SpeechStream):
                         return_when=asyncio.FIRST_COMPLETED,
                     )  # type: ignore
 
-                    # need to propagate exceptions from completed tasks
+                    # propagate exceptions from completed tasks
                     for task in done:
                         if task != wait_reconnect_task:
-                            exc = task.exception()
-                            if exc is not None:
-                                raise exc
+                            task.result()
 
                     if wait_reconnect_task not in done:
                         break
