@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.12.6
+
+### Patch Changes
+
+- improve interruption handling, avoid agent from getting stuck - [#1290](https://github.com/livekit/agents/pull/1290) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.12.5
 
 ### Patch Changes
