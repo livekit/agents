@@ -1035,7 +1035,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
 
-        if self._playing_speech is not None:
+        if self._playing_speech and not self._playing_speech.interrupted:
             should_ignore_input = False
             if not self._playing_speech.allow_interruptions:
                 should_ignore_input = True
@@ -1049,19 +1049,24 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     "interrupt threshold is not met",
                     extra={"speech_id": self._playing_speech.id},
                 )
+
             if should_ignore_input:
                 self._transcribed_text = ""
                 return
 
         if self._pending_agent_reply is None:
-            if self._opts.preemptive_synthesis or not self._transcribed_text:
+            if self._opts.preemptive_synthesis:
                 return
 
+            # as long as we don't have a pending reply, we need to synthesize it
+            # in order to keep the conversation flowing.
+            # transcript could be empty at this moment, if the user interrupted the agent
+            # but did not generate any transcribed text.
             self._synthesize_agent_reply()
 
         assert self._pending_agent_reply is not None
 
-        # in some bad timing, we could end up with two pushed agent replies inside the speech queue.
+        # due to timing, we could end up with two pushed agent replies inside the speech queue.
         # so make sure we directly interrupt every reply when validating a new one
         for speech in self._speech_q:
             if not speech.is_reply:
@@ -1072,7 +1077,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         logger.debug(
             "validated agent reply",
-            extra={"speech_id": self._pending_agent_reply.id},
+            extra={
+                "speech_id": self._pending_agent_reply.id,
+                "text": self._transcribed_text,
+            },
         )
 
         if self._last_speech_time is not None:
@@ -1101,7 +1109,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     def _should_interrupt(self) -> bool:
         if self._playing_speech is None:
-            return True
+            return False
 
         if (
             not self._playing_speech.allow_interruptions
@@ -1155,7 +1163,7 @@ class _DeferredReplyValidation:
 
     @property
     def validating(self) -> bool:
-        return self._validating_task is not None and not self._validating_task.done()
+        return self._validating_task and not self._validating_task.done()
 
     def _compute_delay(self) -> float | None:
         """Computes the amount of time to wait before validating the agent reply.
@@ -1206,7 +1214,6 @@ class _DeferredReplyValidation:
         self._last_recv_start_of_speech_time = time.perf_counter()
         if self.validating:
             assert self._validating_task is not None
-            self._validating_task.cancel()
 
     def on_human_end_of_speech(self, ev: vad.VADEvent) -> None:
         self._speaking = False
