@@ -318,7 +318,9 @@ class SpeechStream(stt.SpeechStream):
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config = {
             "sample_rate": self._opts.sample_rate,
-            "word_boost": self._opts.word_boost,
+            "word_boost": json.dumps(self._opts.word_boost)
+            if self._opts.word_boost is not None
+            else None,
             "encoding": self._opts.encoding,
             "disable_partial_transcripts": self._opts.disable_partial_transcripts,
             "enable_extra_session_information": self._opts.enable_extra_session_information,
