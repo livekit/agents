@@ -48,9 +48,9 @@ class APIStatusError(APIError):
         self,
         message: str,
         *,
-        status_code: int,
-        request_id: str | None,
-        body: object | None,
+        status_code: int = -1,
+        request_id: str | None = None,
+        body: object | None = None,
     ) -> None:
         super().__init__(message, body=body)
 

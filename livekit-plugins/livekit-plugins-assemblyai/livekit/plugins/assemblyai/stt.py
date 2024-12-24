@@ -282,9 +282,6 @@ class SpeechStream(stt.SpeechStream):
 
                     raise APIStatusError(
                         "AssemblyAI connection closed unexpectedly",
-                        status_code=-1,
-                        request_id=None,
-                        body=None,
                     )  # this will trigger a reconnection, see the _run loop
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
