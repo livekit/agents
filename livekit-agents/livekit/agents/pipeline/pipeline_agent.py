@@ -714,6 +714,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     )
                 )
 
+        # we want to add this question even if it's empty. during false positive interruptions,
+        # adding an empty user message gives the LLM context so it could continue from where
+        # it had been interrupted.
         copied_ctx.messages.append(
             ChatMessage.create(text=handle.user_question, role="user")
         )
