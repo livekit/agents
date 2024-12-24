@@ -203,9 +203,14 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        segment_id: str | None = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
-            tts=self, input_text=text, conn_options=conn_options, opts=self._opts
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=self._opts,
+            segment_id=segment_id,
         )
 
 
@@ -217,14 +222,18 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
+        segment_id: str | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
+        self._segment_id = segment_id
+        if self._segment_id is None:
+            self._segment_id = utils.shortuuid()
 
     async def _run(self):
         stream_callback = speechsdk.audio.PushAudioOutputStream(
             _PushAudioOutputStreamCallback(
-                self._opts, asyncio.get_running_loop(), self._event_ch
+                self._opts, asyncio.get_running_loop(), self._event_ch, self._segment_id
             )
         )
         synthesizer = _create_speech_synthesizer(
@@ -289,12 +298,14 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         opts: _TTSOptions,
         loop: asyncio.AbstractEventLoop,
         event_ch: utils.aio.ChanSender[tts.SynthesizedAudio],
+        segment_id: str,
     ):
         super().__init__()
         self._event_ch = event_ch
         self._opts = opts
         self._loop = loop
         self._request_id = utils.shortuuid()
+        self._segment_id = segment_id
 
         self._bstream = utils.audio.AudioByteStream(
             sample_rate=opts.sample_rate, num_channels=1
@@ -304,6 +315,7 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         for frame in self._bstream.write(audio_buffer.tobytes()):
             audio = tts.SynthesizedAudio(
                 request_id=self._request_id,
+                segment_id=self._segment_id,
                 frame=frame,
             )
             with contextlib.suppress(RuntimeError):
@@ -315,6 +327,7 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         for frame in self._bstream.flush():
             audio = tts.SynthesizedAudio(
                 request_id=self._request_id,
+                segment_id=self._segment_id,
                 frame=frame,
             )
             with contextlib.suppress(RuntimeError):

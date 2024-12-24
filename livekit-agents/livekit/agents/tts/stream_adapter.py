@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 from typing import AsyncIterable
 
-from .. import tokenize, utils
+from .. import tokenize
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .tts import (
     TTS,
@@ -65,30 +64,27 @@ class StreamAdapterWrapper(SynthesizeStream):
         wrapped_tts: TTS,
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
+        super().__init__(
+            tts=tts,
+            conn_options=conn_options,
+            tokenizer=sentence_tokenizer,
+        )
         self._wrapped_tts = wrapped_tts
-        self._sent_stream = sentence_tokenizer.stream()
 
     async def _metrics_monitor_task(
         self, event_aiter: AsyncIterable[SynthesizedAudio]
     ) -> None:
         pass  # do nothing
 
-    async def _run(self) -> None:
-        async def _forward_input():
-            """forward input to vad"""
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    self._sent_stream.flush()
-                    continue
-                self._sent_stream.push_text(data)
-
-            self._sent_stream.end_input()
-
+    async def _run(
+        self, input_stream: tokenize.WordStream | tokenize.SentenceStream
+    ) -> None:
         async def _synthesize():
-            async for ev in self._sent_stream:
+            async for ev in input_stream:
                 last_audio: SynthesizedAudio | None = None
-                async for audio in self._wrapped_tts.synthesize(ev.token):
+                async for audio in self._wrapped_tts.synthesize(
+                    ev.token, segment_id=ev.segment_id
+                ):
                     if last_audio is not None:
                         self._event_ch.send_nowait(last_audio)
 
@@ -98,11 +94,4 @@ class StreamAdapterWrapper(SynthesizeStream):
                     last_audio.is_final = True
                     self._event_ch.send_nowait(last_audio)
 
-        tasks = [
-            asyncio.create_task(_forward_input()),
-            asyncio.create_task(_synthesize()),
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
+        await _synthesize()

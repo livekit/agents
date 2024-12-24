@@ -9,6 +9,7 @@ from typing import AsyncIterable, AsyncIterator, Generic, Literal, TypeVar, Unio
 
 from livekit import rtc
 
+from .. import tokenize, utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import TTSMetrics
@@ -75,6 +76,7 @@ class TTS(
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        segment_id: str | None = None,
     ) -> ChunkedStream: ...
 
     def stream(
@@ -234,9 +236,16 @@ class ChunkedStream(ABC):
 class SynthesizeStream(ABC):
     class _FlushSentinel: ...
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+        tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer,
+    ) -> None:
         super().__init__()
         self._tts = tts
+        self._tokenizer = tokenizer
         self._conn_options = conn_options
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
@@ -251,12 +260,52 @@ class SynthesizeStream(ABC):
         self._mtc_text = ""
 
     @abstractmethod
-    async def _run(self) -> None: ...
+    async def _run(
+        self, input_stream: tokenize.WordStream | tokenize.SentenceStream
+    ) -> None: ...
 
     async def _main_task(self) -> None:
+        if isinstance(self._tokenizer, tokenize.SentenceTokenizer):
+            self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+        elif isinstance(self._tokenizer, tokenize.WordTokenizer):
+            self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
+
+        @utils.log_exceptions(logger=logger)
+        async def _tokenize_input():
+            """tokenize text from the input_ch to words"""
+            input_stream = None
+            async for input in self._input_ch:
+                if isinstance(input, str):
+                    if input_stream is None:
+                        # new segment (after flush for e.g)
+                        input_stream = self._tokenizer.stream()
+                        self._segments_ch.send_nowait(input_stream)
+
+                    input_stream.push_text(input)
+                elif isinstance(input, self._FlushSentinel):
+                    if input_stream is not None:
+                        input_stream.end_input()
+
+                    input_stream = None
+
+            self._segments_ch.close()
+
+        @utils.log_exceptions(logger=logger)
+        async def _run_segments():
+            async for input_stream in self._segments_ch:
+                await self._run(input_stream)
+
         for i in range(self._conn_options.max_retry + 1):
             try:
-                return await self._run()
+                tasks = [
+                    asyncio.create_task(_tokenize_input()),
+                    asyncio.create_task(_run_segments()),
+                ]
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    await utils.aio.gracefully_cancel(*tasks)
+                return
             except APIError as e:
                 if self._conn_options.max_retry == 0:
                     raise
