@@ -1163,7 +1163,7 @@ class _DeferredReplyValidation:
 
     @property
     def validating(self) -> bool:
-        return self._validating_task and not self._validating_task.done()
+        return self._validating_task is not None and not self._validating_task.done()
 
     def _compute_delay(self) -> float | None:
         """Computes the amount of time to wait before validating the agent reply.
