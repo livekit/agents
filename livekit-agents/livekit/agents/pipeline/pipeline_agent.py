@@ -1214,6 +1214,7 @@ class _DeferredReplyValidation:
         self._last_recv_start_of_speech_time = time.perf_counter()
         if self.validating:
             assert self._validating_task is not None
+            self._validating_task.cancel()
 
     def on_human_end_of_speech(self, ev: vad.VADEvent) -> None:
         self._speaking = False
