@@ -25,7 +25,13 @@ from typing import List, Literal, Optional
 from urllib.parse import urlencode
 
 import aiohttp
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectOptions,
+    APIStatusError,
+    stt,
+    utils,
+)
 from livekit.agents.stt import SpeechEvent
 from livekit.agents.utils import AudioBuffer
 
@@ -274,8 +280,11 @@ class SpeechStream(stt.SpeechStream):
                     if closing_ws:  # close is expected, see SpeechStream.aclose
                         return
 
-                    raise Exception(
+                    raise APIStatusError(
                         "AssemblyAI connection closed unexpectedly",
+                        status_code=-1,
+                        request_id=None,
+                        body=None,
                     )  # this will trigger a reconnection, see the _run loop
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
