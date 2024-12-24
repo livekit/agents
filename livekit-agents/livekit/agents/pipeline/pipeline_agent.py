@@ -498,7 +498,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         return new_handle
 
     def interrupt(self, interrupt_all: bool = True) -> None:
-        """Interrupt the current speech"""
+        """Interrupt the current speech
+
+        Args:
+            interrupt_all: Whether to interrupt all pending speech
+        """
         if interrupt_all:
             # interrupt all pending speech
             if self._pending_agent_reply is not None:
