@@ -17,6 +17,7 @@ from typing import (
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
+from typing_extensions import override
 
 from .. import utils
 from ..log import logger
@@ -66,6 +67,41 @@ class ToolChoice:
 
 
 TEvent = TypeVar("TEvent")
+T = TypeVar("T")
+
+
+class TrackedChannel(aio.Chan[T]):
+    """
+    A channel that tracks the number of times it has sent or received a value. We
+    use this to handle timeouts from the LLM - someone has received a value from
+    the LLM, we don't want to retry because the audio stream will have already
+    received the chat chunk.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.num_sends = 0
+        self.num_receives = 0
+
+    @override
+    def send_nowait(self, value: T) -> None:
+        self.num_sends += 1
+        return super().send_nowait(value)
+
+    @override
+    async def send(self, value: T) -> None:
+        self.num_sends += 1
+        await super().send(value)
+
+    @override
+    async def recv(self) -> T:
+        self.num_receives += 1
+        return await super().recv()
+
+    @override
+    def recv_nowait(self) -> T:
+        self.num_receives += 1
+        return super().recv_nowait()
 
 
 class LLM(
@@ -128,7 +164,7 @@ class LLMStream(ABC):
         self._fnc_ctx = fnc_ctx
         self._conn_options = conn_options
 
-        self._event_ch = aio.Chan[ChatChunk]()
+        self._event_ch = TrackedChannel[ChatChunk]()
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
@@ -148,6 +184,19 @@ class LLMStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
+                if self._event_ch.num_receives > 0:
+                    logger.warning(
+                        "LLM already sent a value that was used, not retrying",
+                        exc_info=e,
+                        extra={
+                            "llm": self._llm._label,
+                            "attempt": i + 1,
+                            "num_sends": self._event_ch.num_sends,
+                            "num_receives": self._event_ch.num_receives,
+                        },
+                    )
+                    raise
+
                 if self._conn_options.max_retry == 0:
                     raise
                 elif i == self._conn_options.max_retry:
