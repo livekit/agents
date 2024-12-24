@@ -18,7 +18,7 @@ from pyht import AsyncClient as PlayHTAsyncClient  # type: ignore
 from pyht.client import Format, Language, TTSOptions  # type: ignore
 
 from .log import logger
-from .models import FORMAT, TTSModel, format_mapping
+from .models import TTSModel
 
 NUM_CHANNELS = 1
 
@@ -39,7 +39,6 @@ class TTS(tts.TTS):
         voice: str = "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
         language: str = "english",
         sample_rate: int = 24000,
-        format: FORMAT = "mp3",
         model: TTSModel | str = "Play3.0-mini-ws",
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False
@@ -53,7 +52,6 @@ class TTS(tts.TTS):
             api_key (str): PlayAI API key.
             user_id (str): PlayAI user ID.
             voice (str): Voice manifest URL.
-            format (FORMAT): Audio format. Defaults to "mp3".
             model (TTSModel): TTS model, defaults to "Play3.0-mini-ws".
             language (str): language, defaults to "english".
             sample_rate (int): sample rate (Hz), A number greater than or equal to 8000, and must be less than or equal to 48000
@@ -79,7 +77,7 @@ class TTS(tts.TTS):
         _validate_kwargs(kwargs)
         self._config = TTSOptions(
             voice=voice,
-            format=format_mapping.get(format, Format.FORMAT_MP3),
+            format=Format.FORMAT_MP3,  # Default format for now
             sample_rate=sample_rate,
             language=Language(language),
             **kwargs,
