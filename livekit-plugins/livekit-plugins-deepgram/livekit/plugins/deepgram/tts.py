@@ -249,95 +249,30 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        closing_ws = False
-        request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
-        audio_bstream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
-        )
+        self._closing_input = False
 
         @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
             # Converts incoming text into WordStreams and sends them into _segments_ch
-            word_stream = None
+            input_stream = None
             async for input in self._input_ch:
                 if isinstance(input, str):
-                    if word_stream is None:
-                        word_stream = self._opts.word_tokenizer.stream()
-                        self._segments_ch.send_nowait(word_stream)
-                    word_stream.push_text(input)
+                    if input_stream is None:
+                        input_stream = self._opts.word_tokenizer.stream()
+                        self._segments_ch.send_nowait(input_stream)
+                    input_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
-                    if word_stream:
-                        word_stream.end_input()
-                    word_stream = None
+                    if input_stream:
+                        input_stream.end_input()
+                    input_stream = None
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
         async def _run_segments(ws: aiohttp.ClientWebSocketResponse):
-            nonlocal closing_ws
-            async for word_stream in self._segments_ch:
-                async for word in word_stream:
-                    speak_msg = {"type": "Speak", "text": f"{word.token} "}
-                    await ws.send_str(json.dumps(speak_msg))
-
-                # Always flush after a segment
-                flush_msg = {"type": "Flush"}
-                await ws.send_str(json.dumps(flush_msg))
-
-            # after all segments, close
-            close_msg = {"type": "Close"}
-            closing_ws = True
-            await ws.send_str(json.dumps(close_msg))
-
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
-            last_frame: rtc.AudioFrame | None = None
-
-            def _send_last_frame(*, segment_id: str, is_final: bool) -> None:
-                nonlocal last_frame
-                if last_frame is not None:
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id,
-                            segment_id=segment_id,
-                            frame=last_frame,
-                            is_final=is_final,
-                        )
-                    )
-                    last_frame = None
-
-            while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    if not closing_ws:
-                        raise Exception(
-                            "Deepgram websocket connection closed unexpectedly"
-                        )
-                    return
-
-                if msg.type == aiohttp.WSMsgType.BINARY:
-                    data = msg.data
-                    for frame in audio_bstream.write(data):
-                        _send_last_frame(segment_id=segment_id, is_final=False)
-                        last_frame = frame
-                elif msg.type == aiohttp.WSMsgType.TEXT:
-                    resp = json.loads(msg.data)
-                    mtype = resp.get("type")
-                    if mtype == "Flushed":
-                        for frame in audio_bstream.flush():
-                            _send_last_frame(segment_id=segment_id, is_final=False)
-                            last_frame = frame
-                        _send_last_frame(segment_id=segment_id, is_final=True)
-                    elif mtype == "Warning":
-                        logger.warning("Deepgram warning: %s", resp.get("warn_msg"))
-                    elif mtype == "Metadata":
-                        pass
-                    else:
-                        logger.debug("Unknown message type: %s", resp)
+            async for input_stream in self._segments_ch:
+                segment_id = utils.shortuuid()
+                await self._run_ws(input_stream, segment_id, ws)
+            self._closing_input = True
 
         async def _connection_timeout():
             # Deepgram has a 60-minute timeout period for websocket connections
@@ -362,18 +297,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     ),
                     self._conn_options.timeout,
                 )
-                closing_ws = False
 
                 tasks = [
                     asyncio.create_task(_tokenize_input()),
                     asyncio.create_task(_run_segments(ws)),
-                    asyncio.create_task(recv_task(ws)),
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 connection_timeout_task = asyncio.create_task(_connection_timeout())
-
                 try:
-                    done, _ = await asyncio.wait(
+                    done, pending = await asyncio.wait(
                         [
                             asyncio.gather(*tasks),
                             wait_reconnect_task,
@@ -381,6 +313,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                         ],
                         return_when=asyncio.FIRST_COMPLETED,
                     )  # type: ignore
+
+                    # propagate exceptions from completed tasks
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            task.result()
+
                     if wait_reconnect_task not in done:
                         break
                     self._reconnect_event.clear()
@@ -388,18 +326,95 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await utils.aio.gracefully_cancel(
                         *tasks, wait_reconnect_task, connection_timeout_task
                     )
-
-            except asyncio.TimeoutError as e:
-                raise APITimeoutError() from e
-            except aiohttp.ClientResponseError as e:
-                raise APIStatusError(
-                    message=e.message, status_code=e.status, request_id=None, body=None
-                ) from e
-            except Exception as e:
-                raise APIConnectionError() from e
             finally:
                 if ws is not None and not ws.closed:
                     await ws.close()
+
+    async def _run_ws(
+        self,
+        input_stream: tokenize.WordStream,
+        segment_id: str,
+        ws: aiohttp.ClientWebSocketResponse,
+    ) -> None:
+        request_id = utils.shortuuid()
+
+        async def send_task(
+            ws: aiohttp.ClientWebSocketResponse,
+            flush_after_words: int = 30,
+        ):
+            async for word in input_stream:
+                speak_msg = {"type": "Speak", "text": f"{word.token} "}
+                await ws.send_str(json.dumps(speak_msg))
+
+            flush_msg = {"type": "Flush"}
+            await ws.send_str(json.dumps(flush_msg))
+            if self._closing_input:
+                close_msg = {"type": "Close"}
+                await ws.send_str(json.dumps(close_msg))
+
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
+            last_frame: rtc.AudioFrame | None = None
+            audio_bstream = utils.audio.AudioByteStream(
+                sample_rate=self._opts.sample_rate,
+                num_channels=NUM_CHANNELS,
+            )
+
+            def _send_last_frame(*, segment_id: str, is_final: bool) -> None:
+                nonlocal last_frame
+                if last_frame is not None:
+                    self._event_ch.send_nowait(
+                        tts.SynthesizedAudio(
+                            request_id=request_id,
+                            segment_id=segment_id,
+                            frame=last_frame,
+                            is_final=is_final,
+                        )
+                    )
+                    last_frame = None
+
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    if not self._closing_input:
+                        raise APIStatusError(
+                            "Deepgram websocket connection closed unexpectedly"
+                        )
+                    return
+
+                if msg.type == aiohttp.WSMsgType.BINARY:
+                    data = msg.data
+                    for frame in audio_bstream.write(data):
+                        _send_last_frame(segment_id=segment_id, is_final=False)
+                        last_frame = frame
+                elif msg.type == aiohttp.WSMsgType.TEXT:
+                    resp = json.loads(msg.data)
+                    mtype = resp.get("type")
+                    if mtype == "Flushed":
+                        for frame in audio_bstream.flush():
+                            _send_last_frame(segment_id=segment_id, is_final=False)
+                            last_frame = frame
+                        _send_last_frame(segment_id=segment_id, is_final=True)
+                        break
+                    elif mtype == "Warning":
+                        logger.warning("Deepgram warning: %s", resp.get("warn_msg"))
+                    elif mtype == "Metadata":
+                        pass
+                    else:
+                        logger.debug("Unknown message type: %s", resp)
+
+        tasks = [
+            asyncio.create_task(send_task(ws)),
+            asyncio.create_task(recv_task(ws)),
+        ]
+
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
 
 
 def _to_deepgram_url(

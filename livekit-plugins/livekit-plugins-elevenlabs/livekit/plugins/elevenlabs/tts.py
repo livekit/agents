@@ -469,7 +469,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if not eos_sent:
-                        raise Exception(
+                        raise APIStatusError(
                             "11labs connection closed unexpectedly, not all tokens have been consumed"
                         )
                     return

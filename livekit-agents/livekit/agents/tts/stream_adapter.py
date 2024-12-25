@@ -67,7 +67,8 @@ class StreamAdapterWrapper(SynthesizeStream):
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._wrapped_tts = wrapped_tts
-        self._sent_stream = sentence_tokenizer.stream()
+        self._sent_stream = sentence_tokenizer
+        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _metrics_monitor_task(
         self, event_aiter: AsyncIterable[SynthesizedAudio]
@@ -85,10 +86,35 @@ class StreamAdapterWrapper(SynthesizeStream):
 
             self._sent_stream.end_input()
 
-        async def _synthesize():
-            async for ev in self._sent_stream:
+        async def _tokenize_input():
+            """tokenize text"""
+            input_stream = None
+            async for input in self._input_ch:
+                if isinstance(input, str):
+                    if input_stream is None:
+                        # new segment (after flush for e.g)
+                        input_stream = self._sent_stream.stream()
+                        self._segments_ch.send_nowait(input_stream)
+
+                    input_stream.push_text(input)
+                elif isinstance(input, self._FlushSentinel):
+                    if input_stream is not None:
+                        input_stream.end_input()
+
+                    input_stream = None
+            self._segments_ch.close()
+
+        async def _run_segments():
+            async for input_stream in self._segments_ch:
+                await _synthesize(input_stream)
+
+        async def _synthesize(input_stream):
+            async for ev in input_stream:
+                print("ev: ", ev)
                 last_audio: SynthesizedAudio | None = None
-                async for audio in self._wrapped_tts.synthesize(ev.token):
+                async for audio in self._wrapped_tts.synthesize(
+                    ev.token, segment_id=ev.segment_id
+                ):
                     if last_audio is not None:
                         self._event_ch.send_nowait(last_audio)
 
@@ -99,8 +125,8 @@ class StreamAdapterWrapper(SynthesizeStream):
                     self._event_ch.send_nowait(last_audio)
 
         tasks = [
-            asyncio.create_task(_forward_input()),
-            asyncio.create_task(_synthesize()),
+            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_run_segments()),
         ]
         try:
             await asyncio.gather(*tasks)

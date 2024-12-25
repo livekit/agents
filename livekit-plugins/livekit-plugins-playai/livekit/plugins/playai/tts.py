@@ -207,23 +207,23 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._config = self._opts.tts_options
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
+        self._segment_id = utils.shortuuid()
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
         bstream = utils.audio.AudioByteStream(
             sample_rate=self._config.sample_rate,
             num_channels=NUM_CHANNELS,
         )
         last_frame: rtc.AudioFrame | None = None
 
-        def _send_last_frame(*, segment_id: str, is_final: bool) -> None:
+        def _send_last_frame(*, is_final: bool) -> None:
             nonlocal last_frame
             if last_frame is not None:
                 self._event_ch.send_nowait(
                     tts.SynthesizedAudio(
                         request_id=request_id,
-                        segment_id=segment_id,
+                        segment_id=self._segment_id,
                         frame=last_frame,
                         is_final=is_final,
                     )
@@ -240,13 +240,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
                     for frame in bstream.write(frame.data.tobytes()):
-                        _send_last_frame(segment_id=segment_id, is_final=False)
+                        _send_last_frame(is_final=False)
                         last_frame = frame
 
             for frame in bstream.flush():
-                _send_last_frame(segment_id=segment_id, is_final=False)
+                _send_last_frame(is_final=False)
                 last_frame = frame
-            _send_last_frame(segment_id=segment_id, is_final=True)
+            _send_last_frame(is_final=True)
         except Exception as e:
             raise APIConnectionError() from e
         finally:
@@ -273,6 +273,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _create_text_stream(self):
         async def text_stream():
             async for word_stream in self._segments_ch:
+                self._segment_id = utils.shortuuid()
                 async for word in word_stream:
                     yield word.token
 
