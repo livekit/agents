@@ -5,17 +5,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass
-from typing import Literal
-
-from livekit import rtc
-from livekit.agents import llm, utils
-from livekit.agents.llm.function_context import _create_ai_function_info
-from livekit.agents.multimodal import (
-    Capabilities,
-    Content,
-    RealtimeAPI,
-    RealtimeAPISession,
-)
+from typing import AsyncIterable, Literal
 
 from google import genai  # type: ignore
 from google.genai.types import (  # type: ignore
@@ -26,6 +16,13 @@ from google.genai.types import (  # type: ignore
     PrebuiltVoiceConfig,
     SpeechConfig,
     VoiceConfig,
+)
+from livekit import rtc
+from livekit.agents import llm, utils
+from livekit.agents.llm.function_context import _create_ai_function_info
+from livekit.agents.multimodal import (
+    RealtimeAPI,
+    RealtimeAPISession,
 )
 
 from ..log import logger
@@ -49,8 +46,21 @@ EventTypes = Literal[
 
 
 @dataclass
-class GeminiContent(Content):
-    pass
+class GeminiContent:
+    response_id: str
+    item_id: str
+    output_index: int
+    content_index: int
+    text: str
+    audio: list[rtc.AudioFrame]
+    text_stream: AsyncIterable[str]
+    audio_stream: AsyncIterable[rtc.AudioFrame]
+    content_type: Literal["text", "audio"]
+
+
+@dataclass
+class Capabilities:
+    supports_chat_ctx_manipulation: bool
 
 
 @dataclass

@@ -29,8 +29,7 @@ EventTypes = Literal[
 ]
 
 
-@dataclass
-class InputTranscription:
+class InputTranscriptionProto(Protocol):
     item_id: str
     """id of the item"""
     transcript: str | None
@@ -39,8 +38,7 @@ class InputTranscription:
     """error message"""
 
 
-@dataclass
-class Content:
+class ContentProto(Protocol):
     response_id: str
     item_id: str
     output_index: int
@@ -52,16 +50,15 @@ class Content:
     content_type: Literal["text", "audio"]
 
 
-@dataclass
-class Capabilities:
-    supports_chat_ctx_manipulation: bool = False
+class CapabilitiesProto(Protocol):
+    supports_chat_ctx_manipulation: bool
 
 
 class RealtimeAPI(Protocol):
     """Realtime API protocol"""
 
     @property
-    def capabilities(self) -> Capabilities: ...
+    def capabilities(self) -> CapabilitiesProto: ...
 
     def session(
         self,
@@ -228,7 +225,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         asyncio.create_task(_init_and_start())
 
         @self._session.on("response_content_added")
-        def _on_content_added(message: Content):
+        def _on_content_added(message: ContentProto):
             tr_fwd = transcription.TTSSegmentsForwarder(
                 room=self._room,
                 participant=self._room.local_participant,
@@ -256,7 +253,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("input_speech_transcription_completed")
-        def _input_speech_transcription_completed(ev: InputTranscription):
+        def _input_speech_transcription_completed(ev: InputTranscriptionProto):
             if ev.error is not None or ev.transcript is None:
                 self.emit("input_speech_transcription_failed", ev)
                 return

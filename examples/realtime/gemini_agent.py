@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Annotated
 
@@ -51,21 +50,10 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()
 
-    # create a chat context with chat history
     chat_ctx = llm.ChatContext()
-    chat_ctx.append(text="I'm planning a trip to Paris next month.", role="user")
-    chat_ctx.append(
-        text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",
-        role="assistant",
-    )
-    chat_ctx.append(text="What are the must-visit places in Paris?", role="user")
-    chat_ctx.append(
-        text="The must-visit places in Paris are the Eiffel Tower, Louvre Museum, Notre-Dame Cathedral, and Montmartre.",
-        role="assistant",
-    )
 
     agent = multimodal.MultimodalAgent(
-        model=google.realtime.RealtimeModel(
+        model=google.beta.realtime.RealtimeModel(
             voice="Charon",
             temperature=0.8,
             instructions="You are a helpful assistant",
@@ -74,19 +62,6 @@ async def entrypoint(ctx: JobContext):
         chat_ctx=chat_ctx,
     )
     agent.start(ctx.room, participant)
-
-    @agent.on("agent_speech_committed")
-    @agent.on("agent_speech_interrupted")
-    def _on_agent_speech_created(msg: llm.ChatMessage):
-        # example of truncating the chat context
-        max_ctx_len = 10
-        chat_ctx = agent.chat_ctx_copy()
-        if len(chat_ctx.messages) > max_ctx_len:
-            chat_ctx.messages = chat_ctx.messages[-max_ctx_len:]
-            # NOTE: The `set_chat_ctx` function will attempt to synchronize changes made
-            # to the local chat context with the server instead of completely replacing it,
-            # provided that the message IDs are consistent.
-            asyncio.create_task(agent.set_chat_ctx(chat_ctx))
 
 
 if __name__ == "__main__":

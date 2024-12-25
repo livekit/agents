@@ -7,7 +7,7 @@ import time
 import weakref
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Literal, Optional, Union, cast, overload
+from typing import AsyncIterable, Literal, Optional, Union, cast, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -15,11 +15,6 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
-from livekit.agents.multimodal import (
-    Capabilities,
-    Content,
-    InputTranscription,
-)
 from typing_extensions import TypedDict
 
 from .._oai_api import build_oai_function_description
@@ -96,9 +91,40 @@ class RealtimeToolCall:
 
 
 @dataclass
-class RealtimeContent(Content):
-    tool_calls: list[RealtimeToolCall]
-    """pending tool calls"""
+class Capabilities:
+    supports_chat_ctx_manipulation: bool
+
+
+@dataclass
+class InputTranscription:
+    item_id: str
+    """id of the item"""
+    transcript: str | None
+    """transcript of the input audio"""
+    error: str | None = None
+    """error message"""
+
+
+@dataclass
+class RealtimeContent:
+    response_id: str
+    """id of the response"""
+    item_id: str
+    """id of the item"""
+    output_index: int
+    """index of the output"""
+    content_index: int
+    """index of the content"""
+    text: str
+    """accumulated text content"""
+    audio: list[rtc.AudioFrame]
+    """accumulated audio content"""
+    text_stream: AsyncIterable[str]
+    """stream of text content"""
+    audio_stream: AsyncIterable[rtc.AudioFrame]
+    """stream of audio content"""
+    content_type: api_proto.Modality
+    """type of the content"""
 
 
 @dataclass
@@ -1456,7 +1482,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             audio=[],
             text_stream=text_ch,
             audio_stream=audio_ch,
-            tool_calls=[],
             content_type=content_type,
         )
         output.content.append(new_content)
