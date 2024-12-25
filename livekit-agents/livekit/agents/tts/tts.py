@@ -75,7 +75,7 @@ class TTS(
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        segment_id: str = "",
+        segment_id: str | None = None,
     ) -> ChunkedStream: ...
 
     def stream(

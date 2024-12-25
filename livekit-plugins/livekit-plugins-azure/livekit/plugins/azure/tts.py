@@ -203,7 +203,7 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        segment_id: str = "",
+        segment_id: str | None = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
             tts=self,
@@ -222,7 +222,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
-        segment_id: str = "",
+        segment_id: str | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
@@ -296,14 +296,14 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         opts: _TTSOptions,
         loop: asyncio.AbstractEventLoop,
         event_ch: utils.aio.ChanSender[tts.SynthesizedAudio],
-        segment_id: str,
+        segment_id: str | None = None,
     ):
         super().__init__()
         self._event_ch = event_ch
         self._opts = opts
         self._loop = loop
         self._request_id = utils.shortuuid()
-        self._segment_id = segment_id
+        self._segment_id = segment_id or utils.shortuuid()
 
         self._bstream = utils.audio.AudioByteStream(
             sample_rate=opts.sample_rate, num_channels=1
