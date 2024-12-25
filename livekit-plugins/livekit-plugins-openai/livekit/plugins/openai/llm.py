@@ -706,6 +706,7 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
         self._tool_index: int | None = None
+        retryable = True
 
         try:
             opts: dict[str, Any] = dict()
@@ -755,6 +756,7 @@ class LLMStream(llm.LLMStream):
                     for choice in chunk.choices:
                         chat_chunk = self._parse_choice(chunk.id, choice)
                         if chat_chunk is not None:
+                            retryable = False
                             self._event_ch.send_nowait(chat_chunk)
 
                     if chunk.usage is not None:
@@ -771,7 +773,7 @@ class LLMStream(llm.LLMStream):
                         )
 
         except openai.APITimeoutError:
-            raise APITimeoutError()
+            raise APITimeoutError(retryable=retryable)
         except openai.APIStatusError as e:
             raise APIStatusError(
                 e.message,
@@ -780,7 +782,7 @@ class LLMStream(llm.LLMStream):
                 body=e.body,
             )
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(retryable=retryable) from e
 
     def _parse_choice(self, id: str, choice: Choice) -> llm.ChatChunk | None:
         delta = choice.delta
