@@ -249,8 +249,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        self._closing_input = False
-
         @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
             # Converts incoming text into WordStreams and sends them into _segments_ch
@@ -272,7 +270,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for input_stream in self._segments_ch:
                 segment_id = utils.shortuuid()
                 await self._run_ws(input_stream, segment_id, ws)
-            self._closing_input = True
 
         async def _connection_timeout():
             # Deepgram has a 60-minute timeout period for websocket connections
@@ -340,22 +337,23 @@ class SynthesizeStream(tts.SynthesizeStream):
         ws: aiohttp.ClientWebSocketResponse,
     ) -> None:
         request_id = utils.shortuuid()
+        done_segment = False
 
         async def send_task(
             ws: aiohttp.ClientWebSocketResponse,
             flush_after_words: int = 30,
         ):
+            nonlocal done_segment
             async for word in input_stream:
                 speak_msg = {"type": "Speak", "text": f"{word.token} "}
                 await ws.send_str(json.dumps(speak_msg))
 
             flush_msg = {"type": "Flush"}
             await ws.send_str(json.dumps(flush_msg))
-            if self._closing_input:
-                close_msg = {"type": "Close"}
-                await ws.send_str(json.dumps(close_msg))
+            done_segment = True
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
+            nonlocal done_segment
             last_frame: rtc.AudioFrame | None = None
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
@@ -382,7 +380,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not self._closing_input:
+                    if not done_segment:
                         raise APIStatusError(
                             "Deepgram websocket connection closed unexpectedly"
                         )

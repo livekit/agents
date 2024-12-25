@@ -258,7 +258,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
     async def _run(self) -> None:
-        self._closing_input = False
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
         @utils.log_exceptions(logger=logger)
@@ -284,7 +283,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _run_segments(ws: aiohttp.ClientWebSocketResponse):
             async for input_stream in self._segments_ch:
                 await self._run_ws(input_stream, ws)
-            self._closing_input = True
 
         url = f"wss://api.cartesia.ai/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
 
@@ -312,8 +310,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         ws: aiohttp.ClientWebSocketResponse,
     ) -> None:
         request_id = utils.shortuuid()
+        done_segment = False
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse):
+            nonlocal done_segment
             base_pkt = _to_cartesia_options(self._opts)
             async for ev in input_stream:
                 token_pkt = base_pkt.copy()
@@ -322,14 +322,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["continue"] = True
                 await ws.send_str(json.dumps(token_pkt))
 
-            if self._closing_input:
-                end_pkt = base_pkt.copy()
-                end_pkt["context_id"] = request_id
-                end_pkt["transcript"] = " "
-                end_pkt["continue"] = False
-                await ws.send_str(json.dumps(end_pkt))
+            end_pkt = base_pkt.copy()
+            end_pkt["context_id"] = request_id
+            end_pkt["transcript"] = " "
+            end_pkt["continue"] = False
+            done_segment = True
+            await ws.send_str(json.dumps(end_pkt))
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
+            nonlocal done_segment
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=NUM_CHANNELS,
@@ -358,7 +359,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError("Cartesia connection closed unexpectedly")
+                    if not done_segment:
+                        raise APIStatusError("Cartesia connection closed unexpectedly")
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Cartesia message type %s", msg.type)
