@@ -7,6 +7,14 @@ import os
 from dataclasses import dataclass
 from typing import AsyncIterable, Literal
 
+from livekit import rtc
+from livekit.agents import llm, utils
+from livekit.agents.llm.function_context import _create_ai_function_info
+from livekit.agents.multimodal import (
+    RealtimeAPI,
+    RealtimeAPISession,
+)
+
 from google import genai  # type: ignore
 from google.genai.types import (  # type: ignore
     FunctionResponse,
@@ -17,15 +25,8 @@ from google.genai.types import (  # type: ignore
     SpeechConfig,
     VoiceConfig,
 )
-from livekit import rtc
-from livekit.agents import llm, utils
-from livekit.agents.llm.function_context import _create_ai_function_info
-from livekit.agents.multimodal import (
-    RealtimeAPI,
-    RealtimeAPISession,
-)
 
-from ..log import logger
+from ...log import logger
 from .api_proto import (
     ClientEvents,
     LiveAPIModels,
