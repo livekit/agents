@@ -706,6 +706,7 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
         self._tool_index: int | None = None
+        retryable = True
 
         try:
             opts: dict[str, Any] = dict()
@@ -750,7 +751,6 @@ class LLMStream(llm.LLMStream):
                 **opts,
             )
 
-            retryable = True
             async with stream:
                 async for chunk in stream:
                     for choice in chunk.choices:
