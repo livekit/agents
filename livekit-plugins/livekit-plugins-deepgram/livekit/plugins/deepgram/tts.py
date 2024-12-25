@@ -305,7 +305,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 connection_timeout_task = asyncio.create_task(_connection_timeout())
                 try:
-                    done, pending = await asyncio.wait(
+                    done, _ = await asyncio.wait(
                         [
                             asyncio.gather(*tasks),
                             wait_reconnect_task,
@@ -316,7 +316,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     # propagate exceptions from completed tasks
                     for task in done:
-                        if task != wait_reconnect_task:
+                        if (
+                            task != wait_reconnect_task
+                            and task != connection_timeout_task
+                        ):
                             task.result()
 
                     if wait_reconnect_task not in done:
