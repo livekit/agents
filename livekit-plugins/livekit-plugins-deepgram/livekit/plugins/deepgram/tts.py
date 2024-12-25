@@ -391,7 +391,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
 
             except asyncio.TimeoutError as e:
-                raise APITimeoutError(request_id=request_id) from e
+                raise APITimeoutError() from e
             except aiohttp.ClientResponseError as e:
                 raise APIStatusError(
                     message=e.message,
@@ -400,7 +400,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     body=None,
                 ) from e
             except Exception as e:
-                raise APIConnectionError(request_id=request_id) from e
+                raise APIConnectionError() from e
             finally:
                 if ws is not None and not ws.closed:
                     await ws.close()
