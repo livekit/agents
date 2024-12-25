@@ -314,8 +314,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if not closing_ws:
-                        raise Exception(
-                            "Deepgram websocket connection closed unexpectedly"
+                        raise APIStatusError(
+                            "Deepgram websocket connection closed unexpectedly",
+                            request_id=request_id,
                         )
                     return
 
@@ -390,13 +391,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
 
             except asyncio.TimeoutError as e:
-                raise APITimeoutError() from e
+                raise APITimeoutError(request_id=request_id) from e
             except aiohttp.ClientResponseError as e:
                 raise APIStatusError(
-                    message=e.message, status_code=e.status, request_id=None, body=None
+                    message=e.message,
+                    status_code=e.status,
+                    request_id=request_id,
+                    body=None,
                 ) from e
             except Exception as e:
-                raise APIConnectionError() from e
+                raise APIConnectionError(request_id=request_id) from e
             finally:
                 if ws is not None and not ws.closed:
                     await ws.close()
