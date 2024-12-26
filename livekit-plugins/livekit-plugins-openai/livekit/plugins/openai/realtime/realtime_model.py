@@ -288,6 +288,9 @@ class RealtimeModel:
             ValueError: If the API key is not provided and cannot be found in environment variables.
         """
         super().__init__()
+        self._capabilities = Capabilities(
+            supports_chat_ctx_manipulation=False,
+        )
         self._base_url = base_url
 
         is_azure = (
@@ -1682,13 +1685,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 "function": fnc_call_info.function_info.name,
             },
         )
-        if called_fnc.result is not None:
-            create_fut = self.conversation.item.create(
-                tool_call,
-                previous_item_id=item_id,
-            )
-            await self.response.create(on_duplicate="keep_both")
-            await create_fut
+        create_fut = self.conversation.item.create(
+            tool_call,
+            previous_item_id=item_id,
+        )
+        await self.response.create(on_duplicate="keep_both")
+        await create_fut
 
         # update the message with the tool call result
         msg = self._remote_conversation_items.get(tool_call.id)
