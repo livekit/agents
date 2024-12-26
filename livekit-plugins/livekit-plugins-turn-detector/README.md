@@ -35,7 +35,7 @@ python my_agent.py download-files
 
 ## Model system requirements
 
-The end-of-turn model is optimized to run on CPUs with modest system requirements. It is designed to run on the same server hosting your agents. On a 4-core server instance, it completes inference in under 100ms with minimal CPU usage.
+The end-of-turn model is optimized to run on CPUs with modest system requirements. It is designed to run on the same server hosting your agents. On a 4-core server instance, it completes inference in ~50ms with minimal CPU usage.
 
 The model requires 1.5GB of RAM and runs within a shared inference server, supporting multiple concurrent sessions.
 

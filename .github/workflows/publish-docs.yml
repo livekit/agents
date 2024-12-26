@@ -19,7 +19,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.12" # Specify the Python version you want to use
+          python-version: "3.12"
 
       - name: Create and activate virtual environment
         run: |
@@ -34,19 +34,8 @@ jobs:
       - name: Install package
         run: |
           source venv/bin/activate
-          python -m pip install ./livekit-agents \
-                                ./livekit-plugins/livekit-plugins-anthropic \
-                                ./livekit-plugins/livekit-plugins-azure \
-                                ./livekit-plugins/livekit-plugins-cartesia \
-                                ./livekit-plugins/livekit-plugins-deepgram \
-                                ./livekit-plugins/livekit-plugins-elevenlabs \
-                                ./livekit-plugins/livekit-plugins-google \
-                                ./livekit-plugins/livekit-plugins-nltk \
-                                ./livekit-plugins/livekit-plugins-openai \
-                                ./livekit-plugins/livekit-plugins-rag \
-                                ./livekit-plugins/livekit-plugins-silero \
-                                ./livekit-plugins/livekit-plugins-llama-index \
-                                ./livekit-plugins/livekit-plugins-aws
+          pip install ./livekit-agents
+          ./livekit-plugins/install_local.sh
 
       - name: Build Docs
         run: |
@@ -57,6 +46,14 @@ jobs:
         run: |
           source venv/bin/activate
           aws s3 cp docs/ s3://livekit-docs/python --recursive
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
+          AWS_DEFAULT_REGION: "us-east-1"
+
+      - name: Expire cloudfront cache
+        run: |
+          aws cloudfront create-invalidation --distribution-id EJJ40KLJ3TRY9 --paths "/python/*"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}

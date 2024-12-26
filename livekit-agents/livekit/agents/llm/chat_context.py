@@ -32,13 +32,26 @@ class ChatImage:
     You may need to consult your LLM provider's documentation on supported URL types.
 
     ```python
-    # With a VideoFrame, which will be automatically converted to a data URL internally
+    # Pass a VideoFrame directly, which will be automatically converted to a JPEG data URL internally
     async for event in rtc.VideoStream(video_track):
         chat_image = ChatImage(image=event.frame)
         # this instance is now available for your ChatContext
 
-    # With a data URL
-    chat_image = ChatImage(image=f"data:image/jpeg;base64,{base64_encoded_image}")
+    # Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)
+    from livekit.agents.utils.images import encode, EncodeOptions, ResizeOptions
+
+    image_bytes = encode(
+        event.frame,
+        EncodeOptions(
+            format="PNG",
+            resize_options=ResizeOptions(
+                width=512, height=512, strategy="scale_aspect_fit"
+            ),
+        ),
+    )
+    chat_image = ChatImage(
+        image=f"data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+    )
 
     # With an external URL
     chat_image = ChatImage(image="https://example.com/image.jpg")
@@ -56,6 +69,12 @@ class ChatImage:
     inference_height: int | None = None
     """
     Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
+    """
+    inference_detail: Literal["auto", "high", "low"] = "auto"
+    """
+    Detail parameter for LLM provider, if supported.
+    
+    Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
     """
     _cache: dict[Any, Any] = field(default_factory=dict, repr=False, init=False)
     """

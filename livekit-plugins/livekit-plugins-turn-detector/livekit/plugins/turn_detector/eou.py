@@ -13,8 +13,16 @@ from livekit.agents.job import get_current_job_context
 from .log import logger
 
 HG_MODEL = "livekit/turn-detector"
+ONNX_FILENAME = "model_quantized.onnx"
 PUNCS = string.punctuation.replace("'", "")
 MAX_HISTORY = 4
+
+
+def _download_from_hf_hub(repo_id, filename, **kwargs):
+    from huggingface_hub import hf_hub_download
+
+    local_path = hf_hub_download(repo_id=repo_id, filename=filename, **kwargs)
+    return local_path
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -55,13 +63,18 @@ class _EUORunner(_InferenceRunner):
         return text
 
     def initialize(self) -> None:
+        import onnxruntime as ort
         from huggingface_hub import errors
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoTokenizer
 
         try:
-            self._model = AutoModelForCausalLM.from_pretrained(
-                HG_MODEL, local_files_only=True
+            local_path_onnx = _download_from_hf_hub(
+                HG_MODEL, ONNX_FILENAME, local_files_only=True
             )
+            self._session = ort.InferenceSession(
+                local_path_onnx, providers=["CPUExecutionProvider"]
+            )
+
             self._tokenizer = AutoTokenizer.from_pretrained(
                 HG_MODEL, local_files_only=True
             )
@@ -90,13 +103,17 @@ class _EUORunner(_InferenceRunner):
         inputs = self._tokenizer(
             text,
             add_special_tokens=False,
-            return_tensors="pt",
+            return_tensors="np",
         )
 
-        outputs = self._model(**inputs)
-        logits = outputs.logits[0, -1, :].detach().numpy()
-        output_probs = _softmax(logits)
-        eou_probability = output_probs[self._eou_index]
+        input_dict = {"input_ids": np.array(inputs["input_ids"], dtype=np.int64)}
+
+        # Run inference
+        outputs = self._session.run(["logits"], input_dict)
+
+        logits = outputs[0][0, -1, :]
+        probs = _softmax(logits)
+        eou_probability = probs[self._eou_index]
 
         end_time = time.perf_counter()
 
@@ -108,7 +125,6 @@ class _EUORunner(_InferenceRunner):
                 "duration": round(end_time - start_time, 3),
             },
         )
-
         return json.dumps({"eou_probability": float(eou_probability)}).encode()
 
 

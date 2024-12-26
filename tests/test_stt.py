@@ -118,6 +118,8 @@ async def test_stream(stt_factory, sample_rate):
                 continue
 
             if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
+                if text != "":
+                    text += " "
                 text += event.alternatives[0].text
                 # ensure STT is tagging languages correctly
                 language = event.alternatives[0].language

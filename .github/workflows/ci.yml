@@ -50,21 +50,8 @@ jobs:
 
       - name: Install all packages
         run: |
-          pip install ./livekit-agents \
-                      ./livekit-plugins/livekit-plugins-openai \
-                      ./livekit-plugins/livekit-plugins-deepgram \
-                      ./livekit-plugins/livekit-plugins-google \
-                      ./livekit-plugins/livekit-plugins-nltk \
-                      ./livekit-plugins/livekit-plugins-silero \
-                      ./livekit-plugins/livekit-plugins-elevenlabs \
-                      ./livekit-plugins/livekit-plugins-cartesia \
-                      ./livekit-plugins/livekit-plugins-rag \
-                      ./livekit-plugins/livekit-plugins-azure \
-                      ./livekit-plugins/livekit-plugins-anthropic \
-                      ./livekit-plugins/livekit-plugins-llama-index \
-                      ./livekit-plugins/livekit-plugins-fal \
-                      ./livekit-plugins/livekit-plugins-assemblyai \
-                      ./livekit-plugins/livekit-plugins-aws
+          pip install ./livekit-agents
+          ./livekit-plugins/install_local.sh
 
       - name: Install stub packages
         run: |
@@ -93,5 +80,6 @@ jobs:
                -p livekit.plugins.azure \
                -p livekit.plugins.anthropic \
                -p livekit.plugins.fal \
+               -p livekit.plugins.playai \
                -p livekit.plugins.assemblyai \
                -p livekit.plugins.aws

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .decoder import AudioStreamDecoder, StreamBuffer
 from .mp3 import Mp3StreamDecoder
 
-__all__ = ["Mp3StreamDecoder"]
+__all__ = ["Mp3StreamDecoder", "AudioStreamDecoder", "StreamBuffer"]
