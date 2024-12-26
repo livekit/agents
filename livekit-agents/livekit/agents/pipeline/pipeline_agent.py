@@ -416,7 +416,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         Args:
             event: the event to listen to (see EventTypes)
                 - user_started_speaking: the user started speaking
-                - user_partial_transcript: the user transcript was updated
+                - user_interim_transcript: the user transcript was updated
                 - user_stopped_speaking: the user stopped speaking
                 - agent_started_speaking: the agent started speaking
                 - agent_stopped_speaking: the agent stopped speaking
