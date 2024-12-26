@@ -276,10 +276,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         @self._session.on("input_speech_transcription_completed")
         def _input_speech_transcription_completed(ev: InputTranscriptionProto):
-            if ev.error is not None or ev.transcript is None:
-                self.emit("input_speech_transcription_failed", ev)
-                return
-
             self._stt_forwarder.update(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
