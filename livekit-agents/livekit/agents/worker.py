@@ -213,7 +213,7 @@ class WorkerOptions:
             )
 
 
-EventTypes = Literal["worker_registered"]
+EventTypes = Literal["worker_started", "worker_registered"]
 
 
 class Worker(utils.EventEmitter[EventTypes]):
@@ -222,6 +222,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         opts: WorkerOptions,
         *,
         devmode: bool = True,
+        register: bool = True,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__()
@@ -263,6 +264,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._close_future: asyncio.Future[None] | None = None
         self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
         self._devmode = devmode
+        self._register = register
 
         # using spawn context for all platforms. We may have further optimizations for
         # Linux with forkserver, but for now, this is the safest option
@@ -313,7 +315,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             loop=self._loop,
         )
 
-        self._main_task: asyncio.Task[None] | None = None
+        self._conn_task: asyncio.Task[None] | None = None
 
     async def run(self):
         if not self._closed:
@@ -347,11 +349,18 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._http_session = aiohttp.ClientSession()
         self._close_future = asyncio.Future(loop=self._loop)
 
-        self._main_task = asyncio.create_task(self._worker_task(), name="worker_task")
         tasks = [
-            self._main_task,
             asyncio.create_task(self._http_server.run(), name="http_server"),
         ]
+
+        if self._register:
+            self._conn_task = asyncio.create_task(
+                self._connection_task(), name="worker_conn_task"
+            )
+            tasks.append(self._conn_task)
+
+        self.emit("worker_started")
+
         try:
             await asyncio.gather(*tasks)
         finally:
@@ -402,12 +411,32 @@ class Worker(utils.EventEmitter[EventTypes]):
                 api.RoomParticipantIdentity(room=room, identity=participant_identity)
             )
 
-        msg = agent.WorkerMessage()
-        msg.simulate_job.room.CopyFrom(room_obj)
-        if participant:
-            msg.simulate_job.participant.CopyFrom(participant)
+        agent_id = utils.shortuuid("simulated-agent-")
+        token = (
+            api.AccessToken(self._opts.api_key, self._opts.api_secret)
+            .with_identity(agent_id)
+            .with_kind("agent")
+            .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+            .to_jwt()
+        )
 
-        await self._queue_msg(msg)
+        job = agent.Job(
+            id=utils.shortuuid("simulated-job-"),
+            room=room_obj,
+            type=agent.JobType.JT_ROOM,
+            participant=participant,
+        )
+
+        running_info = RunningJobInfo(
+            accept_arguments=JobAcceptArguments(
+                identity=agent_id, name="", metadata=""
+            ),
+            job=job,
+            url=self._opts.ws_url,
+            token=token,
+        )
+
+        await self._proc_pool.launch_job(running_info)
 
     async def aclose(self) -> None:
         if self._closed:
@@ -420,10 +449,11 @@ class Worker(utils.EventEmitter[EventTypes]):
         assert self._close_future is not None
         assert self._http_session is not None
         assert self._api is not None
-        assert self._main_task is not None
 
         self._closed = True
-        self._main_task.cancel()
+
+        if self._conn_task is not None:
+            await utils.aio.gracefully_cancel(self._conn_task)
 
         await self._proc_pool.aclose()
 
@@ -451,7 +481,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         await self._msg_chan.send(msg)
 
-    async def _worker_task(self) -> None:
+    async def _connection_task(self) -> None:
         assert self._http_session is not None
 
         retry_count = 0
@@ -605,7 +635,6 @@ class Worker(utils.EventEmitter[EventTypes]):
                 "reloading job",
                 extra={"job_id": aj.job.id, "agent_name": aj.job.agent_name},
             )
-            url = self._opts.ws_url
 
             # take the original jwt token and extend it while keeping all the same data that was generated
             # by the SFU for the original join token.
@@ -619,7 +648,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             running_info = RunningJobInfo(
                 accept_arguments=aj.accept_arguments,
                 job=aj.job,
-                url=url,
+                url=self._opts.ws_url,
                 token=jwt.encode(decoded, self._opts.api_secret, algorithm="HS256"),
             )
             await self._proc_pool.launch_job(running_info)

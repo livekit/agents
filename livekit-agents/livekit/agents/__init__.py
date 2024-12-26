@@ -25,7 +25,6 @@ from . import (
     tts,
     utils,
     vad,
-    voice_assistant,
 )
 from ._exceptions import (
     APIConnectionError,
@@ -72,7 +71,6 @@ __all__ = [
     "transcription",
     "pipeline",
     "multimodal",
-    "voice_assistant",
     "cli",
     "AssignmentTimeoutError",
     "APIConnectionError",
