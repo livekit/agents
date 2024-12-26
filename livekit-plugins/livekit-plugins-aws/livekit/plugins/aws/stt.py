@@ -13,16 +13,20 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 from typing import Optional
 
-import boto3
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.model import TranscriptEvent, TranscriptResultStream
 from livekit import rtc
-from livekit.agents import stt, utils
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectOptions,
+    stt,
+    utils,
+)
 
+from ._utils import _get_aws_credentials
 from .log import logger
 
 
@@ -30,10 +34,18 @@ from .log import logger
 class STTOptions:
     speech_region: str
     sample_rate: int
-    num_channels: int
-    languages: list[
-        str
-    ]  # see https://docs.aws.amazon.com/transcribe/latest/dg/supported-languages.html
+    language: str
+    encoding: str
+    vocabulary_name: Optional[str]
+    session_id: Optional[str]
+    vocab_filter_method: Optional[str]
+    vocab_filter_name: Optional[str]
+    show_speaker_label: Optional[bool]
+    enable_channel_identification: Optional[bool]
+    number_of_channels: Optional[int]
+    enable_partial_results_stabilization: Optional[bool]
+    partial_results_stability: Optional[str]
+    language_model_name: Optional[str]
 
 
 class STT(stt.STT):
@@ -41,43 +53,47 @@ class STT(stt.STT):
         self,
         *,
         speech_region: str = "us-east-1",
-        speech_key: str | None = None,
-        speech_secret: str | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
         sample_rate: int = 48000,
-        num_channels: int = 1,
-        languages: list[str] = ["en-US"],
+        language: str = "en-US",
+        encoding: str = "pcm",
+        vocabulary_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+        vocab_filter_method: Optional[str] = None,
+        vocab_filter_name: Optional[str] = None,
+        show_speaker_label: Optional[bool] = None,
+        enable_channel_identification: Optional[bool] = None,
+        number_of_channels: Optional[int] = None,
+        enable_partial_results_stabilization: Optional[bool] = None,
+        partial_results_stability: Optional[str] = None,
+        language_model_name: Optional[str] = None,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
         )
-        credentials = boto3.Session().get_credentials()
 
-        speech_key = (
-            speech_key or os.environ.get("AWS_ACCESS_KEY_ID") or credentials.access_key
+        self._api_key, self._api_secret = _get_aws_credentials(
+            api_key, api_secret, speech_region
         )
-        if not speech_key:
-            raise ValueError("AWS_ACCESS_KEY_ID must be set")
-
-        speech_secret = (
-            speech_secret
-            or os.environ.get("AWS_SECRET_ACCESS_KEY")
-            or credentials.secret_key
-        )
-        if not speech_secret:
-            raise ValueError("AWS_SECRET_ACCESS_KEY must be set")
-
-        speech_region = speech_region or os.environ.get("AWS_DEFAULT_REGION")
-        if not speech_region:
-            raise ValueError("AWS_DEFAULT_REGION must be set")
-
         self._config = STTOptions(
             speech_region=speech_region,
-            languages=languages,
+            language=language,
             sample_rate=sample_rate,
-            num_channels=num_channels,
+            encoding=encoding,
+            vocabulary_name=vocabulary_name,
+            session_id=session_id,
+            vocab_filter_method=vocab_filter_method,
+            vocab_filter_name=vocab_filter_name,
+            show_speaker_label=show_speaker_label,
+            enable_channel_identification=enable_channel_identification,
+            number_of_channels=number_of_channels,
+            enable_partial_results_stabilization=enable_partial_results_stabilization,
+            partial_results_stability=partial_results_stability,
+            language_model_name=language_model_name,
         )
 
-    async def recognize(
+    async def _recognize_impl(
         self,
         *,
         buffer: utils.AudioBuffer,
@@ -91,65 +107,73 @@ class STT(stt.STT):
         self,
         *,
         language: str | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
-        return SpeechStream(self._config)
+        return SpeechStream(
+            stt=self,
+            conn_options=conn_options,
+            opts=self._config,
+        )
 
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
         self,
+        stt: STT,
         opts: STTOptions,
-        sample_rate: int = 48000,
-        num_channels: int = 1,
-        max_retry: int = 32,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
+        )
         self._opts = opts
-        self._sample_rate = sample_rate
-        self._num_channels = num_channels
-        self._max_retry = max_retry
-
         self._client = TranscribeStreamingClient(region=self._opts.speech_region)
 
-    async def _run(self, max_retry: int) -> None:
-        while not self._input_ch.closed:
-            try:
-                # aws requires a async generator when calling start_stream_transcription
-                stream = await self._client.start_stream_transcription(
-                    language_code="en-US",
-                    media_sample_rate_hz=self._sample_rate,
-                    media_encoding="pcm",
-                )
+    async def _run(self) -> None:
+        try:
+            # aws requires a async generator when calling start_stream_transcription
+            stream = await self._client.start_stream_transcription(
+                language_code=self._opts.language,
+                media_sample_rate_hz=self._opts.sample_rate,
+                media_encoding=self._opts.encoding,
+                vocabulary_name=self._opts.vocabulary_name,
+                session_id=self._opts.session_id,
+                vocab_filter_method=self._opts.vocab_filter_method,
+                vocab_filter_name=self._opts.vocab_filter_name,
+                show_speaker_label=self._opts.show_speaker_label,
+                enable_channel_identification=self._opts.enable_channel_identification,
+                number_of_channels=self._opts.number_of_channels,
+                enable_partial_results_stabilization=self._opts.enable_partial_results_stabilization,
+                partial_results_stability=self._opts.partial_results_stability,
+                language_model_name=self._opts.language_model_name,
+            )
 
-                # this function basically convert the queue into a async generator
-                async def input_generator():
-                    try:
-                        async for frame in self._input_ch:
-                            if isinstance(frame, rtc.AudioFrame):
-                                await stream.input_stream.send_audio_event(
-                                    audio_chunk=frame.data.tobytes()
-                                )
-                        await stream.input_stream.end_stream()
-                    except Exception as e:
-                        logger.exception(
-                            f"an error occurred while streaming inputs: {e}"
-                        )
+            # this function basically convert the queue into a async generator
+            async def input_generator():
+                try:
+                    async for frame in self._input_ch:
+                        if isinstance(frame, rtc.AudioFrame):
+                            await stream.input_stream.send_audio_event(
+                                audio_chunk=frame.data.tobytes()
+                            )
+                    await stream.input_stream.end_stream()
+                except Exception as e:
+                    logger.exception(f"an error occurred while streaming inputs: {e}")
 
-                # try to connect
-                handler = TranscriptEventHandler(stream.output_stream, self._event_ch)
-                await asyncio.gather(input_generator(), handler.handle_events())
-            except Exception as e:
-                logger.exception(f"an error occurred while streaming inputs: {e}")
+            # try to connect
+            handler = TranscriptEventHandler(stream.output_stream, self._event_ch)
+            await asyncio.gather(input_generator(), handler.handle_events())
+        except Exception as e:
+            logger.exception(f"an error occurred while streaming inputs: {e}")
 
 
 def _streaming_recognize_response_to_speech_data(
     resp: None,
 ) -> stt.SpeechData:
-    lg = "en-US"
     data = stt.SpeechData(
-        language=lg,
-        start_time=0,
-        end_time=0,
+        language="en-US",
+        start_time=resp.start_time,
+        end_time=resp.end_time,
         confidence=0.0,
         text=resp.alternatives[0].transcript,
     )
