@@ -40,7 +40,7 @@ async def entrypoint(ctx: JobContext):
             async with session.get(url) as response:
                 if response.status == 200:
                     weather_data = await response.text()
-                    # response from the function call is returned to the LLM
+                    # # response from the function call is returned to the LLM
                     return f"The weather in {location} is {weather_data}."
                 else:
                     raise Exception(

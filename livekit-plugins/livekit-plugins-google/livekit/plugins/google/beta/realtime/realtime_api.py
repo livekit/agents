@@ -402,26 +402,27 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], RealtimeAPISession):
         )
 
         called_fnc = fnc_call_info.execute()
-        await called_fnc.task
-
-        tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
-        logger.info(
-            "creating response for tool call",
-            extra={
-                "function": fnc_call_info.function_info.name,
-            },
-        )
-        if called_fnc.result is not None:
-            tool_response = LiveClientToolResponse(
-                function_responses=[
-                    FunctionResponse(
-                        name=tool_call.name,
-                        id=tool_call.tool_call_id,
-                        response={"result": tool_call.content},
-                    )
-                ]
+        try:
+            await called_fnc.task
+        except Exception as e:
+            logger.exception(
+                "error executing ai function",
+                extra={
+                    "function": fnc_call_info.function_info.name,
+                },
+                exc_info=e,
             )
+        tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
 
-            await self._session.send(tool_response)
+        tool_response = LiveClientToolResponse(
+            function_responses=[
+                FunctionResponse(
+                    name=tool_call.name,
+                    id=tool_call.tool_call_id,
+                    response={"result": tool_call.content},
+                )
+            ]
+        )
+        await self._session.send(tool_response)
 
         self.emit("function_calls_finished", [called_fnc])
