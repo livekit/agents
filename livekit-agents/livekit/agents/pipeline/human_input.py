@@ -19,15 +19,9 @@ EventTypes = Literal[
 ]
 
 
-class HumanInput(utils.EventEmitter[EventTypes]):
+class AudioRecognition(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
-        *,
-        room: rtc.Room,
-        vad: voice_activity_detection.VAD,
-        stt: speech_to_text.STT,
-        participant: rtc.RemoteParticipant,
-        transcription: bool,
     ) -> None:
         super().__init__()
         self._room, self._vad, self._stt, self._participant, self._transcription = (
