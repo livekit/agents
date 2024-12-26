@@ -21,10 +21,8 @@ def _get_aws_credentials(
             region_name=region,
         )
     else:
-        # Use default credentials from environment or AWS config
         session = boto3.Session(region_name=region)
 
-    # Validate if session credentials are available
     credentials = session.get_credentials()
     if not credentials or not credentials.access_key or not credentials.secret_key:
         raise ValueError("No valid AWS credentials found.")

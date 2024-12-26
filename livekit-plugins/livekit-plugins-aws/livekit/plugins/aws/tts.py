@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any, Callable
 
 import aiohttp
 from aiobotocore.session import AioSession, get_session
@@ -34,9 +35,7 @@ from ._utils import (
     TTS_SPEECH_ENGINE,
     _get_aws_credentials,
 )
-from .log import logger
 
-TTS_SAMPLE_RATE: int = 16000
 TTS_NUM_CHANNELS: int = 1
 
 
@@ -48,7 +47,7 @@ class _TTSOptions:
     speech_engine: TTS_SPEECH_ENGINE
     speech_region: str | None
     sample_rate: int
-    language: TTS_LANGUAGE
+    language: TTS_LANGUAGE | None
 
 
 class TTS(tts.TTS):
@@ -56,38 +55,20 @@ class TTS(tts.TTS):
         self,
         *,
         voice: str | None = "Ruth",
-        aws_session: AioSession | None = None,
-        language: TTS_LANGUAGE = "en-US",
+        language: TTS_LANGUAGE | None = None,
         output_format: TTS_OUTPUT_FORMAT = "pcm",
         speech_engine: TTS_SPEECH_ENGINE = "generative",
         sample_rate: int = 16000,
         speech_region: str = "us-east-1",
         api_key: str | None = None,
         api_secret: str | None = None,
+        session: AioSession | None = None,
     ) -> None:
-        """
-        Create a new instance of AWS Polly TTS.
-
-        ``api_key``  and ``api_secret`` must be set to your AWS Access key id and secret access key, either using the argument or by setting the
-        ``AWS_ACCESS_KEY_ID`` and ``AWS_SECRET_ACCESS_KEY`` environmental variables.
-
-        See https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html for more details on the the AWS Polly TTS.
-
-        Args:
-            Voice (TTSModels, optional): Voice ID to use for the synthesis. Defaults to "Ruth".
-            language (TTS_LANGUAGE, optional): language code for the Synthesize Speech request. This is only necessary if using a bilingual voice, such as Aditi, which can be used for either Indian English (en-IN) or Hindi (hi-IN).
-            output_format(TTS_OUTPUT_FORMAT, optional): The format in which the returned output will be encoded. Defaults to "pcm".
-            sample_rate(int, optional): The audio frequency specified in Hz. Defaults to 16000.
-            speech_engine(TTS_SPEECH_ENGINE, optional): The engine to use for the synthesis. Defaults to "generative".
-            speech_region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
-            api_key(str, optional): AWS access key id.
-            api_secret(str, optional): AWS secret access key.
-        """
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
             ),
-            sample_rate=TTS_SAMPLE_RATE,
+            sample_rate=sample_rate,
             num_channels=TTS_NUM_CHANNELS,
         )
 
@@ -101,14 +82,18 @@ class TTS(tts.TTS):
             speech_engine=speech_engine,
             speech_region=speech_region,
             language=language,
+            sample_rate=sample_rate,
         )
-        self._session = aws_session
+        self._session = session or get_session()
 
-    def _ensure_session(self) -> AioSession:
-        if not self._session:
-            self._session = get_session()
-
-        return self._session
+    def get_client(self):
+        """Returns a client creator context."""
+        return self._session.create_client(
+            "polly",
+            region_name=self._opts.speech_region,
+            aws_access_key_id=self._api_key,
+            aws_secret_access_key=self._api_secret,
+        )
 
     def synthesize(
         self,
@@ -122,9 +107,7 @@ class TTS(tts.TTS):
             text=text,
             conn_options=conn_options,
             opts=self._opts,
-            session=self._ensure_session(),
-            api_key=self._api_key,
-            api_secret=self._api_secret,
+            get_client=self.get_client,
             segment_id=segment_id,
         )
 
@@ -137,38 +120,31 @@ class ChunkedStream(tts.ChunkedStream):
         text: str,
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
-        session: AioSession,
-        api_key: str,
-        api_secret: str,
+        get_client: Callable[[], Any],
         segment_id: str | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=text, conn_options=conn_options)
         self._opts = opts
-        self._api_key = api_key
+        self._get_client = get_client
         self._segment_id = segment_id or utils.shortuuid()
-        self._api_secret = api_secret
-        self._session = session
 
-    @utils.log_exceptions(logger=logger)
-    async def _run(self) -> None:
+    async def _run(self):
         request_id = utils.shortuuid()
 
         try:
-            async with self._session.create_client(
-                "polly",
-                region_name=self._opts.speech_region,
-                aws_access_key_id=self._api_key,
-                aws_secret_access_key=self._api_secret,
-            ) as client:
-                response = await client.synthesize_speech(
-                    Text=self._input_text,
-                    OutputFormat=self._opts.output_format,
-                    Engine=self._opts.speech_engine,
-                    VoiceId=self._opts.voice,
-                    LanguageCode=self._opts.language,
-                    TextType="text",
-                    SampleRate=str(TTS_SAMPLE_RATE),
-                )
+            async with self._get_client() as client:
+                params = {
+                    "Text": self._input_text,
+                    "OutputFormat": self._opts.output_format,
+                    "Engine": self._opts.speech_engine,
+                    "VoiceId": self._opts.voice,
+                    "TextType": "text",
+                    "SampleRate": str(self._opts.sample_rate),
+                    "LanguageCode": self._opts.language,
+                }
+
+                response = await client.synthesize_speech(**_strip_nones(params))
+
                 if "AudioStream" in response:
                     decoder = utils.codecs.Mp3StreamDecoder()
                     async with response["AudioStream"] as resp:
@@ -190,13 +166,13 @@ class ChunkedStream(tts.ChunkedStream):
                                         segment_id=self._segment_id,
                                         frame=rtc.AudioFrame(
                                             data=data,
-                                            sample_rate=TTS_SAMPLE_RATE,
+                                            sample_rate=self._opts.sample_rate,
                                             num_channels=1,
-                                            samples_per_channel=len(data)
-                                            // 2,  # 16-bit
+                                            samples_per_channel=len(data) // 2,
                                         ),
                                     )
                                 )
+
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
@@ -208,3 +184,7 @@ class ChunkedStream(tts.ChunkedStream):
             ) from e
         except Exception as e:
             raise APIConnectionError() from e
+
+
+def _strip_nones(data: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in data.items() if v is not None}

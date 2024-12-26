@@ -25,8 +25,5 @@ class AWSPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__)
 
-    def download_files(self) -> None:
-        pass
-
 
 Plugin.register_plugin(AWSPlugin())
