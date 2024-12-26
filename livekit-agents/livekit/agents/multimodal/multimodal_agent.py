@@ -34,8 +34,6 @@ class InputTranscriptionProto(Protocol):
     """id of the item"""
     transcript: str | None
     """transcript of the input audio"""
-    error: str | None = None
-    """error message"""
 
 
 class ContentProto(Protocol):
@@ -243,6 +241,31 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 audio_stream=message.audio_stream,
             )
 
+        @self._session.on("response_content_done")
+        def _response_content_done(message: ContentProto):
+            if message.content_type == "text":
+                if self._text_response_retries >= self._max_text_response_retries:
+                    raise RuntimeError(
+                        f"The OpenAI Realtime API returned a text response "
+                        f"after {self._max_text_response_retries} retries. "
+                        f"Please try to reduce the number of text system or "
+                        f"assistant messages in the chat context."
+                    )
+
+                self._text_response_retries += 1
+                logger.warning(
+                    "The OpenAI Realtime API returned a text response instead of audio. "
+                    "Attempting to recover to audio mode...",
+                    extra={
+                        "item_id": message.item_id,
+                        "text": message.text,
+                        "retries": self._text_response_retries,
+                    },
+                )
+                self._session._recover_from_text_response(message.item_id)
+            else:
+                self._text_response_retries = 0
+
         @self._session.on("input_speech_committed")
         def _input_speech_committed():
             self._stt_forwarder.update(
@@ -268,10 +291,9 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 text=ev.transcript, role="user", id=ev.item_id
             )
 
-            if self._model.capabilities.supports_chat_ctx_manipulation:
-                self._session._update_conversation_item_content(
-                    ev.item_id, user_msg.content
-                )
+            self._session._update_conversation_item_content(
+                ev.item_id, user_msg.content
+            )
 
             self.emit("user_speech_committed", user_msg)
             logger.debug(

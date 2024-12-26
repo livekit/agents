@@ -43,6 +43,22 @@ EventTypes = Literal[
 
 
 @dataclass
+class InputTranscriptionCompleted:
+    item_id: str
+    """id of the item"""
+    transcript: str
+    """transcript of the input audio"""
+
+
+@dataclass
+class InputTranscriptionFailed:
+    item_id: str
+    """id of the item"""
+    message: str
+    """error message"""
+
+
+@dataclass
 class RealtimeResponse:
     id: str
     """id of the message"""
@@ -96,16 +112,6 @@ class Capabilities:
 
 
 @dataclass
-class InputTranscription:
-    item_id: str
-    """id of the item"""
-    transcript: str | None
-    """transcript of the input audio"""
-    error: str | None = None
-    """error message"""
-
-
-@dataclass
 class RealtimeContent:
     response_id: str
     """id of the response"""
@@ -123,6 +129,8 @@ class RealtimeContent:
     """stream of text content"""
     audio_stream: AsyncIterable[rtc.AudioFrame]
     """stream of audio content"""
+    tool_calls: list[RealtimeToolCall]
+    """pending tool calls"""
     content_type: api_proto.Modality
     """type of the content"""
 
@@ -280,7 +288,6 @@ class RealtimeModel:
             ValueError: If the API key is not provided and cannot be found in environment variables.
         """
         super().__init__()
-        self._capabilities = Capabilities(supports_chat_ctx_manipulation=True)
         self._base_url = base_url
 
         is_azure = (
@@ -799,7 +806,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
         loop: asyncio.AbstractEventLoop,
-        max_text_response_retries: int = 5,
     ) -> None:
         super().__init__()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
@@ -831,9 +837,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         # sync the chat context to the session
         self._init_sync_task = asyncio.create_task(self.set_chat_ctx(chat_ctx))
 
-        self._text_response_retries = 0
-        self._max_text_response_retries = max_text_response_retries
-        self.on("response_content_done", self._handle_response_content_done)
         self._fnc_tasks = utils.aio.TaskSet()
 
     async def aclose(self) -> None:
@@ -1039,29 +1042,6 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             content_index=content_index,
             audio_end_ms=audio_end_ms,
         )
-
-    def _handle_response_content_done(self, message):
-        if message.content_type == "text":
-            if self._text_response_retries >= self._max_text_response_retries:
-                raise RuntimeError(
-                    f"The OpenAI Realtime API returned a text response "
-                    f"after {self._max_text_response_retries} retries. "
-                    f"Please try to reduce the number of text system or "
-                    f"assistant messages in the chat context."
-                )
-
-            self._text_response_retries += 1
-            logger.warning(
-                "The Realtime API returned a text response instead of audio.",
-                extra={
-                    "item_id": message.item_id,
-                    "text": message.text,
-                    "retries": self._text_response_retries,
-                },
-            )
-            self._recover_from_text_response(message.item_id)
-        else:
-            self._text_response_retries = 0
 
     def _update_conversation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
@@ -1302,7 +1282,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         transcript = transcription_completed["transcript"]
         self.emit(
             "input_speech_transcription_completed",
-            InputTranscription(
+            InputTranscriptionCompleted(
                 item_id=transcription_completed["item_id"],
                 transcript=transcript,
             ),
@@ -1320,10 +1300,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         )
         self.emit(
             "input_speech_transcription_failed",
-            InputTranscription(
+            InputTranscriptionFailed(
                 item_id=transcription_failed["item_id"],
-                transcript=None,
-                error=error["message"],
+                message=error["message"],
             ),
         )
 
@@ -1482,6 +1461,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             audio=[],
             text_stream=text_ch,
             audio_stream=audio_ch,
+            tool_calls=[],
             content_type=content_type,
         )
         output.content.append(new_content)
