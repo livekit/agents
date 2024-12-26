@@ -25,7 +25,6 @@ EventTypes = Literal[
     "function_calls_collected",
     "function_calls_finished",
     "metrics_collected",
-    "input_speech_transcription_failed",
 ]
 
 
