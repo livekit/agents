@@ -42,8 +42,8 @@ def _default_can_enter_cb(agent: "VoicePipelineAgent") -> bool:
 class AgentTaskOptions:
     can_enter_cb: Callable[["VoicePipelineAgent"], bool] = _default_can_enter_cb
     """callback to check if the task can be entered"""
-    before_enter_cb_description: Optional[Union[str, _UseDocMarker]] = None
-    """description of the before_enter callback, use `Called to transfer to {task_name}` if not provided"""
+    transfer_function_description: Optional[Union[str, _UseDocMarker]] = None
+    """description of the transfer function, use `Called to transfer to {task_name}` if not provided"""
     before_enter_cb: BeforeEnterCallback = _default_before_enter_cb
     """callback to call before entering the task"""
 
@@ -75,13 +75,15 @@ class AgentTask:
         # transfer function
         from ..pipeline import AgentCallContext
 
-        fnc_desc = (
-            options.before_enter_cb_description
-            if options.before_enter_cb_description is not None
+        transfer_fnc_desc = (
+            options.transfer_function_description
+            if options.transfer_function_description is not None
             else f"Called to transfer to {self._task_name}"
         )
 
-        @ai_callable(name=f"transfer_to_{self._task_name}", description=fnc_desc)
+        @ai_callable(
+            name=f"transfer_to_{self._task_name}", description=transfer_fnc_desc
+        )
         async def transfer_fnc() -> Union["AgentTask", tuple["AgentTask", str]]:
             agent = AgentCallContext.get_current().agent
             return await self._opts.before_enter_cb(agent, self)

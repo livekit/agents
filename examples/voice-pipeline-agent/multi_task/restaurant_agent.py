@@ -67,7 +67,7 @@ class Greeter(AgentTask):
             functions=[self.start_new_order],
             options=AgentTaskOptions(
                 before_enter_cb=before_enter_cb,
-                before_enter_cb_description=(
+                transfer_function_description=(
                     "Called to transfer to the greeter when the user asks for general questions "
                     "or starting over after checking out."
                 ),
@@ -121,7 +121,7 @@ class OrderTaking(AgentTask):
             options=AgentTaskOptions(
                 can_enter_cb=self.can_enter,
                 before_enter_cb=before_enter_cb,
-                before_enter_cb_description=(
+                transfer_function_description=(
                     "Called to transfer to the order taking "
                     "when the user wants to take an order or modify their order."
                 ),
@@ -164,7 +164,7 @@ class CustomerRegistration(AgentTask):
             options=AgentTaskOptions(
                 can_enter_cb=self.can_enter,
                 before_enter_cb=before_enter_cb,
-                before_enter_cb_description=(
+                transfer_function_description=(
                     "Called to transfer to the customer registration "
                     "after the order is confirmed or the user wants to update their information."
                 ),
@@ -215,7 +215,7 @@ class Checkout(AgentTask):
             options=AgentTaskOptions(
                 can_enter_cb=self.can_enter,
                 before_enter_cb=before_enter_cb,
-                before_enter_cb_description=(
+                transfer_function_description=(
                     "Called to transfer to the checkout "
                     "after the user confirms the order and registration."
                 ),
