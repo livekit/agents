@@ -10,7 +10,8 @@ import pytest
 from livekit import agents
 from livekit.agents import APIConnectionError, tokenize, tts
 from livekit.agents.utils import AudioBuffer, merge_frames
-from livekit.plugins import aws, (
+from livekit.plugins import (
+    aws,
     azure,
     cartesia,
     deepgram,
