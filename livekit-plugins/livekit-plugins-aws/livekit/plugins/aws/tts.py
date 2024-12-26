@@ -64,6 +64,24 @@ class TTS(tts.TTS):
         api_secret: str | None = None,
         session: AioSession | None = None,
     ) -> None:
+        """
+        Create a new instance of AWS Polly TTS.
+
+        ``api_key``  and ``api_secret`` must be set to your AWS Access key id and secret access key, either using the argument or by setting the
+        ``AWS_ACCESS_KEY_ID`` and ``AWS_SECRET_ACCESS_KEY`` environmental variables.
+
+        See https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html for more details on the the AWS Polly TTS.
+
+        Args:
+            Voice (TTSModels, optional): Voice ID to use for the synthesis. Defaults to "Ruth".
+            language (TTS_LANGUAGE, optional): language code for the Synthesize Speech request. This is only necessary if using a bilingual voice, such as Aditi, which can be used for either Indian English (en-IN) or Hindi (hi-IN).
+            output_format(TTS_OUTPUT_FORMAT, optional): The format in which the returned output will be encoded. Defaults to "pcm".
+            sample_rate(int, optional): The audio frequency specified in Hz. Defaults to 16000.
+            speech_engine(TTS_SPEECH_ENGINE, optional): The engine to use for the synthesis. Defaults to "generative".
+            speech_region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
+            api_key(str, optional): AWS access key id.
+            api_secret(str, optional): AWS secret access key.
+        """
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
@@ -186,5 +204,5 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-def _strip_nones(data: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in data.items() if v is not None}
+def _strip_nones(d: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in d.items() if v is not None}
