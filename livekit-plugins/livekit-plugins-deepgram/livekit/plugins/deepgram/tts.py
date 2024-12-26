@@ -382,7 +382,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ):
                     if not done_segment:
                         raise APIStatusError(
-                            "Deepgram websocket connection closed unexpectedly"
+                            "Deepgram websocket connection closed unexpectedly",
+                            request_id=request_id,
                         )
                     return
 

@@ -360,7 +360,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if not done_segment:
-                        raise APIStatusError("Cartesia connection closed unexpectedly")
+                        raise APIStatusError(
+                            "Cartesia connection closed unexpectedly",
+                            request_id=request_id,
+                        )
                     return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:

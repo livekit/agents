@@ -206,6 +206,7 @@ class LLMStream(llm.LLMStream):
         self._output_tokens = 0
 
     async def _run(self) -> None:
+        retryable = True
         try:
             if not self._anthropic_stream:
                 self._anthropic_stream = await self._awaitable_anthropic_stream
@@ -215,6 +216,7 @@ class LLMStream(llm.LLMStream):
                     chat_chunk = self._parse_event(event)
                     if chat_chunk is not None:
                         self._event_ch.send_nowait(chat_chunk)
+                        retryable = False
 
                 self._event_ch.send_nowait(
                     llm.ChatChunk(
@@ -227,7 +229,7 @@ class LLMStream(llm.LLMStream):
                     )
                 )
         except anthropic.APITimeoutError:
-            raise APITimeoutError()
+            raise APITimeoutError(retryable=retryable)
         except anthropic.APIStatusError as e:
             raise APIStatusError(
                 e.message,
@@ -236,7 +238,7 @@ class LLMStream(llm.LLMStream):
                 body=e.body,
             )
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(retryable=retryable) from e
 
     def _parse_event(
         self, event: anthropic.types.RawMessageStreamEvent
