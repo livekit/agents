@@ -54,13 +54,10 @@ class Greeter(AgentTask):
         super().__init__(
             name="greeter",
             instructions=(
-                "You are a friendly restaurant receptionist. Your tasks:\n"
+                "You are a friendly restaurant receptionist. Your jobs are:\n"
                 "1. Warmly greet the caller\n"
                 f"2. Ask if they'd like to place an order. (menu: {menu})\n"
-                "Transfer to:\n"
-                "- order_taking: when ready to place order\n"
-                "- customer_registration: only after order is complete\n"
-                "- checkout: only after customer details are collected\n\n"
+                "3. Transfer to the corresponding task using functions based on the user's response.\n"
                 "Important:\n"
                 "- If a transfer function is unavailable, it means prerequisites aren't met\n"
                 "- Guide the customer to complete previous steps first\n"
@@ -68,7 +65,13 @@ class Greeter(AgentTask):
                 "For non-order inquiries, assist directly while maintaining a professional tone."
             ),
             functions=[self.start_new_order],
-            options=AgentTaskOptions(before_enter_cb=before_enter_cb),
+            options=AgentTaskOptions(
+                before_enter_cb=before_enter_cb,
+                before_enter_cb_description=(
+                    "Called to transfer to the greeter when the user asks for general questions "
+                    "or starting over after checking out."
+                ),
+            ),
         )
 
     @llm.ai_callable()
@@ -76,6 +79,7 @@ class Greeter(AgentTask):
         """Called to start a new order."""
         agent = AgentCallContext.get_current().agent
         agent.user_data.clear()
+        # probably also clear the chat ctx of tasks
         logger.info("Started a new order")
         return "Started a new order"
 
@@ -107,22 +111,20 @@ class OrderTaking(AgentTask):
         super().__init__(
             name="order_taking",
             instructions=(
-                "You are a professional order taker at a restaurant. Your tasks:\n"
+                "You are a professional order taker at a restaurant. Your jobs are:\n"
                 f"1. Take orders from our menu: {menu}\n"
                 "2. Clarify special requests\n"
                 "3. Confirm order accuracy\n\n"
-                "Transfer to:\n"
-                "- customer_registration: when order is confirmed\n"
-                "- greeter: for general questions or starting over\n\n"
-                "Important:\n"
-                "- Use update_order function to save the order\n"
-                "- Ensure order is complete before transferring to customer details\n"
-                "- For non-order questions, transfer to greeter"
+                "Transfer to the next step using functions after the order is confirmed."
             ),
             functions=[self.update_order],
             options=AgentTaskOptions(
                 can_enter_cb=self.can_enter,
                 before_enter_cb=before_enter_cb,
+                before_enter_cb_description=(
+                    "Called to transfer to the order taking "
+                    "when the user wants to take an order or modify their order."
+                ),
             ),
         )
 
@@ -152,23 +154,20 @@ class CustomerRegistration(AgentTask):
         super().__init__(
             name="customer_registration",
             instructions=(
-                "You are collecting customer information for their order. Your tasks:\n"
+                "You are collecting customer information for their order. Your jobs are:\n"
                 "1. Get and confirm customer's name and comfirm the spelling\n"
                 "2. Get phone number and verify it's correct\n"
-                "3. Repeat both pieces of information back to ensure accuracy\n"
-                "Transfer to:\n"
-                "- checkout: when all details are confirmed\n"
-                "- order_taking: to modify the order\n"
-                "- greeter: for general questions\n\n"
-                "Important:\n"
-                "- Use collect_name and collect_phone functions to save details\n"
-                "- Verify all information before proceeding to checkout\n"
-                "- For non-detail questions, transfer to greeter"
+                "3. Repeat both pieces of information back to ensure accuracy\n\n"
+                "Transfer to the next step using functions after the information is confirmed."
             ),
             functions=[self.collect_name, self.collect_phone],
             options=AgentTaskOptions(
                 can_enter_cb=self.can_enter,
                 before_enter_cb=before_enter_cb,
+                before_enter_cb_description=(
+                    "Called to transfer to the customer registration "
+                    "after the order is confirmed or the user wants to update their information."
+                ),
             ),
         )
 
@@ -206,23 +205,20 @@ class Checkout(AgentTask):
         super().__init__(
             name="checkout",
             instructions=(
-                "You are a checkout agent at a restaurant. Your tasks:\n"
+                "You are a checkout agent at a restaurant. Your jobs are:\n"
                 f"1. Review order and prices ({menu})\n"
                 "2. Calculate and confirm total\n"
-                "3. Process checkout\n\n"
-                "Transfer to:\n"
-                "- order_taking: to modify order\n"
-                "- customer_registration: to update information\n"
-                "- greeter: after checkout or for general questions\n\n"
-                "Important:\n"
-                "- Use checkout function with final expense\n"
-                "- After successful checkout, transfer to greeter\n"
-                "- For non-checkout questions, transfer to greeter"
+                "3. Process checkout and confirm the total\n\n"
+                "Transfer back to the greeter using functions after checkout."
             ),
             functions=[self.checkout],
             options=AgentTaskOptions(
                 can_enter_cb=self.can_enter,
                 before_enter_cb=before_enter_cb,
+                before_enter_cb_description=(
+                    "Called to transfer to the checkout "
+                    "after the user confirms the order and registration."
+                ),
             ),
         )
 
@@ -250,7 +246,7 @@ class Checkout(AgentTask):
 async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    chat_log_file = "multi_task_chat_log.txt"
+    chat_log_file = "restaurant_agent.log"
     menu = "Pizza: $10, Salad: $5, Ice Cream: $3, Coffee: $2"
 
     # Set up chat logger
