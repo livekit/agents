@@ -77,6 +77,7 @@ jobs:
           sudo dpkg -i libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
           sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
 
+
       - name: Install ffmpeg (macOS)
         if: ${{ startsWith(matrix.os, 'macos') }}
         run: brew install ffmpeg
@@ -109,6 +110,8 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
           FAL_KEY: ${{ secrets.FAL_KEY }}
+          PLAYHT_API_KEY: ${{ secrets.PLAYHT_API_KEY }}
+          PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
         working-directory: tests

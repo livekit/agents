@@ -1,5 +1,11 @@
 # livekit-plugins-eou
 
+## 0.3.4
+
+### Patch Changes
+
+- add jinja2 dependency to turn detector - [#1277](https://github.com/livekit/agents/pull/1277) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.3.3
 
 ### Patch Changes

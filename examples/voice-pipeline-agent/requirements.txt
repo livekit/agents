@@ -1,4 +1,4 @@
-livekit-agents>=0.12.3
+livekit-agents>=0.12.5
 livekit-plugins-deepgram>=0.6.15
 livekit-plugins-google>=0.8.1
 livekit-plugins-openai[vertex]>=0.10.10

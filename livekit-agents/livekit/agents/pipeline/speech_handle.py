@@ -19,6 +19,7 @@ class SpeechHandle:
         user_question: str,
         fnc_nested_depth: int = 0,
         extra_tools_messages: list[ChatMessage] | None = None,
+        fnc_text_message_id: str | None = None,
     ) -> None:
         self._id = id
         self._allow_interruptions = allow_interruptions
@@ -41,6 +42,7 @@ class SpeechHandle:
         # nested speech handle and function calls
         self._fnc_nested_depth = fnc_nested_depth
         self._fnc_extra_tools_messages: list[ChatMessage] | None = extra_tools_messages
+        self._fnc_text_message_id: str | None = fnc_text_message_id
 
         self._nested_speech_handles: list[SpeechHandle] = []
         self._nested_speech_changed = asyncio.Event()
@@ -82,6 +84,7 @@ class SpeechHandle:
         add_to_chat_ctx: bool,
         fnc_nested_depth: int,
         extra_tools_messages: list[ChatMessage],
+        fnc_text_message_id: str | None = None,
     ) -> SpeechHandle:
         return SpeechHandle(
             id=utils.shortuuid(),
@@ -91,6 +94,7 @@ class SpeechHandle:
             user_question="",
             fnc_nested_depth=fnc_nested_depth,
             extra_tools_messages=extra_tools_messages,
+            fnc_text_message_id=fnc_text_message_id,
         )
 
     async def wait_for_initialization(self) -> None:
@@ -199,6 +203,10 @@ class SpeechHandle:
     @property
     def extra_tools_messages(self) -> list[ChatMessage] | None:
         return self._fnc_extra_tools_messages
+
+    @property
+    def fnc_text_message_id(self) -> str | None:
+        return self._fnc_text_message_id
 
     def add_nested_speech(self, speech_handle: SpeechHandle) -> None:
         self._nested_speech_handles.append(speech_handle)

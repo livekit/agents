@@ -220,8 +220,8 @@ class LLM(llm.LLM):
         location = location
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if _gac is None:
-            raise ValueError(
-                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file."
+            logger.warning(
+                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file. Otherwise, use any of the other Google Cloud auth methods."
             )
 
         try:
@@ -706,6 +706,7 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
         self._tool_index: int | None = None
+        retryable = True
 
         try:
             opts: dict[str, Any] = dict()
@@ -730,6 +731,13 @@ class LLMStream(llm.LLMStream):
                     else:
                         opts["tool_choice"] = self._tool_choice
 
+            if self._llm._opts.metadata is not None:
+                # some OpenAI-like API doesn't support having a `metadata` field. (Even None)
+                opts["metadata"] = self._llm._opts.metadata
+
+            if self._llm._opts.store is not None:
+                opts["store"] = self._llm._opts.store
+
             user = self._user or openai.NOT_GIVEN
             messages = _build_oai_context(self._chat_ctx, id(self))
             stream = await self._client.chat.completions.create(
@@ -740,8 +748,6 @@ class LLMStream(llm.LLMStream):
                 stream_options={"include_usage": True},
                 stream=True,
                 user=user,
-                store=self._llm._opts.store,
-                metadata=self._llm._opts.metadata,
                 **opts,
             )
 
@@ -750,6 +756,7 @@ class LLMStream(llm.LLMStream):
                     for choice in chunk.choices:
                         chat_chunk = self._parse_choice(chunk.id, choice)
                         if chat_chunk is not None:
+                            retryable = False
                             self._event_ch.send_nowait(chat_chunk)
 
                     if chunk.usage is not None:
@@ -766,7 +773,7 @@ class LLMStream(llm.LLMStream):
                         )
 
         except openai.APITimeoutError:
-            raise APITimeoutError()
+            raise APITimeoutError(retryable=retryable)
         except openai.APIStatusError as e:
             raise APIStatusError(
                 e.message,
@@ -775,7 +782,7 @@ class LLMStream(llm.LLMStream):
                 body=e.body,
             )
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(retryable=retryable) from e
 
     def _parse_choice(self, id: str, choice: Choice) -> llm.ChatChunk | None:
         delta = choice.delta

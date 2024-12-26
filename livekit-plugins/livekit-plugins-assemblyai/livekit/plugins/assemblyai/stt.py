@@ -25,7 +25,13 @@ from typing import List, Literal, Optional
 from urllib.parse import urlencode
 
 import aiohttp
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectOptions,
+    APIStatusError,
+    stt,
+    utils,
+)
 from livekit.agents.stt import SpeechEvent
 from livekit.agents.utils import AudioBuffer
 
@@ -274,7 +280,7 @@ class SpeechStream(stt.SpeechStream):
                     if closing_ws:  # close is expected, see SpeechStream.aclose
                         return
 
-                    raise Exception(
+                    raise APIStatusError(
                         "AssemblyAI connection closed unexpectedly",
                     )  # this will trigger a reconnection, see the _run loop
 
@@ -305,6 +311,10 @@ class SpeechStream(stt.SpeechStream):
                         [asyncio.gather(*tasks), wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )  # type: ignore
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            task.result()
+
                     if wait_reconnect_task not in done:
                         break
 
@@ -318,7 +328,9 @@ class SpeechStream(stt.SpeechStream):
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config = {
             "sample_rate": self._opts.sample_rate,
-            "word_boost": self._opts.word_boost,
+            "word_boost": json.dumps(self._opts.word_boost)
+            if self._opts.word_boost is not None
+            else None,
             "encoding": self._opts.encoding,
             "disable_partial_transcripts": self._opts.disable_partial_transcripts,
             "enable_extra_session_information": self._opts.enable_extra_session_information,

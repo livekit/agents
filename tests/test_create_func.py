@@ -43,11 +43,15 @@ def test_func_basic():
 
 def test_func_duplicate():
     class TestFunctionContext(llm.FunctionContext):
-        @llm.ai_callable(name="duplicate_function")
+        @llm.ai_callable(
+            name="duplicate_function", description="A simple test function"
+        )
         def fn1(self):
             pass
 
-        @llm.ai_callable(name="duplicate_function")
+        @llm.ai_callable(
+            name="duplicate_function", description="A simple test function"
+        )
         def fn2(self):
             pass
 
@@ -55,6 +59,21 @@ def test_func_duplicate():
         ValueError, match="duplicate ai_callable name: duplicate_function"
     ):
         TestFunctionContext()
+
+
+def test_func_with_docstring():
+    class TestFunctionContext(llm.FunctionContext):
+        @llm.ai_callable()
+        def test_fn(self):
+            """A simple test function"""
+            pass
+
+    fnc_ctx = TestFunctionContext()
+    assert (
+        "test_fn" in fnc_ctx.ai_functions
+    ), "Function should be registered in ai_functions"
+
+    assert fnc_ctx.ai_functions["test_fn"].description == "A simple test function"
 
 
 def test_func_with_optional_parameter():

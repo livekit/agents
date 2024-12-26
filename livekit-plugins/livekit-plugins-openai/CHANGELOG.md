@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.10.12
+
+### Patch Changes
+
+- fix unknown `metadata` & `store` fields on OpenAI-like API - [#1276](https://github.com/livekit/agents/pull/1276) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.10.11
 
 ### Patch Changes
