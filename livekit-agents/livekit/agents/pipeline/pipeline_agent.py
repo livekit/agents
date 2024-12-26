@@ -49,6 +49,7 @@ BeforeTTSCallback = Callable[
 EventTypes = Literal[
     "user_started_speaking",
     "user_interim_transcript",
+    "user_final_transcript",
     "user_stopped_speaking",
     "agent_started_speaking",
     "agent_stopped_speaking",
@@ -417,6 +418,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             event: the event to listen to (see EventTypes)
                 - user_started_speaking: the user started speaking
                 - user_interim_transcript: the user transcript was updated
+                - user_final_transcript: the user transcript was committed
                 - user_stopped_speaking: the user stopped speaking
                 - agent_started_speaking: the agent started speaking
                 - agent_stopped_speaking: the agent stopped speaking
@@ -592,6 +594,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 "received user transcript",
                 extra={"user_transcript": new_transcript},
             )
+            self.emit("user_final_transcript", new_transcript)
 
             self._last_final_transcript_time = time.perf_counter()
 
