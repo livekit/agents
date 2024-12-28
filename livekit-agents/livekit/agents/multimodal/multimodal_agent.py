@@ -28,14 +28,14 @@ EventTypes = Literal[
 ]
 
 
-class InputTranscriptionProto(Protocol):
+class _InputTranscriptionProto(Protocol):
     item_id: str
     """id of the item"""
     transcript: str | None
     """transcript of the input audio"""
 
 
-class ContentProto(Protocol):
+class _ContentProto(Protocol):
     response_id: str
     item_id: str
     output_index: int
@@ -47,29 +47,28 @@ class ContentProto(Protocol):
     content_type: Literal["text", "audio"]
 
 
-class CapabilitiesProto(Protocol):
+class _CapabilitiesProto(Protocol):
     supports_chat_ctx_manipulation: bool
 
 
-class RealtimeAPI(Protocol):
+class _RealtimeAPI(Protocol):
     """Realtime API protocol"""
 
     @property
-    def capabilities(self) -> CapabilitiesProto: ...
-
+    def capabilities(self) -> _CapabilitiesProto: ...
     def session(
         self,
         *,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
-    ) -> RealtimeAPISession:
+    ) -> _RealtimeAPISession:
         """
         Create a new realtime session with the given chat and function contexts.
         """
         pass
 
 
-class RealtimeAPISession(Protocol):
+class _RealtimeAPISession(Protocol):
     async def set_chat_ctx(self, ctx: llm.ChatContext) -> None: ...
     def _push_audio(self, frame: rtc.AudioFrame) -> None: ...
     @property
@@ -110,7 +109,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        model: RealtimeAPI,
+        model: _RealtimeAPI,
         vad: vad.VAD | None = None,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
@@ -222,7 +221,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         asyncio.create_task(_init_and_start())
 
         @self._session.on("response_content_added")
-        def _on_content_added(message: ContentProto):
+        def _on_content_added(message: _ContentProto):
             tr_fwd = transcription.TTSSegmentsForwarder(
                 room=self._room,
                 participant=self._room.local_participant,
@@ -241,7 +240,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("response_content_done")
-        def _response_content_done(message: ContentProto):
+        def _response_content_done(message: _ContentProto):
             if message.content_type == "text":
                 if self._text_response_retries >= self._max_text_response_retries:
                     raise RuntimeError(
@@ -275,7 +274,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("input_speech_transcription_completed")
-        def _input_speech_transcription_completed(ev: InputTranscriptionProto):
+        def _input_speech_transcription_completed(ev: _InputTranscriptionProto):
             self._stt_forwarder.update(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,

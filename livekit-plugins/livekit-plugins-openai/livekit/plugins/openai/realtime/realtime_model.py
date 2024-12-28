@@ -1685,12 +1685,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 "function": fnc_call_info.function_info.name,
             },
         )
-        create_fut = self.conversation.item.create(
-            tool_call,
-            previous_item_id=item_id,
-        )
-        await self.response.create(on_duplicate="keep_both")
-        await create_fut
+        if tool_call.content is not None:
+            create_fut = self.conversation.item.create(
+                tool_call,
+                previous_item_id=item_id,
+            )
+            await self.response.create(on_duplicate="keep_both")
+            await create_fut
 
         # update the message with the tool call result
         msg = self._remote_conversation_items.get(tool_call.id)

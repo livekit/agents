@@ -1,13 +1,13 @@
 from .multimodal_agent import (
     AgentTranscriptionOptions,
     MultimodalAgent,
-    RealtimeAPI,
-    RealtimeAPISession,
+    _RealtimeAPI,
+    _RealtimeAPISession,
 )
 
 __all__ = [
     "MultimodalAgent",
     "AgentTranscriptionOptions",
-    "RealtimeAPI",
-    "RealtimeAPISession",
+    "_RealtimeAPI",
+    "_RealtimeAPISession",
 ]

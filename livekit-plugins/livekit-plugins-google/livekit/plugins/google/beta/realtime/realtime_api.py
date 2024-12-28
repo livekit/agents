@@ -11,8 +11,8 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.multimodal import (
-    RealtimeAPI,
-    RealtimeAPISession,
+    _RealtimeAPI,
+    _RealtimeAPISession,
 )
 
 from google import genai  # type: ignore
@@ -83,7 +83,7 @@ class ModelOptions:
     instructions: str
 
 
-class RealtimeModel(RealtimeAPI):
+class RealtimeModel(_RealtimeAPI):
     def __init__(
         self,
         *,
@@ -172,7 +172,7 @@ class RealtimeModel(RealtimeAPI):
         *,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
-    ) -> RealtimeAPISession:
+    ) -> _RealtimeAPISession:
         session = GeminiRealtimeSession(
             opts=self._opts,
             chat_ctx=chat_ctx or llm.ChatContext(),
@@ -188,7 +188,7 @@ class RealtimeModel(RealtimeAPI):
             await session.aclose()
 
 
-class GeminiRealtimeSession(utils.EventEmitter[EventTypes], RealtimeAPISession):
+class GeminiRealtimeSession(utils.EventEmitter[EventTypes], _RealtimeAPISession):
     def __init__(
         self,
         *,
@@ -413,16 +413,16 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes], RealtimeAPISession):
                 exc_info=e,
             )
         tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
+        if tool_call.content is not None:
+            tool_response = LiveClientToolResponse(
+                function_responses=[
+                    FunctionResponse(
+                        name=tool_call.name,
+                        id=tool_call.tool_call_id,
+                        response={"result": tool_call.content},
+                    )
+                ]
+            )
+            await self._session.send(tool_response)
 
-        tool_response = LiveClientToolResponse(
-            function_responses=[
-                FunctionResponse(
-                    name=tool_call.name,
-                    id=tool_call.tool_call_id,
-                    response={"result": tool_call.content},
-                )
-            ]
-        )
-        await self._session.send(tool_response)
-
-        self.emit("function_calls_finished", [called_fnc])
+            self.emit("function_calls_finished", [called_fnc])
