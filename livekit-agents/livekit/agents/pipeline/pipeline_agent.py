@@ -473,7 +473,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         synthesis_handle = self._synthesize_agent_speech(new_handle.id, source)
         new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
 
-        if self._playing_speech and not self._playing_speech.nested_speech_finished:
+        if self._playing_speech and not self._playing_speech.nested_speech_done:
             self._playing_speech.add_nested_speech(new_handle)
         else:
             self._add_speech_for_playout(new_handle)
@@ -496,6 +496,23 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             )
 
         return new_handle
+
+    def interrupt(self, interrupt_all: bool = True) -> None:
+        """Interrupt the current speech
+
+        Args:
+            interrupt_all: Whether to interrupt all pending speech
+        """
+        if interrupt_all:
+            # interrupt all pending speech
+            if self._pending_agent_reply is not None:
+                self._pending_agent_reply.cancel(cancel_nested=True)
+            for speech in self._speech_q:
+                speech.cancel(cancel_nested=True)
+
+        # interrupt the playing speech
+        if self._playing_speech is not None:
+            self._playing_speech.cancel()
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -956,19 +973,31 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self.emit("function_calls_finished", called_fncs)
             _CallContextVar.reset(tk)
 
+        if not is_using_tools:
+            speech_handle._set_done()
+            return
+
         fnc_task = asyncio.create_task(_execute_function_calls())
-        while not speech_handle.nested_speech_finished:
-            event_wait_task = asyncio.create_task(
+        while not speech_handle.nested_speech_done:
+            nesting_changed = asyncio.create_task(
                 speech_handle.nested_speech_changed.wait()
             )
+            nesting_done_fut: asyncio.Future = speech_handle._nested_speech_done_fut
             await asyncio.wait(
-                [event_wait_task, fnc_task], return_when=asyncio.FIRST_COMPLETED
+                [nesting_changed, fnc_task, nesting_done_fut],
+                return_when=asyncio.FIRST_COMPLETED,
             )
-            if not event_wait_task.done():
-                event_wait_task.cancel()
+            if not nesting_changed.done():
+                nesting_changed.cancel()
 
             while speech_handle.nested_speech_handles:
                 speech = speech_handle.nested_speech_handles[0]
+                if speech_handle.nested_speech_done:
+                    # in case tool speech is added after nested speech done
+                    speech.cancel(cancel_nested=True)
+                    speech_handle.nested_speech_handles.pop(0)
+                    continue
+
                 self._playing_speech = speech
                 await self._play_speech(speech)
                 speech_handle.nested_speech_handles.pop(0)
@@ -977,7 +1006,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.nested_speech_changed.clear()
             # break if the function calls task is done
             if fnc_task.done():
-                speech_handle.mark_nested_speech_finished()
+                speech_handle.mark_nested_speech_done()
+
+        if not fnc_task.done():
+            logger.debug(
+                "cancelling function calls task", extra={"speech_id": speech_handle.id}
+            )
+            fnc_task.cancel()
 
         # mark the speech as done
         speech_handle._set_done()
