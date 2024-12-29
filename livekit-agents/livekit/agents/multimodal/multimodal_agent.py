@@ -11,6 +11,7 @@ from typing import (
     Protocol,
     TypeVar,
     Union,
+    overload,
 )
 
 import aiohttp
@@ -82,6 +83,10 @@ T = TypeVar("T", bound=Callable[..., Any])
 
 class _RealtimeAPISession(Protocol):
     async def set_chat_ctx(self, ctx: llm.ChatContext) -> None: ...
+    @overload
+    def on(self, event_name: str) -> Callable[[T], T]: ...
+    @overload
+    def on(self, event_name: str, handler: T) -> T: ...
     def on(
         self, event_name: str, handler: Optional[T] = None
     ) -> Union[T, Callable[[T], T]]: ...
