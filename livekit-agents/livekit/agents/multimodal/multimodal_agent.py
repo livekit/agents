@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Callable, Literal, Protocol
 
@@ -10,7 +11,7 @@ from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 from livekit.agents.llm import ChatMessage
 from livekit.agents.metrics import MultimodalLLMMetrics
 
-from ..log import logger
+from .. import log
 from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from . import agent_playout
 
@@ -69,6 +70,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         transcription: AgentTranscriptionOptions = AgentTranscriptionOptions(),
         max_text_response_retries: int = 5,
         loop: asyncio.AbstractEventLoop | None = None,
+        logger: log.FieldsLogger | logging.Logger | None = None,
     ):
         """Create a new MultimodalAgent.
 
@@ -88,6 +90,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
+
+        if logger is None:
+            logger = log.logger
+        if not isinstance(logger, log.FieldsLogger):
+            logger = log.FieldsLogger(logger)
+        self._logger = logger
 
         from livekit.plugins.openai import realtime
 
@@ -137,6 +145,10 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
         await self._session.set_chat_ctx(ctx)
 
+    @property
+    def logger(self) -> log.FieldsLogger:
+        return self._logger
+
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
     ) -> None:
@@ -168,10 +180,10 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         async def _init_and_start():
             try:
                 await self._session._init_sync_task
-                logger.info("Session initialized with chat context")
+                self.logger.info("Session initialized with chat context")
                 self._main_atask = asyncio.create_task(self._main_task())
             except Exception as e:
-                logger.exception("Failed to initialize session")
+                self.logger.exception("Failed to initialize session")
                 raise e
 
         # Schedule the initialization and start task
@@ -213,7 +225,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     )
 
                 self._text_response_retries += 1
-                logger.warning(
+                self.logger.warning(
                     "The OpenAI Realtime API returned a text response instead of audio. "
                     "Attempting to recover to audio mode...",
                     extra={
@@ -253,7 +265,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
             self.emit("user_speech_committed", user_msg)
-            logger.debug(
+            self.logger.debug(
                 "committed user speech",
                 extra={"user_transcript": ev.transcript},
             )
@@ -290,7 +302,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
 
-        @utils.log_exceptions(logger=logger)
+        @utils.log_exceptions(logger=self.logger)
         async def _run_task(delay: float) -> None:
             await asyncio.sleep(delay)
 
@@ -304,7 +316,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         self._update_state_task = asyncio.create_task(_run_task(delay))
 
-    @utils.log_exceptions(logger=logger)
+    @utils.log_exceptions(logger=log.logger)
     async def _main_task(self) -> None:
         self._update_state("initializing")
         self._audio_source = rtc.AudioSource(24000, 1)
@@ -339,7 +351,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 else:
                     self.emit("agent_speech_committed", msg)
 
-                logger.debug(
+                self.logger.debug(
                     "committed agent speech",
                     extra={
                         "agent_transcript": collected_text,
@@ -379,7 +391,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             participant_identity
         )
         if self._linked_participant is None:
-            logger.error("_link_participant must be called with a valid identity")
+            self.logger.error("_link_participant must be called with a valid identity")
             return
 
         self._subscribe_to_microphone()

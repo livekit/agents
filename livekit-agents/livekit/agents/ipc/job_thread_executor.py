@@ -289,5 +289,7 @@ class ThreadJobExecutor:
         }
         if self._running_job:
             extra["job_id"] = self._running_job.job.id
+            extra["room"] = self._running_job.job.room.name
+            extra["worker_id"] = self._running_job.worker_id
 
         return extra

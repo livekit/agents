@@ -57,7 +57,6 @@ class SupervisedProc(ABC):
             ping_timeout=ping_timeout,
             high_ping_threshold=high_ping_threshold,
         )
-
         self._exitcode: int | None = None
         self._pid: int | None = None
 

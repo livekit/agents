@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import logging
 import time
 from dataclasses import dataclass
 from typing import (
@@ -20,11 +21,12 @@ from livekit import rtc
 
 from .. import metrics, stt, tokenize, tts, utils, vad
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from ..log import FieldsLogger
 from ..types import ATTRIBUTE_AGENT_STATE, AgentState
+from . import log
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
-from .log import logger
 from .plotter import AssistantPlotter
 from .speech_handle import SpeechHandle
 
@@ -199,6 +201,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         before_tts_cb: BeforeTTSCallback = _default_before_tts_cb,
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
+        logger: FieldsLogger | logging.Logger | None = None,
         # backward compatibility
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply | None = None,
     ) -> None:
@@ -237,8 +240,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
 
+        if logger is None:
+            logger = log.logger
+        if not isinstance(logger, FieldsLogger):
+            logger = FieldsLogger(logger)
+        self._logger = logger
+
         if will_synthesize_assistant_reply is not None:
-            logger.warning(
+            self.logger.warning(
                 "will_synthesize_assistant_reply is deprecated and will be removed in 1.5.0, use before_llm_cb instead",
             )
             before_llm_cb = will_synthesize_assistant_reply
@@ -337,6 +346,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     @property
     def vad(self) -> vad.VAD:
         return self._vad
+
+    @property
+    def logger(self) -> FieldsLogger:
+        return self._logger
 
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
@@ -459,7 +472,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 pass
             else:
                 if isinstance(source, LLMStream):
-                    logger.warning(
+                    self.logger.warning(
                         "LLMStream will be ignored for function call chat context"
                     )
                 elif isinstance(source, AsyncIterable):
@@ -490,7 +503,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             call_ctx.add_extra_chat_message(
                 ChatMessage.create(text=text, role="assistant")
             )
-            logger.debug(
+            self.logger.debug(
                 "added speech to function call chat context",
                 extra={"text": text},
             )
@@ -517,7 +530,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
 
-        @utils.log_exceptions(logger=logger)
+        @utils.log_exceptions(logger=self.logger)
         async def _run_task(delay: float) -> None:
             await asyncio.sleep(delay)
 
@@ -548,7 +561,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _link_participant(self, identity: str) -> None:
         participant = self._room.remote_participants.get(identity)
         if participant is None:
-            logger.error("_link_participant must be called with a valid identity")
+            self.logger.error("_link_participant must be called with a valid identity")
             return
 
         self._human_input = HumanInput(
@@ -602,9 +615,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if not new_transcript:
                 return
 
-            logger.debug(
+            self.logger.debug(
                 "received user transcript",
-                extra={"user_transcript": new_transcript},
+                extra={"user_transcript": new_transcript, "participant": identity},
             )
 
             self._last_final_transcript_time = time.perf_counter()
@@ -638,7 +651,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._human_input.on("interim_transcript", _on_interim_transcript)
         self._human_input.on("final_transcript", _on_final_transcript)
 
-    @utils.log_exceptions(logger=logger)
+    @utils.log_exceptions(logger=log.logger)
     async def _main_task(self) -> None:
         if self._opts.plotting:
             await self._plotter.start()
@@ -705,7 +718,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self._synthesize_answer_task(self._agent_reply_task, new_handle)
         )
 
-    @utils.log_exceptions(logger=logger)
+    @utils.log_exceptions(logger=log.logger)
     async def _synthesize_answer_task(
         self, old_task: asyncio.Task[None], handle: SpeechHandle
     ) -> None:
@@ -861,7 +874,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             else:
                 self.emit("agent_speech_committed", msg)
 
-            logger.debug(
+            self.logger.debug(
                 "committed agent speech",
                 extra={
                     "agent_transcript": collected_text,
@@ -879,7 +892,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             if speech_handle.fnc_nested_depth >= self._opts.max_nested_fnc_calls:
-                logger.warning(
+                self.logger.warning(
                     "max function calls nested depth reached",
                     extra={
                         "speech_id": speech_handle.id,
@@ -907,7 +920,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             for fnc in new_function_calls:
                 called_fnc = fnc.execute()
                 called_fncs.append(called_fnc)
-                logger.debug(
+                self.logger.debug(
                     "executing ai function",
                     extra={
                         "function": fnc.function_info.name,
@@ -917,7 +930,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 try:
                     await called_fnc.task
                 except Exception as e:
-                    logger.exception(
+                    self.logger.exception(
                         "error executing ai function",
                         extra={
                             "function": fnc.function_info.name,
@@ -966,7 +979,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 and new_speech_handle.fnc_nested_depth
                 >= self._opts.max_nested_fnc_calls
             ):
-                logger.warning(
+                self.logger.warning(
                     "max function calls nested depth reached, not propagating fnc ctx",
                     extra={
                         "speech_id": speech_handle.id,
@@ -1026,7 +1039,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 speech_handle.mark_nested_speech_done()
 
         if not fnc_task.done():
-            logger.debug(
+            self.logger.debug(
                 "cancelling function calls task", extra={"speech_id": speech_handle.id}
             )
             fnc_task.cancel()
@@ -1094,13 +1107,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             should_ignore_input = False
             if not self._playing_speech.allow_interruptions:
                 should_ignore_input = True
-                logger.debug(
+                self.logger.debug(
                     "skipping validation, agent is speaking and does not allow interruptions",
                     extra={"speech_id": self._playing_speech.id},
                 )
             elif not self._should_interrupt():
                 should_ignore_input = True
-                logger.debug(
+                self.logger.debug(
                     "interrupt threshold is not met",
                     extra={"speech_id": self._playing_speech.id},
                 )
@@ -1130,7 +1143,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if speech.allow_interruptions:
                 speech.interrupt()
 
-        logger.debug(
+        self.logger.debug(
             "validated agent reply",
             extra={
                 "speech_id": self._pending_agent_reply.id,
@@ -1295,7 +1308,7 @@ class _DeferredReplyValidation:
         self._last_recv_transcript_time = 0.0
 
     def _run(self, delay: float) -> None:
-        @utils.log_exceptions(logger=logger)
+        @utils.log_exceptions(logger=log.logger)
         async def _run_task(chat_ctx: ChatContext, delay: float) -> None:
             use_turn_detector = self._last_final_transcript and not self._speaking
             if (

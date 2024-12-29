@@ -29,7 +29,7 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None):
         )
     elif isinstance(metrics, PipelineTTSMetrics):
         logger.info(
-            f"Pipeline TTS metrics: sequence_id={metrics.sequence_id}, ttfb={metrics.ttfb}, audio_duration={metrics.audio_duration:.2f}"
+            f"Pipeline TTS metrics: sequence_id={metrics.sequence_id}, ttfb={metrics.ttfb}, audio_duration={metrics.audio_duration:.2f}",
         )
     elif isinstance(metrics, TTSMetrics):
         logger.info(
