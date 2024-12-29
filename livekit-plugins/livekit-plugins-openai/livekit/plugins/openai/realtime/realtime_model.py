@@ -289,7 +289,7 @@ class RealtimeModel:
         """
         super().__init__()
         self._capabilities = Capabilities(
-            supports_chat_ctx_manipulation=False,
+            supports_chat_ctx_manipulation=True,
         )
         self._base_url = base_url
 
