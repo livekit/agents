@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, AsyncIterable, Callable, Literal, Protocol
+from typing import (
+    Any,
+    AsyncIterable,
+    Callable,
+    Literal,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+)
 
 import aiohttp
 from livekit import rtc
@@ -68,15 +77,28 @@ class _RealtimeAPI(Protocol):
         pass
 
 
+T = TypeVar("T", bound=Callable[..., Any])
+
+
 class _RealtimeAPISession(Protocol):
     async def set_chat_ctx(self, ctx: llm.ChatContext) -> None: ...
-    def on(self, event_name: str, handler: Callable[..., Any]) -> None: ...
+    def on(
+        self, event_name: str, handler: Optional[T] = None
+    ) -> Union[T, Callable[[T], T]]: ...
+
     def _push_audio(self, frame: rtc.AudioFrame) -> None: ...
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None: ...
     @fnc_ctx.setter
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None: ...
     def chat_ctx_copy(self) -> llm.ChatContext: ...
+    def _recover_from_text_response(self, item_id: str) -> None: ...
+    def _update_conversation_item_content(
+        self, item_id: str, content: llm.ChatMessageContent
+    ) -> None: ...
+    def _truncate_conversation_item(
+        self, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
