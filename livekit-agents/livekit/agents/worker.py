@@ -630,7 +630,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         logger.info(
             "registered worker",
             extra={
-                "id": reg.worker_id,
+                "worker_id": reg.worker_id,
                 "region": reg.server_info.region,
                 "protocol": reg.server_info.protocol,
                 "node_id": reg.server_info.node_id,
@@ -705,7 +705,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             extra={
                 "job_id": msg.job.id,
                 "dispatch_id": msg.job.dispatch_id,
-                "room_name": msg.job.room.name,
+                "room": msg.job.room.name,
                 "agent_name": self._opts.agent_name,
                 "resuming": msg.resuming,
             },
