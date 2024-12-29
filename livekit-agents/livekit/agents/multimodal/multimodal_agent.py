@@ -99,7 +99,9 @@ class _RealtimeAPISession(Protocol):
     def chat_ctx_copy(self) -> llm.ChatContext: ...
     def _recover_from_text_response(self, item_id: str) -> None: ...
     def _update_conversation_item_content(
-        self, item_id: str, content: llm.ChatContent
+        self,
+        item_id: str,
+        content: llm.ChatContent | list[llm.ChatContent] | None = None,
     ) -> None: ...
     def _truncate_conversation_item(
         self, item_id: str, content_index: int, audio_end_ms: int
