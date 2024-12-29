@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterable, Callable, Literal, Protocol
+from typing import Any, AsyncIterable, Callable, Literal, Protocol
 
 import aiohttp
 from livekit import rtc
@@ -31,7 +31,7 @@ EventTypes = Literal[
 class _InputTranscriptionProto(Protocol):
     item_id: str
     """id of the item"""
-    transcript: str | None
+    transcript: str
     """transcript of the input audio"""
 
 
@@ -70,6 +70,7 @@ class _RealtimeAPI(Protocol):
 
 class _RealtimeAPISession(Protocol):
     async def set_chat_ctx(self, ctx: llm.ChatContext) -> None: ...
+    def on(self, event_name: str, handler: Callable[..., Any]) -> None: ...
     def _push_audio(self, frame: rtc.AudioFrame) -> None: ...
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None: ...
