@@ -10,10 +10,6 @@ from typing import AsyncIterable, Literal
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
-from livekit.agents.multimodal import (
-    _RealtimeAPI,
-    _RealtimeAPISession,
-)
 
 from google import genai  # type: ignore
 from google.genai.types import (  # type: ignore
@@ -83,7 +79,7 @@ class ModelOptions:
     instructions: str
 
 
-class RealtimeModel(_RealtimeAPI):
+class RealtimeModel:
     def __init__(
         self,
         *,
@@ -172,7 +168,7 @@ class RealtimeModel(_RealtimeAPI):
         *,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
-    ) -> _RealtimeAPISession:
+    ) -> GeminiRealtimeSession:
         session = GeminiRealtimeSession(
             opts=self._opts,
             chat_ctx=chat_ctx or llm.ChatContext(),
@@ -188,7 +184,7 @@ class RealtimeModel(_RealtimeAPI):
             await session.aclose()
 
 
-class GeminiRealtimeSession(utils.EventEmitter[EventTypes], _RealtimeAPISession):
+class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
