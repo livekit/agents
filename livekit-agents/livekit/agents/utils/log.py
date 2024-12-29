@@ -3,9 +3,11 @@ import functools
 import logging
 from typing import Any, Callable
 
+from ..log import FieldsLogger
+
 
 def log_exceptions(
-    msg: str = "", logger: logging.Logger = logging.getLogger()
+    msg: str = "", logger: logging.Logger | FieldsLogger = logging.getLogger()
 ) -> Callable[[Any], Any]:
     def deco(fn: Callable[[Any], Any]):
         if asyncio.iscoroutinefunction(fn):
