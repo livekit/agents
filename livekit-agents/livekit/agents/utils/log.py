@@ -1,13 +1,13 @@
 import asyncio
 import functools
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, Union
 
 from ..log import FieldsLogger
 
 
 def log_exceptions(
-    msg: str = "", logger: logging.Logger | FieldsLogger = logging.getLogger()
+    msg: str = "", logger: Union[logging.Logger, FieldsLogger] = logging.getLogger()
 ) -> Callable[[Any], Any]:
     def deco(fn: Callable[[Any], Any]):
         if asyncio.iscoroutinefunction(fn):
