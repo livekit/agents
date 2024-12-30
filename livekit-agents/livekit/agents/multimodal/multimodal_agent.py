@@ -58,7 +58,7 @@ class _ContentProto(Protocol):
 
 
 class _CapabilitiesProto(Protocol):
-    supports_chat_ctx_manipulation: bool
+    supports_truncate: bool
 
 
 class _RealtimeAPI(Protocol):
@@ -332,7 +332,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             if self._playing_handle is not None and not self._playing_handle.done():
                 self._playing_handle.interrupt()
 
-                if self._model.capabilities.supports_chat_ctx_manipulation:
+                if self._model.capabilities.supports_truncate:
                     self._session._truncate_conversation_item(
                         item_id=self._playing_handle.item_id,
                         content_index=self._playing_handle.content_index,
@@ -400,7 +400,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     role="assistant",
                     id=self._playing_handle.item_id,
                 )
-                if self._model.capabilities.supports_chat_ctx_manipulation:
+                if self._model.capabilities.supports_truncate:
                     self._session._update_conversation_item_content(
                         self._playing_handle.item_id, msg.content
                     )

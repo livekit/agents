@@ -108,7 +108,7 @@ class RealtimeToolCall:
 
 @dataclass
 class Capabilities:
-    supports_chat_ctx_manipulation: bool
+    supports_truncate: bool
 
 
 @dataclass
@@ -289,7 +289,7 @@ class RealtimeModel:
         """
         super().__init__()
         self._capabilities = Capabilities(
-            supports_chat_ctx_manipulation=True,
+            supports_truncate=True,
         )
         self._base_url = base_url
 

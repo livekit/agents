@@ -57,7 +57,7 @@ class GeminiContent:
 
 @dataclass
 class Capabilities:
-    supports_chat_ctx_manipulation: bool
+    supports_truncate: bool
 
 
 @dataclass
@@ -125,7 +125,7 @@ class RealtimeModel:
         """
         super().__init__()
         self._capabilities = Capabilities(
-            supports_chat_ctx_manipulation=False,
+            supports_truncate=False,
         )
         self._model = model
         self._loop = loop or asyncio.get_event_loop()
