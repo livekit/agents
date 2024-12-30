@@ -13,7 +13,8 @@ import numpy as np
 import sounddevice as sd
 from livekit import rtc
 
-from ..utils import aio
+from ..utils import aio, log_exceptions
+from ..log import logger
 from . import io
 from .pipeline2 import PipelineAgent
 
@@ -32,7 +33,44 @@ def _normalize_db(amplitude_db: float, db_min: float, db_max: float) -> float:
     return (amplitude_db - db_min) / (db_max - db_min)
 
 
-class ChatCLI(io.TextSink):
+class _TextSink(io.TextSink):
+    def __init__(self, cli: "ChatCLI") -> None:
+        self._cli = cli
+        self._capturing = False
+
+    async def capture_text(self, text: str) -> None:
+        if not self._capturing:
+            self._capturing = True
+            sys.stdout.write("\r")
+            sys.stdout.flush()
+            click.echo(_esc(36), nl=False)
+
+        click.echo(text, nl=False)
+
+    def flush(self) -> None:
+        if self._capturing:
+            click.echo(_esc(0))
+            self._capturing = False
+
+
+class _AudioSink(io.AudioSink):
+    def __init__(self, cli: "ChatCLI") -> None:
+        self._cli = cli
+        self._capturing = False
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        if not self._capturing:
+            self._capturing = True
+
+        if self._cli._output_stream is not None:
+            self._cli._output_stream.write(frame.data)
+
+    def flush(self) -> None:
+        if self._capturing:
+            self._capturing = False
+
+
+class ChatCLI:
     def __init__(
         self,
         agent: PipelineAgent,
@@ -41,16 +79,19 @@ class ChatCLI(io.TextSink):
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._agent = agent
-        self._generation_done_ev = threading.Event()
         self._done_fut = asyncio.Future()
         self._micro_db = INPUT_DB_MIN
 
-        self._input_ch = aio.Chan[rtc.AudioFrame](loop=self._loop)
-        self._input_stream: sd.InputStream | None = None
-        self._input_mode: Literal["audio", "text"] = "audio"
-        self._text_buffer = []  # in text mode
+        self._audio_input_ch = aio.Chan[rtc.AudioFrame](loop=self._loop)
 
-        self._text_capturing = False
+        self._input_stream: sd.InputStream | None = None
+        self._output_stream: sd.OutputStream | None = None
+        self._cli_mode: Literal["text", "audio"] = "audio"
+
+        self._text_input_buf = []
+
+        self._text_sink = _TextSink(self)
+        self._audio_sink = _AudioSink(self)
 
     def _print_welcome(self):
         print(_esc(34) + "=" * 50 + _esc(0))
@@ -75,6 +116,7 @@ class ChatCLI(io.TextSink):
         old_settings = termios.tcgetattr(fd)
 
         self._update_microphone(enable=True)
+        self._update_speaker(enable=True)
 
         try:
             tty.setcbreak(fd)
@@ -87,6 +129,7 @@ class ChatCLI(io.TextSink):
             await aio.gracefully_cancel(render_cli_task)
 
             self._update_microphone(enable=False)
+            self._update_speaker(enable=False)
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             self._loop.remove_reader(fd)
@@ -106,27 +149,43 @@ class ChatCLI(io.TextSink):
                 samplerate=24000,
             )
             self._input_stream.start()
-            self._agent.input.audio = self._input_ch
+            self._agent.input.audio = self._audio_input_ch
         elif self._input_stream is not None:
             self._input_stream.stop()
             self._input_stream.close()
             self._input_stream = None
             self._agent.input.audio = None
 
+    def _update_speaker(self, *, enable: bool) -> None:
+        _, output_device = sd.default.device
+        if output_device is not None and enable:
+            self._output_stream = sd.OutputStream(
+                dtype="int16",
+                channels=1,
+                device=output_device,
+                samplerate=24000,
+            )
+            self._output_stream.start()
+            self._agent.output.audio = self._audio_sink
+        elif self._output_stream is not None:
+            self._output_stream.stop()
+            self._output_stream.close()
+            self._output_stream = None
+            self._agent.output.audio = None
+
     def _update_text_output(self, *, enable: bool) -> None:
         if enable:
-            self._agent.output.text = self
+            self._agent.output.text = self._text_sink
         else:
             self._agent.output.text = None
-            self._text_buffer = []
-            self._text_capturing = False
+            self._text_input_buf = []
 
     def _input_sd_callback(self, indata: np.ndarray, frame_count: int, *_) -> None:
         rms = np.sqrt(np.mean(indata.astype(np.float32) ** 2))
         max_int16 = np.iinfo(np.int16).max
         self._micro_db = 20.0 * np.log10(rms / max_int16 + 1e-6)
         self._loop.call_soon_threadsafe(
-            self._input_ch.send_nowait,
+            self._audio_input_ch.send_nowait,
             rtc.AudioFrame(
                 data=indata.tobytes(),
                 samples_per_channel=frame_count,
@@ -135,6 +194,7 @@ class ChatCLI(io.TextSink):
             ),
         )
 
+    @log_exceptions(logger=logger)
     async def _input_cli_task(self, in_ch: aio.Chan[str]) -> None:
         while True:
             char = await in_ch.recv()
@@ -142,32 +202,34 @@ class ChatCLI(io.TextSink):
                 break
 
             if char == "\x02":  # Ctrl+B
-                if self._input_mode == "audio":
-                    self._input_mode = "text"
+                if self._cli_mode == "audio":
+                    self._cli_mode = "text"
                     self._update_text_output(enable=True)
                     self._update_microphone(enable=False)
+                    self._update_speaker(enable=False)
                     click.echo("\nSwitched to Text Input Mode.", nl=False)
                 else:
-                    self._input_mode = "audio"
+                    self._cli_mode = "audio"
                     self._update_text_output(enable=False)
                     self._update_microphone(enable=True)
-                    self._text_buffer = []
+                    self._update_speaker(enable=True)
+                    self._text_input_buf = []
                     click.echo("\nSwitched to Audio Input Mode.", nl=False)
 
-            if self._input_mode == "text": # Read input
+            if self._cli_mode == "text":  # Read input
                 if char in ("\r", "\n"):
-                    text = "".join(self._text_buffer)
+                    text = "".join(self._text_input_buf)
                     if text:
-                        self._text_buffer = []
+                        self._text_input_buf = []
                         self._agent.generate_reply(text)
                         click.echo("\n", nl=False)
-                elif char == "\x7f": # Backspace
-                    if self._text_buffer:
-                        self._text_buffer.pop()
+                elif char == "\x7f":  # Backspace
+                    if self._text_input_buf:
+                        self._text_input_buf.pop()
                         sys.stdout.write("\b \b")
                         sys.stdout.flush()
                 elif char.isprintable():
-                    self._text_buffer.append(char)
+                    self._text_input_buf.append(char)
                     click.echo(char, nl=False)
                     sys.stdout.flush()
 
@@ -175,9 +237,9 @@ class ChatCLI(io.TextSink):
         next_frame = time.perf_counter()
         while True:
             next_frame += 1 / FPS
-            if self._input_mode == "audio":
+            if self._cli_mode == "audio":
                 self._print_audio_mode()
-            elif self._input_mode == "text" and not self._text_capturing:
+            elif self._cli_mode == "text" and not self._text_sink._capturing:
                 self._print_text_mode()
 
             await asyncio.sleep(max(0, next_frame - time.perf_counter()))
@@ -199,21 +261,5 @@ class ChatCLI(io.TextSink):
         sys.stdout.write("\r")
         sys.stdout.flush()
         prompt = "Enter your message: "
-        sys.stdout.write(f"[Text] {prompt}{''.join(self._text_buffer)}")
+        sys.stdout.write(f"[Text] {prompt}{''.join(self._text_input_buf)}")
         sys.stdout.flush()
-
-    # io.Text Sink implementation
-
-    async def capture_text(self, text: str) -> None:
-        if not self._text_capturing:
-            self._text_capturing = True
-            sys.stdout.write("\r")
-            sys.stdout.flush()
-            click.echo(_esc(36), nl=False)
-
-        click.echo(text, nl=False)
-
-    def flush(self) -> None:
-        if self._text_capturing:
-            click.echo(_esc(0))
-            self._text_capturing = False

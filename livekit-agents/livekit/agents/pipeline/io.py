@@ -26,7 +26,13 @@ LLMNode = Callable[
         ],
     ],
 ]
-TTSNode = Callable[[AsyncIterable[str]], Optional[AsyncIterable[rtc.AudioFrame]]]
+TTSNode = Callable[
+    [AsyncIterable[str]],
+    Union[
+        Optional[AsyncIterable[rtc.AudioFrame]],
+        Awaitable[Optional[AsyncIterable[rtc.AudioFrame]]],
+    ],
+]
 
 
 AudioStream = AsyncIterable[rtc.AudioFrame]
@@ -34,7 +40,7 @@ VideoStream = AsyncIterable[rtc.VideoFrame]
 
 
 class AudioSink(Protocol):
-    async def capture_frame(self, audio: rtc.AudioFrame) -> None: ...
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None: ...
 
     def flush(self) -> None: ...
 
