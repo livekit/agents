@@ -14,7 +14,12 @@ from livekit import rtc
 from .. import io, llm, stt, tts, utils, vad
 from ..llm import ChatContext, FunctionContext
 from .audio_recognition import AudioRecognition, _TurnDetector
-from .generation import _LLMGenerationData, do_llm_inference
+from .generation import (
+    _LLMGenerationData,
+    _TTSGenerationData,
+    do_llm_inference,
+    do_tts_inference,
+)
 
 
 class AgentInput:
@@ -220,6 +225,21 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     ) -> Optional[AsyncIterable[rtc.AudioFrame]]:
         assert self._tts is not None, "tts_node called but no TTS node is available"
 
+        async with self._tts.stream() as stream:
+
+            async def _forward_input():
+                async for chunk in text:
+                    stream.push_text(chunk)
+
+                stream.end_input()
+
+            forward_task = asyncio.create_task(_forward_input())
+            try:
+                async for ev in stream:
+                    yield ev.frame
+            finally:
+                await utils.aio.gracefully_cancel(forward_task)
+
     def start(self) -> None:
         self._audio_recognition.start()
 
@@ -265,52 +285,68 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     async def _generate_task(
         self, *, chat_ctx: ChatContext, fnc_ctx: FunctionContext | None
     ) -> None:
+        async def _forward_llm_text(llm_output: AsyncIterable[str]) -> None:
+            """collect and forward the generated text to the current agent output"""
+            async for delta in llm_output:
+                if self.output.text is not None:
+                    await self.output.text.capture_text(delta)
+
+            if self.output.text is not None:
+                self.output.text.flush()
+
+        async def _forward_tts_audio(tts_output: AsyncIterable[rtc.AudioFrame]) -> None:
+            """collect and forward the generated audio to the current agent output"""
+            async for frame in tts_output:
+                if self.output.audio is not None:
+                    await self.output.audio.capture_frame(frame)
+
+            if self.output.audio is not None:
+                self.output.audio.flush()
+
         # new messages generated during the generation (including function calls)
         new_messages: list[llm.ChatMessage] = []
 
+        # TODO(theomonnom): how nested fnc calls is going to work with realtime API?
         for i in range(
             self._max_fnc_steps + 1
         ):  # +1 to ignore the first step that doesn't contain any tools
-            llm_gen_data = _LLMGenerationData(
-                chat_ctx=chat_ctx,
-                # if i >= 2, the LLM supports having multiple steps
-                fnc_ctx=fnc_ctx if i < self._max_fnc_steps - 1 and i >= 2 else None,
-                text_ch=utils.aio.Chan(),
-                tools_ch=utils.aio.Chan(),
+            # if i >= 2, the LLM supports having multiple steps
+            fnc_ctx = fnc_ctx if i < self._max_fnc_steps - 1 and i >= 2 else None
+            chat_ctx = chat_ctx
+
+            llm_task, llm_gen_data = do_llm_inference(
+                node=self.llm_node, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx
+            )
+            tts_text_input, llm_output = utils.aio.itertools.tee(llm_gen_data.text_ch)
+            forward_llm_task = asyncio.create_task(
+                _forward_llm_text(llm_output), name="_generate_task.forward_llm_text"
             )
 
-            llm_task = asyncio.create_task(
-                do_llm_inference(node=self.llm_node, data=llm_gen_data)
-            )
-            llm_task.add_done_callback(lambda _: llm_gen_data.text_ch.close())
-            llm_task.add_done_callback(lambda _: llm_gen_data.tools_ch.close())
-
-            # TODO(theomonnom) Do TTS concurrently here if needed
-
-            async def _collect_text_output() -> str:
-                """collect and forward the generated text to the current agent output"""
-                generated_text = ""
-                async for delta in llm_gen_data.text_ch:
-                    if self.output.text is not None:
-                        generated_text += delta
-                        await self.output.text.capture_text(delta)
-
-                if self.output.text is not None:
-                    self.output.text.flush()
-
-                return generated_text
-
-            collect_text_task = asyncio.create_task(
-                _collect_text_output(), name="_generate_task.collect_text"
-            )
+            tts_task: asyncio.Task | None = None
+            forward_tts_task: asyncio.Task | None = None
+            if self._output.audio is not None:
+                tts_task, tts_gen_data = do_tts_inference(
+                    node=self.tts_node, input=tts_text_input
+                )
+                forward_tts_task = asyncio.create_task(
+                    _forward_tts_audio(tts_gen_data.audio_ch),
+                    name="_generate_task.forward_tts_audio",
+                )
 
             tools: list[llm.FunctionCallInfo] = []
             async for tool in llm_gen_data.tools_ch:
-                tools.append(tool)
+                tools.append(tool)  # TODO(theomonnom): optimize function calls response
 
-            new_text = await collect_text_task
-            if len(new_text) > 0:
-                new_messages.append(llm.ChatMessage(role="assistant", content=new_text))
+            await asyncio.gather(llm_task, forward_llm_task)
+
+            if tts_task is not None and forward_tts_task is not None:
+                await asyncio.gather(tts_task, forward_tts_task)
+
+            generated_text = llm_gen_data.generated_text
+            if len(generated_text) > 0:
+                new_messages.append(
+                    llm.ChatMessage(role="assistant", content=generated_text)
+                )
 
             if len(tools) == 0:
                 break  # no more fnc step needed
