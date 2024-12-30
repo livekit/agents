@@ -4,6 +4,7 @@ import asyncio
 import base64
 import os
 import time
+import weakref
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import AsyncIterable, Literal, Optional, Union, cast, overload
@@ -105,8 +106,11 @@ class RealtimeToolCall:
     """id of the tool call"""
 
 
-# TODO(theomonnom): add the content type directly inside RealtimeContent?
-# text/audio/transcript?
+@dataclass
+class Capabilities:
+    supports_truncate: bool
+
+
 @dataclass
 class RealtimeContent:
     response_id: str
@@ -284,6 +288,9 @@ class RealtimeModel:
             ValueError: If the API key is not provided and cannot be found in environment variables.
         """
         super().__init__()
+        self._capabilities = Capabilities(
+            supports_truncate=True,
+        )
         self._base_url = base_url
 
         is_azure = (
@@ -322,7 +329,7 @@ class RealtimeModel:
         )
 
         self._loop = loop or asyncio.get_event_loop()
-        self._rt_sessions: list[RealtimeSession] = []
+        self._rt_sessions = weakref.WeakSet[RealtimeSession]()
         self._http_session = http_session
 
     @classmethod
@@ -427,8 +434,12 @@ class RealtimeModel:
         return self._http_session
 
     @property
-    def sessions(self) -> list[RealtimeSession]:
+    def sessions(self) -> weakref.WeakSet[RealtimeSession]:
         return self._rt_sessions
+
+    @property
+    def capabilities(self) -> Capabilities:
+        return self._capabilities
 
     def session(
         self,
@@ -475,7 +486,7 @@ class RealtimeModel:
             http_session=self._ensure_session(),
             loop=self._loop,
         )
-        self._rt_sessions.append(new_session)
+        self._rt_sessions.add(new_session)
         return new_session
 
     async def aclose(self) -> None:
@@ -854,6 +865,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     def input_audio_buffer(self) -> InputAudioBuffer:
         return RealtimeSession.InputAudioBuffer(self)
 
+    def _push_audio(self, frame: rtc.AudioFrame) -> None:
+        self.input_audio_buffer.append(frame)
+
     @property
     def response(self) -> Response:
         return RealtimeSession.Response(self)
@@ -1022,6 +1036,15 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self.conversation.item.delete(item_id=item_id)
         self.conversation.item.create(self._create_empty_user_audio_message(1.0))
         self.response.create(on_duplicate="keep_both")
+
+    def _truncate_conversation_item(
+        self, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None:
+        self.conversation.item.truncate(
+            item_id=item_id,
+            content_index=content_index,
+            audio_end_ms=audio_end_ms,
+        )
 
     def _update_conversation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
@@ -1662,7 +1685,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 "function": fnc_call_info.function_info.name,
             },
         )
-        if called_fnc.result is not None:
+        if tool_call.content is not None:
             create_fut = self.conversation.item.create(
                 tool_call,
                 previous_item_id=item_id,

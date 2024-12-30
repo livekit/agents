@@ -114,6 +114,7 @@ def _generate_fake_job() -> job.RunningJobInfo:
         url="fake_url",
         token="fake_token",
         accept_arguments=job.JobAcceptArguments(name="", identity="", metadata=""),
+        worker_id="fake_id",
     )
 
 
