@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import string
-import asyncio
 import time
 
 import numpy as np
