@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import string
+import asyncio
 import time
 
 import numpy as np
@@ -152,7 +153,10 @@ class EOUModel:
     async def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
         return await self.predict_end_of_turn(chat_ctx)
 
-    async def predict_end_of_turn(self, chat_ctx: llm.ChatContext) -> float:
+    # our EOU model inference should be fast, 3 seconds is more than enough
+    async def predict_end_of_turn(
+        self, chat_ctx: llm.ChatContext, *, timeout: float | None = 3
+    ) -> float:
         messages = []
 
         for msg in chat_ctx.messages:
@@ -180,8 +184,10 @@ class EOUModel:
         messages = messages[-MAX_HISTORY:]
 
         json_data = json.dumps({"chat_ctx": messages}).encode()
-        result = await self._executor.do_inference(
-            _EUORunner.INFERENCE_METHOD, json_data
+
+        result = await asyncio.wait_for(
+            self._executor.do_inference(_EUORunner.INFERENCE_METHOD, json_data),
+            timeout=timeout,
         )
 
         assert (

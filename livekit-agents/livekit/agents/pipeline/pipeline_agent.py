@@ -1304,12 +1304,16 @@ class _DeferredReplyValidation:
                 and self._turn_detector.supports_language(self._last_language)
             ):
                 start_time = time.perf_counter()
-                eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
-                unlikely_threshold = self._turn_detector.unlikely_threshold()
-                elasped = time.perf_counter() - start_time
-                if eot_prob < unlikely_threshold:
-                    delay = self._max_endpointing_delay
-                delay = max(0, delay - elasped)
+                try:
+                    eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
+                    unlikely_threshold = self._turn_detector.unlikely_threshold()
+                    elasped = time.perf_counter() - start_time
+                    if eot_prob < unlikely_threshold:
+                        delay = self._max_endpointing_delay
+                    delay = max(0, delay - elasped)
+                except TimeoutError:
+                    pass  # inference process is unresponsive
+
             await asyncio.sleep(delay)
 
             self._reset_states()
