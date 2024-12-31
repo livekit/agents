@@ -1,6 +1,7 @@
 import logging
 import random
 import urllib
+import re
 from typing import Annotated
 
 import aiohttp
@@ -35,6 +36,9 @@ class AssistantFnc(llm.FunctionContext):
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
+        # Clean the location string of special characters
+        location = re.sub(r"[^a-zA-Z0-9]", " ", location).strip()
+
         # When a function call is running, there are a couple of options to inform the user
         # that it might take awhile:
         # Option 1: you can use .say filler message immediately after the call is triggered
@@ -62,6 +66,7 @@ class AssistantFnc(llm.FunctionContext):
                     weather_data = (
                         f"The weather in {location} is {await response.text()}."
                     )
+                    logger.info(f"weather data: {weather_data}")
                 else:
                     raise Exception(
                         f"Failed to get weather data, status code: {response.status}"
