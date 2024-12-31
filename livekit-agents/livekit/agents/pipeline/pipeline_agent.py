@@ -966,13 +966,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 and new_speech_handle.fnc_nested_depth
                 >= self._opts.max_nested_fnc_calls
             ):
-                logger.warning(
-                    "max function calls nested depth reached, not propagating fnc ctx",
-                    extra={
-                        "speech_id": speech_handle.id,
-                        "fnc_nested_depth": speech_handle.fnc_nested_depth,
-                    },
-                )
+                if len(fnc_ctx.ai_functions) > 1:
+                    logger.info(
+                        "max function calls nested depth reached, dropping function context. increase max_nested_fnc_calls to enable additional nesting.",
+                        extra={
+                            "speech_id": speech_handle.id,
+                            "fnc_nested_depth": speech_handle.fnc_nested_depth,
+                        },
+                    )
                 fnc_ctx = None
             answer_llm_stream = self._llm.chat(
                 chat_ctx=chat_ctx,
