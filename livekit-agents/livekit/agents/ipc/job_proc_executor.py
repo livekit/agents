@@ -98,9 +98,12 @@ class ProcJobExecutor(SupervisedProc):
         finally:
             await aio.gracefully_cancel(*self._inference_tasks)
 
-            self._job_status = (
-                JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
-            )
+    @log_exceptions(logger=logger)
+    async def _supervise_task(self) -> None:
+        await super()._supervise_task()
+
+        logger.info(f"job exit code: {self.exitcode}")
+        self._job_status = JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
 
     async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
         if self._inference_executor is None:
