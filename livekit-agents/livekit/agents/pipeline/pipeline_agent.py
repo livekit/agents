@@ -967,8 +967,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 >= self._opts.max_nested_fnc_calls
             ):
                 if len(fnc_ctx.ai_functions) > 1:
-                    logger.warning(
-                        "max function calls nested depth reached, not propagating fnc ctx",
+                    logger.info(
+                        "max function calls nested depth reached, dropping function context. increase max_nested_fnc_calls to enable additional nesting.",
                         extra={
                             "speech_id": speech_handle.id,
                             "fnc_nested_depth": speech_handle.fnc_nested_depth,
