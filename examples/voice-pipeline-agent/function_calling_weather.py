@@ -37,7 +37,7 @@ class AssistantFnc(llm.FunctionContext):
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
         # Clean the location string of special characters
-        location = re.sub(r"[^a-zA-Z0-9]", " ", location).strip()
+        location = re.sub(r"[^a-zA-Z0-9]+", " ", location).strip()
 
         # When a function call is running, there are a couple of options to inform the user
         # that it might take awhile:
@@ -90,7 +90,7 @@ async def entrypoint(ctx: JobContext):
             "You are a weather assistant created by LiveKit. Your interface with users will be voice. "
             "You will provide weather information for a given location. "
             # when using option 1, you can suppress from the agent with prompt
-            "do not say anything while waiting for the function call to complete."
+            "do not return any text while calling the function."
             # uncomment this to use option 2
             # "when performing function calls, let user know that you are checking the weather."
         ),
