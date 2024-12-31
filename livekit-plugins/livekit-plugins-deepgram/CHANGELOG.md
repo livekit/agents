@@ -1,5 +1,11 @@
 # livekit-plugins-deepgram
 
+## 0.6.16
+
+### Patch Changes
+
+- fix: Ensure STT exceptions are being propagated - [#1291](https://github.com/livekit/agents/pull/1291) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.6.15
 
 ### Patch Changes
