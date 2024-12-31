@@ -1,5 +1,11 @@
 # livekit-plugins-anthropic
 
+## 0.2.9
+
+### Patch Changes
+
+- improved handling of LLM errors, do not retry if already began - [#1298](https://github.com/livekit/agents/pull/1298) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.2.8
 
 ### Patch Changes
