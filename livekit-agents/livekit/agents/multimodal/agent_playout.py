@@ -4,11 +4,13 @@ import asyncio
 from typing import AsyncIterable, Literal
 
 from livekit import rtc
-from livekit.agents import transcription, utils
+from livekit.agents import stt, transcription, utils
 
 from ..log import logger
 
-EventTypes = Literal["playout_started", "playout_stopped"]
+EventTypes = Literal[
+    "playout_started", "playout_stopped", "final_transcript", "interim_transcript"
+]
 
 
 class PlayoutHandle:
@@ -68,9 +70,17 @@ class PlayoutHandle:
 
 
 class AgentPlayout(utils.EventEmitter[EventTypes]):
-    def __init__(self, *, audio_source: rtc.AudioSource) -> None:
+    def __init__(
+        self,
+        *,
+        audio_source: rtc.AudioSource,
+        stt: stt.STT,
+        stt_forwarder: stt.STTForwarder,
+    ) -> None:
         super().__init__()
         self._source = audio_source
+        self._stt = stt
+        self._stt_forwarder = stt_forwarder
         self._playout_atask: asyncio.Task[None] | None = None
 
     def play(
@@ -106,6 +116,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             await utils.aio.gracefully_cancel(old_task)
 
         first_frame = True
+        stt_stream = self._stt.stream() if self._stt is not None else None
 
         @utils.log_exceptions(logger=logger)
         async def _play_text_stream():
@@ -134,36 +145,54 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 handle._tr_fwd.push_audio(frame)
 
                 for f in bstream.write(frame.data.tobytes()):
+                    if stt_stream is not None:
+                        stt_stream.push_frame(f)
                     handle._pushed_duration += f.samples_per_channel / f.sample_rate
                     await self._source.capture_frame(f)
 
             for f in bstream.flush():
                 handle._pushed_duration += f.samples_per_channel / f.sample_rate
+                if stt_stream is not None:
+                    stt_stream.push_frame(f)
                 await self._source.capture_frame(f)
 
             handle._tr_fwd.mark_audio_segment_end()
 
             await self._source.wait_for_playout()
 
-        read_text_task = asyncio.create_task(_play_text_stream())
-        capture_task = asyncio.create_task(_capture_task())
+        async def _stt_stream_co() -> None:
+            if stt_stream is not None:
+                async for ev in stt_stream:
+                    self._stt_forwarder.update(ev)
 
+                    if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                        self.emit("final_transcript", ev)
+                    elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
+                        self.emit("interim_transcript", ev)
+
+        read_text_task = asyncio.create_task(_play_text_stream())
+
+        tasks = [
+            asyncio.create_task(_capture_task()),
+            asyncio.create_task(_stt_stream_co()),
+        ]
         try:
-            await asyncio.wait(
-                [capture_task, handle._int_fut],
+            done, _ = await asyncio.wait(
+                [asyncio.gather(*tasks), handle._int_fut],
                 return_when=asyncio.FIRST_COMPLETED,
             )
-        finally:
-            await utils.aio.gracefully_cancel(capture_task)
 
             handle._total_played_time = (
                 handle._pushed_duration - self._source.queued_duration
             )
 
-            if handle.interrupted or capture_task.exception():
-                self._source.clear_queue()  # make sure to remove any queued frames
+            for task in done:
+                if handle.interrupted or task.exception():
+                    self._source.clear_queue() # make sure to remove any queued frames
+                    break
 
-            await utils.aio.gracefully_cancel(read_text_task)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks, read_text_task)
 
             # make sure the text_data.sentence_stream is closed
             handle._tr_fwd.mark_text_segment_end()

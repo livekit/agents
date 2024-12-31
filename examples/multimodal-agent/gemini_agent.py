@@ -14,7 +14,7 @@ from livekit.agents import (
     llm,
     multimodal,
 )
-from livekit.plugins import google
+from livekit.plugins import deepgram, google
 
 load_dotenv()
 
@@ -60,6 +60,7 @@ async def entrypoint(ctx: JobContext):
         ),
         fnc_ctx=fnc_ctx,
         chat_ctx=chat_ctx,
+        stt=deepgram.STT(),
     )
     agent.start(ctx.room, participant)
 
