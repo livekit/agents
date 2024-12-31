@@ -199,10 +199,13 @@ class SpeechStream(stt.SpeechStream):
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
-                    await asyncio.wait(
+                    done, _ = await asyncio.wait(
                         [process_input_task, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            task.result()
                 finally:
                     await utils.aio.gracefully_cancel(
                         process_input_task, wait_reconnect_task
@@ -330,7 +333,7 @@ def _create_speech_recognizer(
         )
 
     auto_detect_source_language_config = None
-    if config.languages and len(config.languages) > 1:
+    if config.languages and len(config.languages) >= 1:
         auto_detect_source_language_config = (
             speechsdk.languageconfig.AutoDetectSourceLanguageConfig(
                 languages=config.languages

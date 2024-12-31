@@ -148,7 +148,7 @@ class LLMStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
-                if self._conn_options.max_retry == 0:
+                if self._conn_options.max_retry == 0 or not e.retryable:
                     raise
                 elif i == self._conn_options.max_retry:
                     raise APIConnectionError(

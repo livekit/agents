@@ -312,7 +312,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise Exception("Cartesia connection closed unexpectedly")
+                    raise APIStatusError(
+                        "Cartesia connection closed unexpectedly",
+                        request_id=request_id,
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Cartesia message type %s", msg.type)

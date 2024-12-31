@@ -621,6 +621,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 job=aj.job,
                 url=url,
                 token=jwt.encode(decoded, self._opts.api_secret, algorithm="HS256"),
+                worker_id=aj.worker_id,
             )
             await self._proc_pool.launch_job(running_info)
 
@@ -692,6 +693,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 job=msg.job,
                 url=job_assign.url or self._opts.ws_url,
                 token=job_assign.token,
+                worker_id=self._id,
             )
 
             await self._proc_pool.launch_job(running_info)

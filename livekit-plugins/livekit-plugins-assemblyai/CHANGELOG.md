@@ -1,5 +1,13 @@
 # livekit-plugins-assemblyai
 
+## 0.2.2
+
+### Patch Changes
+
+- fix: Ensure STT exceptions are being propagated - [#1291](https://github.com/livekit/agents/pull/1291) ([@davidzhao](https://github.com/davidzhao))
+
+- assemblyai: encode boost words - [#1284](https://github.com/livekit/agents/pull/1284) ([@jmugicagonz](https://github.com/jmugicagonz))
+
 ## 0.2.1
 
 ### Patch Changes

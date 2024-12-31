@@ -1,3 +1,13 @@
-from .multimodal_agent import AgentTranscriptionOptions, MultimodalAgent
+from .multimodal_agent import (
+    AgentTranscriptionOptions,
+    MultimodalAgent,
+    _RealtimeAPI,
+    _RealtimeAPISession,
+)
 
-__all__ = ["MultimodalAgent", "AgentTranscriptionOptions"]
+__all__ = [
+    "MultimodalAgent",
+    "AgentTranscriptionOptions",
+    "_RealtimeAPI",
+    "_RealtimeAPISession",
+]

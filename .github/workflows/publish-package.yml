@@ -26,8 +26,7 @@ jobs:
         with:
           submodules: true
           lfs: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PUSH_PAT }}
+          ssh-key: ${{ secrets.CHANGESETS_PUSH_DEPLOY_KEY }}
 
       - uses: pnpm/action-setup@v4
       - name: Use Node.js 20
@@ -84,7 +83,7 @@ jobs:
     uses: livekit/agents/.github/workflows/build-package.yml@main
     with:
       package: ${{ matrix.package.name }}
-      artifact_name: python-package-distributions
+      artifact_name: python-package-dist-${{matrix.package.name}}
 
   publish:
     needs:
@@ -98,8 +97,9 @@ jobs:
       - name: Download all the dists
         uses: actions/download-artifact@v4
         with:
-          name: python-package-distributions
-          path: dist/
+          path: dist
+          pattern: python-package-dist-*
+          merge-multiple: true
 
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@27b31702a0e7fc50959f5ad993c78deac1bdfc29

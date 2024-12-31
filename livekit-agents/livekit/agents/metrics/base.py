@@ -109,10 +109,16 @@ class MultimodalLLMError(Error):
 @dataclass
 class MultimodalLLMMetrics(LLMMetrics):
     @dataclass
+    class CachedTokenDetails:
+        text_tokens: int
+        audio_tokens: int
+
+    @dataclass
     class InputTokenDetails:
         cached_tokens: int
         text_tokens: int
         audio_tokens: int
+        cached_tokens_details: MultimodalLLMMetrics.CachedTokenDetails
 
     @dataclass
     class OutputTokenDetails:
