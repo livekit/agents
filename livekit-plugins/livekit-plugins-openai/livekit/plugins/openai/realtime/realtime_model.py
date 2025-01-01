@@ -925,7 +925,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         input_audio_format: api_proto.AudioFormat | None = None,
         output_audio_format: api_proto.AudioFormat | None = None,
         input_audio_transcription: InputTranscriptionOptions | None = None,
-        turn_detection: ServerVadOptions | None = None,
+        turn_detection: ServerVadOptions | Literal["None"] | None = None,
         tool_choice: api_proto.ToolChoice | None = None,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
@@ -963,13 +963,16 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         server_vad_opts: api_proto.ServerVad | None = None
         if self._opts.turn_detection is not None:
-            server_vad_opts = {
-                "type": "server_vad",
-                "threshold": self._opts.turn_detection.threshold,
-                "prefix_padding_ms": self._opts.turn_detection.prefix_padding_ms,
-                "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
-                "create_response": self._opts.turn_detection.create_response,
-            }
+            if self._opts.turn_detection == "None":
+                server_vad_opts = None
+            else:
+                server_vad_opts = {
+                    "type": "server_vad",
+                    "threshold": self._opts.turn_detection.threshold,
+                    "prefix_padding_ms": self._opts.turn_detection.prefix_padding_ms,
+                    "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
+                    "create_response": self._opts.turn_detection.create_response,
+                }
         input_audio_transcription_opts: api_proto.InputAudioTranscription | None = None
         if self._opts.input_audio_transcription is not None:
             input_audio_transcription_opts = {
