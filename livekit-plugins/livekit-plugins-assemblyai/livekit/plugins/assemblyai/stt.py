@@ -19,12 +19,20 @@ import asyncio
 import dataclasses
 import json
 import os
+import weakref
 from dataclasses import dataclass
 from typing import List, Literal, Optional
 from urllib.parse import urlencode
 
 import aiohttp
-from livekit.agents import stt, utils
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectOptions,
+    APIStatusError,
+    stt,
+    utils,
+)
+from livekit.agents.stt import SpeechEvent
 from livekit.agents.utils import AudioBuffer
 
 from .log import logger
@@ -40,14 +48,14 @@ bytes_per_frame = {
 
 @dataclass
 class STTOptions:
-    sample_rate: Optional[int] = None
+    sample_rate: int
+    buffer_size_seconds: float
     word_boost: Optional[List[str]] = None
     encoding: Optional[Literal["pcm_s16le", "pcm_mulaw"]] = None
     disable_partial_transcripts: bool = False
     enable_extra_session_information: bool = False
     end_utterance_silence_threshold: Optional[int] = None
     # Buffer to collect frames to send to AssemblyAI
-    buffer_size_seconds: Optional[float] = None
 
     def __post_init__(self):
         if self.encoding not in (None, "pcm_s16le", "pcm_mulaw"):
@@ -59,9 +67,9 @@ class STT(stt.STT):
         self,
         *,
         api_key: Optional[str] = None,
-        sample_rate: Optional[int] = 16000,
+        sample_rate: int = 16000,
         word_boost: Optional[List[str]] = None,
-        encoding: Optional[str] = "pcm_s16le",
+        encoding: Optional[Literal["pcm_s16le", "pcm_mulaw"]] = "pcm_s16le",
         disable_partial_transcripts: bool = False,
         enable_extra_session_information: bool = False,
         end_utterance_silence_threshold: Optional[int] = 500,
@@ -93,6 +101,7 @@ class STT(stt.STT):
             end_utterance_silence_threshold=end_utterance_silence_threshold,
         )
         self._session = http_session
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -102,15 +111,10 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        *,
         buffer: AudioBuffer,
-    ) -> stt.SpeechEvent:
-        raise NotImplementedError("Not implemented")
-
-    async def recognize(
-        self,
         *,
-        buffer: AudioBuffer,
+        language: str | None,
+        conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         raise NotImplementedError("Not implemented")
 
@@ -118,14 +122,49 @@ class STT(stt.STT):
         self,
         *,
         language: Optional[str] = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
         config = dataclasses.replace(self._opts)
-        return SpeechStream(
-            stt_=self,
+        stream = SpeechStream(
+            stt=self,
+            conn_options=conn_options,
             opts=config,
             api_key=self._api_key,
             http_session=self.session,
         )
+        self._streams.add(stream)
+        return stream
+
+    def update_options(
+        self,
+        *,
+        disable_partial_transcripts: Optional[bool] = None,
+        word_boost: Optional[List[str]] = None,
+        end_utterance_silence_threshold: Optional[int] = None,
+        enable_extra_session_information: Optional[bool] = None,
+        buffer_size_seconds: Optional[float] = None,
+    ):
+        if disable_partial_transcripts is not None:
+            self._opts.disable_partial_transcripts = disable_partial_transcripts
+        if word_boost is not None:
+            self._opts.word_boost = word_boost
+        if end_utterance_silence_threshold is not None:
+            self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
+        if enable_extra_session_information is not None:
+            self._opts.enable_extra_session_information = (
+                enable_extra_session_information
+            )
+        if buffer_size_seconds is not None:
+            self._opts.buffer_size_seconds = buffer_size_seconds
+
+        for stream in self._streams:
+            stream.update_options(
+                disable_partial_transcripts=disable_partial_transcripts,
+                word_boost=word_boost,
+                end_utterance_silence_threshold=end_utterance_silence_threshold,
+                enable_extra_session_information=enable_extra_session_information,
+                buffer_size_seconds=buffer_size_seconds,
+            )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -134,88 +173,59 @@ class SpeechStream(stt.SpeechStream):
 
     def __init__(
         self,
-        stt_: STT,
+        *,
+        stt: STT,
         opts: STTOptions,
+        conn_options: APIConnectOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
-        num_channels: int = 1,
-        max_retry: int = 32,
     ) -> None:
-        super().__init__(stt=stt_, sample_rate=opts.sample_rate)
+        super().__init__(
+            stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
+        )
 
         self._opts = opts
-        self._num_channels = num_channels
         self._api_key = api_key
         self._session = http_session
-        self._max_retry = max_retry
-        self._speech_duration = 0
-
-        if self._num_channels != 1:
-            raise ValueError(
-                f"AssemblyAI only supports mono audio, but a `num_channels` of {self._num_channels} was provided"
-            )
+        self._speech_duration: float = 0
 
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
-        self._final_events: List[stt.SpeechEvent] = []
+        self._final_events: List[SpeechEvent] = []
+        self._reconnect_event = asyncio.Event()
 
-    @utils.log_exceptions(logger=logger)
-    async def _main_task(self) -> None:
-        await self._run(self._max_retry)
+    def update_options(
+        self,
+        *,
+        disable_partial_transcripts: Optional[bool] = None,
+        word_boost: Optional[List[str]] = None,
+        end_utterance_silence_threshold: Optional[int] = None,
+        enable_extra_session_information: Optional[bool] = None,
+        buffer_size_seconds: Optional[float] = None,
+    ):
+        if disable_partial_transcripts is not None:
+            self._opts.disable_partial_transcripts = disable_partial_transcripts
+        if word_boost is not None:
+            self._opts.word_boost = word_boost
+        if end_utterance_silence_threshold is not None:
+            self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
+        if enable_extra_session_information is not None:
+            self._opts.enable_extra_session_information = (
+                enable_extra_session_information
+            )
+        if buffer_size_seconds is not None:
+            self._opts.buffer_size_seconds = buffer_size_seconds
 
-    @utils.log_exceptions(logger=logger)
-    async def _run(self, max_retry: int) -> None:
+        self._reconnect_event.set()
+
+    async def _run(self) -> None:
         """
         Run a single websocket connection to AssemblyAI and make sure to reconnect
         when something went wrong.
         """
-        retry_count = 0
-        while self._input_ch.qsize() or not self._input_ch.closed:
-            try:
-                live_config = {
-                    "sample_rate": self._opts.sample_rate,
-                    "word_boost": self._opts.word_boost,
-                    "encoding": self._opts.encoding,
-                    "disable_partial_transcripts": self._opts.disable_partial_transcripts,
-                    "enable_extra_session_information": self._opts.enable_extra_session_information,
-                }
 
-                headers = {
-                    "Authorization": self._api_key,
-                    "Content-Type": "application/json",
-                }
-
-                ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
-                filtered_config = {
-                    k: v for k, v in live_config.items() if v is not None
-                }
-                url = f"{ws_url}?{urlencode(filtered_config).lower()}"
-                ws = await self._session.ws_connect(url, headers=headers)
-                retry_count = 0  # connected successfully, reset the retry_count
-
-                await self._run_ws(ws)
-            except Exception:
-                # Something went wrong, retry the connection
-                if retry_count >= max_retry:
-                    logger.error(
-                        f"failed to connect to AssemblyAI after {max_retry} tries"
-                    )
-                    break
-
-                retry_delay = min(retry_count * 2, 10)  # max 10s
-                retry_count += 1  # increment after calculating the delay, the first retry should happen directly
-
-                logger.info(
-                    f"AssemblyAI connection failed, retrying in {retry_delay}s",
-                )
-                await asyncio.sleep(retry_delay)
-
-    async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """
-        This method can throw ws errors, these are handled inside the _run method
-        """
         closing_ws = False
 
-        async def send_task():
+        async def send_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
 
             if self._opts.end_utterance_silence_threshold:
@@ -232,7 +242,7 @@ class SpeechStream(stt.SpeechStream):
             )
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
-                num_channels=self._num_channels,
+                num_channels=1,
                 samples_per_channel=samples_per_buffer,
             )
 
@@ -252,7 +262,7 @@ class SpeechStream(stt.SpeechStream):
             closing_ws = True
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
-        async def recv_task():
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
             while True:
                 try:
@@ -270,7 +280,7 @@ class SpeechStream(stt.SpeechStream):
                     if closing_ws:  # close is expected, see SpeechStream.aclose
                         return
 
-                    raise Exception(
+                    raise APIStatusError(
                         "AssemblyAI connection closed unexpectedly",
                     )  # this will trigger a reconnection, see the _run loop
 
@@ -285,15 +295,57 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("failed to process AssemblyAI message")
 
-        tasks = [
-            asyncio.create_task(send_task()),
-            asyncio.create_task(recv_task()),
-        ]
+        ws: aiohttp.ClientWebSocketResponse | None = None
 
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
+        while True:
+            try:
+                ws = await self._connect_ws()
+                tasks = [
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                ]
+                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
+                try:
+                    done, _ = await asyncio.wait(
+                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )  # type: ignore
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            task.result()
+
+                    if wait_reconnect_task not in done:
+                        break
+
+                    self._reconnect_event.clear()
+                finally:
+                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+            finally:
+                if ws is not None:
+                    await ws.close()
+
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        live_config = {
+            "sample_rate": self._opts.sample_rate,
+            "word_boost": json.dumps(self._opts.word_boost)
+            if self._opts.word_boost is not None
+            else None,
+            "encoding": self._opts.encoding,
+            "disable_partial_transcripts": self._opts.disable_partial_transcripts,
+            "enable_extra_session_information": self._opts.enable_extra_session_information,
+        }
+
+        headers = {
+            "Authorization": self._api_key,
+            "Content-Type": "application/json",
+        }
+
+        ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
+        filtered_config = {k: v for k, v in live_config.items() if v is not None}
+        url = f"{ws_url}?{urlencode(filtered_config).lower()}"
+        ws = await self._session.ws_connect(url, headers=headers)
+        return ws
 
     def _process_stream_event(self, data: dict, closing_ws: bool) -> None:
         # see this page:

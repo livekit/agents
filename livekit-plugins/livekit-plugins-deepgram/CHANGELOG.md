@@ -1,5 +1,39 @@
 # livekit-plugins-deepgram
 
+## 0.6.16
+
+### Patch Changes
+
+- fix: Ensure STT exceptions are being propagated - [#1291](https://github.com/livekit/agents/pull/1291) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.15
+
+### Patch Changes
+
+- added streaming audio decoder for compressed audio. - [#1236](https://github.com/livekit/agents/pull/1236) ([@davidzhao](https://github.com/davidzhao))
+
+- Support Deepgram TTS - [#1201](https://github.com/livekit/agents/pull/1201) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.6.14
+
+### Patch Changes
+
+- enable deepgram filler words by default to improve end of turn accuracy - [#1190](https://github.com/livekit/agents/pull/1190) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.13
+
+### Patch Changes
+
+- fix release - [#1176](https://github.com/livekit/agents/pull/1176) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.6.12
+
+### Patch Changes
+
+- feat: stt retry & stt.FallbackAdapter - [#1114](https://github.com/livekit/agents/pull/1114) ([@theomonnom](https://github.com/theomonnom))
+
+- Added support for custom deepgram base url - [#1137](https://github.com/livekit/agents/pull/1137) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.11
 
 ### Patch Changes

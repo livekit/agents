@@ -1,4 +1,7 @@
 import logging
+import random
+import re
+import urllib
 from typing import Annotated
 
 import aiohttp
@@ -11,7 +14,7 @@ from livekit.agents import (
     cli,
     llm,
 )
-from livekit.agents.pipeline import VoicePipelineAgent
+from livekit.agents.pipeline import AgentCallContext, VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
@@ -33,18 +36,52 @@ class AssistantFnc(llm.FunctionContext):
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
+        # Clean the location string of special characters
+        location = re.sub(r"[^a-zA-Z0-9]+", " ", location).strip()
+
+        # When a function call is running, there are a couple of options to inform the user
+        # that it might take awhile:
+        # Option 1: you can use .say filler message immediately after the call is triggered
+        # Option 2: you can prompt the agent to return a text response when it's making a function call
+        agent = AgentCallContext.get_current().agent
+
+        if (
+            not agent.chat_ctx.messages
+            or agent.chat_ctx.messages[-1].role != "assistant"
+        ):
+            # skip if assistant already said something
+            filler_messages = [
+                "Let me check the weather in {location} for you.",
+                "Let me see what the weather is like in {location} right now.",
+                # LLM will complete this sentence if it is added to the end of the chat context
+                "The current weather in {location} is ",
+            ]
+            message = random.choice(filler_messages).format(location=location)
+            logger.info(f"saying filler message: {message}")
+
+            # NOTE: set add_to_chat_ctx=True will add the message to the end
+            #   of the chat context of the function call for answer synthesis
+            speech_handle = await agent.say(message, add_to_chat_ctx=True)  # noqa: F841
+
         logger.info(f"getting weather for {location}")
-        url = f"https://wttr.in/{location}?format=%C+%t"
+        url = f"https://wttr.in/{urllib.parse.quote(location)}?format=%C+%t"
+        weather_data = ""
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status == 200:
-                    weather_data = await response.text()
                     # response from the function call is returned to the LLM
-                    return f"The weather in {location} is {weather_data}."
+                    weather_data = (
+                        f"The weather in {location} is {await response.text()}."
+                    )
+                    logger.info(f"weather data: {weather_data}")
                 else:
                     raise Exception(
                         f"Failed to get weather data, status code: {response.status}"
                     )
+
+        # (optional) To wait for the speech to finish before giving results of the function call
+        # await speech_handle.join()
+        return weather_data
 
 
 def prewarm_process(proc: JobProcess):
@@ -58,7 +95,11 @@ async def entrypoint(ctx: JobContext):
     initial_chat_ctx = llm.ChatContext().append(
         text=(
             "You are a weather assistant created by LiveKit. Your interface with users will be voice. "
-            "You will provide weather information for a given location."
+            "You will provide weather information for a given location. "
+            # when using option 1, you can suppress from the agent with prompt
+            "do not return any text while calling the function."
+            # uncomment this to use option 2
+            # "when performing function calls, let user know that you are checking the weather."
         ),
         role="system",
     )
@@ -71,6 +112,7 @@ async def entrypoint(ctx: JobContext):
         fnc_ctx=fnc_ctx,
         chat_ctx=initial_chat_ctx,
     )
+
     # Start the assistant. This will automatically publish a microphone track and listen to the participant.
     agent.start(ctx.room, participant)
     await agent.say(

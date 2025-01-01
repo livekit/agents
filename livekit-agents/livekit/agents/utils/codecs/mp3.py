@@ -14,9 +14,12 @@
 
 import ctypes
 import logging
-from importlib import import_module
 from typing import List
 
+try:
+    import av  # noqa
+except ImportError:
+    pass
 from livekit import rtc
 
 
@@ -28,15 +31,28 @@ class Mp3StreamDecoder:
 
     def __init__(self):
         try:
-            globals()["av"] = import_module("av")
+            import av
         except ImportError:
             raise ImportError(
                 "You haven't included the 'codecs' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[codecs]`"
             )
-
         self._codec = av.CodecContext.create("mp3", "r")  # noqa
 
     def decode_chunk(self, chunk: bytes) -> List[rtc.AudioFrame]:
+        # Skip ID3v2 header if present
+        if chunk.startswith(b"ID3"):
+            # ID3v2 header is 10 bytes long
+            # The size is encoded in the next 4 bytes (bytes 6-9)
+            # Each byte only uses 7 bits (most significant bit is always 0)
+            if len(chunk) >= 10:
+                size = (
+                    ((chunk[6] & 0x7F) << 21)
+                    | ((chunk[7] & 0x7F) << 14)
+                    | ((chunk[8] & 0x7F) << 7)
+                    | (chunk[9] & 0x7F)
+                )
+                chunk = chunk[10 + size :]
+
         packets = self._codec.parse(chunk)
         result: List[rtc.AudioFrame] = []
         for packet in packets:

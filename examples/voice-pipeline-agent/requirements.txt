@@ -1,7 +1,8 @@
-livekit-agents>=0.11.3
-livekit-plugins-openai>=0.10.7
-livekit-plugins-deepgram>=0.6.11
-livekit-plugins-silero>=0.7.3
-livekit-plugins-rag>=0.2.2
+livekit-agents>=0.12.6
+livekit-plugins-deepgram>=0.6.16
+livekit-plugins-google>=0.9.0
+livekit-plugins-openai[vertex]>=0.10.10
+livekit-plugins-silero>=0.7.4
+livekit-plugins-rag>=0.2.3
 python-dotenv~=1.0
 aiofile~=3.8.8

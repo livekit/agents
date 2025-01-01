@@ -4,13 +4,24 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterable, AsyncIterator, Literal
+from types import TracebackType
+from typing import (
+    Any,
+    AsyncIterable,
+    AsyncIterator,
+    Generic,
+    Literal,
+    TypeVar,
+    Union,
+)
 
 from livekit import rtc
+from livekit.agents._exceptions import APIConnectionError, APIError
 
 from .. import utils
 from ..log import logger
 from ..metrics import LLMMetrics
+from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..utils import aio
 from . import function_context
 from .chat_context import ChatContext, ChatRole
@@ -48,26 +59,59 @@ class ChatChunk:
     usage: CompletionUsage | None = None
 
 
-class LLM(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
+@dataclass
+class ToolChoice:
+    type: Literal["function"]
+    name: str
+
+
+TEvent = TypeVar("TEvent")
+
+
+class LLM(
+    ABC,
+    rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
+    Generic[TEvent],
+):
     def __init__(self) -> None:
         super().__init__()
         self._capabilities = LLMCapabilities()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+
+    @property
+    def label(self) -> str:
+        return self._label
 
     @abstractmethod
     def chat(
         self,
         *,
         chat_ctx: ChatContext,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         fnc_ctx: function_context.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream": ...
 
     @property
     def capabilities(self) -> LLMCapabilities:
         return self._capabilities
+
+    async def aclose(self) -> None: ...
+
+    async def __aenter__(self) -> LLM:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
 
 class LLMStream(ABC):
@@ -77,10 +121,12 @@ class LLMStream(ABC):
         *,
         chat_ctx: ChatContext,
         fnc_ctx: function_context.FunctionContext | None,
+        conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
         self._chat_ctx = chat_ctx
         self._fnc_ctx = fnc_ctx
+        self._conn_options = conn_options
 
         self._event_ch = aio.Chan[ChatChunk]()
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
@@ -95,7 +141,30 @@ class LLMStream(ABC):
         self._function_tasks = set[asyncio.Task[Any]]()
 
     @abstractmethod
-    async def _main_task(self) -> None: ...
+    async def _run(self) -> None: ...
+
+    async def _main_task(self) -> None:
+        for i in range(self._conn_options.max_retry + 1):
+            try:
+                return await self._run()
+            except APIError as e:
+                if self._conn_options.max_retry == 0 or not e.retryable:
+                    raise
+                elif i == self._conn_options.max_retry:
+                    raise APIConnectionError(
+                        f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",
+                    ) from e
+                else:
+                    logger.warning(
+                        f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",
+                        exc_info=e,
+                        extra={
+                            "llm": self._llm._label,
+                            "attempt": i + 1,
+                        },
+                    )
+
+                await asyncio.sleep(self._conn_options.retry_interval)
 
     @utils.log_exceptions(logger=logger)
     async def _metrics_monitor_task(
@@ -174,3 +243,14 @@ class LLMStream(ABC):
 
     def __aiter__(self) -> AsyncIterator[ChatChunk]:
         return self
+
+    async def __aenter__(self) -> LLMStream:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()

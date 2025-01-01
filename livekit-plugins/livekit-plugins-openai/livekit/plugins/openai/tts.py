@@ -76,6 +76,7 @@ class TTS(tts.TTS):
         )
 
         self._client = client or openai.AsyncClient(
+            max_retries=0,
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
@@ -123,6 +124,7 @@ class TTS(tts.TTS):
         """
 
         azure_client = openai.AsyncAzureOpenAI(
+            max_retries=0,
             azure_endpoint=azure_endpoint,
             azure_deployment=azure_deployment,
             api_version=api_version,

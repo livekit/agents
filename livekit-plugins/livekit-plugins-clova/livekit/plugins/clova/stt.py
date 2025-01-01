@@ -24,6 +24,7 @@ from typing import Optional, Union
 
 import aiohttp
 from livekit.agents import (
+    APIConnectOptions,
     APIStatusError,
     APITimeoutError,
     stt,
@@ -68,6 +69,11 @@ class STT(stt.STT):
             )
         self.threshold = threshold
 
+    def update_options(self, *, language: str | None = None) -> None:
+        self._language = (
+            clova_languages_mapping.get(language, language) or self._language
+        )
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -80,9 +86,10 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        *,
         buffer: AudioBuffer,
-        language: Union[ClovaSttLanguages, str, None] = None,
+        *,
+        language: Union[ClovaSttLanguages, str, None],
+        conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
             url = self.url_builder()
@@ -109,7 +116,13 @@ class STT(stt.STT):
             )
             start = time.time()
             async with self._ensure_session().post(
-                url, data=form_data, headers=headers
+                url,
+                data=form_data,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(
+                    total=30,
+                    sock_connect=conn_options.timeout,
+                ),
             ) as response:
                 response_data = await response.json()
                 end = time.time()

@@ -25,15 +25,42 @@ if TYPE_CHECKING:
 
 @dataclass
 class EncodeOptions:
+    """Options for encoding rtc.VideoFrame to portable image formats."""
+
     format: Literal["JPEG", "PNG"] = "JPEG"
+    """The format to encode the image."""
+
     resize_options: Optional["ResizeOptions"] = None
+    """Options for resizing the image."""
+
+    quality: Optional[int] = 75
+    """Image compression quality, 0-100. Only applies to JPEG."""
 
 
 @dataclass
 class ResizeOptions:
+    """Options for resizing rtc.VideoFrame as part of encoding to a portable image format."""
+
     width: int
+    """The desired resize width (in)"""
+
     height: int
-    strategy: Literal["center_aspect_fit", "center_aspect_cover", "skew"]
+    """The desired height to resize the image to."""
+
+    strategy: Literal[
+        "center_aspect_fit",
+        "center_aspect_cover",
+        "scale_aspect_fit",
+        "scale_aspect_cover",
+        "skew",
+    ]
+    """The strategy to use when resizing the image:
+    - center_aspect_fit: Fit the image into the provided dimensions, with letterboxing
+    - center_aspect_cover: Fill the provided dimensions, with cropping
+    - scale_aspect_fit: Fit the image into the provided dimensions, preserving its original aspect ratio
+    - scale_aspect_cover: Fill the provided dimensions, preserving its original aspect ratio (image will be larger than the provided dimensions)
+    - skew: Precisely resize the image to the provided dimensions
+    """
 
 
 def import_pil():
@@ -46,12 +73,19 @@ def import_pil():
         )
 
 
-def encode(frame: rtc.VideoFrame, options: EncodeOptions):
+def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:
+    """Encode a rtc.VideoFrame to a portable image format (JPEG or PNG).
+
+    See EncodeOptions for more details.
+    """
     import_pil()
     img = _image_from_frame(frame)
     resized = _resize_image(img, options)
     buffer = io.BytesIO()
-    resized.save(buffer, options.format)
+    kwargs = {}
+    if options.format == "JPEG" and options.quality is not None:
+        kwargs["quality"] = options.quality
+    resized.save(buffer, options.format, **kwargs)
     buffer.seek(0)
     return buffer.read()
 
@@ -83,10 +117,11 @@ def _resize_image(image: Any, options: EncodeOptions):
 
         # If the new image is wider than the original
         if resize_opts.width / resize_opts.height > image.width / image.height:
-            new_width = resize_opts.width
-            new_height = int(image.height * (resize_opts.width / image.width))
+            new_height = resize_opts.height
+            new_width = int(image.width * (resize_opts.height / image.height))
 
         resized = image.resize((new_width, new_height))
+
         Image.Image.paste(
             result,
             resized,
@@ -118,5 +153,27 @@ def _resize_image(image: Any, options: EncodeOptions):
             ),
         )
         return result
+    elif resize_opts.strategy == "scale_aspect_fill":
+        # Start with assuming width is the limiting dimension
+        new_width = resize_opts.width
+        new_height = int(image.height * (resize_opts.width / image.width))
+
+        # If height is under the limit, scale based on height instead
+        if new_height < resize_opts.height:
+            new_height = resize_opts.height
+            new_width = int(image.width * (resize_opts.height / image.height))
+
+        return image.resize((new_width, new_height))
+    elif resize_opts.strategy == "scale_aspect_fit":
+        # Start with assuming width is the limiting dimension
+        new_width = resize_opts.width
+        new_height = int(image.height * (resize_opts.width / image.width))
+
+        # If height would exceed the limit, scale based on height instead
+        if new_height > resize_opts.height:
+            new_height = resize_opts.height
+            new_width = int(image.width * (resize_opts.height / image.height))
+
+        return image.resize((new_width, new_height))
 
     raise ValueError(f"Unknown resize strategy: {resize_opts.strategy}")

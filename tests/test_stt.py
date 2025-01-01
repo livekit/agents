@@ -4,34 +4,37 @@ Do speech recognition on a long audio file and compare the result with the expec
 
 import asyncio
 import time
-from itertools import product
+from typing import Callable
 
 import pytest
 from livekit import agents
+from livekit.agents import stt
 from livekit.plugins import assemblyai, azure, deepgram, fal, google, openai, silero
 
 from .utils import make_test_speech, wer
 
 SAMPLE_RATES = [24000, 44100]  # test multiple input sample rates
 WER_THRESHOLD = 0.2
-RECOGNIZE_STT = [
-    lambda: deepgram.STT(),
-    lambda: google.STT(),
-    lambda: google.STT(
-        languages=["en-AU"],
-        model="chirp_2",
-        spoken_punctuation=False,
-        location="us-central1",
+RECOGNIZE_STT: list[Callable[[], stt.STT]] = [
+    pytest.param(lambda: deepgram.STT(), id="deepgram"),
+    pytest.param(lambda: google.STT(), id="google"),
+    pytest.param(
+        lambda: google.STT(
+            languages=["en-AU"],
+            model="chirp_2",
+            spoken_punctuation=False,
+            location="us-central1",
+        ),
+        id="google.chirp_2",
     ),
-    lambda: openai.STT(),
-    lambda: fal.WizperSTT(),
+    pytest.param(lambda: openai.STT(), id="openai"),
+    pytest.param(lambda: fal.WizperSTT(), id="fal"),
 ]
 
 
 @pytest.mark.usefixtures("job_process")
-@pytest.mark.parametrize(
-    "stt_factory, sample_rate", product(RECOGNIZE_STT, SAMPLE_RATES)
-)
+@pytest.mark.parametrize("stt_factory", RECOGNIZE_STT)
+@pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_recognize(stt_factory, sample_rate):
     async with stt_factory() as stt:
         frames, transcript = make_test_speech(sample_rate=sample_rate)
@@ -47,23 +50,34 @@ async def test_recognize(stt_factory, sample_rate):
 
 
 STREAM_VAD = silero.VAD.load(min_silence_duration=0.75)
-STREAM_STT = [
-    lambda: assemblyai.STT(),
-    lambda: deepgram.STT(),
-    lambda: google.STT(),
-    lambda: agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
-    lambda: google.STT(
-        languages=["en-AU"],
-        model="chirp_2",
-        spoken_punctuation=False,
-        location="us-central1",
+STREAM_STT: list[Callable[[], stt.STT]] = [
+    pytest.param(lambda: assemblyai.STT(), id="assemblyai"),
+    pytest.param(lambda: deepgram.STT(), id="deepgram"),
+    pytest.param(lambda: google.STT(), id="google"),
+    pytest.param(
+        lambda: agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
+        id="openai.stream",
     ),
-    lambda: azure.STT(),
+    pytest.param(
+        lambda: agents.stt.StreamAdapter(stt=openai.STT.with_groq(), vad=STREAM_VAD),
+        id="openai.with_groq.stream",
+    ),
+    pytest.param(
+        lambda: google.STT(
+            languages=["en-AU"],
+            model="chirp_2",
+            spoken_punctuation=False,
+            location="us-central1",
+        ),
+        id="google.chirp_2",
+    ),
+    pytest.param(lambda: azure.STT(), id="azure"),
 ]
 
 
 @pytest.mark.usefixtures("job_process")
-@pytest.mark.parametrize("stt_factory, sample_rate", product(STREAM_STT, SAMPLE_RATES))
+@pytest.mark.parametrize("stt_factory", STREAM_STT)
+@pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_stream(stt_factory, sample_rate):
     stt = stt_factory()
 
@@ -94,7 +108,13 @@ async def test_stream(stt_factory, sample_rate):
                 continue
 
             if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
+                if text != "":
+                    text += " "
                 text += event.alternatives[0].text
+                # ensure STT is tagging languages correctly
+                language = event.alternatives[0].language
+                assert language is not None
+                assert language.lower().startswith("en")
 
             if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
                 recv_start = False

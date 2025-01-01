@@ -45,6 +45,7 @@ TelnyxChatModels = Literal[
 CerebrasChatModels = Literal[
     "llama3.1-8b",
     "llama3.1-70b",
+    "llama-3.3-70b",
 ]
 
 PerplexityChatModels = Literal[
@@ -58,8 +59,8 @@ PerplexityChatModels = Literal[
 
 GroqChatModels = Literal[
     "llama-3.1-405b-reasoning",
-    "llama-3.1-70b-versatile",
     "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
     "llama3-groq-70b-8192-tool-use-preview",
     "llama3-groq-8b-8192-tool-use-preview",
     "llama-guard-3-8b",
@@ -80,6 +81,7 @@ DeepSeekChatModels = Literal[
 ]
 
 VertexModels = Literal[
+    "google/gemini-2.0-flash-exp",
     "google/gemini-1.5-flash",
     "google/gemini-1.5-pro",
     "google/gemini-1.0-pro-vision",
@@ -143,6 +145,7 @@ TogetherChatModels = Literal[
     "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
     "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
     "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+    "meta-llama/Llama-3.3-70B-Instruct-Turbo",
     "mistralai/Mistral-7B-Instruct-v0.1",
     "mistralai/Mistral-7B-Instruct-v0.2",
     "mistralai/Mistral-7B-Instruct-v0.3",

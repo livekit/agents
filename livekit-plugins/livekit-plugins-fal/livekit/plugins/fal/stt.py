@@ -1,16 +1,19 @@
+from __future__ import annotations
+
 import dataclasses
 import os
 from dataclasses import dataclass
 from typing import Optional
 
 import fal_client
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
+    APIConnectOptions,
     stt,
 )
 from livekit.agents.stt import SpeechEventType, STTCapabilities
-from livekit.agents.utils import AudioBuffer, merge_frames
-from livekit.rtc import AudioFrame
+from livekit.agents.utils import AudioBuffer
 
 
 @dataclass
@@ -47,6 +50,9 @@ class WizperSTT(stt.STT):
                 "FAL AI API key is required. It should be set with env FAL_KEY"
             )
 
+    def update_options(self, *, language: Optional[str] = None) -> None:
+        self._opts.language = language or self._opts.language
+
     def _sanitize_options(
         self,
         *,
@@ -66,18 +72,14 @@ class WizperSTT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: Optional[str] = None,
-        task: Optional[str] = None,
-        chunk_level: Optional[str] = None,
-        version: Optional[str] = None,
+        language: str | None,
+        conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
-            config = self._sanitize_options(
-                language=language, task=task, chunk_level=chunk_level, version=version
+            config = self._sanitize_options(language=language)
+            data_uri = fal_client.encode(
+                rtc.combine_audio_frames(buffer).to_wav_bytes(), "audio/x-wav"
             )
-            buffer = merge_frames(buffer)
-            wav_bytes = AudioFrame.to_wav_bytes(buffer)
-            data_uri = fal_client.encode(wav_bytes, "audio/x-wav")
             response = await self._fal_client.run(
                 "fal-ai/wizper",
                 arguments={
@@ -87,6 +89,7 @@ class WizperSTT(stt.STT):
                     "chunk_level": config.chunk_level,
                     "version": config.version,
                 },
+                timeout=conn_options.timeout,
             )
             text = response.get("text", "")
             return self._transcription_to_speech_event(text=text)

@@ -43,6 +43,7 @@ from livekit.protocol import agent, models
 
 from . import http_server, ipc, utils
 from ._exceptions import AssignmentTimeoutError
+from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
     JobContext,
@@ -158,6 +159,15 @@ class WorkerOptions:
 
     Defaults to 0.75 on "production" mode, and is disabled in "development" mode.
     """
+
+    job_memory_warn_mb: float = 300
+    """Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged."""
+    job_memory_limit_mb: float = 0
+    """Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
+    Defaults to 0 (disabled).
+    """
+
+    """Number of idle processes to keep warm."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
         dev_default=0, prod_default=3
     )
@@ -234,6 +244,15 @@ class Worker(utils.EventEmitter[EventTypes]):
                 "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
             )
 
+        if (
+            opts.job_memory_limit_mb > 0
+            and opts.job_executor_type != JobExecutorType.PROCESS
+        ):
+            logger.warning(
+                "max_job_memory_usage is only supported for process-based job executors, "
+                "ignoring max_job_memory_usage"
+            )
+
         self._opts = opts
         self._loop = loop or asyncio.get_event_loop()
 
@@ -248,6 +267,26 @@ class Worker(utils.EventEmitter[EventTypes]):
         # using spawn context for all platforms. We may have further optimizations for
         # Linux with forkserver, but for now, this is the safest option
         mp_ctx = mp.get_context("spawn")
+
+        self._inference_executor: (
+            ipc.inference_proc_executor.InferenceProcExecutor | None
+        ) = None
+        if len(_InferenceRunner.registered_runners) > 0:
+            self._inference_executor = (
+                ipc.inference_proc_executor.InferenceProcExecutor(
+                    runners=_InferenceRunner.registered_runners,
+                    initialize_timeout=30,
+                    close_timeout=5,
+                    memory_warn_mb=2000,
+                    memory_limit_mb=0,  # no limit
+                    ping_interval=5,
+                    ping_timeout=60,
+                    high_ping_threshold=2.5,
+                    mp_ctx=mp_ctx,
+                    loop=self._loop,
+                )
+            )
+
         self._proc_pool = ipc.proc_pool.ProcPool(
             initialize_process_fnc=opts.prewarm_fnc,
             job_entrypoint_fnc=opts.entrypoint_fnc,
@@ -256,13 +295,13 @@ class Worker(utils.EventEmitter[EventTypes]):
             ),
             loop=self._loop,
             job_executor_type=opts.job_executor_type,
+            inference_executor=self._inference_executor,
             mp_ctx=mp_ctx,
             initialize_timeout=opts.initialize_process_timeout,
             close_timeout=opts.shutdown_process_timeout,
+            memory_warn_mb=opts.job_memory_warn_mb,
+            memory_limit_mb=opts.job_memory_limit_mb,
         )
-        self._proc_pool.on("process_started", self._on_process_started)
-        self._proc_pool.on("process_closed", self._on_process_closed)
-        self._proc_pool.on("process_job_launched", self._on_process_job_launched)
 
         self._previous_status = agent.WorkerStatus.WS_AVAILABLE
 
@@ -285,7 +324,22 @@ class Worker(utils.EventEmitter[EventTypes]):
             extra={"version": __version__, "rtc-version": rtc.__version__},
         )
 
+        if self._inference_executor is not None:
+            logger.info("starting inference executor")
+            await self._inference_executor.start()
+            await self._inference_executor.initialize()
+
         self._closed = False
+
+        def _update_job_status(proc: ipc.job_executor.JobExecutor) -> None:
+            t = self._loop.create_task(self._update_job_status(proc))
+            self._tasks.add(t)
+            t.add_done_callback(self._tasks.discard)
+
+        self._proc_pool.on("process_started", _update_job_status)
+        self._proc_pool.on("process_closed", _update_job_status)
+        self._proc_pool.on("process_job_launched", _update_job_status)
+
         self._proc_pool.start()
         self._api = api.LiveKitAPI(
             self._opts.ws_url, self._opts.api_key, self._opts.api_secret
@@ -372,6 +426,10 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._main_task.cancel()
 
         await self._proc_pool.aclose()
+
+        if self._inference_executor is not None:
+            await self._inference_executor.aclose()
+
         await self._http_session.close()
         await self._http_server.aclose()
         await self._api.aclose()
@@ -563,6 +621,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 job=aj.job,
                 url=url,
                 token=jwt.encode(decoded, self._opts.api_secret, algorithm="HS256"),
+                worker_id=aj.worker_id,
             )
             await self._proc_pool.launch_job(running_info)
 
@@ -634,6 +693,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 job=msg.job,
                 url=job_assign.url or self._opts.ws_url,
                 token=job_assign.token,
+                worker_id=self._id,
             )
 
             await self._proc_pool.launch_job(running_info)
@@ -689,15 +749,6 @@ class Worker(utils.EventEmitter[EventTypes]):
             # safe to ignore
             return
         await proc.aclose()
-
-    def _on_process_closed(self, proc: ipc.job_executor.JobExecutor) -> None:
-        self._update_job_status_sync(proc)
-
-    def _on_process_started(self, proc: ipc.job_executor.JobExecutor) -> None:
-        self._update_job_status_sync(proc)
-
-    def _on_process_job_launched(self, proc: ipc.job_executor.JobExecutor) -> None:
-        self._update_job_status_sync(proc)
 
     async def _update_worker_status(self):
         job_cnt = len(self.active_jobs)
@@ -756,28 +807,19 @@ class Worker(utils.EventEmitter[EventTypes]):
         with contextlib.suppress(utils.aio.ChanClosed):
             await self._queue_msg(msg)
 
-    def _update_job_status_sync(self, proc: ipc.job_executor.JobExecutor) -> None:
-        t = self._loop.create_task(self._update_job_status(proc))
-        self._tasks.add(t)
-        t.add_done_callback(self._tasks.discard)
-
     async def _update_job_status(self, proc: ipc.job_executor.JobExecutor) -> None:
         job_info = proc.running_job
-        if not job_info:
+        if job_info is None:
             return
-        status: agent.JobStatus = agent.JobStatus.JS_RUNNING
-        if proc.run_status == ipc.job_executor.RunStatus.FINISHED_FAILED:
-            status = agent.JobStatus.JS_FAILED
-        elif proc.run_status == ipc.job_executor.RunStatus.FINISHED_CLEAN:
-            status = agent.JobStatus.JS_SUCCESS
-        elif proc.run_status == ipc.job_executor.RunStatus.STARTING:
-            status = agent.JobStatus.JS_PENDING
 
-        error: str | None = None
-        if proc.exception:
-            error = str(proc.exception)
-        update = agent.UpdateJobStatus(
-            job_id=job_info.job.id, status=status, error=error
-        )
+        status: agent.JobStatus = agent.JobStatus.JS_RUNNING
+        if proc.status == ipc.job_executor.JobStatus.FAILED:
+            status = agent.JobStatus.JS_FAILED
+        elif proc.status == ipc.job_executor.JobStatus.SUCCESS:
+            status = agent.JobStatus.JS_SUCCESS
+        elif proc.status == ipc.job_executor.JobStatus.RUNNING:
+            status = agent.JobStatus.JS_RUNNING
+
+        update = agent.UpdateJobStatus(job_id=job_info.job.id, status=status, error="")
         msg = agent.WorkerMessage(update_job=update)
         await self._queue_msg(msg)

@@ -1,5 +1,39 @@
 # livekit-plugins-azure
 
+## 0.5.2
+
+### Patch Changes
+
+- fix: Ensure STT exceptions are being propagated - [#1291](https://github.com/livekit/agents/pull/1291) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.5.1
+
+### Patch Changes
+
+- fix azure stt language autodetection - [#1246](https://github.com/livekit/agents/pull/1246) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.5.0
+
+### Minor Changes
+
+- Improvements to end of turn plugin, ensure STT language settings. - [#1195](https://github.com/livekit/agents/pull/1195) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.4.4
+
+### Patch Changes
+
+- fix release - [#1176](https://github.com/livekit/agents/pull/1176) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.4.3
+
+### Patch Changes
+
+- feat: stt retry & stt.FallbackAdapter - [#1114](https://github.com/livekit/agents/pull/1114) ([@theomonnom](https://github.com/theomonnom))
+
+- azure: support auth entra token for TTS - [#1134](https://github.com/livekit/agents/pull/1134) ([@nfma](https://github.com/nfma))
+
+- feat: tts retry & tts.FallbackAdapter - [#1074](https://github.com/livekit/agents/pull/1074) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.4.2
 
 ### Patch Changes

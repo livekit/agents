@@ -16,7 +16,7 @@ class FunctionToolChoice(TypedDict):
     name: str
 
 
-Voice = Literal["alloy", "echo", "shimmer"]
+Voice = Literal["alloy", "echo", "shimmer", "ash", "ballad", "coral", "sage", "verse"]
 ToolChoice = Union[Literal["auto", "none", "required"], FunctionToolChoice]
 Role = Literal["system", "assistant", "user", "tool"]
 GenerationFinishedReason = Literal["stop", "max_tokens", "content_filter", "interrupt"]
@@ -26,6 +26,16 @@ Modality = Literal["text", "audio"]
 ResponseStatus = Literal[
     "in_progress", "completed", "incomplete", "cancelled", "failed"
 ]
+
+# https://platform.openai.com/docs/models/gp#gpt-4o-realtime
+OpenAIModel = Literal[
+    "gpt-4o-realtime-preview",
+    "gpt-4o-realtime-preview-2024-10-01",
+    "gpt-4o-realtime-preview-2024-12-17",
+    "gpt-4o-mini-realtime-preview",
+    "gpt-4o-mini-realtime-preview-2024-12-17",
+]
+DefaultOpenAIModel = "gpt-4o-realtime-preview"
 
 
 class TextContent(TypedDict):
@@ -143,6 +153,12 @@ ResponseStatusDetails = Union[
 
 class InputTokenDetails(TypedDict):
     cached_tokens: int
+    text_tokens: int
+    audio_tokens: int
+    cached_tokens_details: CachedTokenDetails
+
+
+class CachedTokenDetails(TypedDict):
     text_tokens: int
     audio_tokens: int
 

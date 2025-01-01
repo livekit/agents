@@ -19,7 +19,7 @@ import asyncio
 import datetime
 import os
 from dataclasses import dataclass
-from typing import Any, Awaitable, MutableSet
+from typing import Any, Literal, MutableSet, Union
 
 import aiohttp
 import httpx
@@ -29,15 +29,14 @@ from livekit.agents import (
     APITimeoutError,
     llm,
 )
+from livekit.agents.llm import ToolChoice, _create_ai_function_info
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
 
-from ._oai_api import (
-    build_oai_function_description,
-    create_ai_function_info,
-)
+from ._oai_api import build_oai_function_description
 from .log import logger
 from .models import (
     CerebrasChatModels,
@@ -59,6 +58,10 @@ class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
+    parallel_tool_calls: bool | None
+    tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto"
+    store: bool | None = None
+    metadata: dict[str, str] | None = None
 
 
 class LLM(llm.LLM):
@@ -71,6 +74,10 @@ class LLM(llm.LLM):
         user: str | None = None,
         client: openai.AsyncClient | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        store: bool | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -81,10 +88,19 @@ class LLM(llm.LLM):
         super().__init__()
         self._capabilities = llm.LLMCapabilities(supports_choices_on_int=True)
 
-        self._opts = LLMOptions(model=model, user=user, temperature=temperature)
-        self._client: openai.AsyncClient = client or openai.AsyncClient(
+        self._opts = LLMOptions(
+            model=model,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            store=store,
+            metadata=metadata,
+        )
+        self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
+            max_retries=0,
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
@@ -112,6 +128,8 @@ class LLM(llm.LLM):
         base_url: str | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -124,6 +142,7 @@ class LLM(llm.LLM):
         """
 
         azure_client = openai.AsyncAzureOpenAI(
+            max_retries=0,
             azure_endpoint=azure_endpoint,
             azure_deployment=azure_deployment,
             api_version=api_version,
@@ -135,7 +154,14 @@ class LLM(llm.LLM):
             base_url=base_url,
         )  # type: ignore
 
-        return LLM(model=model, client=azure_client, user=user, temperature=temperature)
+        return LLM(
+            model=model,
+            client=azure_client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
 
     @staticmethod
     def with_cerebras(
@@ -146,12 +172,15 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of Cerebras LLM.
 
         ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
         the ``CEREBRAS_API_KEY`` environmental variable.
+        @integrations:cerebras:llm
         """
 
         api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
@@ -167,16 +196,20 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
     def with_vertex(
         *,
-        model: str | VertexModels = "google/gemini-1.5-pro",
+        model: str | VertexModels = "google/gemini-2.0-flash-exp",
         project_id: str | None = None,
         location: str = "us-central1",
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of VertexAI LLM.
@@ -187,8 +220,8 @@ class LLM(llm.LLM):
         location = location
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if _gac is None:
-            raise ValueError(
-                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file."
+            logger.warning(
+                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file. Otherwise, use any of the other Google Cloud auth methods."
             )
 
         try:
@@ -228,6 +261,7 @@ class LLM(llm.LLM):
                 self.api_key = self.creds.token
 
         client = AuthTokenRefresher(
+            max_retries=0,
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
@@ -244,6 +278,8 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
         vertex_llm._capabilities = llm.LLMCapabilities(supports_choices_on_int=False)
         return vertex_llm
@@ -251,12 +287,14 @@ class LLM(llm.LLM):
     @staticmethod
     def with_fireworks(
         *,
-        model: str = "accounts/fireworks/models/llama-v3p1-70b-instruct",
+        model: str = "accounts/fireworks/models/llama-v3p3-70b-instruct",
         api_key: str | None = None,
         base_url: str | None = "https://api.fireworks.ai/inference/v1",
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of Fireworks LLM.
@@ -278,6 +316,8 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -289,6 +329,8 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ):
         """
         Create a new instance of XAI LLM.
@@ -309,6 +351,8 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -320,6 +364,8 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of Groq LLM.
@@ -341,6 +387,8 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -352,6 +400,8 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of DeepSeek LLM.
@@ -373,6 +423,8 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -384,6 +436,8 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of OctoAI LLM.
@@ -405,6 +459,8 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -414,6 +470,8 @@ class LLM(llm.LLM):
         base_url: str | None = "http://localhost:11434/v1",
         client: openai.AsyncClient | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of Ollama LLM.
@@ -425,6 +483,8 @@ class LLM(llm.LLM):
             base_url=base_url,
             client=client,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -436,6 +496,8 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of PerplexityAI LLM.
@@ -457,6 +519,8 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -468,6 +532,8 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of TogetherAI LLM.
@@ -489,6 +555,8 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -500,6 +568,8 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         """
         Create a new instance of Telnyx LLM.
@@ -521,6 +591,8 @@ class LLM(llm.LLM):
             client=client,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     @staticmethod
@@ -538,6 +610,8 @@ class LLM(llm.LLM):
         base_url: str | None = None,
         user: str | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> LLM:
         logger.warning("This alias is deprecated. Use LLM.with_azure() instead")
         return LLM.with_azure(
@@ -552,46 +626,44 @@ class LLM(llm.LLM):
             base_url=base_url,
             user=user,
             temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
 
     def chat(
         self,
         *,
         chat_ctx: llm.ChatContext,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream":
-        opts: dict[str, Any] = dict()
-        if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
-            fncs_desc = []
-            for fnc in fnc_ctx.ai_functions.values():
-                fncs_desc.append(build_oai_function_description(fnc, self.capabilities))
+        if parallel_tool_calls is None:
+            parallel_tool_calls = self._opts.parallel_tool_calls
 
-            opts["tools"] = fncs_desc
+        if tool_choice is None:
+            tool_choice = self._opts.tool_choice
 
-            if fnc_ctx and parallel_tool_calls is not None:
-                opts["parallel_tool_calls"] = parallel_tool_calls
-
-        user = self._opts.user or openai.NOT_GIVEN
         if temperature is None:
             temperature = self._opts.temperature
 
-        messages = _build_oai_context(chat_ctx, id(self))
-
-        cmp = self._client.chat.completions.create(
-            messages=messages,
+        return LLMStream(
+            self,
+            client=self._client,
             model=self._opts.model,
+            user=self._opts.user,
+            chat_ctx=chat_ctx,
+            fnc_ctx=fnc_ctx,
+            conn_options=conn_options,
             n=n,
             temperature=temperature,
-            stream_options={"include_usage": True},
-            stream=True,
-            user=user,
-            **opts,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
         )
-
-        return LLMStream(self, oai_stream=cmp, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
 
 
 class LLMStream(llm.LLMStream):
@@ -599,33 +671,92 @@ class LLMStream(llm.LLMStream):
         self,
         llm: LLM,
         *,
-        oai_stream: Awaitable[openai.AsyncStream[ChatCompletionChunk]],
+        client: openai.AsyncClient,
+        model: str | ChatModels,
+        user: str | None,
         chat_ctx: llm.ChatContext,
+        conn_options: APIConnectOptions,
         fnc_ctx: llm.FunctionContext | None,
+        temperature: float | None,
+        n: int | None,
+        parallel_tool_calls: bool | None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]],
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        super().__init__(
+            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
+        )
+        self._client = client
+        self._model = model
         self._llm: LLM = llm
-        self._awaitable_oai_stream = oai_stream
-        self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
+
+        self._user = user
+        self._temperature = temperature
+        self._n = n
+        self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
+
+    async def _run(self) -> None:
+        if hasattr(self._llm._client, "_refresh_credentials"):
+            await self._llm._client._refresh_credentials()
 
         # current function call that we're waiting for full completion (args are streamed)
+        # (defined inside the _run method to make sure the state is reset for each run/attempt)
+        self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
         self._tool_index: int | None = None
-
-    async def _main_task(self) -> None:
-        if hasattr(self._llm._client, "_refresh_credentials"):
-            await self._llm._client._refresh_credentials()
-        if not self._oai_stream:
-            self._oai_stream = await self._awaitable_oai_stream
+        retryable = True
 
         try:
-            async with self._oai_stream as stream:
+            opts: dict[str, Any] = dict()
+            if self._fnc_ctx and len(self._fnc_ctx.ai_functions) > 0:
+                fncs_desc = []
+                for fnc in self._fnc_ctx.ai_functions.values():
+                    fncs_desc.append(
+                        build_oai_function_description(fnc, self._llm._capabilities)
+                    )
+
+                opts["tools"] = fncs_desc
+                if self._parallel_tool_calls is not None:
+                    opts["parallel_tool_calls"] = self._parallel_tool_calls
+
+                if self._tool_choice is not None:
+                    if isinstance(self._tool_choice, ToolChoice):
+                        # specific function
+                        opts["tool_choice"] = {
+                            "type": "function",
+                            "function": {"name": self._tool_choice.name},
+                        }
+                    else:
+                        opts["tool_choice"] = self._tool_choice
+
+            if self._llm._opts.metadata is not None:
+                # some OpenAI-like API doesn't support having a `metadata` field. (Even None)
+                opts["metadata"] = self._llm._opts.metadata
+
+            if self._llm._opts.store is not None:
+                opts["store"] = self._llm._opts.store
+
+            user = self._user or openai.NOT_GIVEN
+            messages = _build_oai_context(self._chat_ctx, id(self))
+            stream = await self._client.chat.completions.create(
+                messages=messages,
+                model=self._model,
+                n=self._n,
+                temperature=self._temperature,
+                stream_options={"include_usage": True},
+                stream=True,
+                user=user,
+                **opts,
+            )
+
+            async with stream:
                 async for chunk in stream:
                     for choice in chunk.choices:
                         chat_chunk = self._parse_choice(chunk.id, choice)
                         if chat_chunk is not None:
+                            retryable = False
                             self._event_ch.send_nowait(chat_chunk)
 
                     if chunk.usage is not None:
@@ -642,7 +773,7 @@ class LLMStream(llm.LLMStream):
                         )
 
         except openai.APITimeoutError:
-            raise APITimeoutError()
+            raise APITimeoutError(retryable=retryable)
         except openai.APIStatusError as e:
             raise APIStatusError(
                 e.message,
@@ -651,7 +782,7 @@ class LLMStream(llm.LLMStream):
                 body=e.body,
             )
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(retryable=retryable) from e
 
     def _parse_choice(self, id: str, choice: Choice) -> llm.ChatChunk | None:
         delta = choice.delta
@@ -713,7 +844,7 @@ class LLMStream(llm.LLMStream):
             )
             return None
 
-        fnc_info = create_ai_function_info(
+        fnc_info = _create_ai_function_info(
             self._fnc_ctx, self._tool_call_id, self._fnc_name, self._fnc_raw_arguments
         )
 

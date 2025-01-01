@@ -8,7 +8,7 @@ from .. import utils
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
-from . import proc_job_executor, thread_job_executor
+from . import inference_executor, job_proc_executor, job_thread_executor
 from .job_executor import JobExecutor
 
 EventTypes = Literal[
@@ -31,8 +31,11 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
+        inference_executor: inference_executor.InferenceExecutor | None,
         job_executor_type: JobExecutorType,
         mp_ctx: BaseContext,
+        memory_warn_mb: float,
+        memory_limit_mb: float,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
@@ -41,9 +44,11 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._close_timeout = close_timeout
+        self._inf_executor = inference_executor
         self._initialize_timeout = initialize_timeout
         self._loop = loop
-
+        self._memory_limit_mb = memory_limit_mb
+        self._memory_warn_mb = memory_warn_mb
         self._num_idle_processes = num_idle_processes
         self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
         self._proc_needed_sem = asyncio.Semaphore(num_idle_processes)
@@ -95,21 +100,30 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     async def _proc_watch_task(self) -> None:
         proc: JobExecutor
         if self._job_executor_type == JobExecutorType.THREAD:
-            proc = thread_job_executor.ThreadJobExecutor(
+            proc = job_thread_executor.ThreadJobExecutor(
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
+                inference_executor=self._inf_executor,
+                ping_interval=2.5,
+                high_ping_threshold=0.5,
                 loop=self._loop,
             )
         elif self._job_executor_type == JobExecutorType.PROCESS:
-            proc = proc_job_executor.ProcJobExecutor(
+            proc = job_proc_executor.ProcJobExecutor(
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
+                inference_executor=self._inf_executor,
                 mp_ctx=self._mp_ctx,
                 loop=self._loop,
+                ping_interval=2.5,
+                ping_timeout=60,
+                high_ping_threshold=0.5,
+                memory_warn_mb=self._memory_warn_mb,
+                memory_limit_mb=self._memory_limit_mb,
             )
         else:
             raise ValueError(f"unsupported job executor: {self._job_executor_type}")

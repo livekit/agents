@@ -19,7 +19,16 @@ import inspect
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Awaitable, List, Tuple, get_args, get_origin
+from typing import (
+    Any,
+    Awaitable,
+    List,
+    Literal,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+)
 
 import httpx
 from livekit import rtc
@@ -30,6 +39,12 @@ from livekit.agents import (
     llm,
     utils,
 )
+from livekit.agents.llm import ToolChoice
+from livekit.agents.llm.function_context import (
+    _create_ai_function_info,
+    _is_optional_type,
+)
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import anthropic
 
@@ -44,6 +59,8 @@ class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
+    parallel_tool_calls: bool | None
+    tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None
 
 
 class LLM(llm.LLM):
@@ -56,6 +73,8 @@ class LLM(llm.LLM):
         user: str | None = None,
         client: anthropic.AsyncClient | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -70,7 +89,13 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError("Anthropic API key is required")
 
-        self._opts = LLMOptions(model=model, user=user, temperature=temperature)
+        self._opts = LLMOptions(
+            model=model,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,
             base_url=base_url,
@@ -89,13 +114,20 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
+        if parallel_tool_calls is None:
+            parallel_tool_calls = self._opts.parallel_tool_calls
+        if tool_choice is None:
+            tool_choice = self._opts.tool_choice
 
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
@@ -104,9 +136,20 @@ class LLM(llm.LLM):
                 fncs_desc.append(_build_function_description(fnc))
 
             opts["tools"] = fncs_desc
-
-            if fnc_ctx and parallel_tool_calls is not None:
-                opts["parallel_tool_calls"] = parallel_tool_calls
+            if tool_choice is not None:
+                anthropic_tool_choice: dict[str, Any] = {"type": "auto"}
+                if isinstance(tool_choice, ToolChoice):
+                    if tool_choice.type == "function":
+                        anthropic_tool_choice = {
+                            "type": "tool",
+                            "name": tool_choice.name,
+                        }
+                elif isinstance(tool_choice, str):
+                    if tool_choice == "required":
+                        anthropic_tool_choice = {"type": "any"}
+            if parallel_tool_calls is not None and parallel_tool_calls is False:
+                anthropic_tool_choice["disable_parallel_tool_use"] = True
+            opts["tool_choice"] = anthropic_tool_choice
 
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
@@ -124,7 +167,11 @@ class LLM(llm.LLM):
         )
 
         return LLMStream(
-            self, anthropic_stream=stream, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx
+            self,
+            anthropic_stream=stream,
+            chat_ctx=chat_ctx,
+            fnc_ctx=fnc_ctx,
+            conn_options=conn_options,
         )
 
 
@@ -138,8 +185,11 @@ class LLMStream(llm.LLMStream):
         ],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
+        conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        super().__init__(
+            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
+        )
         self._awaitable_anthropic_stream = anthropic_stream
         self._anthropic_stream: (
             anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent] | None
@@ -155,7 +205,8 @@ class LLMStream(llm.LLMStream):
         self._input_tokens = 0
         self._output_tokens = 0
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
+        retryable = True
         try:
             if not self._anthropic_stream:
                 self._anthropic_stream = await self._awaitable_anthropic_stream
@@ -165,6 +216,7 @@ class LLMStream(llm.LLMStream):
                     chat_chunk = self._parse_event(event)
                     if chat_chunk is not None:
                         self._event_ch.send_nowait(chat_chunk)
+                        retryable = False
 
                 self._event_ch.send_nowait(
                     llm.ChatChunk(
@@ -177,7 +229,7 @@ class LLMStream(llm.LLMStream):
                     )
                 )
         except anthropic.APITimeoutError:
-            raise APITimeoutError()
+            raise APITimeoutError(retryable=retryable)
         except anthropic.APIStatusError as e:
             raise APIStatusError(
                 e.message,
@@ -186,7 +238,7 @@ class LLMStream(llm.LLMStream):
                 body=e.body,
             )
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(retryable=retryable) from e
 
     def _parse_event(
         self, event: anthropic.types.RawMessageStreamEvent
@@ -356,8 +408,10 @@ def _build_anthropic_message(
 
         return a_msg
     elif msg.role == "tool":
+        if isinstance(msg.content, dict):
+            msg.content = json.dumps(msg.content)
         if not isinstance(msg.content, str):
-            logger.warning("tool message content is not a string")
+            logger.warning("tool message content is not a string or dict")
             return None
         if not msg.tool_call_id:
             return None
@@ -379,11 +433,36 @@ def _build_anthropic_message(
 def _build_anthropic_image_content(
     image: llm.ChatImage, cache_key: Any
 ) -> anthropic.types.ImageBlockParam:
-    if isinstance(image.image, str):  # image url
-        logger.warning(
-            "image url not supported by anthropic, skipping image '%s'", image.image
-        )
-    elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
+    if isinstance(image.image, str):  # image is a URL
+        if not image.image.startswith("data:"):
+            raise ValueError("LiveKit Anthropic Plugin: Image URLs must be data URLs")
+
+        try:
+            header, b64_data = image.image.split(",", 1)
+            media_type = header.split(";")[0].split(":")[1]
+
+            supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+            if media_type not in supported_types:
+                raise ValueError(
+                    f"LiveKit Anthropic Plugin: Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
+                )
+
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "data": b64_data,
+                    "media_type": cast(
+                        Literal["image/jpeg", "image/png", "image/gif", "image/webp"],
+                        media_type,
+                    ),
+                },
+            }
+        except (ValueError, IndexError) as e:
+            raise ValueError(
+                f"LiveKit Anthropic Plugin: Invalid image data URL {str(e)}"
+            )
+    elif isinstance(image.image, rtc.VideoFrame):  # image is a VideoFrame
         if cache_key not in image._cache:
             # inside our internal implementation, we allow to put extra metadata to
             # each ChatImage (avoid to reencode each time we do a chatcompletion request)
@@ -392,7 +471,7 @@ def _build_anthropic_image_content(
                 opts.resize_options = utils.images.ResizeOptions(
                     width=image.inference_width,
                     height=image.inference_height,
-                    strategy="center_aspect_fit",
+                    strategy="scale_aspect_fit",
                 )
 
             encoded_data = utils.images.encode(image.image, opts)
@@ -407,65 +486,8 @@ def _build_anthropic_image_content(
             },
         }
 
-    raise ValueError(f"unknown image type {type(image.image)}")
-
-
-def _create_ai_function_info(
-    fnc_ctx: llm.function_context.FunctionContext,
-    tool_call_id: str,
-    fnc_name: str,
-    raw_arguments: str,  # JSON string
-) -> llm.function_context.FunctionCallInfo:
-    if fnc_name not in fnc_ctx.ai_functions:
-        raise ValueError(f"AI function {fnc_name} not found")
-
-    parsed_arguments: dict[str, Any] = {}
-    try:
-        if raw_arguments:  # ignore empty string
-            parsed_arguments = json.loads(raw_arguments)
-    except json.JSONDecodeError:
-        raise ValueError(
-            f"AI function {fnc_name} received invalid JSON arguments - {raw_arguments}"
-        )
-
-    fnc_info = fnc_ctx.ai_functions[fnc_name]
-
-    # Ensure all necessary arguments are present and of the correct type.
-    sanitized_arguments: dict[str, Any] = {}
-    for arg_info in fnc_info.arguments.values():
-        if arg_info.name not in parsed_arguments:
-            if arg_info.default is inspect.Parameter.empty:
-                raise ValueError(
-                    f"AI function {fnc_name} missing required argument {arg_info.name}"
-                )
-            continue
-
-        arg_value = parsed_arguments[arg_info.name]
-        if get_origin(arg_info.type) is not None:
-            if not isinstance(arg_value, list):
-                raise ValueError(
-                    f"AI function {fnc_name} argument {arg_info.name} should be a list"
-                )
-
-            inner_type = get_args(arg_info.type)[0]
-            sanitized_value = [
-                _sanitize_primitive(
-                    value=v, expected_type=inner_type, choices=arg_info.choices
-                )
-                for v in arg_value
-            ]
-        else:
-            sanitized_value = _sanitize_primitive(
-                value=arg_value, expected_type=arg_info.type, choices=arg_info.choices
-            )
-
-        sanitized_arguments[arg_info.name] = sanitized_value
-
-    return llm.function_context.FunctionCallInfo(
-        tool_call_id=tool_call_id,
-        raw_arguments=raw_arguments,
-        function_info=fnc_info,
-        arguments=sanitized_arguments,
+    raise ValueError(
+        "LiveKit Anthropic Plugin: ChatImage must be an rtc.VideoFrame or a data URL"
     )
 
 
@@ -492,8 +514,10 @@ def _build_function_description(
         if arg_info.description:
             p["description"] = arg_info.description
 
-        if get_origin(arg_info.type) is list:
-            inner_type = get_args(arg_info.type)[0]
+        is_optional, inner_th = _is_optional_type(arg_info.type)
+
+        if get_origin(inner_th) is list:
+            inner_type = get_args(inner_th)[0]
             p["type"] = "array"
             p["items"] = {}
             p["items"]["type"] = type2str(inner_type)
@@ -501,7 +525,7 @@ def _build_function_description(
             if arg_info.choices:
                 p["items"]["enum"] = arg_info.choices
         else:
-            p["type"] = type2str(arg_info.type)
+            p["type"] = type2str(inner_th)
             if arg_info.choices:
                 p["enum"] = arg_info.choices
 
@@ -517,31 +541,3 @@ def _build_function_description(
         "description": fnc_info.description,
         "input_schema": input_schema,
     }
-
-
-def _sanitize_primitive(
-    *, value: Any, expected_type: type, choices: Tuple[Any] | None
-) -> Any:
-    if expected_type is str:
-        if not isinstance(value, str):
-            raise ValueError(f"expected str, got {type(value)}")
-    elif expected_type in (int, float):
-        if not isinstance(value, (int, float)):
-            raise ValueError(f"expected number, got {type(value)}")
-
-        if expected_type is int:
-            if value % 1 != 0:
-                raise ValueError("expected int, got float")
-
-            value = int(value)
-        elif expected_type is float:
-            value = float(value)
-
-    elif expected_type is bool:
-        if not isinstance(value, bool):
-            raise ValueError(f"expected bool, got {type(value)}")
-
-    if choices and value not in choices:
-        raise ValueError(f"invalid value {value}, not in {choices}")
-
-    return value

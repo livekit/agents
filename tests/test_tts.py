@@ -4,12 +4,21 @@ We verify the content using a good STT model
 """
 
 import dataclasses
+from typing import Callable
 
 import pytest
 from livekit import agents
-from livekit.agents import APIConnectionError, tokenize
+from livekit.agents import APIConnectionError, tokenize, tts
 from livekit.agents.utils import AudioBuffer, merge_frames
-from livekit.plugins import azure, cartesia, elevenlabs, google, openai
+from livekit.plugins import (
+    azure,
+    cartesia,
+    deepgram,
+    elevenlabs,
+    google,
+    openai,
+    playai,
+)
 
 from .conftest import TEST_CONNECT_OPTIONS
 from .fake_tts import FakeTTS
@@ -33,13 +42,17 @@ async def _assert_valid_synthesized_audio(
     ), "num channels should be the same"
 
 
-SYNTHESIZE_TTS = [
-    lambda: elevenlabs.TTS(),
-    lambda: elevenlabs.TTS(encoding="pcm_44100"),
-    lambda: openai.TTS(),
-    lambda: google.TTS(),
-    lambda: azure.TTS(),
-    lambda: cartesia.TTS(),
+SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
+    pytest.param(lambda: elevenlabs.TTS(), id="elevenlabs"),
+    pytest.param(
+        lambda: elevenlabs.TTS(encoding="pcm_44100"), id="elevenlabs.pcm_44100"
+    ),
+    pytest.param(lambda: openai.TTS(), id="openai"),
+    pytest.param(lambda: google.TTS(), id="google"),
+    pytest.param(lambda: azure.TTS(), id="azure"),
+    pytest.param(lambda: cartesia.TTS(), id="cartesia"),
+    pytest.param(lambda: deepgram.TTS(), id="deepgram"),
+    pytest.param(lambda: playai.TTS(), id="playai"),
 ]
 
 
@@ -60,26 +73,39 @@ async def test_synthesize(tts_factory):
 
 
 STREAM_SENT_TOKENIZER = tokenize.basic.SentenceTokenizer(min_sentence_len=20)
-STREAM_TTS = [
-    lambda: elevenlabs.TTS(),
-    lambda: elevenlabs.TTS(encoding="pcm_44100"),
-    lambda: cartesia.TTS(),
-    lambda: agents.tts.StreamAdapter(
-        tts=openai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+STREAM_TTS: list[Callable[[], tts.TTS]] = [
+    pytest.param(lambda: elevenlabs.TTS(), id="elevenlabs"),
+    pytest.param(
+        lambda: elevenlabs.TTS(encoding="pcm_44100"), id="elevenlabs.pcm_44100"
     ),
-    lambda: agents.tts.StreamAdapter(
-        tts=google.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    pytest.param(lambda: cartesia.TTS(), id="cartesia"),
+    pytest.param(
+        lambda: agents.tts.StreamAdapter(
+            tts=openai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        ),
+        id="openai.stream",
     ),
-    lambda: agents.tts.StreamAdapter(
-        tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+    pytest.param(
+        lambda: agents.tts.StreamAdapter(
+            tts=google.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        ),
+        id="google.stream",
     ),
+    pytest.param(
+        lambda: agents.tts.StreamAdapter(
+            tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        ),
+        id="azure.stream",
+    ),
+    pytest.param(lambda: deepgram.TTS(), id="deepgram"),
+    pytest.param(lambda: playai.TTS(), id="playai"),
 ]
 
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", STREAM_TTS)
 async def test_stream(tts_factory):
-    tts = tts_factory()
+    tts: agents.tts.TTS = tts_factory()
 
     synthesize_transcript = make_test_synthesize()
 
@@ -96,20 +122,30 @@ async def test_stream(tts_factory):
 
     stream = tts.stream()
 
+    segments = set()
+    # for i in range(2): # TODO(theomonnom): we should test 2 segments
     for chunk in chunks:
         stream.push_text(chunk)
 
     stream.flush()
+    # if i == 1:
     stream.end_input()
 
     frames = []
+    is_final = False
     async for audio in stream:
+        is_final = audio.is_final
+        segments.add(audio.segment_id)
         frames.append(audio.frame)
 
-    await stream.aclose()
+    assert is_final, "final audio should be marked as final"
+
     await _assert_valid_synthesized_audio(
         frames, tts, synthesize_transcript, WER_THRESHOLD
     )
+
+    # assert len(segments) == 2
+    await stream.aclose()
 
 
 async def test_retry():

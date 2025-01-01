@@ -6,6 +6,7 @@ from .chat_context import (
     ChatMessage,
     ChatRole,
 )
+from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .function_context import (
     USE_DOCSTRING,
     CalledFunction,
@@ -14,6 +15,7 @@ from .function_context import (
     FunctionContext,
     FunctionInfo,
     TypeInfo,
+    _create_ai_function_info,
     ai_callable,
 )
 from .llm import (
@@ -24,6 +26,7 @@ from .llm import (
     CompletionUsage,
     LLMCapabilities,
     LLMStream,
+    ToolChoice,
 )
 
 __all__ = [
@@ -49,4 +52,8 @@ __all__ = [
     "CalledFunction",
     "USE_DOCSTRING",
     "LLMCapabilities",
+    "FallbackAdapter",
+    "AvailabilityChangedEvent",
+    "ToolChoice",
+    "_create_ai_function_info",
 ]

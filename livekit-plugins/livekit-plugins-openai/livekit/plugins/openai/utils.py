@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 from typing import Any, Awaitable, Callable, Optional, Union
 
@@ -25,6 +26,8 @@ def build_oai_message(msg: llm.ChatMessage, cache_key: Any):
     # add content if provided
     if isinstance(msg.content, str):
         oai_msg["content"] = msg.content
+    elif isinstance(msg.content, dict):
+        oai_msg["content"] = json.dumps(msg.content)
     elif isinstance(msg.content, list):
         oai_content: list[dict[str, Any]] = []
         for cnt in msg.content:
@@ -64,7 +67,7 @@ def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):
     if isinstance(image.image, str):  # image url
         return {
             "type": "image_url",
-            "image_url": {"url": image.image, "detail": "auto"},
+            "image_url": {"url": image.image, "detail": image.inference_detail},
         }
     elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
         if cache_key not in image._cache:
@@ -75,7 +78,7 @@ def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):
                 opts.resize_options = utils.images.ResizeOptions(
                     width=image.inference_width,
                     height=image.inference_height,
-                    strategy="center_aspect_fit",
+                    strategy="scale_aspect_fit",
                 )
 
             encoded_data = utils.images.encode(image.image, opts)
@@ -83,7 +86,12 @@ def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):
 
         return {
             "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{image._cache[cache_key]}"},
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{image._cache[cache_key]}",
+                "detail": image.inference_detail,
+            },
         }
 
-    raise ValueError(f"unknown image type {type(image.image)}")
+    raise ValueError(
+        "LiveKit OpenAI Plugin: ChatImage must be an rtc.VideoFrame or a URL"
+    )
