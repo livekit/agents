@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.12.8
+
+### Patch Changes
+
+- add timeout for EOU inference requests made to the inference process - [#1315](https://github.com/livekit/agents/pull/1315) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.12.7
 
 ### Patch Changes
