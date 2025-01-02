@@ -109,27 +109,36 @@ async def test_stream(tts_factory):
 
     synthesize_transcript = make_test_synthesize()
 
-    pattern = [1, 2, 4]
-    text = synthesize_transcript
-    chunks = []
-    pattern_iter = iter(pattern * (len(text) // sum(pattern) + 1))
-
-    for chunk_size in pattern_iter:
-        if not text:
-            break
-        chunks.append(text[:chunk_size])
-        text = text[chunk_size:]
+    # Split the transcript into two segments
+    text_segments = [
+        synthesize_transcript[: len(synthesize_transcript) // 2],
+        synthesize_transcript[len(synthesize_transcript) // 2 :],
+    ]
 
     stream = tts.stream()
 
     segments = set()
-    # for i in range(2): # TODO(theomonnom): we should test 2 segments
-    for chunk in chunks:
-        stream.push_text(chunk)
+    for i in range(2):  # Testing 2 segments
+        text = text_segments[i]
 
-    stream.flush()
-    # if i == 1:
-    stream.end_input()
+        # Generate chunks for the current segment
+        pattern = [1, 2, 4]
+        chunks = []
+        text_remaining = text
+        pattern_iter = iter(pattern * (len(text) // sum(pattern) + 1))
+
+        for chunk_size in pattern_iter:
+            if not text_remaining:
+                break
+            chunks.append(text_remaining[:chunk_size])
+            text_remaining = text_remaining[chunk_size:]
+
+        for chunk in chunks:
+            stream.push_text(chunk)
+
+        stream.flush()
+        if i == 1:
+            stream.end_input()
 
     frames = []
     is_final = False
@@ -140,11 +149,12 @@ async def test_stream(tts_factory):
 
     assert is_final, "final audio should be marked as final"
 
-    await _assert_valid_synthesized_audio(
-        frames, tts, synthesize_transcript, WER_THRESHOLD
-    )
+    # Combine the segments for expected text
+    expected_text = "".join(text_segments)
 
-    # assert len(segments) == 2
+    await _assert_valid_synthesized_audio(frames, tts, expected_text, WER_THRESHOLD)
+
+    assert len(segments) == 2, "should have 2 segments"
     await stream.aclose()
 
 
