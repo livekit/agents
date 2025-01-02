@@ -83,30 +83,31 @@ def _build_tools(fnc_ctx: Any) -> List[types.FunctionDeclarationDict]:
 
 
 def _build_gemini_ctx(chat_ctx: llm.ChatContext) -> types.LiveClientContent:
-    current = None
+    content: types.Content | None = None
     turns = []
 
     for msg in chat_ctx.messages:
+        role = msg.role
         if msg.role in {"system", "assistant"}:
-            msg.role = "model"
+            role = "model"
         if msg.role == "tool":
-            msg.role = "user"
+            continue
 
-        if current and current["role"] == msg.role:
+        if content and content.role == role:
             if isinstance(msg.content, str):
-                current["parts"].append({"text": msg.content})
+                content.parts.append({"text": msg.content})
             elif isinstance(msg.content, dict):
-                current["parts"].append({"text": json.dumps(msg.content)})
+                content.parts.append({"text": json.dumps(msg.content)})
             elif isinstance(msg.content, list):
                 for item in msg.content:
                     if isinstance(item, str):
-                        current["parts"].append({"text": item})
+                        content.parts.append({"text": item})
         else:
-            current = {
-                "role": msg.role,
-                "parts": [{"text": msg.content}],
-            }
-            turns.append(current)
+            content = types.Content(
+                parts=[{"text": msg.content}],
+                role=role,
+            )
+            turns.append(content)
 
     return types.LiveClientContent(
         turn_complete=True,
