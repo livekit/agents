@@ -4,7 +4,6 @@ import asyncio
 import base64
 import os
 import time
-import weakref
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import AsyncIterable, Literal, Optional, Union, cast, overload
@@ -329,7 +328,7 @@ class RealtimeModel:
         )
 
         self._loop = loop or asyncio.get_event_loop()
-        self._rt_sessions = weakref.WeakSet[RealtimeSession]()
+        self._rt_sessions = list[RealtimeSession] = []
         self._http_session = http_session
 
     @classmethod
@@ -434,7 +433,7 @@ class RealtimeModel:
         return self._http_session
 
     @property
-    def sessions(self) -> weakref.WeakSet[RealtimeSession]:
+    def sessions(self) -> list[RealtimeSession]:
         return self._rt_sessions
 
     @property
