@@ -279,8 +279,8 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
     def chat_ctx_copy(self) -> llm.ChatContext:
         return self._chat_ctx.copy()
 
-    def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
-        self._queue_msg(_build_gemini_ctx(ctx))
+    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
+        self._chat_ctx = ctx.copy()
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
