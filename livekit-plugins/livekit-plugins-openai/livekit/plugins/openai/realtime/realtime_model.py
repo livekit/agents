@@ -328,7 +328,7 @@ class RealtimeModel:
         )
 
         self._loop = loop or asyncio.get_event_loop()
-        self._rt_sessions = list[RealtimeSession] = []
+        self._rt_sessions: list[RealtimeSession] = []
         self._http_session = http_session
 
     @classmethod
