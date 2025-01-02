@@ -28,6 +28,7 @@ from .api_proto import (
     LiveAPIModels,
     ResponseModality,
     Voice,
+    _build_gemini_ctx,
     _build_tools,
 )
 
@@ -246,11 +247,11 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._main_atask = asyncio.create_task(
             self._main_task(), name="gemini-realtime-session"
         )
-        # dummy task to wait for the session to be initialized # TODO: sync chat ctx
-        self._init_sync_task = asyncio.create_task(
-            asyncio.sleep(0), name="gemini-realtime-session-init"
-        )
+        # dummy task to wait for the session to be initialized
+        self._init_sync_task = asyncio.create_task(asyncio.sleep(0))
         self._send_ch = utils.aio.Chan[ClientEvents]()
+        if chat_ctx:
+            self._queue_msg(_build_gemini_ctx(chat_ctx))
         self._active_response_id = None
 
     async def aclose(self) -> None:
@@ -272,14 +273,14 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         data = base64.b64encode(frame.data).decode("utf-8")
         self._queue_msg({"mime_type": "audio/pcm", "data": data})
 
-    def _queue_msg(self, msg: dict) -> None:
+    def _queue_msg(self, msg: ClientEvents) -> None:
         self._send_ch.send_nowait(msg)
 
     def chat_ctx_copy(self) -> llm.ChatContext:
         return self._chat_ctx.copy()
 
-    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
-        self._chat_ctx = ctx.copy()
+    def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
+        self._queue_msg(_build_gemini_ctx(ctx))
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
