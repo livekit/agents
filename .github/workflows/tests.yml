@@ -114,6 +114,8 @@ jobs:
           PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         working-directory: tests
         run: |
           echo "$GOOGLE_CREDENTIALS_JSON" > google.json
