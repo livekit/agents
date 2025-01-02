@@ -1,5 +1,11 @@
 # livekit-plugins-fal
 
+## 0.2.3
+
+### Patch Changes
+
+- publish package - [`ed974f81a2eab7c1b2d7cff3a27c868ddebb45ee`](https://github.com/livekit/agents/commit/ed974f81a2eab7c1b2d7cff3a27c868ddebb45ee) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.2.2
 
 ### Patch Changes
