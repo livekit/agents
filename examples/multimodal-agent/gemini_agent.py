@@ -14,7 +14,7 @@ from livekit.agents import (
     llm,
     multimodal,
 )
-from livekit.plugins import deepgram, google
+from livekit.plugins import google, silero
 
 load_dotenv()
 
@@ -60,7 +60,8 @@ async def entrypoint(ctx: JobContext):
         ),
         fnc_ctx=fnc_ctx,
         chat_ctx=chat_ctx,
-        stt=deepgram.STT(),
+        stt=google.beta.realtime.STT(),
+        vad=silero.VAD.load(),
     )
     agent.start(ctx.room, participant)
 

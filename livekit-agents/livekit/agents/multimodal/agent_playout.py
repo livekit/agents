@@ -188,7 +188,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
 
             for task in done:
                 if handle.interrupted or task.exception():
-                    self._source.clear_queue() # make sure to remove any queued frames
+                    self._source.clear_queue()  # make sure to remove any queued frames
                     break
 
         finally:

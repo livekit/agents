@@ -179,13 +179,13 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             transcription=transcription,
         )
 
-        # if not stt.capabilities.streaming:
-        #     from .. import stt as speech_to_text
+        if not stt.capabilities.streaming:
+            from .. import stt as speech_to_text
 
-        #     stt = speech_to_text.StreamAdapter(
-        #         stt=stt,
-        #         vad=vad,
-        #     )
+            stt = speech_to_text.StreamAdapter(
+                stt=stt,
+                vad=vad,
+            )
         self._stt = stt
         self.on("final_transcript", self._on_final_transcript)
 
@@ -441,7 +441,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         self._agent_playout.on("playout_stopped", _on_playout_stopped)
         self._agent_playout.on("final_transcript", _on_final_transcript)
 
-
         await self._agent_publication.wait_for_subscription()
 
         bstream = utils.audio.AudioByteStream(
@@ -468,8 +467,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             return
 
         self._subscribe_to_microphone()
-
-
 
     def _subscribe_to_microphone(self, *args, **kwargs) -> None:
         """Subscribe to the participant microphone if found"""
@@ -505,8 +502,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     self._recognize_task(stream_24khz)
                 )
                 break
-
-
 
     @utils.log_exceptions(logger=logger)
     async def _recognize_task(self, audio_stream: rtc.AudioStream) -> None:
@@ -555,7 +550,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def _emit_speech_committed(
         self, speaker: Literal["user", "agent"], msg: str, interrupted: bool = False
     ):
-
         if speaker == "user":
             self.emit("user_speech_committed", msg)
         else:
