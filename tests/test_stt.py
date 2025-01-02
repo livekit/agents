@@ -29,6 +29,7 @@ RECOGNIZE_STT: list[Callable[[], stt.STT]] = [
     ),
     pytest.param(lambda: openai.STT(), id="openai"),
     pytest.param(lambda: fal.WizperSTT(), id="fal"),
+    pytest.param(lambda: google.beta.realtime.STT(), id="google-realtime"),
 ]
 
 
