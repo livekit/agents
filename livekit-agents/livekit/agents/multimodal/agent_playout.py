@@ -74,8 +74,8 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         self,
         *,
         audio_source: rtc.AudioSource,
-        stt: stt.STT,
-        stt_forwarder: stt.STTForwarder,
+        stt: stt.STT | None,
+        stt_forwarder: transcription.STTSegmentsForwarder | None,
     ) -> None:
         super().__init__()
         self._source = audio_source
@@ -180,7 +180,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             done, _ = await asyncio.wait(
                 [asyncio.gather(*tasks), handle._int_fut],
                 return_when=asyncio.FIRST_COMPLETED,
-            )
+            )  # type: ignore
 
             handle._total_played_time = (
                 handle._pushed_duration - self._source.queued_duration

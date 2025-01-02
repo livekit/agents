@@ -179,7 +179,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             transcription=transcription,
         )
 
-        if stt is not None and not stt.capabilities.streaming:
+        if stt and vad and not stt.capabilities.streaming:
             from .. import stt as speech_to_text
 
             stt = speech_to_text.StreamAdapter(
@@ -488,7 +488,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 self._subscribed_track = publication.track  # type: ignore
                 stream_24khz = rtc.AudioStream(
                     self._subscribed_track, sample_rate=24000, num_channels=1
-                )
+                )  # type: ignore
                 self._stt_forwarder = STTSegmentsForwarder(
                     room=self._room,
                     participant=self._linked_participant,
