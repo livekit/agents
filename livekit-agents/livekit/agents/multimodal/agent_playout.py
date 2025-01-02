@@ -161,14 +161,14 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             await self._source.wait_for_playout()
 
         async def _stt_stream_co() -> None:
-            if stt_stream is not None:
+            if stt_stream and self._stt_forwarder is not None:
                 async for ev in stt_stream:
                     self._stt_forwarder.update(ev)
 
                     if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-                        self.emit("final_transcript", ev)
+                        self.emit("final_transcript", ev.alternatives[0].text)
                     elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-                        self.emit("interim_transcript", ev)
+                        self.emit("interim_transcript", ev.alternatives[0].text)
 
         read_text_task = asyncio.create_task(_play_text_stream())
 
