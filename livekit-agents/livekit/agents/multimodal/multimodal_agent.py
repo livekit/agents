@@ -179,7 +179,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             transcription=transcription,
         )
 
-        if not stt.capabilities.streaming:
+        if stt is not None and not stt.capabilities.streaming:
             from .. import stt as speech_to_text
 
             stt = speech_to_text.StreamAdapter(
