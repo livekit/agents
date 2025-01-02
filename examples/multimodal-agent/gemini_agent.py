@@ -51,6 +51,12 @@ async def entrypoint(ctx: JobContext):
     participant = await ctx.wait_for_participant()
 
     chat_ctx = llm.ChatContext()
+    chat_ctx.append(text="I'm planning a trip to Paris next month.", role="user")
+    chat_ctx.append(
+        text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",
+        role="assistant",
+    )
+    chat_ctx.append(text="What are the must-visit places in Paris?", role="user")
 
     agent = multimodal.MultimodalAgent(
         model=google.beta.realtime.RealtimeModel(
