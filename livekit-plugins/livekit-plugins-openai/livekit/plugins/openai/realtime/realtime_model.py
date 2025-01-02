@@ -485,7 +485,7 @@ class RealtimeModel:
             http_session=self._ensure_session(),
             loop=self._loop,
         )
-        self._rt_sessions.add(new_session)
+        self._rt_sessions.append(new_session)
         return new_session
 
     async def aclose(self) -> None:
