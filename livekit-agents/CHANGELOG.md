@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.12.7
+
+### Patch Changes
+
+- ensure job status updates contain the correct status - [#1319](https://github.com/livekit/agents/pull/1319) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.12.6
 
 ### Patch Changes
