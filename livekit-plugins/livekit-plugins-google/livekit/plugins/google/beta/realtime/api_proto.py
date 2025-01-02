@@ -87,10 +87,12 @@ def _build_gemini_ctx(chat_ctx: llm.ChatContext) -> types.LiveClientContent:
     turns = []
 
     for msg in chat_ctx.messages:
-        role = msg.role
-        if msg.role in {"system", "assistant"}:
+        role = None
+        if msg.role == "assistant":
             role = "model"
-        if msg.role == "tool":
+        elif msg.role in {"system", "user"}:
+            role = "user"
+        elif msg.role == "tool":
             continue
 
         if content and content.role == role:
