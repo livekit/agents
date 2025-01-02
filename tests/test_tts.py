@@ -18,6 +18,7 @@ from livekit.plugins import (
     google,
     openai,
     playai,
+    smallestai,
 )
 
 from .conftest import TEST_CONNECT_OPTIONS
@@ -53,6 +54,7 @@ SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: cartesia.TTS(), id="cartesia"),
     pytest.param(lambda: deepgram.TTS(), id="deepgram"),
     pytest.param(lambda: playai.TTS(), id="playai"),
+    pytest.param(lambda: smallestai.TTS(), id="smallestai"),
 ]
 
 
@@ -96,6 +98,11 @@ STREAM_TTS: list[Callable[[], tts.TTS]] = [
             tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
         ),
         id="azure.stream",
+    ),
+    pytest.param(
+        lambda: agents.tts.StreamAdapter(
+            tts=smallestai.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        ),
     ),
     pytest.param(lambda: deepgram.TTS(), id="deepgram"),
     pytest.param(lambda: playai.TTS(), id="playai"),
