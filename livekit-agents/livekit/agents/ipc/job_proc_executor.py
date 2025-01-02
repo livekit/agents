@@ -100,9 +100,10 @@ class ProcJobExecutor(SupervisedProc):
 
     @log_exceptions(logger=logger)
     async def _supervise_task(self) -> None:
-        await super()._supervise_task()
-
-        self._job_status = JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
+        try:
+                await super()._supervise_task()
+        finally:
+                self._job_status = JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
 
     async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
         if self._inference_executor is None:
