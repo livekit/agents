@@ -89,7 +89,7 @@ class RealtimeModel:
         voice: Voice | str = "Puck",
         modalities: ResponseModality = "AUDIO",
         vertexai: bool = False,
-        project: str | None = None,
+        project_id: str | None = None,
         location: str | None = None,
         candidate_count: int = 1,
         temperature: float | None = None,
@@ -111,7 +111,7 @@ class RealtimeModel:
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
-                project (str or None, optional): The project to use for the API. Defaults to None. (for vertexai)
+                project_id (str or None, optional): The project id to use for the API. Defaults to None. (for vertexai)
                 location (str or None, optional): The location to use for the API. Defaults to None. (for vertexai)
             candidate_count (int, optional): The number of candidate responses to generate. Defaults to 1.
             top_p (float, optional): The top-p value for response generation
@@ -130,21 +130,30 @@ class RealtimeModel:
         self._model = model
         self._loop = loop or asyncio.get_event_loop()
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
-        self._vertexai = vertexai
-        self._project_id = project or os.environ.get("GOOGLE_PROJECT")
+        self._project_id = project_id or os.environ.get("GOOGLE_PROJECT_ID")
         self._location = location or os.environ.get("GOOGLE_LOCATION")
-        if self._api_key is None and not self._vertexai:
-            raise ValueError("GOOGLE_API_KEY is not set")
+        if vertexai:
+            if not self._project_id or not self._location:
+                raise ValueError(
+                    "Project and location are required for VertexAI either via project and location or GOOGLE_PROJECT_ID and GOOGLE_LOCATION environment variables"
+                )
+            self._api_key = None  # VertexAI does not require an API key
+
+        else:
+            if not self._api_key:
+                raise ValueError(
+                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
+                )
 
         self._rt_sessions: list[GeminiRealtimeSession] = []
         self._opts = ModelOptions(
             model=model,
-            api_key=api_key,
+            api_key=self._api_key,
             voice=voice,
             response_modalities=modalities,
             vertexai=vertexai,
-            project=project,
-            location=location,
+            project=self._project_id,
+            location=self._location,
             candidate_count=candidate_count,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
