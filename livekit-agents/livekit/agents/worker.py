@@ -428,6 +428,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         )
 
         running_info = RunningJobInfo(
+            worker_id=self._id,
             accept_arguments=JobAcceptArguments(
                 identity=agent_id, name="", metadata=""
             ),

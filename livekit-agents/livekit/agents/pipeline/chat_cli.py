@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import sys
 import termios
-import threading
 import time
 import tty
 from typing import Literal
@@ -13,8 +12,8 @@ import numpy as np
 import sounddevice as sd
 from livekit import rtc
 
-from ..utils import aio, log_exceptions
 from ..log import logger
+from ..utils import aio, log_exceptions
 from . import io
 from .pipeline2 import PipelineAgent
 
@@ -55,19 +54,72 @@ class _TextSink(io.TextSink):
 
 class _AudioSink(io.AudioSink):
     def __init__(self, cli: "ChatCLI") -> None:
+        super().__init__(sample_rate=24000)
         self._cli = cli
         self._capturing = False
+        self._pushed_duration: float = 0.0
+        self._capture_start: float = 0.0
+        self._dispatch_handle: asyncio.TimerHandle | None = None
+
+        self._flush_complete = asyncio.Event()
+        self._flush_complete.set()
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+        await self._flush_complete.wait()
+
+        if not frame.duration:
+            return
+
         if not self._capturing:
             self._capturing = True
+            self._buffer_duration = 0.0
+            self._capture_start = time.monotonic()
+
+        self._pushed_duration += frame.duration
 
         if self._cli._output_stream is not None:
             self._cli._output_stream.write(frame.data)
 
+    def clear_buffer(self) -> None:
+        self._capturing = False
+
+        if self._cli._output_stream is not None and self._cli._output_stream.active:
+            # restarting the stream will clear the buffer
+            self._cli._output_stream.stop()
+            self._cli._output_stream.start()
+
+        if self._pushed_duration > 0.0:
+            if self._dispatch_handle is not None:
+                self._dispatch_handle.cancel()
+
+            self._flush_complete.set()
+            self._pushed_duration = 0.0
+            played_duration = min(
+                time.monotonic() - self._capture_start, self._pushed_duration
+            )
+            self.on_playback_finished(
+                playback_position=played_duration,
+                interrupted=played_duration + 1.0 < self._pushed_duration,
+            )
+
     def flush(self) -> None:
         if self._capturing:
+            self._flush_complete.clear()
             self._capturing = False
+            to_wait = min(
+                0.0, self._pushed_duration - (time.monotonic() - self._capture_start)
+            )
+            self._dispatch_handle = self._cli._loop.call_later(
+                to_wait, self._dispatch_playback_finished
+            )
+
+    def _dispatch_playback_finished(self) -> None:
+        self.on_playback_finished(
+            playback_position=self._pushed_duration, interrupted=False
+        )
+        self._flush_complete.set()
+        self._pushed_duration = 0.0
 
 
 class ChatCLI:
@@ -171,7 +223,7 @@ class ChatCLI:
             self._output_stream.stop()
             self._output_stream.close()
             self._output_stream = None
-            self._agent.output.audio = None
+            self._agent.output.audio
 
     def _update_text_output(self, *, enable: bool) -> None:
         if enable:
@@ -261,5 +313,5 @@ class ChatCLI:
         sys.stdout.write("\r")
         sys.stdout.flush()
         prompt = "Enter your message: "
-        sys.stdout.write(f"[Text] {prompt}{''.join(self._text_input_buf)}")
+        sys.stdout.write(f"[Text {prompt}{''.join(self._text_input_buf)}")
         sys.stdout.flush()

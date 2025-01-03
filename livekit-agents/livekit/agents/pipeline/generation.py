@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import AsyncIterable, Protocol, Tuple, runtime_checkable
+
 from livekit import rtc
 
 from ..llm import ChatChunk, ChatContext, FunctionCallInfo, FunctionContext
