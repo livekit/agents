@@ -137,6 +137,39 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
+
+        def extract_wav_data(wav_bytes: bytes) -> bytes:
+            """Extract raw PCM data from WAV bytes, skipping RIFF header."""
+            # WAV format:
+            # Offset  Size  Description
+            # 0-3     4    "RIFF"
+            # 4-7     4    File size (ignore)
+            # 8-11    4    "WAVE"
+            # 12-15   4    "fmt "
+            # 16-19   4    Length of format data (16)
+            # 20-21   2    Type of format (1 is PCM)
+            # 22-23   2    Number of channels
+            # 24-27   4    Sample rate
+            # 28-31   4    Bytes per second
+            # 32-33   2    Bytes per sample
+            # 34-35   2    Bits per sample
+            # 36-39   4    "data"
+            # 40-43   4    Length of data
+            # 44+     n    The actual audio data
+            
+            # Basic validation
+            if not wav_bytes.startswith(b'RIFF') or b'WAVE' not in wav_bytes[:12]:
+                raise ValueError("Invalid WAV format")
+                
+            # Find data chunk
+            data_pos = wav_bytes.find(b'data')
+            if data_pos == -1:
+                raise ValueError("No data chunk found in WAV")
+                
+            # Skip 'data' and length fields (8 bytes) to get to actual audio data
+            audio_data_start = data_pos + 8
+            return wav_bytes[audio_data_start:]
+
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=self._tts.sample_rate,
             num_channels=NUM_CHANNELS,
@@ -170,19 +203,25 @@ class ChunkedStream(tts.ChunkedStream):
                 async for event in connection:
                     if isinstance(event, AudioOutput):
                         audio_data = base64.b64decode(event.data)
-                        for frame in audio_bstream.write(audio_data):
+                        pcm_data = extract_wav_data(audio_data)
+                        for frame in audio_bstream.write(pcm_data):
+                            if last_frame is not None:
+                                self._event_ch.send_nowait(
+                                    tts.SynthesizedAudio(
+                                        request_id=request_id,
+                                        frame=last_frame,
+                                    )
+                                )
+                            last_frame = frame
+                    elif isinstance(event, AssistantEnd):
+                        # Send the final frame with is_final=True
+                        if last_frame is not None:
                             self._event_ch.send_nowait(
                                 tts.SynthesizedAudio(
                                     request_id=request_id,
                                     frame=frame,
                                 )
                             )
-                    elif isinstance(event, AssistantEnd):
-                        break
-                    # Store chat_group_id when received in chat_metadata
-                    elif isinstance(event, ChatMetadata):
-                        self._tts._last_chat_group_id = event.chat_group_id
-
         except Exception as e:
             logger.error("Error in Hume TTS synthesis", exc_info=e)
             raise APIConnectionError() from e
