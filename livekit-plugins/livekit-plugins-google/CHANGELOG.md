@@ -1,5 +1,15 @@
 # livekit-plugins-google
 
+## 0.9.0
+
+### Minor Changes
+
+- make multimodal class generic and support gemini live api - [#1240](https://github.com/livekit/agents/pull/1240) ([@jayeshp19](https://github.com/jayeshp19))
+
+### Patch Changes
+
+- fix: Ensure STT exceptions are being propagated - [#1291](https://github.com/livekit/agents/pull/1291) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.8.1
 
 ### Patch Changes

@@ -295,7 +295,7 @@ class RecognizeStream(ABC):
         self._input_ch.send_nowait(self._FlushSentinel())
 
     def end_input(self) -> None:
-        """Mark the end of input, no more text will be pushed"""
+        """Mark the end of input, no more audio will be pushed"""
         self.flush()
         self._input_ch.close()
 

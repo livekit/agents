@@ -189,14 +189,17 @@ class TTS(tts.TTS):
         *,
         voice: Voice = DEFAULT_VOICE,
         model: TTSModels | str = "eleven_turbo_v2_5",
+        language: str | None = None,
     ) -> None:
         """
         Args:
             voice (Voice): Voice configuration. Defaults to `DEFAULT_VOICE`.
             model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
+            language (str | None): Language code for the TTS model. Optional.
         """
         self._opts.model = model or self._opts.model
         self._opts.voice = voice or self._opts.voice
+        self._opts.language = language or self._opts.language
 
     def synthesize(
         self,
@@ -469,8 +472,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if not eos_sent:
-                        raise Exception(
-                            "11labs connection closed unexpectedly, not all tokens have been consumed"
+                        raise APIStatusError(
+                            "11labs connection closed unexpectedly, not all tokens have been consumed",
+                            request_id=request_id,
                         )
                     return
 

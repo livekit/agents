@@ -61,6 +61,7 @@ class ActiveJobsResponse:
             channel.write_string(b, accept_args.metadata)
             channel.write_string(b, running_job.url)
             channel.write_string(b, running_job.token)
+            channel.write_string(b, running_job.worker_id)
 
         channel.write_int(b, self.reload_count)
 
@@ -78,6 +79,7 @@ class ActiveJobsResponse:
                     job=job,
                     url=channel.read_string(b),
                     token=channel.read_string(b),
+                    worker_id=channel.read_string(b),
                 )
             )
 

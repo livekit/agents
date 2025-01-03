@@ -1,5 +1,69 @@
 # livekit-plugins-openai
 
+## 0.10.14
+
+### Patch Changes
+
+- fix: revert from weakset to list in multimodal for maintaining sessions - [#1326](https://github.com/livekit/agents/pull/1326) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.13
+
+### Patch Changes
+
+- improved handling of LLM errors, do not retry if already began - [#1298](https://github.com/livekit/agents/pull/1298) ([@davidzhao](https://github.com/davidzhao))
+
+- make multimodal class generic and support gemini live api - [#1240](https://github.com/livekit/agents/pull/1240) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.12
+
+### Patch Changes
+
+- fix unknown `metadata` & `store` fields on OpenAI-like API - [#1276](https://github.com/livekit/agents/pull/1276) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.10.11
+
+### Patch Changes
+
+- Moved create_ai_function_info to function_context.py for better reusability and reduce repetation - [#1260](https://github.com/livekit/agents/pull/1260) ([@jayeshp19](https://github.com/jayeshp19))
+
+- add on_duplicate option for multimodal agent response create - [#1204](https://github.com/livekit/agents/pull/1204) ([@longcw](https://github.com/longcw))
+
+- Add support for OpenAI's "detail" parameter to ChatImage - [#1213](https://github.com/livekit/agents/pull/1213) ([@bcherry](https://github.com/bcherry))
+
+  Add support for data URLs on ChatImage in the Anthropic plugin.
+
+- filter out empty message for set chat ctx in realtime model - [#1245](https://github.com/livekit/agents/pull/1245) ([@longcw](https://github.com/longcw))
+
+- fix: correctly parse function argument types - [#1221](https://github.com/livekit/agents/pull/1221) ([@jayeshp19](https://github.com/jayeshp19))
+
+- add session_updated event for RealtimeSession - [#1253](https://github.com/livekit/agents/pull/1253) ([@longcw](https://github.com/longcw))
+
+- added llama 3.3 70b to model definitions - [#1233](https://github.com/livekit/agents/pull/1233) ([@davidzhao](https://github.com/davidzhao))
+
+- update default realtime model to gpt-4o-realtime-preview-2024-12-17 - [#1250](https://github.com/livekit/agents/pull/1250) ([@davidzhao](https://github.com/davidzhao))
+
+- Fix center_aspect_fit bug, add scale_aspect_fit and scale_aspect_fill resizing options. - [#1222](https://github.com/livekit/agents/pull/1222) ([@bcherry](https://github.com/bcherry))
+
+  Make scale_aspect_fit the new default resizing option for video frames.
+
+## 0.10.10
+
+### Patch Changes
+
+- add `google/gemini-2.0-flash-exp` as default model for vertex - [#1214](https://github.com/livekit/agents/pull/1214) ([@jayeshp19](https://github.com/jayeshp19))
+
+- emit error event for realtime model - [#1200](https://github.com/livekit/agents/pull/1200) ([@longcw](https://github.com/longcw))
+
+- fix: return structured output from func calls - [#1187](https://github.com/livekit/agents/pull/1187) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Handle optional func args in tool calls when set to `None` - [#1211](https://github.com/livekit/agents/pull/1211) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fix: openai llm retries - [#1196](https://github.com/livekit/agents/pull/1196) ([@theomonnom](https://github.com/theomonnom))
+
+- Improvements to end of turn plugin, ensure STT language settings. - [#1195](https://github.com/livekit/agents/pull/1195) ([@davidzhao](https://github.com/davidzhao))
+
+- fix: Handle optional func args in tool calls when set to `None` - [#1211](https://github.com/livekit/agents/pull/1211) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.10.9
 
 ### Patch Changes

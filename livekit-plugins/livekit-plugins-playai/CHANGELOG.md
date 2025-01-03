@@ -1,5 +1,11 @@
 # livekit-plugins-playht
 
+## 1.0.4
+
+### Patch Changes
+
+- Support PlayAI TTS engine. - [#1174](https://github.com/livekit/agents/pull/1174) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 1.0.3
 
 ### Patch Changes

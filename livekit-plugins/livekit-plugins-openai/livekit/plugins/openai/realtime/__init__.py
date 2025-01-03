@@ -2,8 +2,6 @@ from . import api_proto
 from .realtime_model import (
     DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
     DEFAULT_SERVER_VAD_OPTIONS,
-    InputTranscriptionCompleted,
-    InputTranscriptionFailed,
     InputTranscriptionOptions,
     RealtimeContent,
     RealtimeError,
@@ -11,13 +9,12 @@ from .realtime_model import (
     RealtimeOutput,
     RealtimeResponse,
     RealtimeSession,
+    RealtimeSessionOptions,
     RealtimeToolCall,
     ServerVadOptions,
 )
 
 __all__ = [
-    "InputTranscriptionCompleted",
-    "InputTranscriptionFailed",
     "RealtimeContent",
     "RealtimeOutput",
     "RealtimeResponse",
@@ -25,6 +22,7 @@ __all__ = [
     "RealtimeSession",
     "RealtimeModel",
     "RealtimeError",
+    "RealtimeSessionOptions",
     "ServerVadOptions",
     "InputTranscriptionOptions",
     "ConversationItemCreated",
