@@ -308,6 +308,8 @@ class ClientEvent:
         tool_choice: ToolChoice
         temperature: float
         max_output_tokens: int | Literal["inf"]
+        metadata: dict[str, str] | None
+        conversation: Literal["auto", "none"]
 
     class ResponseCreate(TypedDict):
         event_id: NotRequired[str]
