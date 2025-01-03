@@ -107,8 +107,11 @@ class RealtimeToolCall:
     """id of the tool call"""
 
 
-# TODO(theomonnom): add the content type directly inside RealtimeContent?
-# text/audio/transcript?
+@dataclass
+class Capabilities:
+    supports_truncate: bool
+
+
 @dataclass
 class RealtimeContent:
     response_id: str
@@ -288,6 +291,9 @@ class RealtimeModel:
             ValueError: If the API key is not provided and cannot be found in environment variables.
         """
         super().__init__()
+        self._capabilities = Capabilities(
+            supports_truncate=True,
+        )
         self._base_url = base_url
 
         is_azure = (
@@ -433,6 +439,10 @@ class RealtimeModel:
     @property
     def sessions(self) -> list[RealtimeSession]:
         return self._rt_sessions
+
+    @property
+    def capabilities(self) -> Capabilities:
+        return self._capabilities
 
     def session(
         self,
@@ -912,6 +922,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     def input_audio_buffer(self) -> InputAudioBuffer:
         return RealtimeSession.InputAudioBuffer(self)
 
+    def _push_audio(self, frame: rtc.AudioFrame) -> None:
+        self.input_audio_buffer.append(frame)
+
     @property
     def response(self) -> Response:
         return RealtimeSession.Response(self)
@@ -1084,6 +1097,15 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self.conversation.item.delete(item_id=item_id)
         self.conversation.item.create(self._create_empty_user_audio_message(1.0))
         self.response.create(on_duplicate="keep_both")
+
+    def _truncate_conversation_item(
+        self, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None:
+        self.conversation.item.truncate(
+            item_id=item_id,
+            content_index=content_index,
+            audio_end_ms=audio_end_ms,
+        )
 
     def _update_conversation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
@@ -1730,7 +1752,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 "function": fnc_call_info.function_info.name,
             },
         )
-        if called_fnc.result is not None:
+        if tool_call.content is not None:
             create_fut = self.conversation.item.create(
                 tool_call,
                 previous_item_id=item_id,
