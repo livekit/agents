@@ -1,6 +1,9 @@
 from __future__ import annotations, print_function
 
 import asyncio
+import contextlib
+
+from dataclasses import dataclass
 from typing import (
     AsyncIterable,
     Callable,
@@ -11,12 +14,12 @@ from typing import (
 
 from livekit import rtc
 
-from .. import io, llm, stt, tts, utils, vad
+from .. import llm, stt, tts, utils, vad
 from ..llm import ChatContext, FunctionContext
+from ..log import logger
+from . import io
 from .audio_recognition import AudioRecognition, _TurnDetector
 from .generation import (
-    _LLMGenerationData,
-    _TTSGenerationData,
     do_llm_inference,
     do_tts_inference,
 )
@@ -93,6 +96,7 @@ class GenerationHandle:
     ) -> None:
         self._id = speech_id
         self._allow_interruptions = allow_interruptions
+        self._interrupted = False
         self._task = task
 
     @staticmethod
@@ -110,6 +114,10 @@ class GenerationHandle:
         return self._id
 
     @property
+    def interrupted(self) -> bool:
+        return self._interrupted
+
+    @property
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
 
@@ -117,9 +125,11 @@ class GenerationHandle:
         if not self._allow_interruptions:
             raise ValueError("This generation handle does not allow interruptions")
 
+        if self._task.done():
+            return
 
-class AgentTask:
-    pass
+        self._interrupted = True
+        self._task.cancel()
 
 
 EventTypes = Literal[
@@ -131,6 +141,14 @@ EventTypes = Literal[
     "agent_message_committed",
     "agent_message_interrupted",
 ]
+
+
+@dataclass
+class _PipelineOptions:
+    language: str | None
+    allow_interruptions: bool
+    min_interruption_duration: float
+    min_endpointing_delay: float
 
 
 class PipelineAgent(rtc.EventEmitter[EventTypes]):
@@ -146,6 +164,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
+        min_interruption_duration: float = 1.0,
         min_endpointing_delay: float = 0.5,
         max_fnc_steps: int = 5,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -169,8 +188,16 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             loop=self._loop,
         )
 
+        self._opts = _PipelineOptions(
+            language=language,
+            allow_interruptions=allow_interruptions,
+            min_interruption_duration=min_interruption_duration,
+            min_endpointing_delay=min_endpointing_delay,
+        )
+
         self._max_fnc_steps = max_fnc_steps
         self._audio_recognition.on("end_of_turn", self._on_audio_end_of_turn)
+        self._audio_recognition.on("vad_inference_done", self._on_vad_inference_done)
 
         # configurable IO
         self._input = AgentInput(
@@ -267,41 +294,53 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         pass
 
     def say(self, text: str | AsyncIterable[str]) -> GenerationHandle:
-        # say also send to the text output sink... pfff
         pass
 
     def generate_reply(self, user_input: str) -> GenerationHandle:
+        if (
+            self._current_generation is not None
+            and not self._current_generation.interrupted
+        ):
+            raise ValueError("another reply is already in progress")
+
         self._chat_ctx.append(role="user", text=user_input)
 
         # TODO(theomonnom): Use the agent task chat_ctx
         task = asyncio.create_task(
-            self._generate_task(chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx)
+            self._generate_reply_task(chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx)
         )
         gen_handle = GenerationHandle.from_task(task)
         return gen_handle
 
     # -- Main generation task --
 
-    async def _generate_task(
+    @utils.log_exceptions(logger=logger)
+    async def _generate_reply_task(
         self, *, chat_ctx: ChatContext, fnc_ctx: FunctionContext | None
     ) -> None:
+        @utils.log_exceptions(logger=logger)
         async def _forward_llm_text(llm_output: AsyncIterable[str]) -> None:
             """collect and forward the generated text to the current agent output"""
+            if self.output.text is None:
+                return
+
             async for delta in llm_output:
-                if self.output.text is not None:
-                    await self.output.text.capture_text(delta)
+                await self.output.text.capture_text(delta)
 
-            if self.output.text is not None:
-                self.output.text.flush()
+            self.output.text.flush()
 
-        async def _forward_tts_audio(tts_output: AsyncIterable[rtc.AudioFrame]) -> None:
+        @utils.log_exceptions(logger=logger)
+        async def _forward_tts_audio(
+            tts_output: AsyncIterable[rtc.AudioFrame], wait_for_playout: bool = True
+        ) -> None:
             """collect and forward the generated audio to the current agent output"""
-            async for frame in tts_output:
-                if self.output.audio is not None:
-                    await self.output.audio.capture_frame(frame)
+            if self.output.audio is None:
+                return
 
-            if self.output.audio is not None:
-                self.output.audio.flush()
+            async for frame in tts_output:
+                await self.output.audio.capture_frame(frame)
+
+            self.output.audio.flush()
 
         # new messages generated during the generation (including function calls)
         new_messages: list[llm.ChatMessage] = []
@@ -319,7 +358,8 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             )
             tts_text_input, llm_output = utils.aio.itertools.tee(llm_gen_data.text_ch)
             forward_llm_task = asyncio.create_task(
-                _forward_llm_text(llm_output), name="_generate_task.forward_llm_text"
+                _forward_llm_text(llm_output),
+                name="_generate_reply_task.forward_llm_text",
             )
 
             tts_task: asyncio.Task | None = None
@@ -330,7 +370,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
                 )
                 forward_tts_task = asyncio.create_task(
                     _forward_tts_audio(tts_gen_data.audio_ch),
-                    name="_generate_task.forward_tts_audio",
+                    name="_generate_reply_task.forward_tts_audio",
                 )
 
             tools: list[llm.FunctionCallInfo] = []
@@ -339,8 +379,11 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
             await asyncio.gather(llm_task, forward_llm_task)
 
+            # TODO(theomonnom): Simplify this
             if tts_task is not None and forward_tts_task is not None:
+                assert self._output.audio is not None
                 await asyncio.gather(tts_task, forward_tts_task)
+                playback_ev = await self._output.audio.wait_for_playout()
 
             generated_text = llm_gen_data.generated_text
             if len(generated_text) > 0:
@@ -354,7 +397,28 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     # -- Audio recognition --
 
     def _on_audio_end_of_turn(self, new_transcript: str) -> None:
-        pass
+        # When the audio recognition detects the end of a user turn:
+        #  - check if there is no current generation happening
+        #  - cancel the current generation if it allows interruptions (otherwise skip this current
+        #  turn)
+        #  - generate a reply to the user input
+
+        if self._current_generation is not None:
+            if self._current_generation.allow_interruptions:
+                logger.warning(
+                    "skipping user input, current speech generation cannot be interrupted",
+                    extra={"user_input": new_transcript},
+                )
+                return
+
+            self._current_generation.interrupt()
+
+        self.generate_reply(new_transcript)
+
+    def _on_vad_inference_done(self, ev: vad.VADEvent) -> None:
+        if ev.speech_duration > self._opts.min_interruption_duration:
+            if self._current_generation is not None:
+                self._current_generation.interrupt()
 
     # ---
 
