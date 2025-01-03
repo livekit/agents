@@ -49,7 +49,6 @@ You are an **Audio Transcriber**. Your task is to convert audio content into acc
 @dataclass
 class STTOptions:
     language: str
-    detect_language: bool
     system_instructions: str
     model: LiveAPIModels
 
@@ -60,52 +59,74 @@ class STT(stt.STT):
         *,
         api_key: str | None = None,
         language: str = "en-US",
-        detect_language: bool = True,
+        vertexai: bool = False,
+        project_id: str | None = None,
+        location: str = "us-central1",
         system_instructions: str = SYSTEM_INSTRUCTIONS,
         model: LiveAPIModels = "gemini-2.0-flash-exp",
     ):
         """
-        Create a new instance of Google Realtime STT.
+        Create a new instance of Google Realtime STT. you must provide either api_key or vertexai with project_id. api key and project id can be set via environment variables or via the arguments.
+        Args:
+            api_key (str, optional) : The API key to use for the API.
+            vertexai(bool, optional) : Whether to use VertexAI.
+                project_id(str, optional) : The project id to use for the vertex ai.
+                location (str, optional) : The location to use for the vertex ai. defaults to us-central1
+            system_instructions (str, optional) : custom system instructions to use for the transcription.
+            language (str, optional) : The language of the audio. defaults to en-US
+            model (LiveAPIModels, optional) : The model to use for the transcription. defaults to gemini-2.0-flash-exp
         """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False)
         )
 
         self._config = STTOptions(
-            language=language,
-            model=model,
-            system_instructions=system_instructions,
-            detect_language=detect_language,
+            language=language, model=model, system_instructions=system_instructions
         )
-        self._api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        if vertexai:
+            self._project_id = project_id or os.getenv("GOOGLE_PROJECT_ID")
+            self._location = location or os.getenv("GOOGLE_LOCATION")
+            if not self._project_id or not self._location:
+                raise ValueError(
+                    "Project and location are required for VertexAI either via project and location or GOOGLE_PROJECT_ID and GOOGLE_LOCATION environment variables"
+                )
+            self._api_key = None  # VertexAI does not require an API key
+        else:
+            self._api_key = api_key or os.getenv("GOOGLE_API_KEY")
+            if not self._api_key:
+                raise ValueError(
+                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
+                )
         self._client = genai.Client(
             api_key=self._api_key,
+            vertexai=vertexai,
+            project=self._project_id,
+            location=self._location,
         )
 
     async def _recognize_impl(
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: str | None,
         conn_options: APIConnectOptions,
+        language: str | None = None,
     ) -> stt.SpeechEvent:
         try:
+            instructions = self._config.system_instructions
+            if language:
+                instructions += "The language of the audio is " + language
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
             resp = await self._client.aio.models.generate_content(
                 model=self._config.model,
-                contents=types.Content(
-                    parts=[
-                        types.Part(
-                            text=self._config.system_instructions,
-                        ),
-                        types.Part(
-                            inline_data=types.Blob(
-                                mime_type="audio/wav",
-                                data=data,
-                            )
-                        ),
-                    ],
-                ),
+                contents=[
+                    types.Part(text=instructions),
+                    types.Part(
+                        inline_data=types.Blob(
+                            mime_type="audio/wav",
+                            data=data,
+                        )
+                    ),
+                ],
                 config=types.GenerationConfigDict(
                     response_mime_type="application/json",
                     response_schema={
