@@ -75,7 +75,7 @@ class RealtimeResponse:
     """timestamp when the response was created"""
     _first_token_timestamp: float | None = None
     """timestamp when the first token was received"""
-    metadata: dict[str, str] | None = None
+    metadata: map | None = None
     """developer-provided string key-value pairs"""
 
 
@@ -167,7 +167,7 @@ class RealtimeSessionOptions:
     input_audio_format: api_proto.AudioFormat
     output_audio_format: api_proto.AudioFormat
     input_audio_transcription: InputTranscriptionOptions | None
-    turn_detection: ServerVadOptions | None
+    turn_detection: ServerVadOptions | Literal["None"] | None
     tool_choice: api_proto.ToolChoice
     temperature: float
     max_response_output_tokens: int | Literal["inf"]
