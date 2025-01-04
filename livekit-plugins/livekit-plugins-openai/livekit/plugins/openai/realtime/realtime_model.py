@@ -75,6 +75,8 @@ class RealtimeResponse:
     """timestamp when the response was created"""
     _first_token_timestamp: float | None = None
     """timestamp when the first token was received"""
+    metadata: map | None = None
+    """developer-provided string key-value pairs"""
 
 
 @dataclass
@@ -139,6 +141,7 @@ class ServerVadOptions:
     threshold: float
     prefix_padding_ms: int
     silence_duration_ms: int
+    create_response: bool
 
 
 @dataclass
@@ -164,7 +167,7 @@ class RealtimeSessionOptions:
     input_audio_format: api_proto.AudioFormat
     output_audio_format: api_proto.AudioFormat
     input_audio_transcription: InputTranscriptionOptions | None
-    turn_detection: ServerVadOptions | None
+    turn_detection: ServerVadOptions | Literal["None"] | None
     tool_choice: api_proto.ToolChoice
     temperature: float
     max_response_output_tokens: int | Literal["inf"]
@@ -190,6 +193,7 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
     threshold=0.5,
     prefix_padding_ms=300,
     silence_duration_ms=500,
+    create_response=True,
 )
 
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
@@ -714,6 +718,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             on_duplicate: Literal[
                 "cancel_existing", "cancel_new", "keep_both"
             ] = "keep_both",
+            instructions: str | None = None,
+            modalities: list[api_proto.Modality] = ["text", "audio"],
+            conversation: Literal["auto", "none"] = "auto",
+            metadata: map | None = None,
         ) -> asyncio.Future[bool]:
             """Creates a new response.
 
@@ -722,6 +730,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     - "cancel_existing": Cancel the existing response before creating new one
                     - "cancel_new": Skip creating new response if one is in progress
                     - "keep_both": Wait for the existing response to be done and then create a new one
+                instructions: explicit prompt used for out-of-band events
+                modalities: set of modalities that the model can respond in
+                conversation: specifies whether respones is out-of-band
+                    - "auto": Contents of the response will be added to the default conversation
+                    - "none": Creates an out-of-band response which will not add items to default conversation
+                metadata: set of key-value pairs that can be used for storing additional information
 
             Returns:
                 Future that resolves when the response create request is queued
@@ -755,7 +769,29 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 or self._sess._pending_responses[active_resp_id].done_fut.done()
             ):
                 # no active response in progress, create a new one
-                self._sess._queue_msg({"type": "response.create"})
+                if instructions is not None:
+                    self._sess._queue_msg(
+                        {
+                            "type": "response.create",
+                            "response": {
+                                "conversation": conversation,
+                                "metadata": metadata,
+                                "instructions": instructions,
+                                "modalities": modalities,
+                            },
+                        }
+                    )
+                else:
+                    self._sess._queue_msg(
+                        {
+                            "type": "response.create",
+                            "response": {
+                                "conversation": conversation,
+                                "metadata": metadata,
+                                "modalities": modalities,
+                            },
+                        }
+                    )
                 _fut = asyncio.Future[bool]()
                 _fut.set_result(True)
                 return _fut
@@ -792,7 +828,29 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 )
                 new_create_fut = asyncio.Future[None]()
                 self._sess._response_create_fut = new_create_fut
-                self._sess._queue_msg({"type": "response.create"})
+                if instructions is not None:
+                    self._sess._queue_msg(
+                        {
+                            "type": "response.create",
+                            "response": {
+                                "conversation": conversation,
+                                "metadata": metadata,
+                                "instructions": instructions,
+                                "modalities": modalities,
+                            },
+                        }
+                    )
+                else:
+                    self._sess._queue_msg(
+                        {
+                            "type": "response.create",
+                            "response": {
+                                "conversation": conversation,
+                                "metadata": metadata,
+                                "modalities": modalities,
+                            },
+                        }
+                    )
                 return True
 
             return asyncio.create_task(wait_and_create())
@@ -880,7 +938,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         input_audio_format: api_proto.AudioFormat | None = None,
         output_audio_format: api_proto.AudioFormat | None = None,
         input_audio_transcription: InputTranscriptionOptions | None = None,
-        turn_detection: ServerVadOptions | None = None,
+        turn_detection: ServerVadOptions | Literal["None"] | None = None,
         tool_choice: api_proto.ToolChoice | None = None,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
@@ -918,12 +976,16 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         server_vad_opts: api_proto.ServerVad | None = None
         if self._opts.turn_detection is not None:
-            server_vad_opts = {
-                "type": "server_vad",
-                "threshold": self._opts.turn_detection.threshold,
-                "prefix_padding_ms": self._opts.turn_detection.prefix_padding_ms,
-                "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
-            }
+            if self._opts.turn_detection == "None":
+                server_vad_opts = None
+            else:
+                server_vad_opts = {
+                    "type": "server_vad",
+                    "threshold": self._opts.turn_detection.threshold,
+                    "prefix_padding_ms": self._opts.turn_detection.prefix_padding_ms,
+                    "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
+                    "create_response": self._opts.turn_detection.create_response,
+                }
         input_audio_transcription_opts: api_proto.InputAudioTranscription | None = None
         if self._opts.input_audio_transcription is not None:
             input_audio_transcription_opts = {
@@ -1219,6 +1281,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 threshold=session["turn_detection"]["threshold"],
                 prefix_padding_ms=session["turn_detection"]["prefix_padding_ms"],
                 silence_duration_ms=session["turn_detection"]["silence_duration_ms"],
+                create_response=True,
             )
         if session["input_audio_transcription"] is None:
             input_audio_transcription = None
@@ -1398,11 +1461,14 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         response = response_created["response"]
         done_fut = self._loop.create_future()
         status_details = response.get("status_details")
+        metadata = response.get("metadata")
+
         new_response = RealtimeResponse(
             id=response["id"],
             status=response["status"],
             status_details=status_details,
             output=[],
+            metadata=metadata,
             usage=response.get("usage"),
             done_fut=done_fut,
             _created_timestamp=time.time(),
@@ -1577,6 +1643,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         response.status = response_data["status"]
         response.status_details = response_data.get("status_details")
+        response.metadata = response_data.get("metadata")
+        response.output = cast(list[RealtimeOutput], response_data.get("output"))
         response.usage = response_data.get("usage")
 
         metrics_error = None
