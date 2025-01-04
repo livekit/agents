@@ -76,6 +76,7 @@ class ServerVad(TypedDict):
     threshold: NotRequired[float]
     prefix_padding_ms: NotRequired[int]
     silence_duration_ms: NotRequired[int]
+    create_response: bool
 
 
 class FunctionTool(TypedDict):
