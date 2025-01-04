@@ -207,6 +207,7 @@ class Resource:
         status: ResponseStatus
         status_details: NotRequired[ResponseStatusDetails | None]
         output: list[Resource.Item]
+        metadata: map | None
         usage: NotRequired[Usage | None]
 
 

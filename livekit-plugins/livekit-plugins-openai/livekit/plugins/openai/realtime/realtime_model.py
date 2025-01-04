@@ -1461,7 +1461,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         response = response_created["response"]
         done_fut = self._loop.create_future()
         status_details = response.get("status_details")
-        metadata = (response.get("metadata")).json()
+        metadata = response.get("metadata")
 
         new_response = RealtimeResponse(
             id=response["id"],
@@ -1643,7 +1643,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         response.status = response_data["status"]
         response.status_details = response_data.get("status_details")
-        response.metadata = (response_data.get("metadata")).json()
+        response.metadata = response_data.get("metadata")
         response.output = cast(list[RealtimeOutput], response_data.get("output"))
         response.usage = response_data.get("usage")
 
