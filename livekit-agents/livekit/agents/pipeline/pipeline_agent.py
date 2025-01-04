@@ -972,13 +972,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 and new_speech_handle.fnc_nested_depth
                 >= self._opts.max_nested_fnc_calls
             ):
-                logger.warning(
-                    "max function calls nested depth reached, not propagating fnc ctx",
-                    extra={
-                        "speech_id": speech_handle.id,
-                        "fnc_nested_depth": speech_handle.fnc_nested_depth,
-                    },
-                )
+                if len(fnc_ctx.ai_functions) > 1:
+                    logger.info(
+                        "max function calls nested depth reached, dropping function context. increase max_nested_fnc_calls to enable additional nesting.",
+                        extra={
+                            "speech_id": speech_handle.id,
+                            "fnc_nested_depth": speech_handle.fnc_nested_depth,
+                        },
+                    )
                 fnc_ctx = None
             answer_llm_stream = self._llm.chat(
                 chat_ctx=chat_ctx,
@@ -1310,12 +1311,16 @@ class _DeferredReplyValidation:
                 and self._turn_detector.supports_language(self._last_language)
             ):
                 start_time = time.perf_counter()
-                eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
-                unlikely_threshold = self._turn_detector.unlikely_threshold()
-                elasped = time.perf_counter() - start_time
-                if eot_prob < unlikely_threshold:
-                    delay = self._max_endpointing_delay
-                delay = max(0, delay - elasped)
+                try:
+                    eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
+                    unlikely_threshold = self._turn_detector.unlikely_threshold()
+                    elasped = time.perf_counter() - start_time
+                    if eot_prob < unlikely_threshold:
+                        delay = self._max_endpointing_delay
+                    delay = max(0, delay - elasped)
+                except TimeoutError:
+                    pass  # inference process is unresponsive
+
             await asyncio.sleep(delay)
 
             self._reset_states()

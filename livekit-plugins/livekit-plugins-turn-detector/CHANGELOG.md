@@ -1,5 +1,11 @@
 # livekit-plugins-eou
 
+## 0.3.5
+
+### Patch Changes
+
+- fix int32/64 errors on Windows - [#1285](https://github.com/livekit/agents/pull/1285) ([@nbsp](https://github.com/nbsp))
+
 ## 0.3.4
 
 ### Patch Changes
