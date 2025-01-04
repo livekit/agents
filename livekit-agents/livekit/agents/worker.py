@@ -53,7 +53,7 @@ from .job import (
     RunningJobInfo,
 )
 from .log import DEV_LEVEL, logger
-from .utils.hw import get_cpu_monitor
+from .utils.hw import get_cpu_monitor, get_memory_monitor
 from .version import __version__
 
 ASSIGNMENT_TIMEOUT = 7.5
@@ -77,8 +77,11 @@ class _DefaultLoadCalc:
     _instance = None
 
     def __init__(self) -> None:
-        self._m_avg = utils.MovingAverage(5)  # avg over 2.5
+        # Take average reading over 2.5s of CPU and memory
+        self._m_avg_cpu = utils.MovingAverage(5)
+        self._m_avg_mem = utils.MovingAverage(5)
         self._cpu_monitor = get_cpu_monitor()
+        self._mem_monitor = get_memory_monitor()
         self._thread = threading.Thread(
             target=self._calc_load, daemon=True, name="worker_cpu_load_monitor"
         )
@@ -88,19 +91,23 @@ class _DefaultLoadCalc:
     def _calc_load(self) -> None:
         while True:
             cpu_p = self._cpu_monitor.cpu_percent(interval=0.5)
+            mem_p = self._mem_monitor.memory_percent()
             with self._lock:
-                self._m_avg.add_sample(cpu_p)
+                self._m_avg_cpu.add_sample(cpu_p)
+                self._m_avg_mem.add_sample(mem_p)
 
     def _get_avg(self) -> float:
         with self._lock:
-            return self._m_avg.get_avg()
+            return self._m_avg_cpu.get_avg(), self._m_avg_mem.get_avg()
 
     @classmethod
     def get_load(cls, worker: Worker) -> float:
         if cls._instance is None:
             cls._instance = _DefaultLoadCalc()
 
-        return cls._instance._m_avg.get_avg()
+        return max(
+            cls._instance._m_avg_cpu.get_avg(), cls._instance._m_avg_mem.get_avg()
+        )
 
 
 @dataclass
