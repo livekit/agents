@@ -96,7 +96,7 @@ class _DefaultLoadCalc:
                 self._m_avg_cpu.add_sample(cpu_p)
                 self._m_avg_mem.add_sample(mem_p)
 
-    def _get_avg(self) -> tuple[float, float]:
+    def _get_avgs(self) -> tuple[float, float]:
         with self._lock:
             return self._m_avg_cpu.get_avg(), self._m_avg_mem.get_avg()
 
@@ -105,9 +105,7 @@ class _DefaultLoadCalc:
         if cls._instance is None:
             cls._instance = _DefaultLoadCalc()
 
-        return max(
-            cls._instance._m_avg_cpu.get_avg(), cls._instance._m_avg_mem.get_avg()
-        )
+        return max(*cls._instance._get_avgs())
 
 
 @dataclass
