@@ -234,9 +234,9 @@ class RecognizeStream(ABC):
                             "streamed": True,
                         },
                     )
-
                 if num_retries > 0:
                     await asyncio.sleep(self._conn_options.retry_interval)
+                num_retries += 1
 
     async def _metrics_monitor_task(
         self, event_aiter: AsyncIterable[SpeechEvent]
