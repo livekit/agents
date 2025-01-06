@@ -61,7 +61,7 @@ class TTS(tts.TTS):
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
-                streaming=False,
+                streaming=True,
             ),
             sample_rate=sample_rate,
             num_channels=1,
@@ -251,7 +251,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(input_task)
-            self._client.close()
+            await self._client.close()
 
     @utils.log_exceptions(logger=logger)
     async def _tokenize_input(self):
