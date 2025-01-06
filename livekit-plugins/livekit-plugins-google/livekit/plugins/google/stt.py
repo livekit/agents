@@ -377,6 +377,7 @@ class SpeechStream(stt.SpeechStream):
                 )
 
         async def process_stream(stream):
+            has_started = False
             async for resp in stream:
                 if (
                     resp.speech_event_type
@@ -385,6 +386,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     )
+                    has_started = True
 
                 if (
                     resp.speech_event_type
@@ -414,6 +416,13 @@ class SpeechStream(stt.SpeechStream):
                             > _max_session_duration
                         ):
                             logger.debug("restarting session due to timeout")
+                            if has_started:
+                                self._event_ch.send_nowait(
+                                    stt.SpeechEvent(
+                                        type=stt.SpeechEventType.END_OF_SPEECH
+                                    )
+                                )
+                                has_started = False
                             self._reconnect_event.set()
                             return
 
@@ -424,6 +433,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
+                    has_started = False
 
         while True:
             try:
