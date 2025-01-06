@@ -465,6 +465,9 @@ class SpeechStream(stt.SpeechStream):
                     for task in done:
                         if task != wait_reconnect_task:
                             task.result()
+                    if wait_reconnect_task not in done:
+                        break
+                    self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(
                         process_stream_task, wait_reconnect_task
@@ -479,8 +482,6 @@ class SpeechStream(stt.SpeechStream):
                 )
             except Exception as e:
                 raise APIConnectionError() from e
-            finally:
-                self._reconnect_event.clear()
 
 
 def _recognize_response_to_speech_event(
