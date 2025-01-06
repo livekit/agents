@@ -210,15 +210,19 @@ class RecognizeStream(ABC):
     async def _run(self) -> None: ...
 
     async def _main_task(self) -> None:
-        for i in range(self._conn_options.max_retry + 1):
+        max_retries = self._conn_options.max_retry
+        num_retries = 0
+
+        while num_retries <= max_retries:
             try:
-                return await self._run()
+                await self._run()
+                num_retries = 0
             except APIError as e:
-                if self._conn_options.max_retry == 0:
+                if max_retries == 0:
                     raise
-                elif i == self._conn_options.max_retry:
+                elif num_retries == max_retries:
                     raise APIConnectionError(
-                        f"failed to recognize speech after {self._conn_options.max_retry + 1} attempts",
+                        f"failed to recognize speech after {num_retries} attempts",
                     ) from e
                 else:
                     logger.warning(
@@ -226,12 +230,13 @@ class RecognizeStream(ABC):
                         exc_info=e,
                         extra={
                             "tts": self._stt._label,
-                            "attempt": i + 1,
+                            "attempt": num_retries,
                             "streamed": True,
                         },
                     )
 
-                await asyncio.sleep(self._conn_options.retry_interval)
+                if num_retries > 0:
+                    await asyncio.sleep(self._conn_options.retry_interval)
 
     async def _metrics_monitor_task(
         self, event_aiter: AsyncIterable[SpeechEvent]
