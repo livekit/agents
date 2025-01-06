@@ -248,77 +248,86 @@ class TTSSegmentsForwarder:
     async def _main_task(self) -> None:
         """Main task that forwards the transcription to the room."""
         rtc_seg_ch = utils.aio.Chan[rtc.TranscriptionSegment]()
+        forward_task = None
 
-        @utils.log_exceptions(logger=logger)
-        async def _forward_task():
-            async for rtc_seg in rtc_seg_ch:
-                base_transcription = rtc.Transcription(
-                    participant_identity=self._opts.participant_identity,
-                    track_sid=self._opts.track_id,
-                    segments=[rtc_seg],  # no history for now
-                )
+        try:
 
-                transcription = self._opts.before_forward_cb(self, base_transcription)
-                if asyncio.iscoroutine(transcription):
-                    transcription = await transcription
+            @utils.log_exceptions(logger=logger)
+            async def _forward_task():
+                async for rtc_seg in rtc_seg_ch:
+                    base_transcription = rtc.Transcription(
+                        participant_identity=self._opts.participant_identity,
+                        track_sid=self._opts.track_id,
+                        segments=[rtc_seg],  # no history for now
+                    )
 
-                # fallback to default impl if no custom/user stream is returned
-                if not isinstance(transcription, rtc.Transcription):
-                    transcription = _default_before_forward_callback(
+                    transcription = self._opts.before_forward_cb(
                         self, base_transcription
                     )
+                    if asyncio.iscoroutine(transcription):
+                        transcription = await transcription
 
-                if transcription.segments and self._opts.room.isconnected():
-                    try:
-                        await self._opts.room.local_participant.publish_transcription(
-                            transcription
+                    # fallback to default impl if no custom/user stream is returned
+                    if not isinstance(transcription, rtc.Transcription):
+                        transcription = _default_before_forward_callback(
+                            self, base_transcription
                         )
-                    except PublishTranscriptionError:
-                        continue
 
-        forward_task = asyncio.create_task(_forward_task())
+                    if transcription.segments and self._opts.room.isconnected():
+                        try:
+                            await (
+                                self._opts.room.local_participant.publish_transcription(
+                                    transcription
+                                )
+                            )
+                        except PublishTranscriptionError:
+                            continue
 
-        seg_index = 0
-        q_done = False
-        while not q_done:
-            await self._text_q_changed.wait()
-            await self._audio_q_changed.wait()
+            forward_task = asyncio.create_task(_forward_task())
 
-            while self._text_q and self._audio_q:
-                text_data = self._text_q.pop(0)
-                audio_data = self._audio_q.pop(0)
+            seg_index = 0
+            q_done = False
+            while not q_done:
+                await self._text_q_changed.wait()
+                await self._audio_q_changed.wait()
 
-                if text_data is None or audio_data is None:
-                    q_done = True
-                    break
+                while self._text_q and self._audio_q:
+                    text_data = self._text_q.pop(0)
+                    audio_data = self._audio_q.pop(0)
 
-                # wait until the segment is validated and has started playing
-                while not self._closed:
-                    if self._playing_seg_index >= seg_index:
+                    if text_data is None or audio_data is None:
+                        q_done = True
                         break
 
-                    await self._sleep_if_not_closed(0.125)
+                    # wait until the segment is validated and has started playing
+                    while not self._closed:
+                        if self._playing_seg_index >= seg_index:
+                            break
 
-                sentence_stream = text_data.sentence_stream
-                forward_start_time = time.time()
+                        await self._sleep_if_not_closed(0.125)
 
-                async for ev in sentence_stream:
-                    await self._sync_sentence_co(
-                        seg_index,
-                        forward_start_time,
-                        text_data,
-                        audio_data,
-                        ev.token,
-                        rtc_seg_ch,
-                    )
+                    sentence_stream = text_data.sentence_stream
+                    forward_start_time = time.time()
 
-                seg_index += 1
+                    async for ev in sentence_stream:
+                        await self._sync_sentence_co(
+                            seg_index,
+                            forward_start_time,
+                            text_data,
+                            audio_data,
+                            ev.token,
+                            rtc_seg_ch,
+                        )
 
-            self._text_q_changed.clear()
-            self._audio_q_changed.clear()
+                    seg_index += 1
 
-        rtc_seg_ch.close()
-        await forward_task
+                self._text_q_changed.clear()
+                self._audio_q_changed.clear()
+
+        finally:
+            rtc_seg_ch.close()
+            if forward_task:
+                await forward_task
 
     async def _sync_sentence_co(
         self,
