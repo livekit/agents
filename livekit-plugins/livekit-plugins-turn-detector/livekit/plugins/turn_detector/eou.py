@@ -19,6 +19,7 @@ PUNCS = string.punctuation.replace("'", "")
 MAX_HISTORY = 4
 MAX_HISTORY_TOKENS = 512
 
+
 def _download_from_hf_hub(repo_id, filename, **kwargs):
     from huggingface_hub import hf_hub_download
 
