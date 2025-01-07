@@ -281,10 +281,13 @@ class STT(stt.STT):
             self._config.spoken_punctuation = spoken_punctuation
         if model is not None:
             self._config.model = model
+        client = None
+        recognizer = None
         if location is not None:
             self._location = location
             # if location is changed, fetch a new client and recognizer as per the new location
-            self._client = self._ensure_client()
+            client = self._ensure_client()
+            recognizer = self._recognizer
         if keywords is not None:
             self._config.keywords = keywords
 
@@ -297,8 +300,8 @@ class STT(stt.STT):
                 spoken_punctuation=spoken_punctuation,
                 model=model,
                 keywords=keywords,
-                client=self._client,
-                recognizer=self._recognizer,
+                client=client,
+                recognizer=recognizer,
             )
 
 
