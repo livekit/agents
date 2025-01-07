@@ -148,6 +148,7 @@ class LLMStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
                 if self._conn_options.max_retry == 0 or not e.retryable:
                     raise
                 elif i == self._conn_options.max_retry:
@@ -156,7 +157,7 @@ class LLMStream(ABC):
                     ) from e
                 else:
                     logger.warning(
-                        f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",
+                        f"failed to generate LLM completion, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={
                             "llm": self._llm._label,
@@ -164,7 +165,7 @@ class LLMStream(ABC):
                         },
                     )
 
-                await asyncio.sleep(self._conn_options.retry_interval)
+                await asyncio.sleep(retry_interval)
 
     @utils.log_exceptions(logger=logger)
     async def _metrics_monitor_task(

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import time
 import weakref
 from dataclasses import dataclass
 from typing import List, Union
@@ -43,6 +44,10 @@ from .models import SpeechLanguages, SpeechModels
 
 LgType = Union[SpeechLanguages, str]
 LanguageCode = Union[LgType, List[LgType]]
+
+# Google STT has a timeout of 5 mins, we'll attempt to restart the session
+# before that timeout is reached
+_max_session_duration = 4
 
 
 # This class is only be used internally to encapsulate the options
@@ -229,8 +234,6 @@ class STT(stt.STT):
             raise APIStatusError(
                 e.message,
                 status_code=e.code or -1,
-                request_id=None,
-                body=None,
             )
         except Exception as e:
             raise APIConnectionError() from e
@@ -312,6 +315,7 @@ class SpeechStream(stt.SpeechStream):
         self._recognizer = recognizer
         self._config = config
         self._reconnect_event = asyncio.Event()
+        self._session_connected_at: float = 0
 
     def update_options(
         self,
@@ -347,7 +351,7 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         # google requires a async generator when calling streaming_recognize
         # this function basically convert the queue into a async generator
-        async def input_generator():
+        async def input_generator(should_stop: asyncio.Event):
             try:
                 # first request should contain the config
                 yield cloud_speech.StreamingRecognizeRequest(
@@ -356,6 +360,12 @@ class SpeechStream(stt.SpeechStream):
                 )
 
                 async for frame in self._input_ch:
+                    # when the stream is aborted due to reconnect, this input_generator
+                    # needs to stop consuming frames
+                    # when the generator stops, the previous gRPC stream will close
+                    if should_stop.is_set():
+                        return
+
                     if isinstance(frame, rtc.AudioFrame):
                         yield cloud_speech.StreamingRecognizeRequest(
                             audio=frame.data.tobytes()
@@ -367,6 +377,7 @@ class SpeechStream(stt.SpeechStream):
                 )
 
         async def process_stream(stream):
+            has_started = False
             async for resp in stream:
                 if (
                     resp.speech_event_type
@@ -375,6 +386,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     )
+                    has_started = True
 
                 if (
                     resp.speech_event_type
@@ -399,6 +411,20 @@ class SpeechStream(stt.SpeechStream):
                                 alternatives=[speech_data],
                             )
                         )
+                        if (
+                            time.time() - self._session_connected_at
+                            > _max_session_duration
+                        ):
+                            logger.debug("restarting session due to timeout")
+                            if has_started:
+                                self._event_ch.send_nowait(
+                                    stt.SpeechEvent(
+                                        type=stt.SpeechEventType.END_OF_SPEECH
+                                    )
+                                )
+                                has_started = False
+                            self._reconnect_event.set()
+                            return
 
                 if (
                     resp.speech_event_type
@@ -407,6 +433,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
+                    has_started = False
 
         while True:
             try:
@@ -431,12 +458,15 @@ class SpeechStream(stt.SpeechStream):
                     ),
                 )
 
+                should_stop = asyncio.Event()
                 stream = await self._client.streaming_recognize(
-                    requests=input_generator(),
+                    requests=input_generator(should_stop),
                 )
+                self._session_connected_at = time.time()
 
                 process_stream_task = asyncio.create_task(process_stream(stream))
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
                 try:
                     done, _ = await asyncio.wait(
                         [process_stream_task, wait_reconnect_task],
@@ -445,14 +475,23 @@ class SpeechStream(stt.SpeechStream):
                     for task in done:
                         if task != wait_reconnect_task:
                             task.result()
+                    if wait_reconnect_task not in done:
+                        break
+                    self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(
                         process_stream_task, wait_reconnect_task
                     )
-            finally:
-                if not self._reconnect_event.is_set():
-                    break
-                self._reconnect_event.clear()
+                    should_stop.set()
+            except DeadlineExceeded:
+                raise APITimeoutError()
+            except GoogleAPICallError as e:
+                raise APIStatusError(
+                    e.message,
+                    status_code=e.code or -1,
+                )
+            except Exception as e:
+                raise APIConnectionError() from e
 
 
 def _recognize_response_to_speech_event(
