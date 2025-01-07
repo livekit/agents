@@ -285,7 +285,6 @@ class STT(stt.STT):
             self._location = location
             # if location is changed, fetch a new client and recognizer as per the new location
             self._client = self._ensure_client()
-            self._recognizer = self._recognizer
         if keywords is not None:
             self._config.keywords = keywords
 
