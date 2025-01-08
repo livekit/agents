@@ -1103,12 +1103,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     "skipping validation, agent is speaking and does not allow interruptions",
                     extra={"speech_id": self._playing_speech.id},
                 )
-            elif not self._should_interrupt():
-                should_ignore_input = True
-                logger.debug(
-                    "interrupt threshold is not met",
-                    extra={"speech_id": self._playing_speech.id},
-                )
+            else:
+                should_interrupt, should_ignore = self._should_interrupt()
+                if not should_interrupt:
+                    should_ignore_input = should_ignore
+                    logger.debug(
+                        "interrupt threshold is not met",
+                        extra={"speech_id": self._playing_speech.id},
+                    )
 
             if should_ignore_input:
                 self._transcribed_text = ""
@@ -1164,37 +1166,38 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     def _interrupt_if_possible(self) -> None:
         """Check whether the current assistant speech should be interrupted"""
-        if self._playing_speech and self._should_interrupt():
+        should_interrupt,_ = self._should_interrupt()
+        if self._playing_speech and should_interrupt:
             self._playing_speech.interrupt()
 
-    def _should_interrupt(self) -> bool:
+    def _should_interrupt(self):
         if self._playing_speech is None:
-            return False
+            return False, True
 
         if (
             not self._playing_speech.allow_interruptions
             or self._playing_speech.interrupted
         ):
             logger.debug("not self._playing_speech.allow_interruptions or self._playing_speech.interrupted")
-            return False
+            return False, True
 
         if self._opts.int_min_words != 0:
             text = self._transcribed_interim_text or self._transcribed_text
             interim_words = self._opts.transcription.word_tokenizer.tokenize(text=text)
             logger.debug(f"Interim Words: {interim_words}")
             if len(interim_words) == 0:
-                return False
+                return False, True
             elif len(interim_words) == 1:
                 if interim_words[0].lower() in ExcludedWords:
                     logger.debug("interim_words in excluded_words")
-                    return False
+                    return False, True
                 else:
                     if self._playing_speech_since is not None:
                         time_diff = time.perf_counter() - self._playing_speech_since
                         logger.debug(f"Playout time lapsed :  {time_diff}")
                         if time_diff <= 3:
                             logger.debug(f"Dont interrupt as {time_diff} <= 3")
-                            return False
+                            return False, True
             elif len(interim_words) > 1:
                 if interim_words[len(interim_words) - 1].lower() not in ExcludedWords:
                     if self._playing_speech_since is not None:
@@ -1202,15 +1205,15 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         logger.debug(f"Playout time lapsed :  {time_diff}")
                         if time_diff <= 3:
                             logger.info(f"Dont interrupt as {time_diff} <= 3")
-                            return False
+                            return False, False
                     logger.debug("agent_playout_start is None")
-                    return True
+                    return True, False
                 logger.debug("interim_words has excluded_words")
-                return False
+                return False, True
             # if len(interim_words) < self._opts.int_min_words:
             #     return False
 
-        return True
+        return True, False
 
     def _add_speech_for_playout(self, speech_handle: SpeechHandle) -> None:
         self._speech_q.append(speech_handle)
