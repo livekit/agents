@@ -195,6 +195,13 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
 
 
+class _NOTSET:
+    pass
+
+
+NOTSET = _NOTSET()
+
+
 class RealtimeModel:
     @overload
     def __init__(
@@ -207,7 +214,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -232,7 +239,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -250,7 +257,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -347,7 +354,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -451,8 +458,8 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat | None = None,
         output_audio_format: api_proto.AudioFormat | None = None,
         tool_choice: api_proto.ToolChoice | None = None,
-        input_audio_transcription: InputTranscriptionOptions | None = None,
-        turn_detection: ServerVadOptions | None = None,
+        input_audio_transcription: InputTranscriptionOptions | None | _NOTSET = NOTSET,
+        turn_detection: ServerVadOptions | None | _NOTSET = NOTSET,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
     ) -> RealtimeSession:
@@ -469,9 +476,9 @@ class RealtimeModel:
             opts.output_audio_format = output_audio_format
         if tool_choice is not None:
             opts.tool_choice = tool_choice
-        if input_audio_transcription is not None:
-            opts.input_audio_transcription
-        if turn_detection is not None:
+        if not isinstance(input_audio_transcription, _NOTSET):
+            opts.input_audio_transcription = input_audio_transcription
+        if not isinstance(turn_detection, _NOTSET):
             opts.turn_detection = turn_detection
         if temperature is not None:
             opts.temperature = temperature
@@ -879,8 +886,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         voice: api_proto.Voice | None = None,
         input_audio_format: api_proto.AudioFormat | None = None,
         output_audio_format: api_proto.AudioFormat | None = None,
-        input_audio_transcription: InputTranscriptionOptions | None = None,
-        turn_detection: ServerVadOptions | None = None,
+        input_audio_transcription: InputTranscriptionOptions | None | _NOTSET = NOTSET,
+        turn_detection: ServerVadOptions | None | _NOTSET = NOTSET,
         tool_choice: api_proto.ToolChoice | None = None,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
@@ -896,9 +903,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self._opts.input_audio_format = input_audio_format
         if output_audio_format is not None:
             self._opts.output_audio_format = output_audio_format
-        if input_audio_transcription is not None:
+        if not isinstance(input_audio_transcription, _NOTSET):
             self._opts.input_audio_transcription = input_audio_transcription
-        if turn_detection is not None:
+        if not isinstance(turn_detection, _NOTSET):
             self._opts.turn_detection = turn_detection
         if tool_choice is not None:
             self._opts.tool_choice = tool_choice
