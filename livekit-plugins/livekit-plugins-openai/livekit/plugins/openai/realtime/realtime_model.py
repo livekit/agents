@@ -979,12 +979,16 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         """
         original_ctx = self._remote_conversation_items.to_chat_context()
 
-        # filter out messages that are not function calls and content is None
-        filtered_messages = [
-            msg
-            for msg in new_ctx.messages
-            if msg.tool_call_id or msg.content is not None
-        ]
+        def _validate_message(msg: llm.ChatMessage) -> bool:
+            # already exists in the remote conversation items
+            # or is a function call or has content
+            return (
+                self._remote_conversation_items.get(msg.id) is not None
+                or msg.tool_call_id is not None
+                or msg.content is not None
+            )
+
+        filtered_messages = list(filter(_validate_message, new_ctx.messages))
         changes = utils._compute_changes(
             original_ctx.messages, filtered_messages, key_fnc=lambda x: x.id
         )
@@ -1059,7 +1063,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         if item is None:
             logger.warning(
                 "conversation item not found, skipping update",
-                extra={"item_id": item_id},
+                extra={"item_id": item_id, "content": str(content)},
             )
             return
         item.content = content
