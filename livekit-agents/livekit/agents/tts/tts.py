@@ -178,6 +178,7 @@ class ChunkedStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
                 if self._conn_options.max_retry == 0:
                     raise
                 elif i == self._conn_options.max_retry:
@@ -186,7 +187,7 @@ class ChunkedStream(ABC):
                     ) from e
                 else:
                     logger.warning(
-                        f"failed to synthesize speech, retrying in {self._conn_options.retry_interval}s",
+                        f"failed to synthesize speech, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={
                             "tts": self._tts._label,
@@ -195,7 +196,7 @@ class ChunkedStream(ABC):
                         },
                     )
 
-                await asyncio.sleep(self._conn_options.retry_interval)
+                await asyncio.sleep(retry_interval)
 
     async def aclose(self) -> None:
         """Close is automatically called if the stream is completely collected"""
@@ -258,6 +259,7 @@ class SynthesizeStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
                 if self._conn_options.max_retry == 0:
                     raise
                 elif i == self._conn_options.max_retry:
@@ -266,7 +268,7 @@ class SynthesizeStream(ABC):
                     ) from e
                 else:
                     logger.warning(
-                        f"failed to synthesize speech, retrying in {self._conn_options.retry_interval}s",
+                        f"failed to synthesize speech, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={
                             "tts": self._tts._label,
@@ -275,7 +277,7 @@ class SynthesizeStream(ABC):
                         },
                     )
 
-                await asyncio.sleep(self._conn_options.retry_interval)
+                await asyncio.sleep(retry_interval)
 
     async def _metrics_monitor_task(
         self, event_aiter: AsyncIterable[SynthesizedAudio]

@@ -17,6 +17,7 @@ HG_MODEL = "livekit/turn-detector"
 ONNX_FILENAME = "model_quantized.onnx"
 PUNCS = string.punctuation.replace("'", "")
 MAX_HISTORY = 4
+MAX_HISTORY_TOKENS = 512
 
 
 def _download_from_hf_hub(repo_id, filename, **kwargs):
@@ -77,7 +78,7 @@ class _EUORunner(_InferenceRunner):
             )
 
             self._tokenizer = AutoTokenizer.from_pretrained(
-                HG_MODEL, local_files_only=True
+                HG_MODEL, local_files_only=True, truncation_side="left"
             )
             self._eou_index = self._tokenizer.encode("<|im_end|>")[-1]
         except (errors.LocalEntryNotFoundError, OSError):
@@ -105,6 +106,8 @@ class _EUORunner(_InferenceRunner):
             text,
             add_special_tokens=False,
             return_tensors="np",
+            max_length=MAX_HISTORY_TOKENS,
+            truncation=True,
         )
 
         input_dict = {"input_ids": np.array(inputs["input_ids"], dtype=np.int64)}

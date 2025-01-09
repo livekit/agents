@@ -57,5 +57,15 @@ class APIConnectOptions:
         if self.timeout < 0:
             raise ValueError("timeout must be greater than or equal to 0")
 
+    def _interval_for_retry(self, num_retries: int) -> float:
+        """
+        Return the interval for the given number of retries.
+
+        The first retry is immediate, and then uses specified retry_interval
+        """
+        if num_retries == 0:
+            return 0.1
+        return self.retry_interval
+
 
 DEFAULT_API_CONNECT_OPTIONS = APIConnectOptions()

@@ -206,6 +206,9 @@ class SpeechStream(stt.SpeechStream):
                     for task in done:
                         if task != wait_reconnect_task:
                             task.result()
+                    if wait_reconnect_task not in done:
+                        break
+                    self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(
                         process_input_task, wait_reconnect_task
@@ -220,9 +223,6 @@ class SpeechStream(stt.SpeechStream):
                     del self._recognizer
 
                 await asyncio.to_thread(_cleanup)
-                if not self._reconnect_event.is_set():
-                    break
-                self._reconnect_event.clear()
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs):
         detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
