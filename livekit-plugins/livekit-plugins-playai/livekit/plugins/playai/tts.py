@@ -203,6 +203,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         opts: _Options,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
+        self._tts = tts
         self._client = tts._client
         self._opts = opts
         self._config = self._opts.tts_options
@@ -264,8 +265,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         raise APIConnectionError() from e
 
                     self._client = PlayHTAsyncClient(
-                        user_id=self.tts._user_id,
-                        api_key=self.tts._api_key,
+                        user_id=self._tts._user_id,
+                        api_key=self._tts._api_key,
                     )
                     continue
 
