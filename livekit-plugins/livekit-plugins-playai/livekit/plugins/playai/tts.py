@@ -203,8 +203,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         opts: _Options,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts = tts
         self._client = tts._client
+        self._api_key = tts._api_key
+        self._user_id = tts._user_id
         self._opts = opts
         self._config = self._opts.tts_options
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
@@ -251,8 +252,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 last_frame = frame
                     break
 
-                except websockets.exceptions.ConnectionClosedError as e:
-                    logger.warning(f"WebSocket closed unexpectedly: {e}")
+                except websockets.exceptions.ConnectionClosedError as err:
+                    logger.warning(f"WebSocket closed unexpectedly: {err}")
                     # Close client
                     try:
                         await self._client.close()
@@ -262,11 +263,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
 
                     if attempt == max_retries:
-                        raise APIConnectionError() from e
+                        raise APIConnectionError() from err
 
                     self._client = PlayHTAsyncClient(
-                        user_id=self._tts._user_id,
-                        api_key=self._tts._api_key,
+                        user_id=self._user_id,
+                        api_key=self._api_key,
                     )
                     continue
 
