@@ -235,50 +235,29 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         input_task = asyncio.create_task(self._tokenize_input())
 
-        max_retries = 3
         try:
             text_stream = await self._create_text_stream()
-
-            for attempt in range(0, max_retries + 1):
-                try:
-                    async for chunk in self._client.stream_tts_input(
-                        text_stream=text_stream,
-                        options=self._config,
-                        voice_engine=self._opts.model,
-                    ):
-                        for frame in self._mp3_decoder.decode_chunk(chunk):
-                            for frame in bstream.write(frame.data.tobytes()):
-                                _send_last_frame(segment_id=segment_id, is_final=False)
-                                last_frame = frame
-                    break
-
-                except websockets.exceptions.ConnectionClosedError as err:
-                    logger.warning(f"WebSocket closed unexpectedly: {err}")
-                    # Close client
-                    try:
-                        await self._client.close()
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to close PlayHT websocket connection {e}"
-                        )
-
-                    if attempt == max_retries:
-                        raise APIConnectionError() from err
-
-                    self._client = PlayHTAsyncClient(
-                        user_id=self._user_id,
-                        api_key=self._api_key,
-                    )
-                    continue
-
-                except Exception as e:
-                    raise APIConnectionError() from e
+            self._client = PlayHTAsyncClient(
+                user_id=self._user_id,
+                api_key=self._api_key,
+            )
+            async for chunk in self._client.stream_tts_input(
+                text_stream=text_stream,
+                options=self._config,
+                voice_engine=self._opts.model,
+            ):
+                for frame in self._mp3_decoder.decode_chunk(chunk):
+                    for frame in bstream.write(frame.data.tobytes()):
+                        _send_last_frame(segment_id=segment_id, is_final=False)
+                        last_frame = frame
 
             for frame in bstream.flush():
                 _send_last_frame(segment_id=segment_id, is_final=False)
                 last_frame = frame
             _send_last_frame(segment_id=segment_id, is_final=True)
 
+        except Exception as e:
+            raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(input_task)
             await self._client.close()
