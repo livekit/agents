@@ -75,7 +75,7 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Ollama          | livekit-plugins-openai    | [openai.LLM.with_ollama()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_ollama)         |
 | Perplexity      | livekit-plugins-openai    | [openai.LLM.with_perplexity()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_perplexity) |
 | Together.ai     | livekit-plugins-openai    | [openai.LLM.with_together()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_together)     |
-| X.ai (Groq)     | livekit-plugins-openai    | [openai.LLM.with_x_ai()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_x_ai)             |
+| X.ai (Grok)     | livekit-plugins-openai    | [openai.LLM.with_x_ai()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_x_ai)             |
 
 ### STT
 
