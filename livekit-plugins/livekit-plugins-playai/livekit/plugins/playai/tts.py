@@ -92,8 +92,6 @@ class TTS(tts.TTS):
         self._api_key = api_key
         self._user_id = user_id
 
-        self._client = PlayHTAsyncClient(user_id=self._user_id, api_key=self._api_key)
-
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     def update_options(
@@ -159,7 +157,8 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _Options,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._client = tts._client
+        self._api_key = tts._api_key
+        self._user_id = tts._user_id
         self._opts = opts
         self._config = self._opts.tts_options
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
@@ -168,6 +167,10 @@ class ChunkedStream(tts.ChunkedStream):
         request_id = utils.shortuuid()
         bstream = utils.audio.AudioByteStream(
             sample_rate=self._config.sample_rate, num_channels=NUM_CHANNELS
+        )
+        self._client = PlayHTAsyncClient(
+            user_id=self._user_id,
+            api_key=self._api_key,
         )
 
         try:
@@ -202,7 +205,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         opts: _Options,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._client = tts._client
         self._api_key = tts._api_key
         self._user_id = tts._user_id
         self._opts = opts
