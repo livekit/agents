@@ -5,7 +5,6 @@ import os
 import weakref
 from dataclasses import dataclass, fields
 
-import websockets  # needed for ConnectionClosedError
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
