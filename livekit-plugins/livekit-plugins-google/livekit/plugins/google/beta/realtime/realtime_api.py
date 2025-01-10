@@ -281,6 +281,20 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
     async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
         self._chat_ctx = ctx.copy()
 
+    def cancel_response(self) -> None:
+        raise NotImplementedError("cancel_response is not supported yet")
+
+    def create_response(
+        self,
+        on_duplicate: Literal[
+            "cancel_existing", "cancel_new", "keep_both"
+        ] = "keep_both",
+    ) -> None:
+        raise NotImplementedError("create_response is not supported yet")
+
+    def commit_audio_buffer(self) -> None:
+        raise NotImplementedError("commit_audio_buffer is not supported yet")
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
         @utils.log_exceptions(logger=logger)

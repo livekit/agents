@@ -1017,6 +1017,21 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         # wait for all the futures to complete
         await asyncio.gather(*_futs)
 
+    def cancel_response(self) -> None:
+        if self._active_response_id:
+            self.response.cancel()
+
+    def create_response(
+        self,
+        on_duplicate: Literal[
+            "cancel_existing", "cancel_new", "keep_both"
+        ] = "keep_both",
+    ) -> None:
+        self.response.create(on_duplicate=on_duplicate)
+
+    def commit_audio_buffer(self) -> None:
+        self.input_audio_buffer.commit()
+
     def _create_empty_user_audio_message(self, duration: float) -> llm.ChatMessage:
         """Create an empty audio message with the given duration."""
         samples = int(duration * api_proto.SAMPLE_RATE)

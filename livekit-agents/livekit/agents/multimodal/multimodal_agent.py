@@ -29,7 +29,6 @@ EventTypes = Literal[
     "user_stopped_speaking",
     "agent_started_speaking",
     "agent_stopped_speaking",
-    "input_speech_committed",
     "user_speech_committed",
     "agent_speech_committed",
     "agent_speech_interrupted",
@@ -97,7 +96,18 @@ class _RealtimeAPISession(Protocol):
     def fnc_ctx(self) -> llm.FunctionContext | None: ...
     @fnc_ctx.setter
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None: ...
+
     def chat_ctx_copy(self) -> llm.ChatContext: ...
+
+    def cancel_response(self) -> None: ...
+    def create_response(
+        self,
+        on_duplicate: Literal[
+            "cancel_existing", "cancel_new", "keep_both"
+        ] = "keep_both",
+    ) -> None: ...
+    def commit_audio_buffer(self) -> None: ...
+
     def _recover_from_text_response(self, item_id: str) -> None: ...
     def _update_conversation_item_content(
         self,
@@ -303,7 +313,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     alternatives=[stt.SpeechData(language="", text="")],
                 )
             )
-            self.emit("input_speech_committed")
 
         @self._session.on("input_speech_transcription_completed")
         def _input_speech_transcription_completed(ev: _InputTranscriptionProto):
@@ -349,6 +358,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             self.emit("metrics_collected", metrics)
 
     def interrupt(self) -> None:
+        self._session.cancel_response()
+
         if self._playing_handle is not None and not self._playing_handle.done():
             self._playing_handle.interrupt()
 
@@ -359,6 +370,11 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     audio_end_ms=int(self._playing_handle.audio_samples / 24000 * 1000),
                 )
         self._update_state("listening")
+
+    def commit_audio_buffer(self) -> None:
+        """Commit the audio buffer and create a new response"""
+        self._session.commit_audio_buffer()
+        self._session.create_response(on_duplicate="cancel_existing")
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
