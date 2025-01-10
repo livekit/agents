@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
+import wave
 from typing import Any, Awaitable, Callable, Optional, Union
 
 from livekit import rtc
@@ -35,6 +37,8 @@ def build_oai_message(msg: llm.ChatMessage, cache_key: Any):
                 oai_content.append({"type": "text", "text": cnt})
             elif isinstance(cnt, llm.ChatImage):
                 oai_content.append(_build_oai_image_content(cnt, cache_key))
+            elif isinstance(cnt, llm.ChatAudio):
+                oai_content.append(_build_oai_audio_content(cnt))
 
         oai_msg["content"] = oai_content
 
@@ -61,6 +65,29 @@ def build_oai_message(msg: llm.ChatMessage, cache_key: Any):
         oai_msg["tool_call_id"] = msg.tool_call_id
 
     return oai_msg
+
+
+def _build_oai_audio_content(audio: llm.ChatAudio):
+    frames = audio.frame if isinstance(audio.frame, list) else [audio.frame]
+    audio_data: bytes
+    with io.BytesIO() as inmemory_wav:
+        with wave.open(inmemory_wav, "wb") as wav_file:
+            wav_file.setnchannels(frames[0].num_channels)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(frames[0].sample_rate)
+            wav_file.writeframes(frames[0].to_wav_bytes())
+            for frame in frames[1:]:
+                wav_file.writeframes(frame._data)
+        inmemory_wav.seek(0)
+        audio_data = inmemory_wav.getvalue()
+
+    return {
+        "type": "input_audio",
+        "input_audio": {
+            "data": base64.b64encode(audio_data).decode("utf-8"),
+            "format": "wav",
+        },
+    }
 
 
 def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):

@@ -18,21 +18,16 @@ from __future__ import annotations
 import asyncio
 import datetime
 import os
+from base64 import b64decode
 from dataclasses import dataclass
 from typing import Any, Literal, MutableSet, Union
 
 import aiohttp
 import httpx
-from livekit.agents import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    llm,
-)
+import openai
+from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice, _create_ai_function_info
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-
-import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
 
@@ -639,8 +634,10 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
+        tool_choice: (
+            Union[ToolChoice, Literal["auto", "required", "none"]] | None
+        ) = None,
+        modalities: list[str] | None = None,
     ) -> "LLMStream":
         if parallel_tool_calls is None:
             parallel_tool_calls = self._opts.parallel_tool_calls
@@ -663,6 +660,7 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            modalities=modalities,
         )
 
 
@@ -681,6 +679,7 @@ class LLMStream(llm.LLMStream):
         n: int | None,
         parallel_tool_calls: bool | None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]],
+        modalities: list[str] | None,
     ) -> None:
         super().__init__(
             llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
@@ -694,6 +693,7 @@ class LLMStream(llm.LLMStream):
         self._n = n
         self._parallel_tool_calls = parallel_tool_calls
         self._tool_choice = tool_choice
+        self._modalities = modalities
 
     async def _run(self) -> None:
         if hasattr(self._llm._client, "_refresh_credentials"):
@@ -748,6 +748,7 @@ class LLMStream(llm.LLMStream):
                 stream_options={"include_usage": True},
                 stream=True,
                 user=user,
+                modalities=self._modalities,
                 **opts,
             )
 
