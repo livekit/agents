@@ -129,19 +129,26 @@ class AudioStreamDecoder:
             for frame in container.decode(audio_stream):
                 if self._closed:
                     return
-                for resampled_frame in resampler.resample(frame):
-                    nchannels = len(resampled_frame.layout.channels)
-                    data = resampled_frame.to_ndarray().tobytes()
-                    self._output_ch.send_nowait(
-                        rtc.AudioFrame(
-                            data=data,
-                            num_channels=nchannels,
-                            sample_rate=resampled_frame.sample_rate,
-                            samples_per_channel=resampled_frame.samples / nchannels,
-                        )
-                    )
+                frames = resampler.resample(frame)
+                asyncio.run_coroutine_threadsafe(
+                    self._push_decoded_frames(frames),
+                    self._loop,
+                )
         finally:
             self._output_finished = True
+
+    async def _push_decoded_frames(self, frames: list[av.AudioFrame]):
+        for resampled_frame in frames:
+            nchannels = len(resampled_frame.layout.channels)
+            data = resampled_frame.to_ndarray().tobytes()
+            await self._output_ch.send(
+                rtc.AudioFrame(
+                    data=data,
+                    num_channels=nchannels,
+                    sample_rate=resampled_frame.sample_rate,
+                    samples_per_channel=resampled_frame.samples / nchannels,
+                )
+            )
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
         return self

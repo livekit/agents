@@ -77,7 +77,6 @@ jobs:
           sudo dpkg -i libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
           sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
 
-
       - name: Install ffmpeg (macOS)
         if: ${{ startsWith(matrix.os, 'macos') }}
         run: brew install ffmpeg
@@ -129,7 +128,7 @@ jobs:
               test_files="test_stt.py"
               ;;
             tts)
-              test_files="test_tts.py"
+              test_files="test_tts.py test_decoder.py"
               ;;
             *)
               echo "Unknown test group: ${{ matrix.test_group }}"
