@@ -75,7 +75,7 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Ollama          | livekit-plugins-openai    | [openai.LLM.with_ollama()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_ollama)         |
 | Perplexity      | livekit-plugins-openai    | [openai.LLM.with_perplexity()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_perplexity) |
 | Together.ai     | livekit-plugins-openai    | [openai.LLM.with_together()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_together)     |
-| X.ai (Groq)     | livekit-plugins-openai    | [openai.LLM.with_x_ai()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_x_ai)             |
+| X.ai (Grok)     | livekit-plugins-openai    | [openai.LLM.with_x_ai()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_x_ai)             |
 
 ### STT
 
@@ -122,7 +122,7 @@ Documentation on the framework and how to use it can be found [here](https://doc
 | Voice agent using the new OpenAI Realtime API                         | [demo](https://playground.livekit.io)          | [code](https://github.com/livekit-examples/realtime-playground)                                        |
 | Super fast voice agent using Cerebras hosted Llama 3.1                | [demo](https://cerebras.vercel.app)            | [code](https://github.com/dsa/fast-voice-assistant/)                                                   |
 | Voice agent using Cartesia's Sonic model                              | [demo](https://cartesia-assistant.vercel.app/) | [code](https://github.com/livekit-examples/cartesia-voice-agent)                                       |
-| Agent that looks up the current weather via function call             | N/A                                            | [code](https://github.com/livekit-examples/cartesia-voice-agent)                                       |
+| Agent that looks up the current weather via function call             | N/A                                            | [code](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/function_calling_weather.py)                                       |
 | Voice Agent using Gemini 2.0 Flash                                    | N/A                                            | [code](https://github.com/livekit-examples/voice-pipeline-agent/gemini_voice_agent.py)                 |
 | Voice agent with custom turn-detection model                          | N/A                                            | [code](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/turn_detector.py)     |
 | Voice agent that performs a RAG-based lookup                          | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/voice-pipeline-agent/simple-rag)           |

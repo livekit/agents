@@ -46,7 +46,7 @@ class SpeechHandle:
 
         self._nested_speech_handles: list[SpeechHandle] = []
         self._nested_speech_changed = asyncio.Event()
-        self._nested_speech_finished = False
+        self._nested_speech_done_fut = asyncio.Future[None]()
 
     @staticmethod
     def create_assistant_reply(
@@ -190,11 +190,16 @@ class SpeechHandle:
             raise RuntimeError("interruptions are not allowed")
         self.cancel()
 
-    def cancel(self) -> None:
+    def cancel(self, cancel_nested: bool = False) -> None:
         self._init_fut.cancel()
 
         if self._synthesis_handle is not None:
             self._synthesis_handle.interrupt()
+
+        if cancel_nested:
+            for speech in self._nested_speech_handles:
+                speech.cancel(cancel_nested=True)
+            self.mark_nested_speech_done()
 
     @property
     def fnc_nested_depth(self) -> int:
@@ -221,8 +226,10 @@ class SpeechHandle:
         return self._nested_speech_changed
 
     @property
-    def nested_speech_finished(self) -> bool:
-        return self._nested_speech_finished
+    def nested_speech_done(self) -> bool:
+        return self._nested_speech_done_fut.done()
 
-    def mark_nested_speech_finished(self) -> None:
-        self._nested_speech_finished = True
+    def mark_nested_speech_done(self) -> None:
+        if self._nested_speech_done_fut.done():
+            return
+        self._nested_speech_done_fut.set_result(None)
