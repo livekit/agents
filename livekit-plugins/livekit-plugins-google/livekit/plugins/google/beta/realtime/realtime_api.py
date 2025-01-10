@@ -286,6 +286,8 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._init_sync_task = asyncio.create_task(asyncio.sleep(0))
         self._send_ch = utils.aio.Chan[ClientEvents]()
         self._active_response_id = None
+        if chat_ctx:
+            self.create_conversation(chat_ctx)
 
     async def aclose(self) -> None:
         if self._send_ch.closed:
