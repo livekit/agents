@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Annotated
+from typing import Annotated, Optional, TypedDict
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -13,13 +13,9 @@ from livekit.agents import (
     llm,
 )
 from livekit.agents.pipeline import AgentCallContext, VoicePipelineAgent
-from livekit.agents.pipeline.agent_task import (
-    AgentTask,
-    AgentTaskOptions,
-    _default_before_enter_cb,
-)
+from livekit.agents.pipeline.agent_task import AgentTask
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 load_dotenv()
 
@@ -27,229 +23,264 @@ logger = logging.getLogger("multi-task-agent")
 logger.setLevel(logging.INFO)
 
 
-user_data_template = {
-    "order": [],
-    "customer_name": None,
-    "customer_phone": None,
-    "checked_out": False,
-    "expense": None,
-}
+class UserData(TypedDict):
+    customer_name: Optional[str]
+    customer_phone: Optional[str]
+
+    reservation_time: Optional[str]
+
+    order: Optional[list[str]]
+    customer_credit_card: Optional[str]
+    customer_credit_card_expiry: Optional[str]
+    customer_credit_card_cvv: Optional[str]
+    expense: Optional[float]
+    checked_out: Optional[bool]
 
 
-async def before_enter_cb(
-    agent: VoicePipelineAgent, task: AgentTask
-) -> tuple[AgentTask, str]:
-    task, message = await _default_before_enter_cb(agent, task)
+def update_chat_ctx(task: AgentTask, chat_ctx: llm.ChatContext) -> AgentTask:
+    last_chat_ctx = chat_ctx.truncate(keep_last_n=6)
+    task.inject_chat_ctx(last_chat_ctx)
+    return task
 
-    # additionally add the current user data to the message
-    user_data = user_data_template.copy()
-    user_data.update(agent.user_data)
-    message += f" The current user data is {json.dumps(user_data)}"
-    logger.info(message)
-    return task, message
+
+# some common functions
+@llm.ai_callable()
+async def update_name(
+    name: Annotated[str, llm.TypeInfo(description="The customer's name")],
+) -> str:
+    """Called when the user provides their name.
+    Confirm the spelling with the user before calling the function."""
+    agent = AgentCallContext.get_current().agent
+    user_data: UserData = agent.user_data
+    user_data["customer_name"] = name
+    return f"The name is updated to {name}"
+
+
+@llm.ai_callable()
+async def update_phone(
+    phone: Annotated[str, llm.TypeInfo(description="The customer's phone number")],
+) -> str:
+    """Called when the user provides their phone number.
+    Confirm the spelling with the user before calling the function."""
+
+    agent = AgentCallContext.get_current().agent
+    user_data: UserData = agent.user_data
+    user_data["customer_phone"] = phone
+    return f"The phone number is updated to {phone}"
+
+
+@llm.ai_callable()
+async def to_greeter() -> tuple[AgentTask, str]:
+    """Called when user asks unrelated questions or requests other services."""
+    agent = AgentCallContext.get_current().agent
+    next_task = AgentTask.get_task(Greeter)
+    return update_chat_ctx(next_task, agent.chat_ctx), f"User data: {agent.user_data}"
 
 
 class Greeter(AgentTask):
     def __init__(self, menu: str):
         super().__init__(
-            name="greeter",
             instructions=(
-                "You are a friendly restaurant receptionist. Your jobs are:\n"
-                "1. Warmly greet the caller\n"
-                f"2. Ask if they'd like to place an order. (menu: {menu})\n"
-                "3. Transfer to the corresponding task using functions based on the user's response.\n"
-                "Important:\n"
-                "- If a transfer function is unavailable, it means prerequisites aren't met\n"
-                "- Guide the customer to complete previous steps first\n"
-                "- If already checked out, start a new order\n\n"
-                "For non-order inquiries, assist directly while maintaining a professional tone."
+                f"You are a friendly restaurant receptionist. The menu is: {menu}\n"
+                "Your jobs are to greet the caller and guide them to the reservation, "
+                "or order taking task based on the user's response."
+            )
+        )
+        self.menu = menu
+
+    @llm.ai_callable()
+    async def to_reservation(self) -> tuple[AgentTask, str]:
+        """Called when user wants to make a reservation."""
+        agent = AgentCallContext.get_current().agent
+        next_task = self.get_task(Reservation)
+        return update_chat_ctx(
+            next_task, agent.chat_ctx
+        ), f"User info: {agent.user_data}"
+
+    @llm.ai_callable()
+    async def to_takeaway(self) -> tuple[AgentTask, str]:
+        """Called when the user orders a takeaway"""
+        agent = AgentCallContext.get_current().agent
+        next_task = self.get_task(Takeaway)
+        return update_chat_ctx(
+            next_task, agent.chat_ctx
+        ), f"User info: {agent.user_data}"
+
+    @llm.ai_callable()
+    def to_checkout(self) -> tuple[AgentTask, str]:
+        """Called when the user wants to checkout the takeaway order."""
+        agent = AgentCallContext.get_current().agent
+        user_data: UserData = agent.user_data
+        if user_data.get("checked_out"):
+            return "You have already checked out. Please ask for other services."
+
+        if not user_data.get("order"):
+            next_task = self.get_task(Takeaway)
+            message = "No order found. Please take an order first."
+        else:
+            next_task = self.get_task(Checkout)
+            message = f"User order: {user_data['order']}. "
+
+        message += f" User info: {user_data}"
+        return update_chat_ctx(next_task, agent.chat_ctx), message
+
+
+class Reservation(AgentTask):
+    def __init__(self):
+        super().__init__(
+            instructions=(
+                "You are a reservation agent at a restaurant. Your jobs are to record "
+                "the customer's name, phone number, and reservation time. Then confirm "
+                "the reservation details with the customer."
             ),
-            functions=[self.start_new_order],
-            options=AgentTaskOptions(
-                before_enter_cb=before_enter_cb,
-                transfer_function_description=(
-                    "Called to transfer to the greeter when the user asks for general questions "
-                    "or starting over after checking out."
-                ),
-            ),
+            functions=[update_name, update_phone, to_greeter],
         )
 
     @llm.ai_callable()
-    async def start_new_order(self) -> str:
-        """Called to start a new order."""
+    async def update_reservation_time(
+        self,
+        time: Annotated[str, llm.TypeInfo(description="The reservation time")],
+    ) -> str:
+        """Called when the user provides their reservation time.
+        Confirm the time with the user before calling the function."""
         agent = AgentCallContext.get_current().agent
-        agent.user_data.clear()
-        # probably also clear the chat ctx of tasks
-        logger.info("Started a new order")
-        return "Started a new order"
+        user_data: UserData = agent.user_data
+        user_data["reservation_time"] = time
+        return f"The reservation time is updated to {time}"
+
+    @llm.ai_callable()
+    async def confirm_reservation(self) -> str:
+        """Called when the user confirms the reservation.
+        Call this function to transfer to the next step."""
+        agent = AgentCallContext.get_current().agent
+        user_data: UserData = agent.user_data
+        if not user_data.get("customer_name") or not user_data.get("customer_phone"):
+            return "Please provide your name and phone number first."
+
+        if not user_data.get("reservation_time"):
+            return "Please provide reservation time first."
+
+        next_task = self.get_task(Greeter)
+        return update_chat_ctx(
+            next_task, agent.chat_ctx
+        ), f"Reservation confirmed. User data: {user_data}"
 
 
-"""
-Another way to create a task
-
-@llm.ai_callable()
-async def start_new_order() -> str:
-    ...
-
-def can_enter_greeter(agent: VoicePipelineAgent) -> bool:
-    return True
-
-greeter = AgentTask(
-    name="greeter",
-    instructions="...",
-    functions=[start_new_order],
-    options=AgentTaskOptions(
-        can_enter_cb=can_enter_greeter,
-        before_enter_cb=before_enter_cb,
-    ),
-)
-"""
-
-
-class OrderTaking(AgentTask):
+class Takeaway(AgentTask):
     def __init__(self, menu: str):
         super().__init__(
-            name="order_taking",
             instructions=(
-                "You are a professional order taker at a restaurant. Your jobs are:\n"
-                f"1. Take orders from our menu: {menu}\n"
-                "2. Clarify special requests\n"
-                "3. Confirm order accuracy\n\n"
-                "Transfer to the next step using functions after the order is confirmed."
+                "You are a professional order taker at a restaurant Our menu is: "
+                f"{menu}. Your jobs are to show the menu and take orders from the "
+                "customer. Clarify special requests and confirm the order with the "
+                "customer."
             ),
-            functions=[self.update_order],
-            options=AgentTaskOptions(
-                can_enter_cb=self.can_enter,
-                before_enter_cb=before_enter_cb,
-                transfer_function_description=(
-                    "Called to transfer to the order taking "
-                    "when the user wants to take an order or modify their order."
-                ),
-            ),
+            functions=[to_greeter],
         )
-
-    def can_enter(self, agent: "VoicePipelineAgent") -> bool:
-        checked_out = agent.user_data.get("checked_out", False)
-        return not checked_out
 
     @llm.ai_callable()
     async def update_order(
         self,
         items: Annotated[
-            list[str],
-            llm.TypeInfo(description="The items of the full order"),
+            list[str], llm.TypeInfo(description="The items of the full order")
         ],
     ) -> str:
         """Called when the user updates their order."""
 
         agent = AgentCallContext.get_current().agent
-        agent.user_data["order"] = items
-
-        logger.info("Updated order", extra={"order": items})
+        user_data: UserData = agent.user_data
+        user_data["order"] = items
         return f"Updated order to {items}"
 
-
-class CustomerRegistration(AgentTask):
-    def __init__(self):
-        super().__init__(
-            name="customer_registration",
-            instructions=(
-                "You are collecting customer information for their order. Your jobs are:\n"
-                "1. Get and confirm customer's name and comfirm the spelling\n"
-                "2. Get phone number and verify it's correct\n"
-                "3. Repeat both pieces of information back to ensure accuracy\n\n"
-                "Transfer to the next step using functions after the information is confirmed."
-            ),
-            functions=[self.collect_name, self.collect_phone],
-            options=AgentTaskOptions(
-                can_enter_cb=self.can_enter,
-                before_enter_cb=before_enter_cb,
-                transfer_function_description=(
-                    "Called to transfer to the customer registration "
-                    "after the order is confirmed or the user wants to update their information."
-                ),
-            ),
-        )
-
-    def can_enter(self, agent: "VoicePipelineAgent") -> bool:
-        checked_out = agent.user_data.get("checked_out", False)
-        order = agent.user_data.get("order", None)
-        return order and not checked_out
-
     @llm.ai_callable()
-    async def collect_name(
-        self, name: Annotated[str, llm.TypeInfo(description="The customer's name")]
-    ) -> str:
-        """Called when the user provides their name."""
+    async def to_checkout(self) -> tuple[AgentTask, str]:
+        """Called when the user confirms the order. Call this function to transfer to the checkout step.
+        Double check the order with the user before calling the function."""
         agent = AgentCallContext.get_current().agent
-        agent.user_data["customer_name"] = name
+        user_data: UserData = agent.user_data
+        if not user_data.get("order"):
+            return "No order found. Please take an order first."
 
-        logger.info("Collected name", extra={"customer_name": name})
-        return f"The name is updated to {name}"
-
-    @llm.ai_callable()
-    async def collect_phone(
-        self,
-        phone: Annotated[str, llm.TypeInfo(description="The customer's phone number")],
-    ) -> str:
-        """Called when the user provides their phone number."""
-        agent = AgentCallContext.get_current().agent
-        agent.user_data["customer_phone"] = phone
-
-        logger.info("Collected phone", extra={"customer_phone": phone})
-        return f"The phone number is updated to {phone}"
+        next_task = self.get_task(Checkout)
+        return update_chat_ctx(next_task, agent.chat_ctx), f"User info: {user_data}"
 
 
 class Checkout(AgentTask):
     def __init__(self, menu: str):
         super().__init__(
-            name="checkout",
             instructions=(
-                "You are a checkout agent at a restaurant. Your jobs are:\n"
-                f"1. Review order and prices ({menu})\n"
-                "2. Calculate and confirm total\n"
-                "3. Process checkout and confirm the total\n\n"
-                "Transfer back to the greeter using functions after checkout."
+                "You are a professional checkout agent at a restaurant. The menu is: "
+                f"{menu}. Your are responsible for calculating the expense of the "
+                "order and collecting customer's name, phone number and credit card "
+                "information, including the card number, expiry date, and CVV."
             ),
-            functions=[self.checkout],
-            options=AgentTaskOptions(
-                can_enter_cb=self.can_enter,
-                before_enter_cb=before_enter_cb,
-                transfer_function_description=(
-                    "Called to transfer to the checkout "
-                    "after the user confirms the order and registration."
-                ),
-            ),
+            functions=[update_name, update_phone, to_greeter],
         )
 
-    def can_enter(self, agent: "VoicePipelineAgent") -> bool:
-        checked_out = agent.user_data.get("checked_out", False)
-        order = agent.user_data.get("order")
-        customer_name = agent.user_data.get("customer_name")
-        customer_phone = agent.user_data.get("customer_phone")
-
-        return order and customer_name and customer_phone and not checked_out
-
     @llm.ai_callable()
-    async def checkout(
+    async def confirm_expense(
         self,
         expense: Annotated[float, llm.TypeInfo(description="The expense of the order")],
     ) -> str:
-        """Called when the user confirms the checkout."""
+        """Called when the user confirms the expense."""
         agent = AgentCallContext.get_current().agent
-        agent.user_data["checked_out"] = True
-        agent.user_data["expense"] = expense
-        logger.info("Checked out", extra=agent.user_data)
-        return "Checked out"
+        user_data: UserData = agent.user_data
+        user_data["expense"] = expense
+        return f"The expense is confirmed to be {expense}"
+
+    @llm.ai_callable()
+    async def update_credit_card(
+        self,
+        number: Annotated[str, llm.TypeInfo(description="The credit card number")],
+        expiry: Annotated[
+            str, llm.TypeInfo(description="The expiry date of the credit card")
+        ],
+        cvv: Annotated[str, llm.TypeInfo(description="The CVV of the credit card")],
+    ) -> str:
+        """Called when the user provides their credit card number, expiry date, and CVV.
+        Confirm the spelling with the user before calling the function."""
+        agent = AgentCallContext.get_current().agent
+        user_data: UserData = agent.user_data
+        user_data["customer_credit_card"] = number
+        user_data["customer_credit_card_expiry"] = expiry
+        user_data["customer_credit_card_cvv"] = cvv
+        return f"The credit card number is updated to {number}"
+
+    @llm.ai_callable()
+    async def confirm_checkout(self) -> str:
+        """Called when the user confirms the checkout.
+        Double check the information with the user before calling the function."""
+        agent = AgentCallContext.get_current().agent
+        user_data: UserData = agent.user_data
+        if not user_data.get("expense"):
+            return "Please confirm the expense first."
+
+        if (
+            not user_data.get("customer_credit_card")
+            or not user_data.get("customer_credit_card_expiry")
+            or not user_data.get("customer_credit_card_cvv")
+        ):
+            return "Please provide the credit card information first."
+
+        user_data["checked_out"] = True
+        next_task = self.get_task(Greeter)
+        return update_chat_ctx(
+            next_task, agent.chat_ctx
+        ), f"User checked out. User info: {user_data}"
 
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    chat_log_file = "restaurant_agent.log"
+    # create tasks
     menu = "Pizza: $10, Salad: $5, Ice Cream: $3, Coffee: $2"
+    greeter = AgentTask.register_task(Greeter(menu))
+    AgentTask.register_task(Reservation())
+    AgentTask.register_task(Takeaway(menu))
+    AgentTask.register_task(Checkout(menu))
 
     # Set up chat logger
+    chat_log_file = "restaurant_agent.log"
     chat_logger = logging.getLogger("chat_logger")
     chat_logger.setLevel(logging.INFO)
     handler = logging.FileHandler(chat_log_file)
@@ -257,21 +288,13 @@ async def entrypoint(ctx: JobContext):
     handler.setFormatter(formatter)
     chat_logger.addHandler(handler)
 
-    agent_tasks = [
-        Greeter(menu),
-        OrderTaking(menu),
-        CustomerRegistration(),
-        Checkout(menu),
-    ]
-
     participant = await ctx.wait_for_participant()
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
         llm=openai.LLM(),
-        tts=openai.TTS(),
-        initial_task=agent_tasks[0],
-        available_tasks=agent_tasks,
+        tts=cartesia.TTS(),
+        initial_task=greeter,
         max_nested_fnc_calls=3,  # may call functions in the transition function
     )
 

@@ -196,7 +196,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         # chat_ctx: ChatContext | None = None,
         # fnc_ctx: FunctionContext | None = None,
         initial_task: AgentTask | None = None,
-        available_tasks: list[AgentTask] | None = None,
         allow_interruptions: bool = True,
         interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
@@ -323,47 +322,25 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         # agent tasks
         self._user_data: dict[str, Any] = {}
         self._current_agent_task = initial_task or AgentTask()
-        self._agent_tasks: list[AgentTask] = available_tasks or []
 
     @property
     def user_data(self) -> dict[str, Any]:
         return self._user_data
 
     @property
-    def agent_tasks(self) -> list[AgentTask]:
-        return self._agent_tasks
-
-    @property
     def current_agent_task(self) -> AgentTask:
         return self._current_agent_task
 
-    @current_agent_task.setter
-    def current_agent_task(self, task: AgentTask) -> None:
+    def update_task(self, task: AgentTask) -> None:
         self._current_agent_task = task
 
     @property
-    def fnc_ctx(self) -> FunctionContext | None:
-        available_tasks = [task for task in self._agent_tasks if task._can_enter(self)]
-        if not available_tasks:
-            # no transition available, return the current function context
-            return self._current_agent_task.fnc_ctx
-
-        new_fnc_ctx = (
-            self._current_agent_task.fnc_ctx.copy()
-            if self._current_agent_task.fnc_ctx
-            else FunctionContext()
-        )
-        for task in available_tasks:
-            if task.transfer_fnc_info.name in new_fnc_ctx._fncs:
-                raise ValueError(
-                    f"duplicate ai_callable name: {task.transfer_fnc_info.name}"
-                )
-            new_fnc_ctx._fncs[task.transfer_fnc_info.name] = task.transfer_fnc_info
-
-        return new_fnc_ctx
+    def fnc_ctx(self) -> FunctionContext:
+        return self._current_agent_task.fnc_ctx
 
     @property
     def _chat_ctx(self) -> ChatContext:
+        # for compatibility for self._chat_ctx
         return self._current_agent_task.chat_ctx
 
     @property
@@ -435,9 +412,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 ),
             )
 
-        for agent_task in self._agent_tasks:
-            if agent_task.llm:
-                agent_task.llm.on("metrics_collected", _on_llm_metrics)
+        # for agent_task in self._agent_tasks:
+        #     if agent_task.llm:
+        #         agent_task.llm.on("metrics_collected", _on_llm_metrics)
 
         @self._vad.on("metrics_collected")
         def _on_vad_metrics(vad_metrics: vad.VADMetrics) -> None:
@@ -990,12 +967,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 if new_task:
                     logger.debug(
                         "switching to next agent task",
-                        extra={
-                            "current_task": self.current_agent_task.name,
-                            "new_task": new_task.name,
-                        },
+                        extra={"from": self.current_agent_task, "to": new_task},
                     )
-                    self.current_agent_task = new_task
+                    self.update_task(new_task)
+                    # TODO: should we update task after the function call is done?
                     # use the new chat ctx for the next task
                     tool_calls_chat_ctx = self._chat_ctx
 
@@ -1028,12 +1003,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             fnc_ctx = self.fnc_ctx
             if (
                 fnc_ctx
+                and len(fnc_ctx.ai_functions) > 0
                 and new_speech_handle.fnc_nested_depth
                 >= self._opts.max_nested_fnc_calls
             ):
                 if len(fnc_ctx.ai_functions) > 1:
                     logger.info(
-                        "max function calls nested depth reached, dropping function context. increase max_nested_fnc_calls to enable additional nesting.",
+                        "max function calls nested depth reached, dropping function context. "
+                        "increase max_nested_fnc_calls to enable additional nesting.",
                         extra={
                             "speech_id": speech_handle.id,
                             "fnc_nested_depth": speech_handle.fnc_nested_depth,

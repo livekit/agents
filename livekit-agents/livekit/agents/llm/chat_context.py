@@ -192,3 +192,18 @@ class ChatContext:
         copied_chat_ctx = ChatContext(messages=[m.copy() for m in self.messages])
         copied_chat_ctx._metadata = self._metadata
         return copied_chat_ctx
+
+    def truncate(
+        self, keep_last_n: int, *, keep_system_message: bool = False
+    ) -> ChatContext:
+        copied_messages = [m.copy() for m in self.messages[-keep_last_n:]]
+
+        remove_roles = {"tool"}  # tool message at the first position is invalid
+        if not keep_system_message:
+            remove_roles.add("system")
+        while copied_messages and copied_messages[0].role in remove_roles:
+            copied_messages.pop(0)
+
+        new_ctx = ChatContext(messages=copied_messages)
+        new_ctx._metadata = self._metadata
+        return new_ctx

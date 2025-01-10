@@ -1,112 +1,74 @@
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Awaitable, Callable, Optional, Union
+import inspect
+from typing import Callable, Dict, Optional, Type, Union
 
-from ..llm import LLM, ChatContext, ChatMessage, FunctionContext
-from ..llm.function_context import FunctionInfo, _UseDocMarker, ai_callable
+from ..llm import LLM, ChatContext, FunctionContext
+from ..llm.function_context import METADATA_ATTR, ai_callable
 from ..stt import STT
-
-if TYPE_CHECKING:
-    from ..pipeline import VoicePipelineAgent
-
-
-BeforeEnterCallback = Callable[
-    ["VoicePipelineAgent", "AgentTask"],
-    Awaitable[Union["AgentTask", tuple["AgentTask", str]]],
-]
-
-
-def _get_last_n_messages(messages: list[ChatMessage], n: int) -> list[ChatMessage]:
-    collected_messages = messages.copy()[-n:]
-    while collected_messages and collected_messages[0].role in ["system", "tool"]:
-        collected_messages.pop(0)
-    return collected_messages
-
-
-async def _default_before_enter_cb(
-    agent: "VoicePipelineAgent", task: "AgentTask"
-) -> tuple["AgentTask", str]:
-    # keep the last n messages for the next stage
-    keep_last_n = 6
-    previous_messages = _get_last_n_messages(agent.chat_ctx.messages, keep_last_n)
-    task.chat_ctx.messages.extend(previous_messages)
-
-    message = f"Transferred from {agent.current_agent_task.name} to {task.name}."
-    return task, message
-
-
-def _default_can_enter_cb(agent: "VoicePipelineAgent") -> bool:
-    return True
-
-
-@dataclass(frozen=True)
-class AgentTaskOptions:
-    can_enter_cb: Callable[["VoicePipelineAgent"], bool] = _default_can_enter_cb
-    """callback to check if the task can be entered"""
-    transfer_function_description: Optional[Union[str, _UseDocMarker]] = None
-    """description of the transfer function, use `Called to transfer to {task_name}` if not provided"""
-    before_enter_cb: BeforeEnterCallback = _default_before_enter_cb
-    """callback to call before entering the task"""
 
 
 class AgentTask:
+    # Single class-level storage for all tasks
+    _registered_tasks: Dict[Union[str, Type["AgentTask"]], "AgentTask"] = {}
+
     def __init__(
         self,
-        name: Optional[str] = None,
         instructions: Optional[str] = None,
         functions: Optional[list[Callable]] = None,
         llm: Optional[LLM] = None,
-        options: AgentTaskOptions = AgentTaskOptions(),
+        name: Optional[str] = None,
     ) -> None:
         self._chat_ctx = ChatContext()
         if instructions:
             self._chat_ctx.append(text=instructions, role="system")
-        self._fnc_ctx: Optional[FunctionContext] = None
+
+        self._fnc_ctx = FunctionContext()
         if functions:
-            self._fnc_ctx = FunctionContext()
+            # register ai functions from the list
             for fnc in functions:
+                if not hasattr(fnc, METADATA_ATTR):
+                    fnc = ai_callable()(fnc)
                 self._fnc_ctx._register_ai_function(fnc)
+
+        # register ai functions from the class
+        for _, member in inspect.getmembers(self, predicate=inspect.ismethod):
+            if hasattr(member, METADATA_ATTR):
+                self._fnc_ctx._register_ai_function(member)
 
         self._llm = llm
         self._stt = None
 
-        self._task_name = name or self.__class__.__name__
-        self._opts = options
+        # Auto-register if name is provided
+        if name is not None:
+            self.register_task(self, name)
 
-        # transfer function
-        from ..pipeline import AgentCallContext
+    @classmethod
+    def register_task(
+        cls, task: "AgentTask", name: Optional[str] = None
+    ) -> "AgentTask":
+        """Register a task instance globally"""
+        # Register by name if provided
+        if name is not None:
+            if name in cls._registered_tasks:
+                raise ValueError(f"Task with name '{name}' already registered")
+            cls._registered_tasks[name] = task
 
-        transfer_fnc_desc = (
-            options.transfer_function_description
-            if options.transfer_function_description is not None
-            else f"Called to transfer to {self._task_name}"
-        )
+        # Always register by type
+        task_type = type(task)
+        if task_type in cls._registered_tasks:
+            raise ValueError(f"Task of type {task_type.__name__} already registered")
+        cls._registered_tasks[task_type] = task
 
-        @ai_callable(
-            name=f"transfer_to_{self._task_name}", description=transfer_fnc_desc
-        )
-        async def transfer_fnc() -> Union["AgentTask", tuple["AgentTask", str]]:
-            agent = AgentCallContext.get_current().agent
-            return await self._opts.before_enter_cb(agent, self)
+        return task
 
-        self._transfer_fnc_info = FunctionContext._callable_to_fnc_info(transfer_fnc)
-
-    def _can_enter(self, agent: "VoicePipelineAgent") -> bool:
-        return self._opts.can_enter_cb(agent)
-
-    @property
-    def name(self) -> str:
-        return self._task_name
-
-    @property
-    def transfer_fnc_info(self) -> FunctionInfo:
-        return self._transfer_fnc_info  # type: ignore
+    def inject_chat_ctx(self, chat_ctx: ChatContext) -> None:
+        self._chat_ctx.messages.extend(chat_ctx.messages)
 
     @property
     def chat_ctx(self) -> ChatContext:
         return self._chat_ctx
 
     @property
-    def fnc_ctx(self) -> Optional[FunctionContext]:
+    def fnc_ctx(self) -> FunctionContext:
         return self._fnc_ctx
 
     @property
@@ -116,3 +78,15 @@ class AgentTask:
     @property
     def stt(self) -> Optional[STT]:
         return self._stt
+
+    @classmethod
+    def get_task(cls, key: Union[str, Type["AgentTask"]]) -> "AgentTask":
+        """Get task instance by name or class"""
+        if key not in cls._registered_tasks:
+            raise ValueError(f"Task with name or class {key} not found")
+        return cls._registered_tasks[key]
+
+    @classmethod
+    def all_registered_tasks(cls) -> list["AgentTask"]:
+        """Get all registered tasks"""
+        return list(set(cls._registered_tasks.values()))
