@@ -47,7 +47,7 @@ LanguageCode = Union[LgType, List[LgType]]
 
 # Google STT has a timeout of 5 mins, we'll attempt to restart the session
 # before that timeout is reached
-_max_session_duration = 4
+_max_session_duration = 240
 
 
 # This class is only be used internally to encapsulate the options
@@ -281,6 +281,13 @@ class STT(stt.STT):
             self._config.spoken_punctuation = spoken_punctuation
         if model is not None:
             self._config.model = model
+        client = None
+        recognizer = None
+        if location is not None:
+            self._location = location
+            # if location is changed, fetch a new client and recognizer as per the new location
+            client = self._ensure_client()
+            recognizer = self._recognizer
         if keywords is not None:
             self._config.keywords = keywords
 
@@ -292,8 +299,9 @@ class STT(stt.STT):
                 punctuate=punctuate,
                 spoken_punctuation=spoken_punctuation,
                 model=model,
-                location=location,
                 keywords=keywords,
+                client=client,
+                recognizer=recognizer,
             )
 
 
@@ -326,8 +334,9 @@ class SpeechStream(stt.SpeechStream):
         punctuate: bool | None = None,
         spoken_punctuation: bool | None = None,
         model: SpeechModels | None = None,
-        location: str | None = None,
         keywords: List[tuple[str, float]] | None = None,
+        client: SpeechAsyncClient | None = None,
+        recognizer: str | None = None,
     ):
         if languages is not None:
             if isinstance(languages, str):
@@ -345,6 +354,10 @@ class SpeechStream(stt.SpeechStream):
             self._config.model = model
         if keywords is not None:
             self._config.keywords = keywords
+        if client is not None:
+            self._client = client
+        if recognizer is not None:
+            self._recognizer = recognizer
 
         self._reconnect_event.set()
 
@@ -415,7 +428,9 @@ class SpeechStream(stt.SpeechStream):
                             time.time() - self._session_connected_at
                             > _max_session_duration
                         ):
-                            logger.debug("restarting session due to timeout")
+                            logger.debug(
+                                "Google STT maximum connection time reached. Reconnecting..."
+                            )
                             if has_started:
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(

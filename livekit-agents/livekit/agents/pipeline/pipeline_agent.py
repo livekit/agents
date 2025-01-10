@@ -830,11 +830,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
+        # add tool calls and text message to the chat context
         message_id_committed: str | None = None
-        if (
-            collected_text
-            and speech_handle.add_to_chat_ctx
-            and (not user_question or speech_handle.user_committed)
+        if speech_handle.add_to_chat_ctx and (
+            not user_question or speech_handle.user_committed
         ):
             if speech_handle.extra_tools_messages:
                 if speech_handle.fnc_text_message_id is not None:
@@ -848,27 +847,28 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         speech_handle.extra_tools_messages[0].content = ""
                 self._chat_ctx.messages.extend(speech_handle.extra_tools_messages)
 
-            if interrupted:
-                collected_text += "..."
+            if collected_text:
+                if interrupted:
+                    collected_text += "..."
 
-            msg = ChatMessage.create(text=collected_text, role="assistant")
-            self._chat_ctx.messages.append(msg)
-            message_id_committed = msg.id
-            speech_handle.mark_speech_committed()
+                msg = ChatMessage.create(text=collected_text, role="assistant")
+                self._chat_ctx.messages.append(msg)
+                message_id_committed = msg.id
+                speech_handle.mark_speech_committed()
 
-            if interrupted:
-                self.emit("agent_speech_interrupted", msg)
-            else:
-                self.emit("agent_speech_committed", msg)
+                if interrupted:
+                    self.emit("agent_speech_interrupted", msg)
+                else:
+                    self.emit("agent_speech_committed", msg)
 
-            logger.debug(
-                "committed agent speech",
-                extra={
-                    "agent_transcript": collected_text,
-                    "interrupted": interrupted,
-                    "speech_id": speech_handle.id,
-                },
-            )
+                logger.debug(
+                    "committed agent speech",
+                    extra={
+                        "agent_transcript": collected_text,
+                        "interrupted": interrupted,
+                        "speech_id": speech_handle.id,
+                    },
+                )
 
         @utils.log_exceptions(logger=logger)
         async def _execute_function_calls() -> None:
