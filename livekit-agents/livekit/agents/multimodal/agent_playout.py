@@ -153,7 +153,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 [capture_task, handle._int_fut],
                 return_when=asyncio.FIRST_COMPLETED,
             )
-
         finally:
             await utils.aio.gracefully_cancel(capture_task)
 
