@@ -15,6 +15,7 @@ from google import genai  # type: ignore
 from google.genai.types import (  # type: ignore
     FunctionResponse,
     GenerationConfigDict,
+    LiveClientContent,
     LiveClientToolResponse,
     LiveConnectConfigDict,
     PrebuiltVoiceConfig,
@@ -28,8 +29,10 @@ from .api_proto import (
     LiveAPIModels,
     ResponseModality,
     Voice,
+    _build_gemini_ctx,
     _build_tools,
 )
+from .transcriber import TranscriberSession, TranscriptionContent
 
 EventTypes = Literal[
     "start_session",
@@ -39,6 +42,9 @@ EventTypes = Literal[
     "function_calls_collected",
     "function_calls_finished",
     "function_calls_cancelled",
+    "input_speech_transcription_completed",
+    "agent_speech_transcription_completed",
+    "agent_speech_transcription_interrupted",
 ]
 
 
@@ -53,6 +59,12 @@ class GeminiContent:
     text_stream: AsyncIterable[str]
     audio_stream: AsyncIterable[rtc.AudioFrame]
     content_type: Literal["text", "audio"]
+
+
+@dataclass
+class InputTranscription:
+    item_id: str
+    transcript: str
 
 
 @dataclass
@@ -77,6 +89,7 @@ class ModelOptions:
     presence_penalty: float | None
     frequency_penalty: float | None
     instructions: str
+    enable_transcription: bool
 
 
 class RealtimeModel:
@@ -88,6 +101,7 @@ class RealtimeModel:
         api_key: str | None = None,
         voice: Voice | str = "Puck",
         modalities: ResponseModality = "AUDIO",
+        enable_transcription: bool = True,
         vertexai: bool = False,
         project_id: str | None = None,
         location: str | None = None,
@@ -109,6 +123,7 @@ class RealtimeModel:
             modalities (ResponseModality): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
             model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
+            enable_transcription (bool, optional): Whether to enable transcription. Defaults to True
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
                 project_id (str or None, optional): The project id to use for the API. Defaults to None. (for vertexai)
@@ -150,6 +165,7 @@ class RealtimeModel:
             model=model,
             api_key=self._api_key,
             voice=voice,
+            enable_transcription=enable_transcription,
             response_modalities=modalities,
             vertexai=vertexai,
             project=self._project_id,
@@ -224,7 +240,6 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             tools.append({"function_declarations": functions})
 
         self._config = LiveConnectConfigDict(
-            model=self._opts.model,
             response_modalities=self._opts.response_modalities,
             generation_config=GenerationConfigDict(
                 candidate_count=self._opts.candidate_count,
@@ -255,10 +270,20 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._main_atask = asyncio.create_task(
             self._main_task(), name="gemini-realtime-session"
         )
-        # dummy task to wait for the session to be initialized # TODO: sync chat ctx
-        self._init_sync_task = asyncio.create_task(
-            asyncio.sleep(0), name="gemini-realtime-session-init"
-        )
+        if self._opts.enable_transcription:
+            self._transcriber = TranscriberSession(
+                client=self._client, model=self._opts.model
+            )
+            self._agent_transcriber = TranscriberSession(
+                client=self._client, model=self._opts.model
+            )
+            self._transcriber.on("input_speech_done", self._on_input_speech_done)
+            self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
+            self._agent_transcriber.on(
+                "input_speech_interrupted", self._on_agent_speech_interrupted
+            )
+        # init dummy task
+        self._init_sync_task = asyncio.create_task(asyncio.sleep(0))
         self._send_ch = utils.aio.Chan[ClientEvents]()
         self._active_response_id = None
 
@@ -277,18 +302,77 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
         self._fnc_ctx = value
 
-    def _push_audio(self, frame: rtc.AudioFrame) -> None:
-        data = base64.b64encode(frame.data).decode("utf-8")
-        self._queue_msg({"mime_type": "audio/pcm", "data": data})
+    def _update_conversation_item_content(self, item_id: str, content: str) -> None:
+        pass
 
-    def _queue_msg(self, msg: dict) -> None:
+    def _push_audio(self, frame: rtc.AudioFrame) -> None:
+        if self._opts.enable_transcription:
+            self._transcriber._push_audio(frame)
+        else:
+            data = base64.b64encode(frame.data).decode("utf-8")
+            self._queue_msg({"mime_type": "audio/pcm", "data": data})
+
+    def _queue_msg(self, msg: ClientEvents) -> None:
         self._send_ch.send_nowait(msg)
+
+    def create_conversation(
+        self, chat_ctx: llm.ChatContext | llm.ChatMessage, turn_complete: bool = True
+    ) -> None:
+        if isinstance(chat_ctx, llm.ChatMessage):
+            new_chat_ctx = llm.ChatContext()
+            new_chat_ctx.append(text=chat_ctx.content, role=chat_ctx.role)
+        else:
+            new_chat_ctx = chat_ctx
+        gemini_ctx = _build_gemini_ctx(new_chat_ctx)
+        client_content = LiveClientContent(
+            turn_complete=turn_complete,
+            turns=gemini_ctx,
+        )
+        self._queue_msg(client_content)
 
     def chat_ctx_copy(self) -> llm.ChatContext:
         return self._chat_ctx.copy()
 
     async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
         self._chat_ctx = ctx.copy()
+
+    def _on_input_speech_done(self, content: TranscriptionContent) -> None:
+        self.emit(
+            "input_speech_transcription_completed",
+            InputTranscription(
+                item_id=content.response_id,
+                transcript=content.text,
+            ),
+        )
+
+        self._chat_ctx.append(text=content.text, role="user")
+        conversation = _build_gemini_ctx(self._chat_ctx)
+
+        client_content = LiveClientContent(
+            turn_complete=True,
+            turns=conversation,
+        )
+        self._queue_msg(client_content)
+
+    def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
+        self.emit(
+            "agent_speech_transcription_completed",
+            InputTranscription(
+                item_id=content.response_id,
+                transcript=content.text,
+            ),
+        )
+        self._chat_ctx.append(text=content.text, role="assistant")
+
+    def _on_agent_speech_interrupted(self, content: TranscriptionContent) -> None:
+        self.emit(
+            "agent_speech_transcription_completed",
+            InputTranscription(
+                item_id=content.response_id,
+                transcript=content.text,
+            ),
+        )
+        self._chat_ctx.append(text=content.text, role="assistant")
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
@@ -335,6 +419,8 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                                         samples_per_channel=len(part.inline_data.data)
                                         // 2,
                                     )
+                                    if self._opts.enable_transcription:
+                                        self._agent_transcriber._push_audio(frame)
                                     content.audio_stream.send_nowait(frame)
 
                         if server_content.interrupted or server_content.turn_complete:

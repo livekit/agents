@@ -14,7 +14,7 @@ from livekit.agents import (
     llm,
     multimodal,
 )
-from livekit.plugins import google, silero
+from livekit.plugins import google
 
 load_dotenv()
 
@@ -57,11 +57,12 @@ async def entrypoint(ctx: JobContext):
             voice="Charon",
             temperature=0.8,
             instructions="You are a helpful assistant",
+            api_key=api_key,
         ),
         fnc_ctx=fnc_ctx,
         chat_ctx=chat_ctx,
-        stt=google.beta.realtime.STT(),
-        vad=silero.VAD.load(),
+        # stt=google.beta.realtime.STT(),
+        # vad=silero.VAD.load(),
     )
     agent.start(ctx.room, participant)
 

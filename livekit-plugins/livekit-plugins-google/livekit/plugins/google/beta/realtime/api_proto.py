@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 import inspect
+import json
 from typing import Any, Dict, List, Literal, Sequence, Union
 
+from livekit.agents import llm
+
 from google.genai import types  # type: ignore
+
+__all__ = [
+    "ClientEvents",
+    "LiveAPIModels",
+    "ResponseModality",
+    "Voice",
+    "_build_gemini_ctx",
+    "_build_tools",
+]
 
 LiveAPIModels = Literal["gemini-2.0-flash-exp"]
 
@@ -77,3 +89,35 @@ def _build_tools(fnc_ctx: Any) -> List[types.FunctionDeclarationDict]:
         function_declarations.append(func_decl)
 
     return function_declarations
+
+
+def _build_gemini_ctx(chat_ctx: llm.ChatContext) -> List[types.Content]:
+    content = None
+    turns = []
+
+    for msg in chat_ctx.messages:
+        role = None
+        if msg.role == "assistant":
+            role = "model"
+        elif msg.role in {"system", "user"}:
+            role = "user"
+        elif msg.role == "tool":
+            continue
+
+        if content and content.role == role:
+            if isinstance(msg.content, str):
+                content.parts.append(types.Part(text=msg.content))
+            elif isinstance(msg.content, dict):
+                content.parts.append(types.Part(text=json.dumps(msg.content)))
+            elif isinstance(msg.content, list):
+                for item in msg.content:
+                    if isinstance(item, str):
+                        content.parts.append(types.Part(text=item))
+        else:
+            content = types.Content(
+                parts=[types.Part(text=msg.content)],
+                role=role,
+            )
+            turns.append(content)
+
+    return turns

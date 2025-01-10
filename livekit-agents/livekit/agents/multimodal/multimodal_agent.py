@@ -16,10 +16,9 @@ from typing import (
 
 import aiohttp
 from livekit import rtc
-from livekit.agents import llm, stt, tokenize, utils, vad
+from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 from livekit.agents.llm import ChatMessage
 from livekit.agents.metrics import MultimodalLLMMetrics
-from livekit.agents.transcription import STTSegmentsForwarder, TTSSegmentsForwarder
 
 from ..log import logger
 from ..types import ATTRIBUTE_AGENT_STATE, AgentState
@@ -36,8 +35,6 @@ EventTypes = Literal[
     "function_calls_collected",
     "function_calls_finished",
     "metrics_collected",
-    "final_transcript",
-    "interim_transcript",
 ]
 
 
@@ -146,7 +143,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         vad: vad.VAD | None = None,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
-        stt: stt.STT | None = None,
         transcription: AgentTranscriptionOptions = AgentTranscriptionOptions(),
         max_text_response_retries: int = 5,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -179,18 +175,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             transcription=transcription,
         )
 
-        if stt and vad and not stt.capabilities.streaming:
-            from .. import stt as speech_to_text
-
-            stt = speech_to_text.StreamAdapter(
-                stt=stt,
-                vad=vad,
-            )
-        self._stt = stt
-        self.on("final_transcript", self._on_final_transcript)
-
         # audio input
-        self._recognize_atask: asyncio.Task | None = None
+        self._read_micro_atask: asyncio.Task | None = None
         self._subscribed_track: rtc.RemoteAudioTrack | None = None
         self._input_audio_ch = utils.aio.Chan[rtc.AudioFrame]()
 
@@ -209,10 +195,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     @property
     def vad(self) -> vad.VAD | None:
         return self._vad
-
-    @property
-    def stt(self) -> stt.STT | None:
-        return self._stt
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
@@ -270,7 +252,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         @self._session.on("response_content_added")
         def _on_content_added(message: _ContentProto):
-            tr_fwd = TTSSegmentsForwarder(
+            tr_fwd = transcription.TTSSegmentsForwarder(
                 room=self._room,
                 participant=self._room.local_participant,
                 speed=self._opts.transcription.agent_transcription_speed,
@@ -339,6 +321,16 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
             self._emit_speech_committed("user", ev.transcript)
 
+        @self._session.on("agent_speech_transcription_completed")
+        def _agent_speech_transcription_completed(ev: _InputTranscriptionProto):
+            self._agent_stt_forwarder.update(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language="", text=ev.transcript)],
+                )
+            )
+            self._emit_speech_committed("agent", ev.transcript)
+
         @self._session.on("input_speech_started")
         def _input_speech_started():
             self.emit("user_started_speaking")
@@ -398,15 +390,13 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         self._agent_publication = await self._room.local_participant.publish_track(
             track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         )
-        self._agent_stt_forwarder = STTSegmentsForwarder(
+        self._agent_stt_forwarder = transcription.STTSegmentsForwarder(
             room=self._room,
             participant=self._room.local_participant,
             track=track,
         )
         self._agent_playout = agent_playout.AgentPlayout(
-            audio_source=self._audio_source,
-            stt=self._stt,
-            stt_forwarder=self._agent_stt_forwarder,
+            audio_source=self._audio_source
         )
 
         def _on_playout_started() -> None:
@@ -434,12 +424,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
                     self._emit_speech_committed("agent", collected_text, interrupted)
 
-        def _on_final_transcript(text: str):
-            self._emit_speech_committed("agent", text)
-
         self._agent_playout.on("playout_started", _on_playout_started)
         self._agent_playout.on("playout_stopped", _on_playout_stopped)
-        self._agent_playout.on("final_transcript", _on_final_transcript)
 
         await self._agent_publication.wait_for_subscription()
 
@@ -468,6 +454,11 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         self._subscribe_to_microphone()
 
+    async def _micro_task(self, track: rtc.LocalAudioTrack) -> None:
+        stream_24khz = rtc.AudioStream(track, sample_rate=24000, num_channels=1)
+        async for ev in stream_24khz:
+            self._input_audio_ch.send_nowait(ev.frame)
+
     def _subscribe_to_microphone(self, *args, **kwargs) -> None:
         """Subscribe to the participant microphone if found"""
 
@@ -486,63 +477,25 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 and publication.track != self._subscribed_track
             ):
                 self._subscribed_track = publication.track  # type: ignore
-                self._stt_forwarder = STTSegmentsForwarder(
+                self._stt_forwarder = transcription.STTSegmentsForwarder(
                     room=self._room,
                     participant=self._linked_participant,
                     track=self._subscribed_track,
                 )
 
-                if self._recognize_atask is not None:
-                    self._recognize_atask.cancel()
+                if self._read_micro_atask is not None:
+                    self._read_micro_atask.cancel()
 
-                self._recognize_atask = asyncio.create_task(
-                    self._recognize_task(self._subscribed_track)  # type: ignore
+                self._read_micro_atask = asyncio.create_task(
+                    self._micro_task(self._subscribed_track)  # type: ignore
                 )
                 break
-
-    @utils.log_exceptions(logger=logger)
-    async def _recognize_task(self, track: rtc.LocalAudioTrack) -> None:
-        """
-        Receive the frames from the user audio stream.
-        """
-        stream_24khz = rtc.AudioStream(track, sample_rate=24000, num_channels=1)
-        stt_stream = self._stt.stream() if self._stt is not None else None
-
-        async def _micro_task() -> None:
-            async for ev in stream_24khz:
-                if stt_stream is not None:
-                    stt_stream.push_frame(ev.frame)
-                self._input_audio_ch.send_nowait(ev.frame)
-
-        async def _stt_stream_co() -> None:
-            if stt_stream is not None:
-                async for ev in stt_stream:
-                    self._stt_forwarder.update(ev)
-
-                    if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-                        self.emit("final_transcript", ev.alternatives[0].text)
-                    elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-                        self.emit("interim_transcript", ev.alternatives[0].text)
-
-        tasks = [
-            asyncio.create_task(_micro_task()),
-            asyncio.create_task(_stt_stream_co()),
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
-            if stt_stream is not None:
-                await stt_stream.aclose()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._http_session:
             self._http_session = utils.http_context.http_session()
 
         return self._http_session
-
-    def _on_final_transcript(self, text: str):
-        self._emit_speech_committed("user", text)
 
     def _emit_speech_committed(
         self, speaker: Literal["user", "agent"], msg: str, interrupted: bool = False

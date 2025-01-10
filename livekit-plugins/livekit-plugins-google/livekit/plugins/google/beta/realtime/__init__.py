@@ -5,7 +5,6 @@ from .api_proto import (
     Voice,
 )
 from .realtime_api import RealtimeModel
-from .stt import STT
 
 __all__ = [
     "RealtimeModel",
@@ -13,5 +12,4 @@ __all__ = [
     "LiveAPIModels",
     "ResponseModality",
     "Voice",
-    "STT",
 ]
