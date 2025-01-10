@@ -14,34 +14,40 @@ from . import proto
 from .log import setup_logging
 
 
+def common_options(f):
+    """Decorator to add common options to CLI commands."""
+    f = click.option(
+        "--log-level",
+        default="DEBUG",
+        type=click.Choice(
+            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
+        ),
+        help="Set the logging level",
+    )(f)
+    f = click.option(
+        "--url",
+        envvar="LIVEKIT_URL",
+        help="LiveKit server or Cloud project's websocket URL",
+    )(f)
+    f = click.option(
+        "--api-key",
+        envvar="LIVEKIT_API_KEY",
+        help="LiveKit server or Cloud project's API key",
+    )(f)
+    f = click.option(
+        "--api-secret",
+        envvar="LIVEKIT_API_SECRET",
+        help="LiveKit server or Cloud project's API secret",
+    )(f)
+    return f
+
+
 def run_app(opts: WorkerOptions) -> None:
     """Run the CLI to interact with the worker"""
     cli = click.Group()
 
     @cli.command(help="Start the worker in production mode.")
-    @click.option(
-        "--log-level",
-        default="INFO",
-        type=click.Choice(
-            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
-        ),
-        help="Set the logging level",
-    )
-    @click.option(
-        "--url",
-        envvar="LIVEKIT_URL",
-        help="LiveKit server or Cloud project's websocket URL",
-    )
-    @click.option(
-        "--api-key",
-        envvar="LIVEKIT_API_KEY",
-        help="LiveKit server or Cloud project's API key",
-    )
-    @click.option(
-        "--api-secret",
-        envvar="LIVEKIT_API_SECRET",
-        help="LiveKit server or Cloud project's API secret",
-    )
+    @common_options
     @click.option(
         "--drain-timeout",
         default=60,
@@ -64,29 +70,7 @@ def run_app(opts: WorkerOptions) -> None:
         run_worker(args)
 
     @cli.command(help="Start the worker in development mode")
-    @click.option(
-        "--log-level",
-        default="DEBUG",
-        type=click.Choice(
-            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
-        ),
-        help="Set the logging level",
-    )
-    @click.option(
-        "--url",
-        envvar="LIVEKIT_URL",
-        help="LiveKit server or Cloud project's websocket URL",
-    )
-    @click.option(
-        "--api-key",
-        envvar="LIVEKIT_API_KEY",
-        help="LiveKit server or Cloud project's API key",
-    )
-    @click.option(
-        "--api-secret",
-        envvar="LIVEKIT_API_SECRET",
-        help="LiveKit server or Cloud project's API secret",
-    )
+    @common_options
     @click.option(
         "--asyncio-debug/--no-asyncio-debug",
         default=False,
@@ -108,29 +92,7 @@ def run_app(opts: WorkerOptions) -> None:
         _run_dev(opts, log_level, url, api_key, api_secret, asyncio_debug, watch)
 
     @cli.command(help="Connect to a specific room")
-    @click.option(
-        "--log-level",
-        default="DEBUG",
-        type=click.Choice(
-            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
-        ),
-        help="Set the logging level",
-    )
-    @click.option(
-        "--url",
-        envvar="LIVEKIT_URL",
-        help="LiveKit server or Cloud project's websocket URL",
-    )
-    @click.option(
-        "--api-key",
-        envvar="LIVEKIT_API_KEY",
-        help="LiveKit server or Cloud project's API key",
-    )
-    @click.option(
-        "--api-secret",
-        envvar="LIVEKIT_API_SECRET",
-        help="LiveKit server or Cloud project's API secret",
-    )
+    @common_options
     @click.option(
         "--asyncio-debug/--no-asyncio-debug",
         default=False,
@@ -168,14 +130,7 @@ def run_app(opts: WorkerOptions) -> None:
         )
 
     @cli.command(help="Download plugin dependency files")
-    @click.option(
-        "--log-level",
-        default="DEBUG",
-        type=click.Choice(
-            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
-        ),
-        help="Set the logging level",
-    )
+    @common_options
     def download_files(log_level: str) -> None:
         setup_logging(log_level, True)
 
