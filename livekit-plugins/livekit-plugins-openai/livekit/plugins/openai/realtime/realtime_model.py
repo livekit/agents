@@ -722,7 +722,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 "cancel_existing", "cancel_new", "keep_both"
             ] = "keep_both",
             instructions: str = "",
-            modalities: list[api_proto.Modality] = "audio",
+            modalities: list[api_proto.Modality] = ["text", "audio"],
             conversation: Literal["auto", "none"] = "auto",
             metadata: map | None = None,
         ) -> asyncio.Future[bool]:
