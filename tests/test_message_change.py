@@ -43,9 +43,9 @@ def test_find_longest_increasing_subsequence(indices, expected_seq, desc):
         assert result[0] == 0, f"First index not included in {desc}"
 
     # Verify sequence matches expected
-    assert (
-        result_seq == expected_seq
-    ), f"Wrong sequence in {desc}: expected {expected_seq}, got {result_seq}"
+    assert result_seq == expected_seq, (
+        f"Wrong sequence in {desc}: expected {expected_seq}, got {result_seq}"
+    )
 
 
 @pytest.mark.parametrize(

@@ -354,9 +354,9 @@ async def test_shutdown_no_job():
 
     assert proc.exitcode == 0
     assert not proc.killed
-    assert (
-        start_args.shutdown_counter.value == 0
-    ), "shutdown_cb isn't called when there is no job"
+    assert start_args.shutdown_counter.value == 0, (
+        "shutdown_cb isn't called when there is no job"
+    )
 
 
 async def test_job_slow_shutdown():
