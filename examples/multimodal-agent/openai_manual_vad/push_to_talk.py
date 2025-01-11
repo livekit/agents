@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
-from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 import aiohttp
-from aiohttp import web
 from dotenv import load_dotenv
 from livekit.agents import (
     AutoSubscribe,
@@ -18,7 +14,6 @@ from livekit.agents import (
     cli,
     llm,
     multimodal,
-    utils,
 )
 from livekit.plugins import openai
 
@@ -28,54 +23,8 @@ logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
 
 
-class WebServer(utils.EventEmitter[Literal["push", "release"]]):
-    def __init__(self):
-        super().__init__()
-        self.websocket_connections = set()
-        self.app = web.Application()
-        self.setup_routes()
-
-    def setup_routes(self):
-        self.app.router.add_get("/", self.serve_index)
-        self.app.router.add_get("/ws", self.websocket_handler)
-
-    async def serve_index(self, request):
-        this_dir = Path(__file__).parent
-        return web.FileResponse(this_dir / "index.html")
-
-    async def websocket_handler(self, request):
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
-        self.websocket_connections.add(ws)
-
-        try:
-            async for msg in ws:
-                if msg.type == web.WSMsgType.TEXT:
-                    # Forward the message to the room
-                    data = json.loads(msg.data)
-                    msg = data["message"]
-                    if msg in ["push", "release"]:
-                        self.emit(msg)
-
-        finally:
-            self.websocket_connections.remove(ws)
-        return ws
-
-    async def start(self, host="localhost", port=8080):
-        runner = web.AppRunner(self.app)
-        await runner.setup()
-        site = web.TCPSite(runner, host, port)
-        await site.start()
-        logger.info(f"Web server started at http://{host}:{port}")
-
-
 async def entrypoint(ctx: JobContext):
     logger.info("starting entrypoint")
-
-    # Initialize and start web server
-    port = os.getenv("PORT", 8080)
-    web_server = WebServer()
-    await web_server.start(host="localhost", port=port)
 
     fnc_ctx = llm.FunctionContext()
 
@@ -125,15 +74,17 @@ async def entrypoint(ctx: JobContext):
     )
     agent.start(ctx.room, participant)
 
-    @web_server.on("push")
-    def on_button_down():
-        logger.info("interrupting agent")
-        agent.interrupt()
+    # Set attribute to indicate PTT support
+    await ctx.room.local_participant.set_attributes({"supports-ptt": "1"})
 
-    @web_server.on("release")
-    def on_button_up():
-        logger.info("committing audio buffer")
-        agent.commit_audio_buffer()
+    @ctx.room.local_participant.register_rpc_method("ptt")
+    async def handle_ptt(data):
+        logger.info(f"Received PTT action: {data.payload}")
+        if data.payload == "push":
+            agent.interrupt()
+        elif data.payload == "release":
+            agent.commit_audio_buffer()
+        return "ok"
 
     @agent.on("agent_speech_committed")
     @agent.on("agent_speech_interrupted")
