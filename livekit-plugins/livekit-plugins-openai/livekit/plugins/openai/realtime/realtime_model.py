@@ -721,8 +721,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             on_duplicate: Literal[
                 "cancel_existing", "cancel_new", "keep_both"
             ] = "keep_both",
-            instructions: str | None = None,
-            modalities: list[api_proto.Modality] | None = None,
+            instructions: str = "",
+            modalities: list[api_proto.Modality] = "audio",
             conversation: Literal["auto", "none"] = "auto",
             metadata: map | None = None,
         ) -> asyncio.Future[bool]:
@@ -734,7 +734,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     - "cancel_new": Skip creating new response if one is in progress
                     - "keep_both": Wait for the existing response to be done and then create a new one
                 instructions: explicit prompt used for out-of-band events
-                modalities: set of modalities that the model can respond in
+                modalities: set of modalities that the model can respond in, defaults to audio
                 conversation: specifies whether respones is out-of-band
                     - "auto": Contents of the response will be added to the default conversation
                     - "none": Creates an out-of-band response which will not add items to default conversation
@@ -1443,7 +1443,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         response = response_created["response"]
         done_fut = self._loop.create_future()
         status_details = response.get("status_details")
-        metadata = response.get("metadata")
+        metadata = cast(map, response.get("metadata"))
         new_response = RealtimeResponse(
             id=response["id"],
             status=response["status"],
@@ -1624,7 +1624,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         response.status = response_data["status"]
         response.status_details = response_data.get("status_details")
-        response.metadata = response_data.get("metadata")
+        response.metadata = cast(map, response_data.get("metadata"))
         response.output = cast(list[RealtimeOutput], response_data.get("output"))
         response.usage = response_data.get("usage")
 
