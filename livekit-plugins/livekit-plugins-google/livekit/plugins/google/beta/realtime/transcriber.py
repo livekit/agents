@@ -85,7 +85,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         @utils.log_exceptions(logger=logger)
         async def _send_task():
             async for msg in self._send_ch:
-                await self._session.send(msg)
+                await self._session.send(input=msg)
 
         @utils.log_exceptions(logger=logger)
         async def _recv_task():
