@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Annotated, Optional, TypedDict
+from typing import Annotated, AsyncIterable, Optional, TypedDict
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -71,7 +71,7 @@ async def update_phone(
 
 @llm.ai_callable()
 async def to_greeter() -> tuple[AgentTask, str]:
-    """Called when user asks unrelated questions or requests other services."""
+    """Called when user asks any unrelated questions or requests any other services not in your job description."""
     agent = AgentCallContext.get_current().agent
     next_task = AgentTask.get_task(Greeter)
     return update_chat_ctx(next_task, agent.chat_ctx), f"User data: {agent.user_data}"
@@ -82,8 +82,8 @@ class Greeter(AgentTask):
         super().__init__(
             instructions=(
                 f"You are a friendly restaurant receptionist. The menu is: {menu}\n"
-                "Your jobs are to greet the caller and guide them to the reservation, "
-                "or order taking task based on the user's response."
+                "Your jobs are to greet the caller and guide them to the reservation "
+                "or takeaway agent based on the user's request."
             )
         )
         self.menu = menu
@@ -99,39 +99,21 @@ class Greeter(AgentTask):
 
     @llm.ai_callable()
     async def to_takeaway(self) -> tuple[AgentTask, str]:
-        """Called when the user orders a takeaway"""
+        """Called when the user wants to make an order or checkout."""
         agent = AgentCallContext.get_current().agent
         next_task = self.get_task(Takeaway)
         return update_chat_ctx(
             next_task, agent.chat_ctx
         ), f"User info: {agent.user_data}"
 
-    @llm.ai_callable()
-    def to_checkout(self) -> tuple[AgentTask, str]:
-        """Called when the user wants to checkout the takeaway order."""
-        agent = AgentCallContext.get_current().agent
-        user_data: UserData = agent.user_data
-        if user_data.get("checked_out"):
-            return "You have already checked out. Please ask for other services."
-
-        if not user_data.get("order"):
-            next_task = self.get_task(Takeaway)
-            message = "No order found. Please take an order first."
-        else:
-            next_task = self.get_task(Checkout)
-            message = f"User order: {user_data['order']}. "
-
-        message += f" User info: {user_data}"
-        return update_chat_ctx(next_task, agent.chat_ctx), message
-
 
 class Reservation(AgentTask):
     def __init__(self):
         super().__init__(
             instructions=(
-                "You are a reservation agent at a restaurant. Your jobs are to record "
-                "the customer's name, phone number, and reservation time. Then confirm "
-                "the reservation details with the customer."
+                "You are a reservation agent at a restaurant. Your jobs are to ask for "
+                "the reservation time, then customer's name, and phone number. Then "
+                "confirm the reservation details with the customer."
             ),
             functions=[update_name, update_phone, to_greeter],
         )
@@ -170,8 +152,7 @@ class Takeaway(AgentTask):
     def __init__(self, menu: str):
         super().__init__(
             instructions=(
-                "You are a professional order taker at a restaurant Our menu is: "
-                f"{menu}. Your jobs are to show the menu and take orders from the "
+                f"Our menu is: {menu}. Your jobs are to record the order from the "
                 "customer. Clarify special requests and confirm the order with the "
                 "customer."
             ),
@@ -185,7 +166,7 @@ class Takeaway(AgentTask):
             list[str], llm.TypeInfo(description="The items of the full order")
         ],
     ) -> str:
-        """Called when the user updates their order."""
+        """Called when the user want to create or update their order."""
 
         agent = AgentCallContext.get_current().agent
         user_data: UserData = agent.user_data
@@ -199,7 +180,7 @@ class Takeaway(AgentTask):
         agent = AgentCallContext.get_current().agent
         user_data: UserData = agent.user_data
         if not user_data.get("order"):
-            return "No order found. Please take an order first."
+            return "No takeaway order found. Please make an order first."
 
         next_task = self.get_task(Checkout)
         return update_chat_ctx(next_task, agent.chat_ctx), f"User info: {user_data}"
@@ -268,6 +249,15 @@ class Checkout(AgentTask):
             next_task, agent.chat_ctx
         ), f"User checked out. User info: {user_data}"
 
+    @llm.ai_callable()
+    async def to_takeaway(self) -> tuple[AgentTask, str]:
+        """Called when the user wants to update their order."""
+        agent = AgentCallContext.get_current().agent
+        next_task = self.get_task(Takeaway)
+        return update_chat_ctx(
+            next_task, agent.chat_ctx
+        ), f"User info: {agent.user_data}"
+
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -288,6 +278,15 @@ async def entrypoint(ctx: JobContext):
     handler.setFormatter(formatter)
     chat_logger.addHandler(handler)
 
+    async def _before_tts_cb(
+        agent: VoicePipelineAgent, text: str | AsyncIterable[str]
+    ) -> str | AsyncIterable[str]:
+        if isinstance(text, str):
+            yield text.replace("*", "")
+        else:
+            async for t in text:
+                yield t.replace("*", "")
+
     participant = await ctx.wait_for_participant()
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
@@ -296,6 +295,7 @@ async def entrypoint(ctx: JobContext):
         tts=cartesia.TTS(),
         initial_task=greeter,
         max_nested_fnc_calls=3,  # may call functions in the transition function
+        before_tts_cb=_before_tts_cb,
     )
 
     # read text input from the room for easy testing
