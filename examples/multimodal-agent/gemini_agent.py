@@ -53,7 +53,10 @@ async def entrypoint(ctx: JobContext):
     # chat_ctx is used to serve as initial context, Agent will start the conversation first if chat_ctx is provided
     chat_ctx = llm.ChatContext()
     chat_ctx.append(text="What is LiveKit?", role="user")
-    chat_ctx.append(text="LiveKit is the platform for building realtime AI. The main use cases are to build AI voice agents. LiveKit also powers livestreaming apps, robotics, and video conferencing.", role="assistant")
+    chat_ctx.append(
+        text="LiveKit is the platform for building realtime AI. The main use cases are to build AI voice agents. LiveKit also powers livestreaming apps, robotics, and video conferencing.",
+        role="assistant",
+    )
     chat_ctx.append(text="What is the LiveKit Agents framework?", role="user")
 
     agent = multimodal.MultimodalAgent(
