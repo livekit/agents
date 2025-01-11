@@ -1754,4 +1754,3 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
     def logging_extra(self) -> dict:
         return {"session_id": self._session_id}
-    
