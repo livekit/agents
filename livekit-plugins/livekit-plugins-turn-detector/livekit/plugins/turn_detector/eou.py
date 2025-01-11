@@ -193,9 +193,9 @@ class EOUModel:
             timeout=timeout,
         )
 
-        assert (
-            result is not None
-        ), "end_of_utterance prediction should always returns a result"
+        assert result is not None, (
+            "end_of_utterance prediction should always returns a result"
+        )
 
         result_json = json.loads(result.decode())
         return result_json["eou_probability"]
