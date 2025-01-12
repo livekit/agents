@@ -982,7 +982,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 if new_task:
                     logger.debug(
                         "switching to next agent task",
-                        extra={"from": self.current_agent_task, "to": new_task},
+                        extra={
+                            "new_task": new_task,
+                            "previous_task": self.current_agent_task,
+                        },
                     )
                     self.update_task(new_task)
                     # TODO: should we update task after the function call is done?

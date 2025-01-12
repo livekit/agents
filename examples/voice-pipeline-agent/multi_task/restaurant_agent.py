@@ -82,15 +82,16 @@ class Greeter(AgentTask):
         super().__init__(
             instructions=(
                 f"You are a friendly restaurant receptionist. The menu is: {menu}\n"
-                "Your jobs are to greet the caller and guide them to the reservation "
-                "or takeaway agent based on the user's request."
+                "Your jobs are to greet the caller and understand if they want to "
+                "make a reservation or order takeaway. Guide them to the right agent."
             )
         )
         self.menu = menu
 
     @llm.ai_callable()
     async def to_reservation(self) -> tuple[AgentTask, str]:
-        """Called when user wants to make a reservation."""
+        """Called when user wants to make a reservation. This function handles transitioning to the reservation agent
+        who will collect the necessary details like reservation time, customer name and phone number."""
         agent = AgentCallContext.get_current().agent
         next_task = self.get_task(Reservation)
         return update_chat_ctx(
@@ -99,7 +100,8 @@ class Greeter(AgentTask):
 
     @llm.ai_callable()
     async def to_takeaway(self) -> tuple[AgentTask, str]:
-        """Called when the user wants to make an order or checkout."""
+        """Called when the user wants to place a takeaway order. This includes handling orders for pickup,
+        delivery, or when the user wants to proceed to checkout with their existing order."""
         agent = AgentCallContext.get_current().agent
         next_task = self.get_task(Takeaway)
         return update_chat_ctx(
@@ -166,8 +168,7 @@ class Takeaway(AgentTask):
             list[str], llm.TypeInfo(description="The items of the full order")
         ],
     ) -> str:
-        """Called when the user want to create or update their order."""
-
+        """Called when the user create or update their order."""
         agent = AgentCallContext.get_current().agent
         user_data: UserData = agent.user_data
         user_data["order"] = items
@@ -192,8 +193,8 @@ class Checkout(AgentTask):
             instructions=(
                 "You are a professional checkout agent at a restaurant. The menu is: "
                 f"{menu}. Your are responsible for calculating the expense of the "
-                "order and collecting customer's name, phone number and credit card "
-                "information, including the card number, expiry date, and CVV."
+                "order and then collecting customer's name, phone number and credit card "
+                "information, including the card number, expiry date, and CVV step by step."
             ),
             functions=[update_name, update_phone, to_greeter],
         )

@@ -16,7 +16,8 @@ from livekit.agents.pipeline import AgentCallContext, VoicePipelineAgent
 from livekit.agents.pipeline.agent_task import (
     AgentInlineTask,
     AgentTask,
-    ResultNotSetError,
+    ResultNotSet,
+    TaskFailed,
 )
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.plugins import cartesia, deepgram, openai, silero
@@ -52,7 +53,7 @@ def update_chat_ctx(task: T, chat_ctx: llm.ChatContext) -> T:
 
 class GetName(AgentInlineTask):
     def __init__(self, user_data: UserData | None = None):
-        instructions = "Collect the user's name. Confirm the spelling with the user before completing the task."
+        instructions = "Ask for and collect the customer's name. Please verify the spelling before proceeding."
         if user_data:
             instructions += f"\nPreviously collected user data: {user_data}"
         super().__init__(instructions=instructions)
@@ -68,7 +69,7 @@ class GetName(AgentInlineTask):
 
 class GetPhoneNumber(AgentInlineTask):
     def __init__(self, user_data: UserData | None = None):
-        instructions = "Collect the user's phone number. Confirm the spelling with the user before completing the task."
+        instructions = "Ask for and collect a valid 10-digit phone number. Please verify the number before proceeding."
         if user_data:
             instructions += f"\nPreviously collected user data: {user_data}"
         super().__init__(instructions=instructions)
@@ -94,7 +95,7 @@ class GetPhoneNumber(AgentInlineTask):
 
 class GetReservationTime(AgentInlineTask):
     def __init__(self, user_data: UserData | None = None):
-        instructions = "Collect the user's reservation time and confirm the time before completing the task."
+        instructions = "Ask for the desired reservation time and confirm the timing with the customer."
         if user_data:
             instructions += f"\nPreviously collected user data: {user_data}"
         super().__init__(instructions=instructions)
@@ -111,9 +112,9 @@ class GetReservationTime(AgentInlineTask):
 class TakeOrder(AgentInlineTask):
     def __init__(self, menu: str, user_data: UserData | None = None):
         instructions = (
-            "You are a professional order taker at a restaurant. Our menu is: "
-            f"{menu}. Clarify special requests and confirm the order with the "
-            "customer."
+            "You are a professional restaurant server. Here's our menu: "
+            f"{menu}. Take the customer's order, clarify any special requests, "
+            "and confirm the complete order before proceeding."
         )
         if user_data:
             instructions += f"\nPreviously collected user data: {user_data}"
@@ -136,7 +137,7 @@ class TakeOrder(AgentInlineTask):
 
 class GetCreditCard(AgentInlineTask):
     def __init__(self, user_data: UserData | None = None):
-        instructions = "Collect the user's credit card information, including the card number, expiry date, and CVV."
+        instructions = "Collect the customer's payment information: card number, expiration date (MM/YY), and CVV."
         if user_data:
             instructions += f"\nPreviously collected user data: {user_data}"
         super().__init__(instructions=instructions)
@@ -181,9 +182,9 @@ class Greeter(AgentTask):
     def __init__(self, menu: str):
         super().__init__(
             instructions=(
-                f"You are a friendly restaurant receptionist. The menu is: {menu}\n"
-                "Your jobs are to greet the caller and guide them to the reservation, "
-                "or order taking task based on the user's response."
+                f"You are a friendly restaurant host. Our menu: {menu}\n"
+                "Welcome customers and guide them to either make a reservation "
+                "or place an order based on their preference."
             )
         )
         self.menu = menu
@@ -199,24 +200,20 @@ class Greeter(AgentTask):
                 GetReservationTime(user_data), agent.chat_ctx
             ).run()
             user_data["reservation_time"] = reservation_time
-        except ResultNotSetError:
-            return "Please provide your reservation time."
 
-        try:
             name = await update_chat_ctx(GetName(user_data), agent.chat_ctx).run()
             user_data["customer_name"] = name
-        except ResultNotSetError:
-            return "Please provide your name."
 
-        try:
             phone = await update_chat_ctx(
                 GetPhoneNumber(user_data), agent.chat_ctx
             ).run()
             user_data["customer_phone"] = phone
-        except ResultNotSetError:
-            return "Please provide your phone number."
+        except TaskFailed as e:
+            return f"Task failed: {e}"
+        except ResultNotSet:
+            return f"Failed to collect user data, the collected data is {user_data}"
 
-        return f"Updated user data: {user_data}"
+        return f"Reservation successful. Updated user data: {user_data}"
 
     @llm.ai_callable()
     async def take_order(self) -> str:
@@ -229,9 +226,11 @@ class Greeter(AgentTask):
                 TakeOrder(self.menu, user_data), agent.chat_ctx
             ).run()
             user_data["order"] = order
-        except ResultNotSetError:
-            return "Please select items from the menu first."
-        return f"Updated user data: {user_data}"
+        except TaskFailed as e:
+            return f"Task failed: {e}"
+        except ResultNotSet:
+            return f"Failed to collect the order, the collected data is {user_data}"
+        return f"Order successful. Updated user data: {user_data}"
 
     @llm.ai_callable()
     async def checkout(
@@ -246,24 +245,20 @@ class Greeter(AgentTask):
         try:
             name = await update_chat_ctx(GetName(user_data), agent.chat_ctx).run()
             user_data["customer_name"] = name
-        except ResultNotSetError:
-            return "Please provide your name."
 
-        try:
             phone = await update_chat_ctx(
                 GetPhoneNumber(user_data), agent.chat_ctx
             ).run()
             user_data["customer_phone"] = phone
-        except ResultNotSetError:
-            return "Please provide your phone number."
 
-        try:
             credit_card = await update_chat_ctx(
                 GetCreditCard(user_data), agent.chat_ctx
             ).run()
             user_data.update(credit_card)
-        except ResultNotSetError:
-            return "Please provide your credit card information to checkout."
+        except TaskFailed as e:
+            return f"Task failed: {e}"
+        except ResultNotSet:
+            return f"Failed to collect user data, the collected data is {user_data}"
 
         user_data["checked_out"] = True
 
@@ -299,7 +294,7 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
         llm=openai.LLM(),
-        tts=openai.TTS(),
+        tts=cartesia.TTS(),
         initial_task=greeter,
         max_nested_fnc_calls=3,  # may call functions in the transition function
     )

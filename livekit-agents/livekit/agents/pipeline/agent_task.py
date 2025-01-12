@@ -1,18 +1,22 @@
 import asyncio
 import inspect
 import logging
-from typing import Any, Callable, Dict, Optional, Type, Union
+from typing import Annotated, Any, Callable, Dict, Optional, Type, Union
 
 from ..llm import LLM, ChatContext, FunctionContext
-from ..llm.function_context import METADATA_ATTR, ai_callable
+from ..llm.function_context import METADATA_ATTR, TypeInfo, ai_callable
 from ..stt import STT
 from .speech_handle import SpeechHandle
 
 logger = logging.getLogger(__name__)
 
 
-class ResultNotSetError(Exception):
+class ResultNotSet(Exception):
     """Exception raised when the task result is not set."""
+
+
+class TaskFailed(Exception):
+    """Exception raised when the task fails."""
 
 
 class SilentSentinel:
@@ -42,16 +46,16 @@ class AgentTask:
             self._chat_ctx.append(text=instructions, role="system")
 
         self._fnc_ctx = FunctionContext()
-        if functions:
-            # register ai functions from the list
-            for fnc in functions:
-                if not hasattr(fnc, METADATA_ATTR):
-                    fnc = ai_callable()(fnc)
-                self._fnc_ctx._register_ai_function(fnc)
+        functions = functions or []
+        # register ai functions from the list
+        for fnc in functions:
+            if not hasattr(fnc, METADATA_ATTR):
+                fnc = ai_callable()(fnc)
+            self._fnc_ctx._register_ai_function(fnc)
 
         # register ai functions from the class
         for _, member in inspect.getmembers(self, predicate=inspect.ismethod):
-            if hasattr(member, METADATA_ATTR):
+            if hasattr(member, METADATA_ATTR) and member not in functions:
                 self._fnc_ctx._register_ai_function(member)
 
         self._llm = llm
@@ -82,7 +86,11 @@ class AgentTask:
         return task
 
     def inject_chat_ctx(self, chat_ctx: ChatContext) -> None:
-        self._chat_ctx.messages.extend(chat_ctx.messages)
+        # filter duplicate messages
+        existing_messages = {msg.id: msg for msg in self._chat_ctx.messages}
+        for msg in chat_ctx.messages:
+            if msg.id not in existing_messages:
+                self._chat_ctx.messages.append(msg)
 
     @property
     def chat_ctx(self) -> ChatContext:
@@ -113,7 +121,9 @@ class AgentTask:
         return list(set(cls._registered_tasks.values()))
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(name={self._name})"
+        if self._name:
+            return f"{self.__class__.__name__}(name={self._name})"
+        return f"{self.__class__.__name__}()"
 
 
 class AgentInlineTask(AgentTask):
@@ -128,7 +138,6 @@ class AgentInlineTask(AgentTask):
 
         self._done_fut: asyncio.Future[None] = asyncio.Future()
         self._result: Optional[Any] = None
-        self._error: Optional[Exception] = None
 
         self._parent_task: AgentTask | None = None
         self._parent_speech: SpeechHandle | None = None
@@ -146,28 +155,28 @@ class AgentInlineTask(AgentTask):
             "running inline task",
             extra={"task": str(self), "parent_task": str(self._parent_task)},
         )
-        # generate reply to the user
-        if proactive_reply:
-            speech_handle = SpeechHandle.create_assistant_speech(
-                allow_interruptions=agent._opts.allow_interruptions,
-                add_to_chat_ctx=True,
-            )
-            self._proactive_reply_task = asyncio.create_task(
-                agent._synthesize_answer_task(None, speech_handle)
-            )
-            if self._parent_speech is not None:
-                self._parent_speech.add_nested_speech(speech_handle)
-            else:
-                agent._add_speech_for_playout(speech_handle)
-
-        # wait for the task to complete
         try:
+            # generate reply to the user
+            if proactive_reply:
+                speech_handle = SpeechHandle.create_assistant_speech(
+                    allow_interruptions=agent._opts.allow_interruptions,
+                    add_to_chat_ctx=True,
+                )
+                self._proactive_reply_task = asyncio.create_task(
+                    agent._synthesize_answer_task(None, speech_handle)
+                )
+                if self._parent_speech is not None:
+                    self._parent_speech.add_nested_speech(speech_handle)
+                else:
+                    agent._add_speech_for_playout(speech_handle)
+
+            # wait for the task to complete
             await self._done_fut
-            if self._error:
-                raise self._error
+            if self._done_fut.exception():
+                raise self._done_fut.exception()
 
             if self._result is None:
-                raise ResultNotSetError()
+                raise ResultNotSet()
             return self._result
         finally:
             # reset the parent task
@@ -176,18 +185,30 @@ class AgentInlineTask(AgentTask):
                 "inline task completed",
                 extra={
                     "result": self._result,
-                    "error": self._error,
+                    "error": self.exception,
                     "task": str(self),
                     "parent_task": str(self._parent_task),
                 },
             )
 
     @ai_callable()
-    def comfirm_result(self) -> SilentSentinel:
-        """Called when user comfirms the information is correct or user wants to exit the task.
-        Double check with the user before calling this function. This function should be called last in the task."""
+    def on_success(self) -> SilentSentinel:
+        """Called when user confirms the information is correct.
+        This function is called alone at the end of the task
+        to indicate the task is done.
+        """
         if not self._done_fut.done():
             self._done_fut.set_result(None)
+        return SilentSentinel()
+
+    @ai_callable()
+    def on_error(
+        self,
+        reason: Annotated[str, TypeInfo(description="The reason for the error")],
+    ) -> SilentSentinel:
+        """Called when user wants to exit the task or refuses to provide the information."""
+        if not self._done_fut.done():
+            self._done_fut.set_exception(TaskFailed(reason))
         return SilentSentinel()
 
     @property
@@ -199,11 +220,11 @@ class AgentInlineTask(AgentTask):
         return self._result
 
     @property
-    def error(self) -> Optional[Exception]:
-        return self._error
+    def exception(self) -> Optional[Exception]:
+        return self._done_fut.exception()
 
     def __repr__(self) -> str:
         speech_id = self._parent_speech.id if self._parent_speech else None
         return (
-            f"{self.__class__.__name__}(name={self._name}, parent_speech={speech_id})"
+            f"{self.__class__.__name__}(parent_speech={speech_id}, name={self._name})"
         )
