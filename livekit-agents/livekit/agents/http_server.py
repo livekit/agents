@@ -6,10 +6,6 @@ from typing import Any
 from aiohttp import web
 
 
-async def health_check(_: Any):
-    return web.Response(text="OK")
-
-
 class HttpServer:
     def __init__(
         self, host: str, port: int, loop: asyncio.AbstractEventLoop | None = None
@@ -18,8 +14,11 @@ class HttpServer:
         self._host = host
         self._port = port
         self._app = web.Application(loop=self._loop)
-        self._app.add_routes([web.get("/", health_check)])
         self._close_future = asyncio.Future[None](loop=self._loop)
+
+    @property
+    def app(self) -> web.Application:
+        return self._app
 
     async def run(self) -> None:
         self._runner = web.AppRunner(self._app)

@@ -6,6 +6,7 @@ from .channel import Chan, ChanClosed, ChanReceiver, ChanSender
 from .interval import Interval, interval
 from .sleep import Sleep, SleepFinished, sleep
 from .task_set import TaskSet
+from .wait_group import WaitGroup
 
 
 async def gracefully_cancel(*futures: asyncio.Future):
@@ -45,6 +46,7 @@ __all__ = [
     "SleepFinished",
     "sleep",
     "TaskSet",
+    "WaitGroup",
     "debug",
     "gracefully_cancel",
     "duplex_unix",

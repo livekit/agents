@@ -2,11 +2,12 @@ from __future__ import annotations, print_function
 
 import asyncio
 import contextlib
+import heapq
 
 from dataclasses import dataclass
 from typing import (
     AsyncIterable,
-    Callable,
+    Tuple,
     Literal,
     Optional,
     Union,
@@ -14,7 +15,7 @@ from typing import (
 
 from livekit import rtc
 
-from .. import llm, stt, tts, utils, vad
+from .. import llm, stt, tts, utils, vad, debug, tokenize
 from ..llm import ChatContext, FunctionContext
 from ..log import logger
 from . import io
@@ -22,91 +23,28 @@ from .audio_recognition import AudioRecognition, _TurnDetector
 from .generation import (
     do_llm_inference,
     do_tts_inference,
+    _TTSGenerationData,
 )
 
 
-class AgentInput:
-    def __init__(self, video_changed: Callable, audio_changed: Callable) -> None:
-        self._video_stream: io.VideoStream | None = None
-        self._audio_stream: io.AudioStream | None = None
-        self._video_changed = video_changed
-        self._audio_changed = audio_changed
-
-    @property
-    def video(self) -> io.VideoStream | None:
-        return self._video_stream
-
-    @video.setter
-    def video(self, stream: io.VideoStream | None) -> None:
-        self._video_stream = stream
-        self._video_changed()
-
-    @property
-    def audio(self) -> io.AudioStream | None:
-        return self._audio_stream
-
-    @audio.setter
-    def audio(self, stream: io.AudioStream | None) -> None:
-        self._audio_stream = stream
-        self._audio_changed()
-
-
-class AgentOutput:
+class SpeechHandle:
     def __init__(
-        self, video_changed: Callable, audio_changed: Callable, text_changed: Callable
-    ) -> None:
-        self._video_sink: io.VideoSink | None = None
-        self._audio_sink: io.AudioSink | None = None
-        self._text_sink: io.TextSink | None = None
-        self._video_changed = video_changed
-        self._audio_changed = audio_changed
-        self._text_changed = text_changed
-
-    @property
-    def video(self) -> io.VideoSink | None:
-        return self._video_sink
-
-    @video.setter
-    def video(self, sink: io.VideoSink | None) -> None:
-        self._video_sink = sink
-        self._video_changed()
-
-    @property
-    def audio(self) -> io.AudioSink | None:
-        return self._audio_sink
-
-    @audio.setter
-    def audio(self, sink: io.AudioSink | None) -> None:
-        self._audio_sink = sink
-        self._audio_changed()
-
-    @property
-    def text(self) -> io.TextSink | None:
-        return self._text_sink
-
-    @text.setter
-    def text(self, sink: io.TextSink | None) -> None:
-        self._text_sink = sink
-        self._text_changed()
-
-
-class GenerationHandle:
-    def __init__(
-        self, *, speech_id: str, allow_interruptions: bool, task: asyncio.Task
+        self, *, speech_id: str, allow_interruptions: bool, step_index: int
     ) -> None:
         self._id = speech_id
+        self._step_index = step_index
         self._allow_interruptions = allow_interruptions
-        self._interrupted = False
-        self._task = task
+        self._interrupt_fut = asyncio.Future()
+        self._done_fut = asyncio.Future()
+        self._play_fut = asyncio.Future()
+        self._playout_done_fut = asyncio.Future()
 
     @staticmethod
-    def from_task(
-        task: asyncio.Task, *, allow_interruptions: bool = True
-    ) -> GenerationHandle:
-        return GenerationHandle(
-            speech_id=utils.shortuuid("gen_"),
+    def create(allow_interruptions: bool = True, step_index: int = 0) -> SpeechHandle:
+        return SpeechHandle(
+            speech_id=utils.shortuuid("SH_"),
             allow_interruptions=allow_interruptions,
-            task=task,
+            step_index=step_index,
         )
 
     @property
@@ -114,22 +52,43 @@ class GenerationHandle:
         return self._id
 
     @property
+    def step_index(self) -> int:
+        return self._step_index
+
+    @property
     def interrupted(self) -> bool:
-        return self._interrupted
+        return self._interrupt_fut.done()
 
     @property
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
 
+    def play(self) -> None:
+        self._play_fut.set_result(None)
+
+    def done(self) -> bool:
+        return self._done_fut.done()
+
     def interrupt(self) -> None:
         if not self._allow_interruptions:
             raise ValueError("This generation handle does not allow interruptions")
 
-        if self._task.done():
+        if self.done():
             return
 
-        self._interrupted = True
-        self._task.cancel()
+        self._done_fut.set_result(None)
+        self._interrupt_fut.set_result(None)
+
+    async def wait_for_playout(self) -> None:
+        await asyncio.shield(self._playout_done_fut)
+
+    def _mark_playout_done(self) -> None:
+        self._playout_done_fut.set_result(None)
+
+    def _mark_done(self) -> None:
+        with contextlib.suppress(asyncio.InvalidStateError):
+            # will raise InvalidStateError if the future is already done (interrupted)
+            self._done_fut.set_result(None)
 
 
 EventTypes = Literal[
@@ -152,6 +111,13 @@ class _PipelineOptions:
 
 
 class PipelineAgent(rtc.EventEmitter[EventTypes]):
+    SPEECH_PRIORITY_LOW = 0
+    """Priority for messages that should be played after all other messages in the queue"""
+    SPEECH_PRIORITY_NORMAL = 5
+    """Every speech generates by the PipelineAgent defaults to this priority."""
+    SPEECH_PRIORITY_HIGH = 10
+    """Priority for important messages that should be played before others."""
+
     def __init__(
         self,
         *,
@@ -164,7 +130,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
-        min_interruption_duration: float = 1.0,
+        min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
         max_fnc_steps: int = 5,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -176,8 +142,28 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         self._fnc_ctx = fnc_ctx
 
         self._stt, self._vad, self._llm, self._tts = stt, vad, llm, tts
-        self._turn_detector = turn_detector
 
+        if tts and not tts.capabilities.streaming:
+            from .. import tts as text_to_speech
+
+            tts = text_to_speech.StreamAdapter(
+                tts=tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
+            )
+
+        if stt and not stt.capabilities.streaming:
+            from .. import stt as speech_to_text
+
+            if vad is None:
+                raise ValueError(
+                    "VAD is required when streaming is not supported by the STT"
+                )
+
+            stt = speech_to_text.StreamAdapter(
+                stt=stt,
+                vad=vad,
+            )
+
+        self._turn_detector = turn_detector
         self._audio_recognition = AudioRecognition(
             agent=self,
             stt=self.stt_node,
@@ -200,17 +186,21 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         self._audio_recognition.on("vad_inference_done", self._on_vad_inference_done)
 
         # configurable IO
-        self._input = AgentInput(
+        self._input = io.AgentInput(
             self._on_video_input_changed, self._on_audio_input_changed
         )
-        self._output = AgentOutput(
+        self._output = io.AgentOutput(
             self._on_video_output_changed,
             self._on_audio_output_changed,
             self._on_text_output_changed,
         )
 
-        # current generation happening (including all function calls & steps)
-        self._current_generation: GenerationHandle | None = None
+        self._current_speech: SpeechHandle | None = None
+        self._speech_q: list[Tuple[int, SpeechHandle]] = []
+        self._speech_q_changed = asyncio.Event()
+        self._speech_tasks = []
+
+        self._speech_scheduler_task: asyncio.Task | None = None
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -232,7 +222,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
                 async for event in stream:
                     yield event
             finally:
-                forward_task.cancel()
+                await utils.aio.gracefully_cancel(forward_task)
 
     async def llm_node(
         self, chat_ctx: llm.ChatContext, fnc_ctx: llm.FunctionContext | None
@@ -269,22 +259,25 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
     def start(self) -> None:
         self._audio_recognition.start()
+        self._speech_scheduler_task = asyncio.create_task(
+            self._playout_scheduler(), name="_playout_scheduler"
+        )
 
     async def aclose(self) -> None:
         await self._audio_recognition.aclose()
 
     @property
-    def input(self) -> AgentInput:
+    def input(self) -> io.AgentInput:
         return self._input
 
     @property
-    def output(self) -> AgentOutput:
+    def output(self) -> io.AgentOutput:
         return self._output
 
     # TODO(theomonnom): find a better name than `generation`
     @property
-    def current_generation(self) -> GenerationHandle | None:
-        return self._current_generation
+    def current_speech(self) -> SpeechHandle | None:
+        return self._current_speech
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -293,30 +286,60 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     def update_options(self) -> None:
         pass
 
-    def say(self, text: str | AsyncIterable[str]) -> GenerationHandle:
+    def say(self, text: str | AsyncIterable[str]) -> SpeechHandle:
         pass
 
-    def generate_reply(self, user_input: str) -> GenerationHandle:
-        if (
-            self._current_generation is not None
-            and not self._current_generation.interrupted
-        ):
+    def generate_reply(self, user_input: str) -> SpeechHandle:
+        if self._current_speech is not None and not self._current_speech.interrupted:
             raise ValueError("another reply is already in progress")
 
-        self._chat_ctx.append(role="user", text=user_input)
+        debug.Tracing.log_event("generate_reply", {"user_input": user_input})
+        self._chat_ctx.append(role="user", text=user_input)  # TODO(theomonnom) Remove
 
-        # TODO(theomonnom): Use the agent task chat_ctx
+        handle = SpeechHandle.create(allow_interruptions=self._opts.allow_interruptions)
         task = asyncio.create_task(
-            self._generate_reply_task(chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx)
+            self._generate_pipeline_reply_task(
+                handle=handle,
+                chat_ctx=self._chat_ctx,
+                fnc_ctx=self._fnc_ctx,
+            ),
+            name="_generate_pipeline_reply",
         )
-        gen_handle = GenerationHandle.from_task(task)
-        return gen_handle
+        self._schedule_speech(handle, task, self.SPEECH_PRIORITY_NORMAL)
+        return handle
 
     # -- Main generation task --
 
+    def _schedule_speech(
+        self, speech: SpeechHandle, task: asyncio.Task, priority: int
+    ) -> None:
+        self._speech_tasks.append(task)
+        task.add_done_callback(lambda _: self._speech_tasks.remove(task))
+
+        heapq.heappush(self._speech_q, (priority, speech))
+        self._speech_q_changed.set()
+
     @utils.log_exceptions(logger=logger)
-    async def _generate_reply_task(
-        self, *, chat_ctx: ChatContext, fnc_ctx: FunctionContext | None
+    async def _playout_scheduler(self) -> None:
+        while True:
+            await self._speech_q_changed.wait()
+
+            while self._speech_q:
+                _, speech = heapq.heappop(self._speech_q)
+                self._current_speech = speech
+                speech.play()
+                await speech.wait_for_playout()
+                self._current_speech = None
+
+            self._speech_q_changed.clear()
+
+    @utils.log_exceptions(logger=logger)
+    async def _generate_pipeline_reply_task(
+        self,
+        *,
+        handle: SpeechHandle,
+        chat_ctx: ChatContext,
+        fnc_ctx: FunctionContext | None,
     ) -> None:
         @utils.log_exceptions(logger=logger)
         async def _forward_llm_text(llm_output: AsyncIterable[str]) -> None:
@@ -324,75 +347,243 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             if self.output.text is None:
                 return
 
-            async for delta in llm_output:
-                await self.output.text.capture_text(delta)
-
-            self.output.text.flush()
+            try:
+                async for delta in llm_output:
+                    await self.output.text.capture_text(delta)
+            finally:
+                self.output.text.flush()
 
         @utils.log_exceptions(logger=logger)
-        async def _forward_tts_audio(
-            tts_output: AsyncIterable[rtc.AudioFrame], wait_for_playout: bool = True
-        ) -> None:
-            """collect and forward the generated audio to the current agent output"""
+        async def _forward_tts_audio(tts_output: AsyncIterable[rtc.AudioFrame]) -> None:
+            """collect and forward the generated audio to the current agent output (generally playout)"""
             if self.output.audio is None:
                 return
 
-            async for frame in tts_output:
-                await self.output.audio.capture_frame(frame)
+            try:
+                async for frame in tts_output:
+                    await self.output.audio.capture_frame(frame)
+            finally:
+                self.output.audio.flush()  # always flush (even if the task is interrupted)
 
-            self.output.audio.flush()
+        @utils.log_exceptions(logger=logger)
+        async def _execute_tools(
+            tools_ch: utils.aio.Chan[llm.FunctionCallInfo],
+            called_functions: set[llm.CalledFunction],
+        ) -> None:
+            """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
+            try:
+                async for tool in tools_ch:
+                    logger.debug(
+                        "executing tool",
+                        extra={
+                            "function": tool.function_info.name,
+                            "speech_id": handle.id,
+                        },
+                    )
+                    debug.Tracing.log_event(
+                        "executing tool",
+                        {
+                            "function": tool.function_info.name,
+                            "speech_id": handle.id,
+                        },
+                    )
+                    cfnc = tool.execute()
+                    called_functions.add(cfnc)
+            except asyncio.CancelledError:
+                # don't allow to cancel running function calla if they're still running
+                pending_tools = [cfn for cfn in called_functions if not cfn.task.done()]
 
-        # new messages generated during the generation (including function calls)
-        new_messages: list[llm.ChatMessage] = []
+                if pending_tools:
+                    names = [cfn.call_info.function_info.name for cfn in pending_tools]
 
-        # TODO(theomonnom): how nested fnc calls is going to work with realtime API?
-        for i in range(
-            self._max_fnc_steps + 1
-        ):  # +1 to ignore the first step that doesn't contain any tools
-            # if i >= 2, the LLM supports having multiple steps
-            fnc_ctx = fnc_ctx if i < self._max_fnc_steps - 1 and i >= 2 else None
-            chat_ctx = chat_ctx
+                    logger.debug(
+                        "waiting for function call to finish before cancelling",
+                        extra={
+                            "functions": names,
+                            "speech_id": handle.id,
+                        },
+                    )
+                    debug.Tracing.log_event(
+                        "waiting for function call to finish before cancelling",
+                        {
+                            "functions": names,
+                            "speech_id": handle.id,
+                        },
+                    )
+                    await asyncio.gather(*[cfn.task for cfn in pending_tools])
+            finally:
+                if len(called_functions) > 0:
+                    logger.debug(
+                        "tools execution completed",
+                        extra={"speech_id": handle.id},
+                    )
+                    debug.Tracing.log_event(
+                        "tools execution completed",
+                        {"speech_id": handle.id},
+                    )
 
-            llm_task, llm_gen_data = do_llm_inference(
-                node=self.llm_node, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx
+        debug.Tracing.log_event(
+            "generation started",
+            {"speech_id": handle.id, "step_index": handle.step_index},
+        )
+
+        wg = utils.aio.WaitGroup()
+        tasks = []
+        llm_task, llm_gen_data = do_llm_inference(
+            node=self.llm_node,
+            chat_ctx=chat_ctx,
+            fnc_ctx=fnc_ctx
+            if handle.step_index < self._max_fnc_steps - 1 and handle.step_index >= 2
+            else None,
+        )
+        tasks.append(llm_task)
+        wg.add(1)
+        llm_task.add_done_callback(lambda _: wg.done())
+        tts_text_input, llm_output = utils.aio.itertools.tee(llm_gen_data.text_ch)
+
+        tts_task: asyncio.Task | None = None
+        tts_gen_data: _TTSGenerationData | None = None
+        if self._output.audio is not None:
+            tts_task, tts_gen_data = do_tts_inference(
+                node=self.tts_node, input=tts_text_input
             )
-            tts_text_input, llm_output = utils.aio.itertools.tee(llm_gen_data.text_ch)
-            forward_llm_task = asyncio.create_task(
-                _forward_llm_text(llm_output),
-                name="_generate_reply_task.forward_llm_text",
+            tasks.append(tts_task)
+            wg.add(1)
+            tts_task.add_done_callback(lambda _: wg.done())
+
+        # wait for the play() method to be called
+        await asyncio.wait(
+            [
+                handle._play_fut,
+                handle._interrupt_fut,
+            ],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if handle.interrupted:
+            await utils.aio.gracefully_cancel(*tasks)
+            handle._mark_done()
+            return  # return directly (the generated output wasn't used)
+
+        # forward tasks are started after the play() method is called
+        # they redirect the generated text/audio to the output channels
+        forward_llm_task = asyncio.create_task(
+            _forward_llm_text(llm_output),
+            name="_generate_reply_task.forward_llm_text",
+        )
+        tasks.append(forward_llm_task)
+        wg.add(1)
+        forward_llm_task.add_done_callback(lambda _: wg.done())
+
+        forward_tts_task: asyncio.Task | None = None
+        if tts_gen_data is not None:
+            forward_tts_task = asyncio.create_task(
+                _forward_tts_audio(tts_gen_data.audio_ch),
+                name="_generate_reply_task.forward_tts_audio",
+            )
+            tasks.append(forward_tts_task)
+            wg.add(1)
+            forward_tts_task.add_done_callback(lambda _: wg.done())
+
+        # start to execute tools (only after play())
+        called_functions: set[llm.CalledFunction] = set()
+        tools_task = asyncio.create_task(
+            _execute_tools(llm_gen_data.tools_ch, called_functions),
+            name="_generate_reply_task.execute_tools",
+        )
+        tasks.append(tools_task)
+        wg.add(1)
+        tools_task.add_done_callback(lambda _: wg.done())
+
+        # wait for the tasks to finish
+        await asyncio.wait(
+            [
+                wg.wait(),
+                handle._interrupt_fut,
+            ],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        # wait for the end of the playout if the audio is enabled
+        if forward_llm_task is not None:
+            assert self._output.audio is not None
+            await asyncio.wait(
+                [
+                    self._output.audio.wait_for_playout(),
+                    handle._interrupt_fut,
+                ],
+                return_when=asyncio.FIRST_COMPLETED,
             )
 
-            tts_task: asyncio.Task | None = None
-            forward_tts_task: asyncio.Task | None = None
-            if self._output.audio is not None:
-                tts_task, tts_gen_data = do_tts_inference(
-                    node=self.tts_node, input=tts_text_input
+        if handle.interrupted:
+            await utils.aio.gracefully_cancel(*tasks)
+
+            if len(called_functions) > 0:
+                functions = [
+                    cfnc.call_info.function_info.name for cfnc in called_functions
+                ]
+                logger.debug(
+                    "speech interrupted, ignoring generation of the function calls results",
+                    extra={"speech_id": handle.id, "functions": functions},
                 )
-                forward_tts_task = asyncio.create_task(
-                    _forward_tts_audio(tts_gen_data.audio_ch),
-                    name="_generate_reply_task.forward_tts_audio",
+                debug.Tracing.log_event(
+                    "speech interrupted, ignoring generation of the function calls results",
+                    {"speech_id": handle.id, "functions": functions},
                 )
 
-            tools: list[llm.FunctionCallInfo] = []
-            async for tool in llm_gen_data.tools_ch:
-                tools.append(tool)  # TODO(theomonnom): optimize function calls response
-
-            await asyncio.gather(llm_task, forward_llm_task)
-
-            # TODO(theomonnom): Simplify this
-            if tts_task is not None and forward_tts_task is not None:
+            # if the audio playout was enabled, clear the buffer
+            if forward_tts_task is not None:
                 assert self._output.audio is not None
-                await asyncio.gather(tts_task, forward_tts_task)
+
+                self._output.audio.clear_buffer()
                 playback_ev = await self._output.audio.wait_for_playout()
 
-            generated_text = llm_gen_data.generated_text
-            if len(generated_text) > 0:
-                new_messages.append(
-                    llm.ChatMessage(role="assistant", content=generated_text)
+                debug.Tracing.log_event(
+                    "playout interrupted",
+                    {
+                        "playback_position": playback_ev.playback_position,
+                        "speech_id": handle.id,
+                    },
                 )
 
-            if len(tools) == 0:
-                break  # no more fnc step needed
+                handle._mark_playout_done()
+                # TODO(theomonnom): calculate the played text based on playback_ev.playback_position
+
+            handle._mark_done()
+            return
+
+        handle._mark_playout_done()
+        debug.Tracing.log_event("playout completed", {"speech_id": handle.id})
+
+        if len(called_functions) > 0:
+            if handle.step_index >= self._max_fnc_steps:
+                logger.warning(
+                    "maximum number of function calls steps reached",
+                    extra={"speech_id": handle.id},
+                )
+                debug.Tracing.log_event(
+                    "maximum number of function calls steps reached",
+                    {"speech_id": handle.id},
+                )
+                handle._mark_done()
+                return
+
+            # create a new SpeechHandle to generate the result of the function calls
+            handle = SpeechHandle.create(
+                allow_interruptions=self._opts.allow_interruptions,
+                step_index=handle.step_index + 1,
+            )
+            task = asyncio.create_task(
+                self._generate_pipeline_reply_task(
+                    handle=handle,
+                    chat_ctx=chat_ctx,
+                    fnc_ctx=fnc_ctx,
+                ),
+                name="_generate_pipeline_reply",
+            )
+            self._schedule_speech(handle, task, self.SPEECH_PRIORITY_NORMAL)
+
+        handle._mark_done()
 
     # -- Audio recognition --
 
@@ -403,22 +594,34 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         #  turn)
         #  - generate a reply to the user input
 
-        if self._current_generation is not None:
-            if self._current_generation.allow_interruptions:
+        if self._current_speech is not None:
+            if self._current_speech.allow_interruptions:
                 logger.warning(
                     "skipping user input, current speech generation cannot be interrupted",
                     extra={"user_input": new_transcript},
                 )
                 return
 
-            self._current_generation.interrupt()
+            debug.Tracing.log_event(
+                "speech interrupted, new user turn detected",
+                {"speech_id": self._current_speech.id},
+            )
+            self._current_speech.interrupt()
 
         self.generate_reply(new_transcript)
 
     def _on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if ev.speech_duration > self._opts.min_interruption_duration:
-            if self._current_generation is not None:
-                self._current_generation.interrupt()
+            if (
+                self._current_speech is not None
+                and not self._current_speech.interrupted
+                and self._current_speech.allow_interruptions
+            ):
+                debug.Tracing.log_event(
+                    "speech interrupted by vad",
+                    {"speech_id": self._current_speech.id},
+                )
+                self._current_speech.interrupt()
 
     # ---
 

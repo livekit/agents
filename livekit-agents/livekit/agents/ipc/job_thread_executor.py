@@ -60,6 +60,24 @@ class ThreadJobExecutor:
 
         self._inference_executor = inference_executor
         self._inference_tasks: list[asyncio.Task[None]] = []
+        self._id = utils.shortuuid("THEXEC_")
+        self._tracing_requests = dict[str, asyncio.Future[proto.TracingResponse]]()
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    async def tracing_info(self) -> dict[str, Any]:
+        if not self.started:
+            raise RuntimeError("thread not started")
+
+        tracing_req = proto.TracingRequest()
+        tracing_req.request_id = utils.shortuuid("trace_req_")
+        fut = asyncio.Future[proto.TracingResponse]()
+        self._tracing_requests[tracing_req.request_id] = fut
+        await channel.asend_message(self._pch, tracing_req)
+        resp = await fut
+        return resp.info
 
     @property
     def status(self) -> JobStatus:
@@ -270,6 +288,11 @@ class ThreadJobExecutor:
                 self._inference_tasks.append(
                     asyncio.create_task(self._do_inference_task(msg))
                 )
+
+            if isinstance(msg, proto.TracingResponse):
+                fut = self._tracing_requests.pop(msg.request_id)
+                with contextlib.suppress(asyncio.InvalidStateError):
+                    fut.set_result(msg)
 
     @utils.log_exceptions(logger=logger)
     async def _ping_task(self) -> None:

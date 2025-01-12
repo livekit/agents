@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable
 
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
-from ..utils import aio, log_exceptions
+from ..utils import aio, log_exceptions, shortuuid
 from . import channel, proto
 from .inference_executor import InferenceExecutor
 from .job_executor import JobStatus
@@ -52,6 +52,24 @@ class ProcJobExecutor(SupervisedProc):
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._inference_executor = inference_executor
         self._inference_tasks: list[asyncio.Task[None]] = []
+        self._id = shortuuid("PCEXEC_")
+        self._tracing_requests = dict[str, asyncio.Future[proto.TracingResponse]]()
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    async def tracing_info(self) -> dict[str, Any]:
+        if not self.started:
+            raise RuntimeError("process not started")
+
+        tracing_req = proto.TracingRequest()
+        tracing_req.request_id = shortuuid("trace_req_")
+        fut = asyncio.Future[proto.TracingResponse]()
+        self._tracing_requests[tracing_req.request_id] = fut
+        await channel.asend_message(self._pch, tracing_req)
+        resp = await fut
+        return resp.info
 
     @property
     def status(self) -> JobStatus:

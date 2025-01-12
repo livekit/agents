@@ -28,6 +28,7 @@ from typing import Any, Callable
 from livekit import rtc
 
 from ..job import JobContext, JobProcess, _JobContextVar
+from ..debug import tracing
 from ..log import logger
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
@@ -40,6 +41,8 @@ from .proto import (
     InitializeRequest,
     ShutdownRequest,
     StartJobRequest,
+    TracingRequest,
+    TracingResponse,
 )
 
 
@@ -168,6 +171,20 @@ class _JobProc:
 
                 if isinstance(msg, InferenceResponse):
                     self._inf_client._on_inference_response(msg)
+
+                if isinstance(msg, TracingRequest):
+                    if not self.has_running_job:
+                        logger.warning("tracing request received without running job")
+                        return
+
+                    await self._client.send(
+                        TracingResponse(
+                            request_id=msg.request_id,
+                            info=tracing.Tracing._get_job_handle(
+                                self._job_ctx.job.id
+                            )._export(),
+                        )
+                    )
 
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
 
