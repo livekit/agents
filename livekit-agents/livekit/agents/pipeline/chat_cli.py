@@ -79,7 +79,9 @@ class _AudioSink(io.AudioSink):
         self._pushed_duration += frame.duration
 
         if self._cli._output_stream is not None:
-            self._cli._output_stream.write(frame.data)
+            await self._cli._loop.run_in_executor(
+                None, self._cli._output_stream.write, frame.data
+            )
 
     def clear_buffer(self) -> None:
         self._capturing = False
@@ -144,6 +146,8 @@ class ChatCLI:
 
         self._text_sink = _TextSink(self)
         self._audio_sink = _AudioSink(self)
+
+        self._saved_frames = []
 
     def _print_welcome(self):
         print(_esc(34) + "=" * 50 + _esc(0))
@@ -236,15 +240,22 @@ class ChatCLI:
         rms = np.sqrt(np.mean(indata.astype(np.float32) ** 2))
         max_int16 = np.iinfo(np.int16).max
         self._micro_db = 20.0 * np.log10(rms / max_int16 + 1e-6)
-        self._loop.call_soon_threadsafe(
-            self._audio_input_ch.send_nowait,
-            rtc.AudioFrame(
-                data=indata.tobytes(),
-                samples_per_channel=frame_count,
-                sample_rate=24000,
-                num_channels=1,
-            ),
+
+        frame = rtc.AudioFrame(
+            data=indata.tobytes(),
+            samples_per_channel=frame_count,
+            sample_rate=24000,
+            num_channels=1,
         )
+        self._saved_frames.append(frame)
+
+        if len(self._saved_frames) > 20 * 5:
+            frmae = rtc.combine_audio_frames(self._saved_frames)
+            wav = frmae.to_wav_bytes()
+            with open("audio.wav", "wb") as f:
+                f.write(wav)
+
+        self._loop.call_soon_threadsafe(self._audio_input_ch.send_nowait, frame)
 
     @log_exceptions(logger=logger)
     async def _input_cli_task(self, in_ch: aio.Chan[str]) -> None:

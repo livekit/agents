@@ -145,3 +145,68 @@ class VideoSink(ABC):
 
     @abstractmethod
     def flush(self) -> None: ...
+
+
+class AgentInput:
+    def __init__(self, video_changed: Callable, audio_changed: Callable) -> None:
+        self._video_stream: VideoStream | None = None
+        self._audio_stream: AudioStream | None = None
+        self._video_changed = video_changed
+        self._audio_changed = audio_changed
+
+    @property
+    def video(self) -> VideoStream | None:
+        return self._video_stream
+
+    @video.setter
+    def video(self, stream: VideoStream | None) -> None:
+        self._video_stream = stream
+        self._video_changed()
+
+    @property
+    def audio(self) -> AudioStream | None:
+        return self._audio_stream
+
+    @audio.setter
+    def audio(self, stream: AudioStream | None) -> None:
+        self._audio_stream = stream
+        self._audio_changed()
+
+
+class AgentOutput:
+    def __init__(
+        self, video_changed: Callable, audio_changed: Callable, text_changed: Callable
+    ) -> None:
+        self._video_sink: VideoSink | None = None
+        self._audio_sink: AudioSink | None = None
+        self._text_sink: TextSink | None = None
+        self._video_changed = video_changed
+        self._audio_changed = audio_changed
+        self._text_changed = text_changed
+
+    @property
+    def video(self) -> VideoSink | None:
+        return self._video_sink
+
+    @video.setter
+    def video(self, sink: VideoSink | None) -> None:
+        self._video_sink = sink
+        self._video_changed()
+
+    @property
+    def audio(self) -> AudioSink | None:
+        return self._audio_sink
+
+    @audio.setter
+    def audio(self, sink: AudioSink | None) -> None:
+        self._audio_sink = sink
+        self._audio_changed()
+
+    @property
+    def text(self) -> TextSink | None:
+        return self._text_sink
+
+    @text.setter
+    def text(self, sink: TextSink | None) -> None:
+        self._text_sink = sink
+        self._text_changed()

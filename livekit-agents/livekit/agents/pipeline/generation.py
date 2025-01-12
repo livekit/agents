@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncIterable, Protocol, Tuple, runtime_checkable
 
 from livekit import rtc
@@ -20,7 +20,8 @@ class _ACloseable(Protocol):
 class _LLMGenerationData:
     text_ch: aio.Chan[str]
     tools_ch: aio.Chan[FunctionCallInfo]
-    generated_text: str = ""  #
+    generated_text: str = ""
+    generated_tools: list[FunctionCallInfo] = field(default_factory=list)
 
 
 def do_llm_inference(
@@ -58,6 +59,7 @@ def do_llm_inference(
 
                         if delta.tool_calls:
                             for tool in delta.tool_calls:
+                                data.generated_tools.append(tool)
                                 tools_ch.send_nowait(tool)
 
                         if delta.content:
