@@ -44,7 +44,6 @@ EventTypes = Literal[
     "function_calls_cancelled",
     "input_speech_transcription_completed",
     "agent_speech_transcription_completed",
-    "agent_speech_transcription_interrupted",
 ]
 
 
@@ -233,6 +232,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._chat_ctx = chat_ctx
         self._fnc_ctx = fnc_ctx
         self._fnc_tasks = utils.aio.TaskSet()
+        self._is_interrupted = False
 
         tools = []
         if self._fnc_ctx is not None:
@@ -279,15 +279,12 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             )
             self._transcriber.on("input_speech_done", self._on_input_speech_done)
             self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
-            self._agent_transcriber.on(
-                "input_speech_interrupted", self._on_agent_speech_interrupted
-            )
         # init dummy task
         self._init_sync_task = asyncio.create_task(asyncio.sleep(0))
         self._send_ch = utils.aio.Chan[ClientEvents]()
         self._active_response_id = None
         if chat_ctx:
-            self.create_conversation(chat_ctx)
+            self.generate_reply(chat_ctx)
 
     async def aclose(self) -> None:
         if self._send_ch.closed:
@@ -304,20 +301,16 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
         self._fnc_ctx = value
 
-    def _update_conversation_item_content(self, item_id: str, content: str) -> None:
-        pass
-
     def _push_audio(self, frame: rtc.AudioFrame) -> None:
         if self._opts.enable_transcription:
             self._transcriber._push_audio(frame)
-        else:
-            data = base64.b64encode(frame.data).decode("utf-8")
-            self._queue_msg({"mime_type": "audio/pcm", "data": data})
+        data = base64.b64encode(frame.data).decode("utf-8")
+        self._queue_msg({"mime_type": "audio/pcm", "data": data})
 
     def _queue_msg(self, msg: ClientEvents) -> None:
         self._send_ch.send_nowait(msg)
 
-    def create_conversation(
+    def generate_reply(
         self, chat_ctx: llm.ChatContext | llm.ChatMessage, turn_complete: bool = True
     ) -> None:
         if isinstance(chat_ctx, llm.ChatMessage):
@@ -348,33 +341,17 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         )
 
         self._chat_ctx.append(text=content.text, role="user")
-        conversation = _build_gemini_ctx(self._chat_ctx)
-
-        client_content = LiveClientContent(
-            turn_complete=True,
-            turns=conversation,
-        )
-        self._queue_msg(client_content)
 
     def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
-        self.emit(
-            "agent_speech_transcription_completed",
-            InputTranscription(
-                item_id=content.response_id,
-                transcript=content.text,
-            ),
-        )
-        self._chat_ctx.append(text=content.text, role="assistant")
-
-    def _on_agent_speech_interrupted(self, content: TranscriptionContent) -> None:
-        self.emit(
-            "agent_speech_transcription_completed",
-            InputTranscription(
-                item_id=content.response_id,
-                transcript=content.text,
-            ),
-        )
-        self._chat_ctx.append(text=content.text, role="assistant")
+        if not self._is_interrupted:
+            self.emit(
+                "agent_speech_transcription_completed",
+                InputTranscription(
+                    item_id=content.response_id,
+                    transcript=content.text,
+                ),
+            )
+            self._chat_ctx.append(text=content.text, role="assistant")
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
@@ -390,6 +367,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             while True:
                 async for response in self._session.receive():
                     if self._active_response_id is None:
+                        self._is_interrupted = False
                         self._active_response_id = utils.shortuuid()
                         text_stream = utils.aio.Chan[str]()
                         audio_stream = utils.aio.Chan[rtc.AudioFrame]()
@@ -430,10 +408,8 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                                 if isinstance(stream, utils.aio.Chan):
                                     stream.close()
 
-                            if server_content.interrupted:
-                                self.emit("input_speech_started")
-                            elif server_content.turn_complete:
-                                self.emit("response_content_done", content)
+                            self.emit("agent_speech_completed")
+                            self._is_interrupted = True
 
                             self._active_response_id = None
 
@@ -516,6 +492,6 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                     )
                 ]
             )
-            await self._session.send(tool_response)
+            await self._session.send(input=tool_response)
 
             self.emit("function_calls_finished", [called_fnc])

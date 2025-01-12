@@ -311,13 +311,14 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     alternatives=[stt.SpeechData(language="", text=ev.transcript)],
                 )
             )
-            user_msg = ChatMessage.create(
-                text=ev.transcript, role="user", id=ev.item_id
-            )
+            if self._model.capabilities.supports_truncate:
+                user_msg = ChatMessage.create(
+                    text=ev.transcript, role="user", id=ev.item_id
+                )
 
-            self._session._update_conversation_item_content(
-                ev.item_id, user_msg.content
-            )
+                self._session._update_conversation_item_content(
+                    ev.item_id, user_msg.content
+                )
 
             self._emit_speech_committed("user", ev.transcript)
 
@@ -330,6 +331,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 )
             )
             self._emit_speech_committed("agent", ev.transcript)
+
+        @self._session.on("agent_speech_completed")
+        def _agent_speech_completed():
+            self._update_state("listening")
+            if self._playing_handle is not None and not self._playing_handle.done():
+                self._playing_handle.interrupt()
 
         @self._session.on("input_speech_started")
         def _input_speech_started():
@@ -371,9 +378,9 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             await asyncio.sleep(delay)
 
             if self._room.isconnected():
-                await self._room.local_participant.set_attributes(
-                    {ATTRIBUTE_AGENT_STATE: state}
-                )
+                await self._room.local_participant.set_attributes({
+                    ATTRIBUTE_AGENT_STATE: state
+                })
 
         if self._update_state_task is not None:
             self._update_state_task.cancel()

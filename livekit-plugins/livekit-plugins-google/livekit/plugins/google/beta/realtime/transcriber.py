@@ -16,7 +16,6 @@ from .api_proto import ClientEvents, LiveAPIModels
 
 EventTypes = Literal[
     "input_speech_started",
-    "input_speech_interrupted",
     "input_speech_done",
 ]
 
@@ -107,12 +106,8 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
                                 if part.text:
                                     content.text += part.text
 
-                        if server_content.interrupted or server_content.turn_complete:
-                            if server_content.interrupted:
-                                self.emit("input_speech_interrupted", content)
-                            elif server_content.turn_complete:
-                                self.emit("input_speech_done", content)
-
+                        if server_content.turn_complete:
+                            self.emit("input_speech_done", content)
                             self._active_response_id = None
 
         async with self._client.aio.live.connect(
