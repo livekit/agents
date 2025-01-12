@@ -41,6 +41,7 @@ class STTOptions:
     languages: list[
         str
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
+    speech_endpoint: str | None = None
 
 
 class STT(stt.STT):
@@ -305,16 +306,14 @@ class SpeechStream(stt.SpeechStream):
 def _create_speech_recognizer(
     *, config: STTOptions, stream: speechsdk.audio.AudioInputStream
 ) -> speechsdk.SpeechRecognizer:
-    if config.speech_host:
-        speech_config = speechsdk.SpeechConfig(host=config.speech_host)
-    if config.speech_auth_token:
-        speech_config = speechsdk.SpeechConfig(
-            auth_token=config.speech_auth_token, region=config.speech_region
-        )
-    else:
-        speech_config = speechsdk.SpeechConfig(
-            subscription=config.speech_key, region=config.speech_region
-        )
+    # let the SpeechConfig constructor to validate the arguments
+    speech_config = speechsdk.SpeechConfig(
+        subscription=config.speech_key,
+        region=config.speech_region,
+        endpoint=config.speech_endpoint,
+        host=config.speech_host,
+        auth_token=config.speech_auth_token,
+    )
 
     if config.segmentation_silence_timeout_ms:
         speech_config.set_property(

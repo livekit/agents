@@ -120,6 +120,7 @@ class _TTSOptions:
     language: str | None = None
     # See https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-voice#adjust-prosody
     prosody: ProsodyConfig | None = None
+    speech_endpoint: str | None = None
 
 
 class TTS(tts.TTS):
@@ -324,20 +325,15 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
 def _create_speech_synthesizer(
     *, config: _TTSOptions, stream: speechsdk.audio.AudioOutputStream
 ) -> speechsdk.SpeechSynthesizer:
-    if config.speech_host:
-        speech_config = speechsdk.SpeechConfig(host=config.speech_host)
-    if config.speech_auth_token:
-        speech_config = speechsdk.SpeechConfig(
-            auth_token=config.speech_auth_token,
-            region=config.speech_region,
-            speech_recognition_language=config.language or "en-US",
-        )
-    else:
-        speech_config = speechsdk.SpeechConfig(
-            subscription=config.speech_key,
-            region=config.speech_region,
-            speech_recognition_language=config.language or "en-US",
-        )
+    # let the SpeechConfig constructor to validate the arguments
+    speech_config = speechsdk.SpeechConfig(
+        subscription=config.speech_key,
+        region=config.speech_region,
+        endpoint=config.speech_endpoint,
+        host=config.speech_host,
+        auth_token=config.speech_auth_token,
+        speech_recognition_language=config.language or "en-US",
+    )
 
     speech_config.set_speech_synthesis_output_format(
         SUPPORTED_SAMPLE_RATE[config.sample_rate]
