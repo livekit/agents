@@ -19,7 +19,7 @@ import asyncio
 
 STTNode = Callable[
     [AsyncIterable[rtc.AudioFrame]],
-    Union[Awaitable[Optional[AsyncIterable[stt.SpeechEvent]]],],
+    Union[Awaitable[Optional[AsyncIterable[stt.SpeechEvent]]]],
 ]
 LLMNode = Callable[
     [llm.ChatContext, Optional[llm.FunctionContext]],
