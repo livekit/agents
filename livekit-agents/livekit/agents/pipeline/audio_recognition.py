@@ -171,16 +171,8 @@ class AudioRecognition(rtc.EventEmitter[EventTypes]):
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
             self.emit("interim_transcript", ev)
 
-            tracing.Tracing.log_event(
-                "user interim transcript",
-                {
-                    "interim transcript": ev.alternatives[0].text,
-                },
-            )
-
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
-            tracing.Tracing.log_event("start of speech")
             self.emit("start_of_speech", ev)
             self._speaking = True
 
@@ -192,7 +184,6 @@ class AudioRecognition(rtc.EventEmitter[EventTypes]):
             self.emit("vad_inference_done", ev)
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
-            tracing.Tracing.log_event("end of speech")
             self.emit("end_of_speech", ev)
             self._speaking = False
 
