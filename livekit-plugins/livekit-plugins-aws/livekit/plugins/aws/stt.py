@@ -224,7 +224,7 @@ def _streaming_recognize_response_to_speech_data(resp: Result) -> stt.SpeechData
         start_time=resp.start_time if resp.start_time else 0.0,
         end_time=resp.end_time if resp.end_time else 0.0,
         confidence=0.0,
-        text=resp.alternatives[0].transcript,
+        text=resp.alternatives[0].transcript if resp.alternatives else "",
     )
 
     return data
