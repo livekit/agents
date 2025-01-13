@@ -11,8 +11,8 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 
-from google import genai  # type: ignore
-from google.genai.types import (  # type: ignore
+from google import genai
+from google.genai.types import (
     FunctionResponse,
     GenerationConfigDict,
     LiveClientToolResponse,
