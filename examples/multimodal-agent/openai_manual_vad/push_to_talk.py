@@ -10,6 +10,7 @@ from livekit.agents import (
     AutoSubscribe,
     JobContext,
     WorkerOptions,
+    JobRequest,
     WorkerType,
     cli,
     llm,
@@ -26,42 +27,8 @@ logger.setLevel(logging.INFO)
 async def entrypoint(ctx: JobContext):
     logger.info("starting entrypoint")
 
-    fnc_ctx = llm.FunctionContext()
-
-    @fnc_ctx.ai_callable()
-    async def get_weather(
-        location: Annotated[
-            str, llm.TypeInfo(description="The location to get the weather for")
-        ],
-    ):
-        """Called when the user asks about the weather. This function will return the weather for the given location."""
-        logger.info(f"getting weather for {location}")
-        url = f"https://wttr.in/{location}?format=%C+%t"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    weather_data = await response.text()
-                    return f"The weather in {location} is {weather_data}."
-                else:
-                    raise Exception(
-                        f"Failed to get weather data, status code: {response.status}"
-                    )
-
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+    await ctx.connect()
     participant = await ctx.wait_for_participant()
-
-    chat_ctx = llm.ChatContext()
-    chat_ctx.append(text="I'm planning a trip to Paris next month.", role="user")
-    chat_ctx.append(
-        text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",
-        role="assistant",
-    )
-    chat_ctx.append(text="What are the must-visit places in Paris?", role="user")
-    chat_ctx.append(
-        text="The must-visit places in Paris are the Eiffel Tower, Louvre Museum, Notre-Dame Cathedral, and Montmartre.",
-        role="assistant",
-    )
-
     agent = multimodal.MultimodalAgent(
         model=openai.realtime.RealtimeModel(
             voice="alloy",
@@ -69,13 +36,8 @@ async def entrypoint(ctx: JobContext):
             instructions="You are a helpful assistant",
             turn_detection=None,
         ),
-        fnc_ctx=fnc_ctx,
-        chat_ctx=chat_ctx,
     )
     agent.start(ctx.room, participant)
-
-    # Set attribute to indicate PTT support
-    await ctx.room.local_participant.set_attributes({"supports-ptt": "1"})
 
     @ctx.room.local_participant.register_rpc_method("ptt")
     async def handle_ptt(data):
@@ -100,5 +62,18 @@ async def entrypoint(ctx: JobContext):
             asyncio.create_task(agent.set_chat_ctx(chat_ctx))
 
 
+async def handle_request(request: JobRequest) -> None:
+    await request.accept(
+        identity="ptt-agent",
+        # This attribute communicates to frontend that we support PTT
+        attributes={"supports-ptt": "1"},
+    )
+
+
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, worker_type=WorkerType.ROOM))
+    cli.run_app(
+        WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            request_fnc=handle_request,
+        )
+    )
