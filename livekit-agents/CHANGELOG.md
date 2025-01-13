@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.12.9
+
+### Patch Changes
+
+- remove aiodns from livekit-agents - [#1368](https://github.com/livekit/agents/pull/1368) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.12.8
 
 ### Patch Changes
