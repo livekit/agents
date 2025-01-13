@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import aiohttp
-from aiobotocore.session import AioSession, get_session
+from aiobotocore.session import AioSession, get_session  # type: ignore
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,

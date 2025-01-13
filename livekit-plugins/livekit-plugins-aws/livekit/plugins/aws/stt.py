@@ -95,9 +95,9 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        *,
         buffer: utils.AudioBuffer,
-        language: str | None = None,
+        *,
+        language: str | None,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         raise NotImplementedError(

@@ -1,10 +1,11 @@
 import os
+from typing import Optional
 
-import boto3
+import boto3  # type: ignore
 
 
 def _get_aws_credentials(
-    api_key: str | None, api_secret: str | None, region: str | None
+    api_key: Optional[str], api_secret: Optional[str], region: Optional[str]
 ):
     region = region or os.environ.get("AWS_DEFAULT_REGION")
     if not region:
