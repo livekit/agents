@@ -160,9 +160,16 @@ class SpeechStream(stt.SpeechStream):
                 except Exception as e:
                     logger.exception(f"an error occurred while streaming inputs: {e}")
 
-            # try to connect
             handler = TranscriptEventHandler(stream.output_stream, self._event_ch)
-            await asyncio.gather(input_generator(), handler.handle_events())
+            tasks = [
+                asyncio.create_task(input_generator()),
+                asyncio.create_task(handler.handle_events()),
+            ]
+            # try to connect
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
         except Exception as e:
             logger.exception(f"an error occurred while streaming inputs: {e}")
 
