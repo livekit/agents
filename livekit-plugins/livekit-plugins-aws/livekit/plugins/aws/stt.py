@@ -154,14 +154,13 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     async for frame in self._input_ch:
                         if isinstance(frame, rtc.AudioFrame):
-                            # temporary log
-                            logger.info(f"sending frame: {frame.data.tobytes()}")
                             await stream.input_stream.send_audio_event(
                                 audio_chunk=frame.data.tobytes()
                             )
-                            # temporary log
-                            logger.info(f"sent frame: {frame.data.tobytes()}")
                     await stream.input_stream.end_stream()
+                    await stream.input_stream.close()
+                    logger.info("input stream closed")  # temporary log
+
                 except Exception as e:
                     logger.exception(f"an error occurred while streaming inputs: {e}")
 
