@@ -157,6 +157,7 @@ class SpeechStream(stt.SpeechStream):
                             await stream.input_stream.send_audio_event(
                                 audio_chunk=frame.data.tobytes()
                             )
+                    logger.info("sending end stream")  # temporary log
                     await stream.input_stream.end_stream()
                     logger.info("input stream closed")  # temporary log
 
