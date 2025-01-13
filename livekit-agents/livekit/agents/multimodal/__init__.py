@@ -1,13 +1,19 @@
-from .multimodal_agent import (
-    AgentTranscriptionOptions,
-    MultimodalAgent,
-    _RealtimeAPI,
-    _RealtimeAPISession,
+from .realtime import (
+    RealtimeModel,
+    RealtimeCapabilities,
+    RealtimeSession,
+    InputSpeechStartedEvent,
+    InputSpeechStoppedEvent,
+    GenerationCreatedEvent,
+    ErrorEvent,
 )
 
 __all__ = [
-    "MultimodalAgent",
-    "AgentTranscriptionOptions",
-    "_RealtimeAPI",
-    "_RealtimeAPISession",
+    "RealtimeModel",
+    "RealtimeCapabilities",
+    "RealtimeSession",
+    "InputSpeechStartedEvent",
+    "InputSpeechStoppedEvent",
+    "GenerationCreatedEvent",
+    "ErrorEvent",
 ]
