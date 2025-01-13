@@ -160,10 +160,19 @@ class SpeechStream(stt.SpeechStream):
                 except Exception as e:
                     logger.exception(f"an error occurred while streaming inputs: {e}")
 
-            handler = TranscriptEventHandler(stream.output_stream, self._event_ch)
+            async def handle_transcript_events():
+                try:
+                    async for event in stream.output_stream:
+                        if isinstance(event, TranscriptEvent):
+                            self._process_transcript_event(event)
+                except Exception as e:
+                    logger.exception(
+                        f"An error occurred while handling transcript events: {e}"
+                    )
+
             tasks = [
                 asyncio.create_task(input_generator()),
-                asyncio.create_task(handler.handle_events()),
+                asyncio.create_task(handle_transcript_events()),
             ]
             # try to connect
             try:
@@ -171,42 +180,9 @@ class SpeechStream(stt.SpeechStream):
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
         except Exception as e:
-            logger.exception(f"an error occurred while streaming inputs: {e}")
+            logger.exception(f"An error occurred while streaming inputs: {e}")
 
-
-def _streaming_recognize_response_to_speech_data(
-    resp: None,
-) -> stt.SpeechData:
-    data = stt.SpeechData(
-        language="en-US",
-        start_time=resp.start_time,
-        end_time=resp.end_time,
-        confidence=0.0,
-        text=resp.alternatives[0].transcript,
-    )
-
-    return data
-
-
-class TranscriptEventHandler:
-    def __init__(
-        self,
-        transcript_result_stream: TranscriptResultStream,
-        event_ch: asyncio.Queue[Optional[stt.SpeechEvent]],
-    ):
-        self._transcript_result_stream = transcript_result_stream
-        self._event_ch = event_ch
-
-    async def handle_events(self):
-        """Process generic incoming events from Amazon Transcribe
-        and delegate to appropriate sub-handlers.
-        """
-        async for event in self._transcript_result_stream:
-            if isinstance(event, TranscriptEvent):
-                await self.handle_transcript_event(event)
-
-    async def handle_transcript_event(self, transcript_event: TranscriptEvent):
-        # This handler can be implemented to handle transcriptions as needed.
+    def _process_transcript_event(self, transcript_event: TranscriptEvent):
         stream = transcript_event.transcript.results
         for resp in stream:
             if resp.start_time == 0.0:
@@ -239,3 +215,17 @@ class TranscriptEventHandler:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 )
+
+
+def _streaming_recognize_response_to_speech_data(
+    resp: TranscriptResultStream,
+) -> stt.SpeechData:
+    data = stt.SpeechData(
+        language="en-US",
+        start_time=resp.start_time,
+        end_time=resp.end_time,
+        confidence=0.0,
+        text=resp.alternatives[0].transcript,
+    )
+
+    return data

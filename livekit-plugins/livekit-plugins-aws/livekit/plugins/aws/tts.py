@@ -29,14 +29,15 @@ from livekit.agents import (
     utils,
 )
 
-from ._utils import (
-    TTS_LANGUAGE,
-    TTS_OUTPUT_FORMAT,
-    TTS_SPEECH_ENGINE,
-    _get_aws_credentials,
-)
+from ._utils import _get_aws_credentials
+from .models import TTS_LANGUAGE, TTS_OUTPUT_FORMAT, TTS_SPEECH_ENGINE
 
 TTS_NUM_CHANNELS: int = 1
+DEFAULT_OUTPUT_FORMAT = "pcm"
+DEFAULT_SPEECH_ENGINE = "generative"
+DEFAULT_SPEECH_REGION = "us-east-1"
+DEFAULT_VOICE = "Ruth"
+DEFAULT_SAMPLE_RATE = 16000
 
 
 @dataclass
@@ -45,21 +46,21 @@ class _TTSOptions:
     voice: str | None
     output_format: TTS_OUTPUT_FORMAT
     speech_engine: TTS_SPEECH_ENGINE
-    speech_region: str | None
+    speech_region: str
     sample_rate: int
-    language: TTS_LANGUAGE | None
+    language: TTS_LANGUAGE | str | None
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice: str | None = "Ruth",
-        language: TTS_LANGUAGE | None = None,
-        output_format: TTS_OUTPUT_FORMAT = "pcm",
-        speech_engine: TTS_SPEECH_ENGINE = "generative",
-        sample_rate: int = 16000,
-        speech_region: str = "us-east-1",
+        voice: str | None = DEFAULT_VOICE,
+        language: TTS_LANGUAGE | str | None = None,
+        output_format: TTS_OUTPUT_FORMAT = DEFAULT_OUTPUT_FORMAT,
+        speech_engine: TTS_SPEECH_ENGINE = DEFAULT_SPEECH_ENGINE,
+        sample_rate: int = DEFAULT_SAMPLE_RATE,
+        speech_region: str = DEFAULT_SPEECH_REGION,
         api_key: str | None = None,
         api_secret: str | None = None,
         session: AioSession | None = None,
@@ -160,9 +161,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "SampleRate": str(self._opts.sample_rate),
                     "LanguageCode": self._opts.language,
                 }
-
                 response = await client.synthesize_speech(**_strip_nones(params))
-
                 if "AudioStream" in response:
                     decoder = utils.codecs.Mp3StreamDecoder()
                     async with response["AudioStream"] as resp:
