@@ -2,16 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Annotated
 
-import aiohttp
 from dotenv import load_dotenv
 from livekit.agents import (
-    AutoSubscribe,
     JobContext,
-    WorkerOptions,
     JobRequest,
-    WorkerType,
+    WorkerOptions,
     cli,
     llm,
     multimodal,
