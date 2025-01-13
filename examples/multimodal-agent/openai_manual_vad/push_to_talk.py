@@ -41,7 +41,7 @@ async def entrypoint(ctx: JobContext):
         if data.payload == "push":
             agent.interrupt()
         elif data.payload == "release":
-            agent.commit_audio_buffer()
+            agent.generate_reply(on_duplicate="cancel_existing")
         return "ok"
 
     @agent.on("agent_speech_committed")

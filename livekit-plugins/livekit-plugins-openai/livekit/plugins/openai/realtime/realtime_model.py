@@ -1032,6 +1032,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     def commit_audio_buffer(self) -> None:
         self.input_audio_buffer.commit()
 
+    @property
+    def server_vad_enabled(self) -> bool:
+        return self._opts.turn_detection is not None
+
     def _create_empty_user_audio_message(self, duration: float) -> llm.ChatMessage:
         """Create an empty audio message with the given duration."""
         samples = int(duration * api_proto.SAMPLE_RATE)

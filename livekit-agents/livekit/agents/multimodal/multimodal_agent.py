@@ -107,6 +107,8 @@ class _RealtimeAPISession(Protocol):
         ] = "keep_both",
     ) -> None: ...
     def commit_audio_buffer(self) -> None: ...
+    @property
+    def server_vad_enabled(self) -> bool: ...
 
     def _recover_from_text_response(self, item_id: str) -> None: ...
     def _update_conversation_item_content(
@@ -371,10 +373,16 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 )
         self._update_state("listening")
 
-    def commit_audio_buffer(self) -> None:
-        """Commit the audio buffer and create a new response"""
-        self._session.commit_audio_buffer()
-        self._session.create_response(on_duplicate="cancel_existing")
+    def generate_reply(
+        self,
+        on_duplicate: Literal[
+            "cancel_existing", "cancel_new", "keep_both"
+        ] = "cancel_existing",
+    ) -> None:
+        """Generate a reply from the agent"""
+        if not self._session.server_vad_enabled:
+            self._session.commit_audio_buffer()
+        self._session.create_response(on_duplicate=on_duplicate)
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""

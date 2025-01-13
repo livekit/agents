@@ -295,6 +295,9 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
     def commit_audio_buffer(self) -> None:
         raise NotImplementedError("commit_audio_buffer is not supported yet")
 
+    def server_vad_enabled(self) -> bool:
+        return True
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
         @utils.log_exceptions(logger=logger)
