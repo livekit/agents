@@ -25,7 +25,6 @@ from hume.empathic_voice.types.assistant_input import AssistantInput
 from hume.empathic_voice.types.session_settings import SessionSettings
 from hume.empathic_voice.types.audio_output import AudioOutput
 from hume.empathic_voice.types.assistant_end import AssistantEnd
-from hume.empathic_voice.types.chat_metadata import ChatMetadata
 
 from livekit import rtc
 from livekit.agents import (
@@ -174,6 +173,7 @@ class ChunkedStream(tts.ChunkedStream):
             sample_rate=self._tts.sample_rate,
             num_channels=NUM_CHANNELS,
         )
+        last_frame = None
 
         try:
             session = self._tts._ensure_session()
@@ -219,9 +219,11 @@ class ChunkedStream(tts.ChunkedStream):
                             self._event_ch.send_nowait(
                                 tts.SynthesizedAudio(
                                     request_id=request_id,
-                                    frame=frame,
+                                    frame=last_frame,
+                                    is_final=True,
                                 )
                             )
+                        break
         except Exception as e:
             logger.error("Error in Hume TTS synthesis", exc_info=e)
             raise APIConnectionError() from e
