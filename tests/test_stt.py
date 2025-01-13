@@ -60,6 +60,7 @@ async def test_recognize(stt_factory, sample_rate):
 
 STREAM_VAD = silero.VAD.load(min_silence_duration=0.75)
 STREAM_STT: list[Callable[[], stt.STT]] = [
+    pytest.param(lambda: aws.STT(), id="aws"),
     pytest.param(lambda: assemblyai.STT(), id="assemblyai"),
     pytest.param(lambda: deepgram.STT(), id="deepgram"),
     pytest.param(lambda: google.STT(), id="google"),
@@ -81,7 +82,6 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
         id="google.chirp_2",
     ),
     pytest.param(lambda: azure.STT(), id="azure"),
-    pytest.param(lambda: aws.STT(), id="aws"),
 ]
 
 
