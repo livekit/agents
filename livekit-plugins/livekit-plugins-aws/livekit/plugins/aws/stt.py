@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from amazon_transcribe.client import TranscribeStreamingClient
-from amazon_transcribe.model import TranscriptEvent, TranscriptResultStream
+from amazon_transcribe.model import Result, TranscriptEvent
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -98,6 +98,7 @@ class STT(stt.STT):
         *,
         buffer: utils.AudioBuffer,
         language: str | None = None,
+        conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         raise NotImplementedError(
             "Amazon Transcribe does not support single frame recognition"
@@ -185,7 +186,7 @@ class SpeechStream(stt.SpeechStream):
     def _process_transcript_event(self, transcript_event: TranscriptEvent):
         stream = transcript_event.transcript.results
         for resp in stream:
-            if resp.start_time == 0.0:
+            if resp.start_time and resp.start_time == 0.0:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                 )
@@ -217,9 +218,7 @@ class SpeechStream(stt.SpeechStream):
                 )
 
 
-def _streaming_recognize_response_to_speech_data(
-    resp: TranscriptResultStream,
-) -> stt.SpeechData:
+def _streaming_recognize_response_to_speech_data(resp: Result) -> stt.SpeechData:
     data = stt.SpeechData(
         language="en-US",
         start_time=resp.start_time,
