@@ -6,7 +6,7 @@ from typing import Any, AsyncIterable, Awaitable, Callable, Union
 
 from livekit import rtc
 
-from .. import llm, tokenize, utils
+from .. import tokenize, utils
 from .. import transcription as agent_transcription
 from .. import tts as text_to_speech
 from .agent_playout import AgentPlayout, PlayoutHandle
@@ -96,15 +96,9 @@ class AgentOutput:
         *,
         room: rtc.Room,
         agent_playout: AgentPlayout,
-        llm: llm.LLM,
         tts: text_to_speech.TTS,
     ) -> None:
-        self._room, self._agent_playout, self._llm, self._tts = (
-            room,
-            agent_playout,
-            llm,
-            tts,
-        )
+        self._room, self._agent_playout, self._tts = room, agent_playout, tts
         self._tasks = set[asyncio.Task[Any]]()
 
     @property
