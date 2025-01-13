@@ -332,6 +332,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
             self._emit_speech_committed("agent", ev.transcript)
 
+        # Similar to _input_speech_started, this handles updating the state to "listening" when the agent's speech is complete.
+        # However, since Gemini doesn't support VAD events, we are not emitting the `user_started_speaking` event here.
         @self._session.on("agent_speech_completed")
         def _agent_speech_completed():
             self._update_state("listening")

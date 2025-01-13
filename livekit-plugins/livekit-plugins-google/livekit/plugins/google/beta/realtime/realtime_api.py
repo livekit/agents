@@ -44,6 +44,7 @@ EventTypes = Literal[
     "function_calls_cancelled",
     "input_speech_transcription_completed",
     "agent_speech_transcription_completed",
+    "agent_speech_completed",
 ]
 
 
