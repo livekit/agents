@@ -9,7 +9,16 @@ from typing import Callable
 import pytest
 from livekit import agents
 from livekit.agents import stt
-from livekit.plugins import assemblyai, azure, deepgram, fal, google, openai, silero
+from livekit.plugins import (
+    assemblyai,
+    aws,
+    azure,
+    deepgram,
+    fal,
+    google,
+    openai,
+    silero,
+)
 
 from .utils import make_test_speech, wer
 
@@ -51,6 +60,7 @@ async def test_recognize(stt_factory, sample_rate):
 
 STREAM_VAD = silero.VAD.load(min_silence_duration=0.75)
 STREAM_STT: list[Callable[[], stt.STT]] = [
+    pytest.param(lambda: aws.STT(), id="aws"),
     pytest.param(lambda: assemblyai.STT(), id="assemblyai"),
     pytest.param(lambda: deepgram.STT(), id="deepgram"),
     pytest.param(lambda: google.STT(), id="google"),
