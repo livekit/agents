@@ -157,9 +157,11 @@ class SpeechStream(stt.SpeechStream):
                             await stream.input_stream.send_audio_event(
                                 audio_chunk=frame.data.tobytes()
                             )
-                    logger.info("sending end stream")  # temporary log
-                    await stream.input_stream.end_stream()
-                    logger.info("input stream closed")  # temporary log
+                            print("sent frame")
+                        else:
+                            print("sent end stream")  # temporary log
+                            await stream.input_stream.end_stream()
+                            break
 
                 except Exception as e:
                     logger.exception(f"an error occurred while streaming inputs: {e}")
