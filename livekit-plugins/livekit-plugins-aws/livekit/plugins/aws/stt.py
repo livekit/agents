@@ -191,7 +191,7 @@ class SpeechStream(stt.SpeechStream):
                     stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                 )
 
-            if resp.end_time > 0.0:
+            if resp.end_time and resp.end_time > 0.0:
                 if resp.is_partial:
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
@@ -221,8 +221,8 @@ class SpeechStream(stt.SpeechStream):
 def _streaming_recognize_response_to_speech_data(resp: Result) -> stt.SpeechData:
     data = stt.SpeechData(
         language="en-US",
-        start_time=resp.start_time,
-        end_time=resp.end_time,
+        start_time=resp.start_time if resp.start_time else 0.0,
+        end_time=resp.end_time if resp.end_time else 0.0,
         confidence=0.0,
         text=resp.alternatives[0].transcript,
     )
