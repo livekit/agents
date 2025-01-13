@@ -176,6 +176,10 @@ class ChatMessage:
         copied_msg._metadata = self._metadata
         return copied_msg
 
+    @property
+    def is_tool_call(self) -> bool:
+        return self.role == "tool" or (self.role == "assistant" and self.tool_calls)
+
 
 @dataclass
 class ChatContext:
@@ -194,9 +198,16 @@ class ChatContext:
         return copied_chat_ctx
 
     def truncate(
-        self, keep_last_n: int, *, keep_system_message: bool = False
+        self,
+        keep_last_n: int,
+        *,
+        keep_system_message: bool = False,
+        keep_tool_calls: bool = True,
     ) -> ChatContext:
-        copied_messages = [m.copy() for m in self.messages[-keep_last_n:]]
+        messages = self.messages
+        if not keep_tool_calls:
+            messages = [m for m in messages if not m.is_tool_call]
+        copied_messages = [msg.copy() for msg in messages[-keep_last_n:]]
 
         remove_roles = {"tool"}  # tool message at the first position is invalid
         if not keep_system_message:

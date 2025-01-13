@@ -1216,11 +1216,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             )
             self.emit("metrics_collected", eou_metrics)
 
-        if not self._inline_task_running():
-            self._add_speech_for_playout(self._pending_agent_reply)
-        else:
-            assert self._playing_speech is not None
+        if self._playing_speech and not self._playing_speech.nested_speech_done:
             self._playing_speech.add_nested_speech(self._pending_agent_reply)
+        else:
+            self._add_speech_for_playout(self._pending_agent_reply)
 
         self._pending_agent_reply = None
         self._transcribed_interim_text = ""

@@ -37,7 +37,7 @@ class UserData(TypedDict):
     checked_out: Optional[bool]
 
 
-def update_chat_ctx(task: AgentTask, chat_ctx: llm.ChatContext) -> AgentTask:
+def update_context(task: AgentTask, chat_ctx: llm.ChatContext) -> AgentTask:
     last_chat_ctx = chat_ctx.truncate(keep_last_n=6)
     task.inject_chat_ctx(last_chat_ctx)
     return task
@@ -74,7 +74,7 @@ async def to_greeter() -> tuple[AgentTask, str]:
     """Called when user asks any unrelated questions or requests any other services not in your job description."""
     agent = AgentCallContext.get_current().agent
     next_task = AgentTask.get_task(Greeter)
-    return update_chat_ctx(next_task, agent.chat_ctx), f"User data: {agent.user_data}"
+    return update_context(next_task, agent.chat_ctx), f"User data: {agent.user_data}"
 
 
 class Greeter(AgentTask):
@@ -94,7 +94,7 @@ class Greeter(AgentTask):
         who will collect the necessary details like reservation time, customer name and phone number."""
         agent = AgentCallContext.get_current().agent
         next_task = self.get_task(Reservation)
-        return update_chat_ctx(
+        return update_context(
             next_task, agent.chat_ctx
         ), f"User info: {agent.user_data}"
 
@@ -104,7 +104,7 @@ class Greeter(AgentTask):
         delivery, or when the user wants to proceed to checkout with their existing order."""
         agent = AgentCallContext.get_current().agent
         next_task = self.get_task(Takeaway)
-        return update_chat_ctx(
+        return update_context(
             next_task, agent.chat_ctx
         ), f"User info: {agent.user_data}"
 
@@ -145,7 +145,7 @@ class Reservation(AgentTask):
             return "Please provide reservation time first."
 
         next_task = self.get_task(Greeter)
-        return update_chat_ctx(
+        return update_context(
             next_task, agent.chat_ctx
         ), f"Reservation confirmed. User data: {user_data}"
 
@@ -184,7 +184,7 @@ class Takeaway(AgentTask):
             return "No takeaway order found. Please make an order first."
 
         next_task = self.get_task(Checkout)
-        return update_chat_ctx(next_task, agent.chat_ctx), f"User info: {user_data}"
+        return update_context(next_task, agent.chat_ctx), f"User info: {user_data}"
 
 
 class Checkout(AgentTask):
@@ -246,7 +246,7 @@ class Checkout(AgentTask):
 
         user_data["checked_out"] = True
         next_task = self.get_task(Greeter)
-        return update_chat_ctx(
+        return update_context(
             next_task, agent.chat_ctx
         ), f"User checked out. User info: {user_data}"
 
@@ -255,7 +255,7 @@ class Checkout(AgentTask):
         """Called when the user wants to update their order."""
         agent = AgentCallContext.get_current().agent
         next_task = self.get_task(Takeaway)
-        return update_chat_ctx(
+        return update_context(
             next_task, agent.chat_ctx
         ), f"User info: {agent.user_data}"
 

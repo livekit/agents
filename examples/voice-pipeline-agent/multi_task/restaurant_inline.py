@@ -45,18 +45,28 @@ class UserData(TypedDict):
 T = TypeVar("T", bound=AgentTask)
 
 
-def update_chat_ctx(task: T, chat_ctx: llm.ChatContext) -> T:
-    last_chat_ctx = chat_ctx.truncate(keep_last_n=6)
+def update_context(
+    task: T, chat_ctx: llm.ChatContext, keep_tool_calls: bool = False
+) -> T:
+    last_chat_ctx = chat_ctx.truncate(keep_last_n=3, keep_tool_calls=keep_tool_calls)
     task.inject_chat_ctx(last_chat_ctx)
     return task
 
 
+def update_instructions(instructions: str, user_data: UserData | None = None) -> str:
+    if user_data:
+        instructions += f"\nCurrently collected user data: {user_data}."
+    return instructions
+
+
 class GetName(AgentInlineTask):
     def __init__(self, user_data: UserData | None = None):
-        instructions = "Ask for and collect the customer's name. Please verify the spelling before proceeding."
-        if user_data:
-            instructions += f"\nPreviously collected user data: {user_data}"
-        super().__init__(instructions=instructions)
+        instructions = "Your job is to ask for and collect the user's name. Please verify the spelling before proceeding."
+        user_data = user_data or {}
+        super().__init__(
+            instructions=update_instructions(instructions, user_data),
+            preset_result=user_data.get("customer_name"),
+        )
 
     @llm.ai_callable()
     async def set_name(
@@ -69,10 +79,12 @@ class GetName(AgentInlineTask):
 
 class GetPhoneNumber(AgentInlineTask):
     def __init__(self, user_data: UserData | None = None):
-        instructions = "Ask for and collect a valid 10-digit phone number. Please verify the number before proceeding."
-        if user_data:
-            instructions += f"\nPreviously collected user data: {user_data}"
-        super().__init__(instructions=instructions)
+        instructions = "Your job is to collect the user's phone number. Please verify the spelling before proceeding."
+        user_data = user_data or {}
+        super().__init__(
+            instructions=update_instructions(instructions, user_data),
+            preset_result=user_data.get("customer_phone"),
+        )
 
     @llm.ai_callable()
     async def set_phone_number(
@@ -95,10 +107,12 @@ class GetPhoneNumber(AgentInlineTask):
 
 class GetReservationTime(AgentInlineTask):
     def __init__(self, user_data: UserData | None = None):
-        instructions = "Ask for the desired reservation time and confirm the timing with the customer."
-        if user_data:
-            instructions += f"\nPreviously collected user data: {user_data}"
-        super().__init__(instructions=instructions)
+        instructions = "Your job is to ask for the desired reservation time and confirm the timing with the customer."
+        user_data = user_data or {}
+        super().__init__(
+            instructions=update_instructions(instructions, user_data),
+            preset_result=user_data.get("reservation_time"),
+        )
 
     @llm.ai_callable()
     async def set_reservation_time(
@@ -112,13 +126,14 @@ class GetReservationTime(AgentInlineTask):
 class TakeOrder(AgentInlineTask):
     def __init__(self, menu: str, user_data: UserData | None = None):
         instructions = (
-            "You are a professional restaurant server. Here's our menu: "
-            f"{menu}. Take the customer's order, clarify any special requests, "
-            "and confirm the complete order before proceeding."
+            "Your job is to take the customer's order, clarify any special requests, "
+            f"and confirm the complete order before proceeding. Our menu is {menu}"
         )
-        if user_data:
-            instructions += f"\nPreviously collected user data: {user_data}"
-        super().__init__(instructions=instructions)
+        user_data = user_data or {}
+        super().__init__(
+            instructions=update_instructions(instructions, user_data),
+            preset_result=user_data.get("order"),
+        )
 
     @llm.ai_callable()
     async def update_order(
@@ -137,10 +152,17 @@ class TakeOrder(AgentInlineTask):
 
 class GetCreditCard(AgentInlineTask):
     def __init__(self, user_data: UserData | None = None):
-        instructions = "Collect the customer's payment information: card number, expiration date (MM/YY), and CVV."
-        if user_data:
-            instructions += f"\nPreviously collected user data: {user_data}"
-        super().__init__(instructions=instructions)
+        instructions = "Your job is to collect the customer's payment information: card number, expiration date (MM/YY), and CVV."
+        user_data = user_data or {}
+        credit_card = {
+            "customer_credit_card": user_data.get("customer_credit_card"),
+            "customer_credit_card_expiry": user_data.get("customer_credit_card_expiry"),
+            "customer_credit_card_cvv": user_data.get("customer_credit_card_cvv"),
+        }
+        super().__init__(
+            instructions=update_instructions(instructions, user_data),
+            preset_result=credit_card,
+        )
 
     @llm.ai_callable()
     async def set_credit_card(
@@ -178,36 +200,37 @@ class GetCreditCard(AgentInlineTask):
         return f"The credit card information is updated to {self._result}"
 
 
-class Greeter(AgentTask):
+class HostBot(AgentTask):
     def __init__(self, menu: str):
         super().__init__(
             instructions=(
                 f"You are a friendly restaurant host. Our menu: {menu}\n"
-                "Welcome customers and guide them to either make a reservation "
-                "or place an order based on their preference."
+                "Welcome customers and guide them to either make, update or cancel a reservation, "
+                "or order takeaway and then checkout based on their preference."
             )
         )
         self.menu = menu
 
     @llm.ai_callable()
     async def make_reservation(self) -> str:
-        """Called when the user want to make a reservation."""
+        """Called when the user want to make or update a reservation."""
         agent = AgentCallContext.get_current().agent
         user_data: UserData = agent.user_data
 
         try:
-            reservation_time = await update_chat_ctx(
+            reservation_time = await update_context(
                 GetReservationTime(user_data), agent.chat_ctx
             ).run()
             user_data["reservation_time"] = reservation_time
 
-            name = await update_chat_ctx(GetName(user_data), agent.chat_ctx).run()
+            name = await update_context(GetName(user_data), agent.chat_ctx).run()
             user_data["customer_name"] = name
 
-            phone = await update_chat_ctx(
+            phone = await update_context(
                 GetPhoneNumber(user_data), agent.chat_ctx
             ).run()
             user_data["customer_phone"] = phone
+
         except TaskFailed as e:
             return f"Task failed: {e}"
         except ResultNotSet:
@@ -216,13 +239,24 @@ class Greeter(AgentTask):
         return f"Reservation successful. Updated user data: {user_data}"
 
     @llm.ai_callable()
-    async def take_order(self) -> str:
-        """Called when the user wants to take an order."""
+    async def cancel_reservation(self) -> str:
+        """Called when the user wants to cancel the reservation."""
+        agent = AgentCallContext.get_current().agent
+        user_data: UserData = agent.user_data
+        if "reservation_time" not in user_data:
+            return "You have not made a reservation yet."
+
+        user_data["reservation_time"] = None
+        return f"Reservation cancelled. Updated user data: {user_data}"
+
+    @llm.ai_callable()
+    async def order_takeaway(self) -> str:
+        """Called when the user wants to order takeaway."""
         agent = AgentCallContext.get_current().agent
         user_data: UserData = agent.user_data
 
         try:
-            order = await update_chat_ctx(
+            order = await update_context(
                 TakeOrder(self.menu, user_data), agent.chat_ctx
             ).run()
             user_data["order"] = order
@@ -243,17 +277,27 @@ class Greeter(AgentTask):
         user_data["expense"] = expense
 
         try:
-            name = await update_chat_ctx(GetName(user_data), agent.chat_ctx).run()
+            name = await update_context(GetName(user_data), agent.chat_ctx).run()
             user_data["customer_name"] = name
 
-            phone = await update_chat_ctx(
+            phone = await update_context(
                 GetPhoneNumber(user_data), agent.chat_ctx
             ).run()
             user_data["customer_phone"] = phone
 
-            credit_card = await update_chat_ctx(
+            credit_card = await update_context(
                 GetCreditCard(user_data), agent.chat_ctx
             ).run()
+            if not isinstance(credit_card, dict) or not all(
+                key in credit_card
+                for key in [
+                    "customer_credit_card",
+                    "customer_credit_card_expiry",
+                    "customer_credit_card_cvv",
+                ]
+            ):
+                return "The credit card information is not valid."
+
             user_data.update(credit_card)
         except TaskFailed as e:
             return f"Task failed: {e}"
@@ -266,11 +310,11 @@ class Greeter(AgentTask):
 
 
 @llm.ai_callable()
-async def to_greeter() -> tuple[AgentTask, str]:
+async def to_host() -> tuple[AgentTask, str]:
     """Called when user asks unrelated questions or requests other services."""
     agent = AgentCallContext.get_current().agent
-    next_task = AgentTask.get_task(Greeter)
-    return update_chat_ctx(next_task, agent.chat_ctx), f"User data: {agent.user_data}"
+    next_task = AgentTask.get_task(HostBot)
+    return update_context(next_task, agent.chat_ctx), f"User data: {agent.user_data}"
 
 
 async def entrypoint(ctx: JobContext):
@@ -278,7 +322,7 @@ async def entrypoint(ctx: JobContext):
 
     # create tasks
     menu = "Pizza: $10, Salad: $5, Ice Cream: $3, Coffee: $2"
-    greeter = AgentTask.register_task(Greeter(menu))
+    greeter = AgentTask.register_task(HostBot(menu))
 
     # Set up chat logger
     chat_log_file = "restaurant_agent.log"

@@ -133,11 +133,12 @@ class AgentInlineTask(AgentTask):
         functions: Optional[list[Callable]] = None,
         llm: Optional[LLM] = None,
         name: Optional[str] = None,
+        preset_result: Optional[Any] = None,
     ) -> None:
         super().__init__(instructions, functions, llm, name)
 
         self._done_fut: asyncio.Future[None] = asyncio.Future()
-        self._result: Optional[Any] = None
+        self._result: Optional[Any] = preset_result
 
         self._parent_task: AgentTask | None = None
         self._parent_speech: SpeechHandle | None = None
@@ -194,22 +195,23 @@ class AgentInlineTask(AgentTask):
     @ai_callable()
     def on_success(self) -> SilentSentinel:
         """Called when user confirms the information is correct.
-        This function is called alone at the end of the task
-        to indicate the task is done.
+        This function is called to indicate the job is done.
         """
         if not self._done_fut.done():
             self._done_fut.set_result(None)
-        return SilentSentinel()
+        return SilentSentinel(result=self.result, error=self.exception)
 
     @ai_callable()
     def on_error(
         self,
         reason: Annotated[str, TypeInfo(description="The reason for the error")],
     ) -> SilentSentinel:
-        """Called when user wants to exit the task or refuses to provide the information."""
+        """Called when user wants to stop or refuses to provide the information.
+        Only focus on your job.
+        """
         if not self._done_fut.done():
             self._done_fut.set_exception(TaskFailed(reason))
-        return SilentSentinel()
+        return SilentSentinel(result=self.result, error=self.exception)
 
     @property
     def done(self) -> bool:
