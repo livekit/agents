@@ -76,12 +76,12 @@ class AgentTask:
             if name in cls._registered_tasks:
                 raise ValueError(f"Task with name '{name}' already registered")
             cls._registered_tasks[name] = task
-
-        # Always register by type
-        task_type = type(task)
-        if task_type in cls._registered_tasks:
-            raise ValueError(f"Task of type {task_type.__name__} already registered")
-        cls._registered_tasks[task_type] = task
+        else:
+            # register by type
+            task_type = type(task)
+            if task_type in cls._registered_tasks:
+                raise ValueError(f"Task of type {task_type.__name__} already registered")
+            cls._registered_tasks[task_type] = task
 
         return task
 

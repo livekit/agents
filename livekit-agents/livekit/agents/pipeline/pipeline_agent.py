@@ -969,6 +969,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             tool_calls_results = []
             tool_calls_chat_ctx = call_ctx.chat_ctx
             should_create_response = True
+            original_task = self.current_agent_task
             for called_fnc in called_fncs:
                 # ignore the function calls that returns None
                 if called_fnc.result is None and called_fnc.exception is None:
@@ -1006,6 +1007,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 ChatMessage.create_tool_calls(tool_calls_info, text=collected_text)
             ]
             extra_tools_messages.extend(tool_calls_results)
+
+            if original_task != self.current_agent_task:
+                # add the function call results to the original task
+                original_task.chat_ctx.messages.extend(extra_tools_messages)
 
             new_speech_handle = SpeechHandle.create_tool_speech(
                 allow_interruptions=speech_handle.allow_interruptions,

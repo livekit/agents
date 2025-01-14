@@ -37,10 +37,9 @@ class UserData(TypedDict):
     checked_out: Optional[bool]
 
 
-def update_context(task: AgentTask, chat_ctx: llm.ChatContext) -> AgentTask:
-    last_chat_ctx = chat_ctx.truncate(keep_last_n=6)
+def update_context(task: AgentTask, chat_ctx: llm.ChatContext) -> None:
+    last_chat_ctx = chat_ctx.truncate(keep_last_n=4, keep_tool_calls=False)
     task.inject_chat_ctx(last_chat_ctx)
-    return task
 
 
 # some common functions
@@ -73,8 +72,9 @@ async def update_phone(
 async def to_greeter() -> tuple[AgentTask, str]:
     """Called when user asks any unrelated questions or requests any other services not in your job description."""
     agent = AgentCallContext.get_current().agent
-    next_task = AgentTask.get_task(Greeter)
-    return update_context(next_task, agent.chat_ctx), f"User data: {agent.user_data}"
+    next_task = AgentTask.get_task("greeter")
+    update_context(next_task, agent.chat_ctx)
+    return next_task, f"User data: {agent.user_data}"
 
 
 class Greeter(AgentTask):
@@ -93,20 +93,18 @@ class Greeter(AgentTask):
         """Called when user wants to make a reservation. This function handles transitioning to the reservation agent
         who will collect the necessary details like reservation time, customer name and phone number."""
         agent = AgentCallContext.get_current().agent
-        next_task = self.get_task(Reservation)
-        return update_context(
-            next_task, agent.chat_ctx
-        ), f"User info: {agent.user_data}"
+        next_task = AgentTask.get_task("reservation")
+        update_context(next_task, agent.chat_ctx)
+        return next_task, f"User info: {agent.user_data}"
 
     @llm.ai_callable()
     async def to_takeaway(self) -> tuple[AgentTask, str]:
         """Called when the user wants to place a takeaway order. This includes handling orders for pickup,
         delivery, or when the user wants to proceed to checkout with their existing order."""
         agent = AgentCallContext.get_current().agent
-        next_task = self.get_task(Takeaway)
-        return update_context(
-            next_task, agent.chat_ctx
-        ), f"User info: {agent.user_data}"
+        next_task = AgentTask.get_task("takeaway")
+        update_context(next_task, agent.chat_ctx)
+        return next_task, f"User info: {agent.user_data}"
 
 
 class Reservation(AgentTask):
@@ -144,10 +142,9 @@ class Reservation(AgentTask):
         if not user_data.get("reservation_time"):
             return "Please provide reservation time first."
 
-        next_task = self.get_task(Greeter)
-        return update_context(
-            next_task, agent.chat_ctx
-        ), f"Reservation confirmed. User data: {user_data}"
+        next_task = AgentTask.get_task("greeter")
+        update_context(next_task, agent.chat_ctx)
+        return next_task, f"Reservation confirmed. User data: {user_data}"
 
 
 class Takeaway(AgentTask):
@@ -183,8 +180,9 @@ class Takeaway(AgentTask):
         if not user_data.get("order"):
             return "No takeaway order found. Please make an order first."
 
-        next_task = self.get_task(Checkout)
-        return update_context(next_task, agent.chat_ctx), f"User info: {user_data}"
+        next_task = AgentTask.get_task("checkout")
+        update_context(next_task, agent.chat_ctx)
+        return next_task, f"User info: {user_data}"
 
 
 class Checkout(AgentTask):
@@ -192,7 +190,7 @@ class Checkout(AgentTask):
         super().__init__(
             instructions=(
                 "You are a professional checkout agent at a restaurant. The menu is: "
-                f"{menu}. Your are responsible for calculating the expense of the "
+                f"{menu}. Your are responsible for confirming the expense of the "
                 "order and then collecting customer's name, phone number and credit card "
                 "information, including the card number, expiry date, and CVV step by step."
             ),
@@ -245,19 +243,17 @@ class Checkout(AgentTask):
             return "Please provide the credit card information first."
 
         user_data["checked_out"] = True
-        next_task = self.get_task(Greeter)
-        return update_context(
-            next_task, agent.chat_ctx
-        ), f"User checked out. User info: {user_data}"
+        next_task = AgentTask.get_task("greeter")
+        update_context(next_task, agent.chat_ctx)
+        return next_task, f"User checked out. User info: {user_data}"
 
     @llm.ai_callable()
     async def to_takeaway(self) -> tuple[AgentTask, str]:
         """Called when the user wants to update their order."""
         agent = AgentCallContext.get_current().agent
-        next_task = self.get_task(Takeaway)
-        return update_context(
-            next_task, agent.chat_ctx
-        ), f"User info: {agent.user_data}"
+        next_task = AgentTask.get_task("takeaway")
+        update_context(next_task, agent.chat_ctx)
+        return next_task, f"User info: {agent.user_data}"
 
 
 async def entrypoint(ctx: JobContext):
@@ -265,10 +261,10 @@ async def entrypoint(ctx: JobContext):
 
     # create tasks
     menu = "Pizza: $10, Salad: $5, Ice Cream: $3, Coffee: $2"
-    greeter = AgentTask.register_task(Greeter(menu))
-    AgentTask.register_task(Reservation())
-    AgentTask.register_task(Takeaway(menu))
-    AgentTask.register_task(Checkout(menu))
+    AgentTask.register_task(Greeter(menu), "greeter")
+    AgentTask.register_task(Reservation(), "reservation")
+    AgentTask.register_task(Takeaway(menu), "takeaway")
+    AgentTask.register_task(Checkout(menu), "checkout")
 
     # Set up chat logger
     chat_log_file = "restaurant_agent.log"
@@ -294,7 +290,7 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=cartesia.TTS(),
-        initial_task=greeter,
+        initial_task=AgentTask.get_task("greeter"),
         max_nested_fnc_calls=3,  # may call functions in the transition function
         before_tts_cb=_before_tts_cb,
     )
