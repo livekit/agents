@@ -317,13 +317,15 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._send_ch.send_nowait(msg)
 
     def generate_reply(
-        self, chat_ctx: llm.ChatContext | llm.ChatMessage, turn_complete: bool = True
+        self, ctx: llm.ChatContext | llm.ChatMessage, turn_complete: bool = True
     ) -> None:
-        if isinstance(chat_ctx, llm.ChatMessage):
+        if isinstance(ctx, llm.ChatMessage) and isinstance(ctx.content, str):
             new_chat_ctx = llm.ChatContext()
-            new_chat_ctx.append(text=chat_ctx.content, role=chat_ctx.role)
+            new_chat_ctx.append(text=ctx.content, role=ctx.role)
+        elif isinstance(ctx, llm.ChatContext):
+            new_chat_ctx = ctx
         else:
-            new_chat_ctx = chat_ctx
+            raise ValueError("Invalid chat context")
         gemini_ctx = _build_gemini_ctx(new_chat_ctx)
         client_content = LiveClientContent(
             turn_complete=turn_complete,
