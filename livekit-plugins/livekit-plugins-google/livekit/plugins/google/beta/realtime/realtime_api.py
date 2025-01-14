@@ -11,8 +11,8 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 
-from google import genai  # type: ignore
-from google.genai.types import (  # type: ignore
+from google import genai
+from google.genai.types import (
     FunctionResponse,
     GenerationConfigDict,
     LiveClientContent,
@@ -89,7 +89,8 @@ class ModelOptions:
     presence_penalty: float | None
     frequency_penalty: float | None
     instructions: str
-    enable_transcription: bool
+    enable_user_audio_transcription: bool
+    enable_agent_audio_transcription: bool
 
 
 class RealtimeModel:
@@ -101,7 +102,8 @@ class RealtimeModel:
         api_key: str | None = None,
         voice: Voice | str = "Puck",
         modalities: ResponseModality = "AUDIO",
-        enable_transcription: bool = True,
+        enable_user_audio_transcription: bool = True,
+        enable_agent_audio_transcription: bool = True,
         vertexai: bool = False,
         project_id: str | None = None,
         location: str | None = None,
@@ -123,7 +125,8 @@ class RealtimeModel:
             modalities (ResponseModality): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
             model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
-            enable_transcription (bool, optional): Whether to enable transcription. Defaults to True
+            enable_user_audio_transcription (bool, optional): Whether to enable user audio transcription. Defaults to True
+            enable_agent_audio_transcription (bool, optional): Whether to enable agent audio transcription. Defaults to True
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
                 project_id (str or None, optional): The project id to use for the API. Defaults to None. (for vertexai)
@@ -165,7 +168,8 @@ class RealtimeModel:
             model=model,
             api_key=self._api_key,
             voice=voice,
-            enable_transcription=enable_transcription,
+            enable_user_audio_transcription=enable_user_audio_transcription,
+            enable_agent_audio_transcription=enable_agent_audio_transcription,
             response_modalities=modalities,
             vertexai=vertexai,
             project=self._project_id,
@@ -271,14 +275,15 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._main_atask = asyncio.create_task(
             self._main_task(), name="gemini-realtime-session"
         )
-        if self._opts.enable_transcription:
+        if self._opts.enable_user_audio_transcription:
             self._transcriber = TranscriberSession(
                 client=self._client, model=self._opts.model
             )
+            self._transcriber.on("input_speech_done", self._on_input_speech_done)
+        if self._opts.enable_agent_audio_transcription:
             self._agent_transcriber = TranscriberSession(
                 client=self._client, model=self._opts.model
             )
-            self._transcriber.on("input_speech_done", self._on_input_speech_done)
             self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
         # init dummy task
         self._init_sync_task = asyncio.create_task(asyncio.sleep(0))
@@ -303,7 +308,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._fnc_ctx = value
 
     def _push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._opts.enable_transcription:
+        if self._opts.enable_user_audio_transcription:
             self._transcriber._push_audio(frame)
         data = base64.b64encode(frame.data).decode("utf-8")
         self._queue_msg({"mime_type": "audio/pcm", "data": data})
@@ -400,7 +405,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                                         samples_per_channel=len(part.inline_data.data)
                                         // 2,
                                     )
-                                    if self._opts.enable_transcription:
+                                    if self._opts.enable_agent_audio_transcription:
                                         self._agent_transcriber._push_audio(frame)
                                     content.audio_stream.send_nowait(frame)
 
@@ -461,6 +466,10 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
                 await self._session.close()
+                if self._opts.enable_user_audio_transcription:
+                    await self._transcriber.aclose()
+                if self._opts.enable_agent_audio_transcription:
+                    await self._agent_transcriber.aclose()
 
     @utils.log_exceptions(logger=logger)
     async def _run_fnc_task(self, fnc_call_info: llm.FunctionCallInfo, item_id: str):

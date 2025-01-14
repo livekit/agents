@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Literal, Sequence, Union
 
 from livekit.agents import llm
 
-from google.genai import types  # type: ignore
+from google.genai import types
 
 __all__ = [
     "ClientEvents",
