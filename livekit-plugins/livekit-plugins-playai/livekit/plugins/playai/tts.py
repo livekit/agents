@@ -197,8 +197,9 @@ class ChunkedStream(tts.ChunkedStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            await self._client.close()
-            self._client = None
+            if self._client is not None:
+                await self._client.close()
+                self._client = None
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -268,8 +269,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(input_task)
-            await self._client.close()
-            self._client = None
+            if self._client is not None:
+                await self._client.close()
+                self._client = None
 
     @utils.log_exceptions(logger=logger)
     async def _tokenize_input(self):
