@@ -3,27 +3,26 @@ from __future__ import annotations, print_function
 import asyncio
 import contextlib
 import heapq
-
 from dataclasses import dataclass
 from typing import (
     AsyncIterable,
-    Tuple,
     Literal,
     Optional,
+    Tuple,
     Union,
 )
 
 from livekit import rtc
 
-from .. import llm, stt, tts, utils, vad, debug, tokenize
+from .. import debug, llm, stt, tokenize, tts, utils, vad
 from ..llm import ChatContext, FunctionContext
 from ..log import logger
-from . import io, events
+from . import events, io
 from .audio_recognition import AudioRecognition, _TurnDetector
 from .generation import (
+    _TTSGenerationData,
     do_llm_inference,
     do_tts_inference,
-    _TTSGenerationData,
 )
 
 

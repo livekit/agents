@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import AsyncIterable, Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
 from .. import llm
-
-from typing import AsyncIterable, Union, Literal, Generic, TypeVar
 
 
 @dataclass

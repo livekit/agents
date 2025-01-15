@@ -1,10 +1,11 @@
 from .chat_context import (
-    ChatAudio,
-    ChatContent,
     ChatContext,
-    ChatImage,
     ChatMessage,
-    ChatRole,
+    FunctionCall,
+    FunctionCallOutput,
+    AudioContent,
+    ImageContent,
+    ChatItem,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .function_context import (
@@ -28,16 +29,18 @@ from .llm import (
     LLMStream,
     ToolChoice,
 )
+from .utils import compute_chat_ctx_diff
 
 __all__ = [
     "LLM",
     "LLMStream",
     "ChatContext",
-    "ChatRole",
     "ChatMessage",
-    "ChatAudio",
-    "ChatImage",
-    "ChatContent",
+    "FunctionCall",
+    "FunctionCallOutput",
+    "AudioContent",
+    "ImageContent",
+    "ChatItem",
     "ChatContext",
     "ChoiceDelta",
     "Choice",
@@ -56,4 +59,5 @@ __all__ = [
     "AvailabilityChangedEvent",
     "ToolChoice",
     "_create_ai_function_info",
+    "compute_chat_ctx_diff",
 ]

@@ -27,8 +27,8 @@ from typing import Any, Callable
 
 from livekit import rtc
 
-from ..job import JobContext, JobProcess, _JobContextVar
 from ..debug import tracing
+from ..job import JobContext, JobProcess, _JobContextVar
 from ..log import logger
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message

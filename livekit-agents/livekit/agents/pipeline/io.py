@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import (
@@ -14,8 +15,6 @@ from typing import (
 from livekit import rtc
 
 from .. import llm, stt
-
-import asyncio
 
 STTNode = Callable[
     [AsyncIterable[rtc.AudioFrame]],

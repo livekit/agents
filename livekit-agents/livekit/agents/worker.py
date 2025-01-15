@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import time
 import asyncio
 import contextlib
 import datetime
@@ -24,6 +23,7 @@ import multiprocessing as mp
 import os
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import reduce
@@ -39,12 +39,13 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
+from aiohttp import web
 from livekit import api, rtc
 from livekit.protocol import agent, models
 
 from . import http_server, ipc, utils
-from .debug import tracing
 from ._exceptions import AssignmentTimeoutError
+from .debug import tracing
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -57,8 +58,6 @@ from .job import (
 from .log import DEV_LEVEL, logger
 from .utils.hw import get_cpu_monitor
 from .version import __version__
-
-from aiohttp import web
 
 ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
