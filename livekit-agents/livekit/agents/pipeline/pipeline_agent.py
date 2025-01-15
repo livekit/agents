@@ -721,6 +721,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 # the speech is playing but not committed yet, add it to the chat context for this new reply synthesis
                 # First add the previous function call message if any
                 if playing_speech.extra_tools_messages:
+                    if playing_speech.fnc_text_message_id is not None:
+                        # there is a message alongside the function calls
+                        msgs = copied_ctx.messages
+                        if msgs and msgs[-1].id == playing_speech.fnc_text_message_id:
+                            # replace it with the tool call message if it's the last in the ctx
+                            msgs.pop()
                     copied_ctx.messages.extend(playing_speech.extra_tools_messages)
 
                 # Then add the previous assistant message
