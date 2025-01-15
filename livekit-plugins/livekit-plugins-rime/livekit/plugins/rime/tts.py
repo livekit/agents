@@ -233,7 +233,7 @@ class ChunkedStream(tts.ChunkedStream):
                 message=e.message,
                 status_code=e.status,
                 request_id=request_id,
-                body=e.body,
+                body=None,
             ) from e
         except Exception as e:
             raise APIConnectionError() from e
