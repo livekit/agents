@@ -127,12 +127,14 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        segment_id: str | None = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
             tts=self,
             input_text=text,
             conn_options=conn_options,
             opts=self._opts,
+            segment_id=segment_id,
         )
 
     def stream(
@@ -155,6 +157,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
         opts: _Options,
+        segment_id: str | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._api_key = tts._api_key
@@ -162,6 +165,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = opts
         self._config = self._opts.tts_options
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
+        self._segment_id = segment_id or utils.shortuuid()
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
@@ -186,11 +190,16 @@ class ChunkedStream(tts.ChunkedStream):
                             tts.SynthesizedAudio(
                                 request_id=request_id,
                                 frame=frame,
+                                segment_id=self._segment_id,
                             )
                         )
             for frame in bstream.flush():
                 self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(request_id=request_id, frame=frame)
+                    tts.SynthesizedAudio(
+                        request_id=request_id,
+                        frame=frame,
+                        segment_id=self._segment_id,
+                    )
                 )
         except Exception as e:
             raise APIConnectionError() from e
