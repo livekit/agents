@@ -157,23 +157,21 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _Options,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._api_key = tts._api_key
-        self._user_id = tts._user_id
+        self._tts = tts
         self._opts = opts
         self._config = self._opts.tts_options
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
+        self._client: PlayHTAsyncClient | None = _create_client(self._tts)
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
         bstream = utils.audio.AudioByteStream(
             sample_rate=self._config.sample_rate, num_channels=NUM_CHANNELS
         )
-        self._client = PlayHTAsyncClient(
-            user_id=self._user_id,
-            api_key=self._api_key,
-        )
 
         try:
+            if self._client is None:
+                self._client = _create_client(self._tts)
             async for chunk in self._client.tts(
                 text=self._input_text,
                 options=self._config,
@@ -194,6 +192,10 @@ class ChunkedStream(tts.ChunkedStream):
                 )
         except Exception as e:
             raise APIConnectionError() from e
+        finally:
+            if self._client is not None:
+                await self._client.close()
+                self._client = None
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -205,12 +207,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         opts: _Options,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._api_key = tts._api_key
-        self._user_id = tts._user_id
+        self._tts = tts
         self._opts = opts
         self._config = self._opts.tts_options
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
+        self._client: PlayHTAsyncClient | None = _create_client(self._tts)
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
@@ -238,10 +240,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             text_stream = await self._create_text_stream()
-            self._client = PlayHTAsyncClient(
-                user_id=self._user_id,
-                api_key=self._api_key,
-            )
+            if self._client is None:
+                self._client = _create_client(self._tts)
             async for chunk in self._client.stream_tts_input(
                 text_stream=text_stream,
                 options=self._config,
@@ -258,10 +258,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             _send_last_frame(segment_id=segment_id, is_final=True)
 
         except Exception as e:
+            if self._client is not None:
+                await self._client.close()
+                self._client = None
+
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(input_task)
-            await self._client.close()
 
     @utils.log_exceptions(logger=logger)
     async def _tokenize_input(self):
@@ -287,6 +290,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                     yield word.token
 
         return text_stream()
+
+
+def _create_client(tts: TTS) -> PlayHTAsyncClient:
+    return PlayHTAsyncClient(
+        user_id=tts._user_id,
+        api_key=tts._api_key,
+    )
 
 
 def _update_options(config: TTSOptions, **kwargs) -> TTSOptions:
