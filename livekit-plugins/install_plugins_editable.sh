@@ -11,6 +11,7 @@ pip install -e ./livekit-plugins-azure --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-cartesia --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-deepgram --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-elevenlabs --config-settings editable_mode=strict
+pip install -e ./livekit-plugins-fal --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-google --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-minimal --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-nltk --config-settings editable_mode=strict
