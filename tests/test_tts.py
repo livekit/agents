@@ -37,9 +37,9 @@ async def _assert_valid_synthesized_audio(
 
     merged_frame = merge_frames(frames)
     assert merged_frame.sample_rate == tts.sample_rate, "sample rate should be the same"
-    assert (
-        merged_frame.num_channels == tts.num_channels
-    ), "num channels should be the same"
+    assert merged_frame.num_channels == tts.num_channels, (
+        "num channels should be the same"
+    )
 
 
 SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
@@ -141,13 +141,16 @@ async def test_stream(tts_factory):
             stream.end_input()
 
     frames = []
-    is_final = False
+    is_final = 0
     async for audio in stream:
-        is_final = audio.is_final
+        if audio.is_final:
+            is_final += 1
         segments.add(audio.segment_id)
         frames.append(audio.frame)
 
-    assert is_final, "final audio should be marked as final"
+    assert is_final >= 2, (
+        "both segments should be marked as final"
+    )  # (>= 2) tts streamadapter class could have multiple final audio based on number of sentences
 
     # Combine the segments for expected text
     expected_text = "".join(text_segments)

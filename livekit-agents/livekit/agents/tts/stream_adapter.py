@@ -76,16 +76,6 @@ class StreamAdapterWrapper(SynthesizeStream):
         pass  # do nothing
 
     async def _run(self) -> None:
-        async def _forward_input():
-            """forward input to vad"""
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    self._sent_stream.flush()
-                    continue
-                self._sent_stream.push_text(data)
-
-            self._sent_stream.end_input()
-
         async def _tokenize_input():
             """tokenize text"""
             input_stream = None
