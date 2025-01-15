@@ -42,6 +42,7 @@ class AgentTask:
         name: Optional[str] = None,
     ) -> None:
         self._chat_ctx = ChatContext()
+        self._instructions = instructions
         if instructions:
             self._chat_ctx.append(text=instructions, role="system")
 
@@ -95,8 +96,16 @@ class AgentTask:
                 self._chat_ctx.messages.append(msg)
 
     @property
+    def instructions(self) -> Optional[str]:
+        return self._instructions
+
+    @property
     def chat_ctx(self) -> ChatContext:
         return self._chat_ctx
+
+    @chat_ctx.setter
+    def chat_ctx(self, chat_ctx: ChatContext) -> None:
+        self._chat_ctx = chat_ctx
 
     @property
     def fnc_ctx(self) -> FunctionContext:

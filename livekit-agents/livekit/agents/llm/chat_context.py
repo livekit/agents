@@ -209,7 +209,10 @@ class ChatContext:
         messages = self.messages
         if not keep_tool_calls:
             messages = [m for m in messages if not m.is_tool_call]
-        copied_messages = [msg.copy() for msg in messages[-keep_last_n:]]
+        if keep_last_n > 0:
+            copied_messages = [msg.copy() for msg in messages[-keep_last_n:]]
+        else:
+            copied_messages = [msg.copy() for msg in messages]
 
         remove_roles = {"tool"}  # tool message at the first position is invalid
         if not keep_system_message:

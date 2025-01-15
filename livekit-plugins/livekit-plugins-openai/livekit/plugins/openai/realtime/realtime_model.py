@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
 import os
 import time
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal, Optional, Union, cast, overload
+from typing import Any, AsyncIterable, Literal, Optional, Union, cast, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -14,6 +15,7 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
+from livekit.agents.pipeline import AgentTask
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from typing_extensions import TypedDict
 
@@ -40,6 +42,28 @@ EventTypes = Literal[
     "function_calls_finished",
     "metrics_collected",
 ]
+
+
+_CallContextVar = contextvars.ContextVar["RealtimeCallContext"](
+    "realtime_session_contextvar"
+)
+
+
+class RealtimeCallContext:
+    def __init__(
+        self,
+        session: "RealtimeSession",
+    ) -> None:
+        self._session = session
+        self._metadata = dict[str, Any]()
+
+    @staticmethod
+    def get_current() -> "RealtimeCallContext":
+        return _CallContextVar.get()
+
+    @property
+    def session(self) -> "RealtimeSession":
+        return self._session
 
 
 @dataclass
@@ -445,7 +469,8 @@ class RealtimeModel:
         self,
         *,
         chat_ctx: llm.ChatContext | None = None,
-        fnc_ctx: llm.FunctionContext | None = None,
+        # fnc_ctx: llm.FunctionContext | None = None,
+        init_task: AgentTask | None = None,
         modalities: list[api_proto.Modality] | None = None,
         instructions: str | None = None,
         voice: api_proto.Voice | None = None,
@@ -483,7 +508,8 @@ class RealtimeModel:
 
         new_session = RealtimeSession(
             chat_ctx=chat_ctx or llm.ChatContext(),
-            fnc_ctx=fnc_ctx,
+            # fnc_ctx=fnc_ctx,
+            init_task=init_task,
             opts=opts,
             http_session=self._ensure_session(),
             loop=self._loop,
@@ -809,7 +835,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         opts: _ModelOptions,
         http_session: aiohttp.ClientSession,
         chat_ctx: llm.ChatContext,
-        fnc_ctx: llm.FunctionContext | None,
+        # fnc_ctx: llm.FunctionContext | None,
+        init_task: AgentTask | None = None,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
@@ -825,7 +852,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._item_deleted_futs: dict[str, asyncio.Future[bool]] = {}
         self._item_truncated_futs: dict[str, asyncio.Future[bool]] = {}
 
-        self._fnc_ctx = fnc_ctx
+        # self._fnc_ctx = fnc_ctx
+        self._current_task = init_task or AgentTask()
+        self._user_data: dict[str, Any] = {}
+
         self._loop = loop
 
         self._opts = opts
@@ -853,11 +883,25 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
-        return self._fnc_ctx
+        return self._current_task.fnc_ctx
 
-    @fnc_ctx.setter
-    def fnc_ctx(self, fnc_ctx: llm.FunctionContext | None) -> None:
-        self._fnc_ctx = fnc_ctx
+    @property
+    def user_data(self) -> dict[str, Any]:
+        return self._user_data
+
+    @property
+    def current_task(self) -> AgentTask:
+        return self._current_task
+
+    async def update_task(self, task: AgentTask) -> None:
+        self._current_task.chat_ctx = self.chat_ctx_copy()
+        self._current_task = task
+        self.session_update(instructions=task.instructions)
+
+        # # remove the function calls from the chat context
+        # chat_ctx = self.chat_ctx_copy()
+        # chat_ctx = chat_ctx.truncate(keep_last_n=-1, keep_tool_calls=False)
+        # await self.set_chat_ctx(chat_ctx)
 
     @property
     def conversation(self) -> Conversation:
@@ -913,13 +957,14 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self._opts.max_response_output_tokens = max_response_output_tokens
 
         tools = []
-        if self._fnc_ctx is not None:
-            for fnc in self._fnc_ctx.ai_functions.values():
+        if self.fnc_ctx is not None:
+            for fnc in self.fnc_ctx.ai_functions.values():
                 # the realtime API is using internally-tagged polymorphism.
                 # build_oai_function_description was built for the ChatCompletion API
                 function_data = build_oai_function_description(fnc)["function"]
                 function_data["type"] = "function"
                 tools.append(function_data)
+        logger.info(f"tools: {tools}")
 
         server_vad_opts: api_proto.ServerVad | None = None
         if self._opts.turn_detection is not None:
@@ -1542,7 +1587,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         output = response.output[output_index]
 
         if output.type == "function_call":
-            if self._fnc_ctx is None:
+            if self.fnc_ctx is None:
                 logger.error(
                     "function call received but no fnc_ctx is available",
                     extra=self.logging_extra(),
@@ -1554,7 +1599,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             assert item["type"] == "function_call"
 
             fnc_call_info = _create_ai_function_info(
-                self._fnc_ctx,
+                self.fnc_ctx,
                 item["call_id"],
                 item["name"],
                 item["arguments"],
@@ -1680,17 +1725,44 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             "executing ai function",
             extra={
                 "function": fnc_call_info.function_info.name,
+                "arguments": fnc_call_info.function_info.arguments,
             },
         )
 
+        tk = _CallContextVar.set(RealtimeCallContext(self))
+
         called_fnc = fnc_call_info.execute()
         await called_fnc.task
+        _CallContextVar.reset(tk)
 
         tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
+
+        # switch task
+        new_task = called_fnc.get_agent_task()
+        if new_task:
+            original_task = self._current_task
+            logger.debug(
+                "switching to next agent task",
+                extra={
+                    "new_task": new_task,
+                    "previous_task": self.current_task,
+                },
+            )
+            await self.update_task(new_task)
+
+            # update the chat context of the original task
+            original_task.chat_ctx.messages.extend(
+                [
+                    llm.ChatMessage.create_tool_calls([called_fnc.call_info]),
+                    tool_call,
+                ]
+            )
+
         logger.info(
-            "creating response for tool call",
+            "ai functions done, creating response for tool call",
             extra={
                 "function": fnc_call_info.function_info.name,
+                "result": called_fnc.get_content(),
             },
         )
         if tool_call.content is not None:
