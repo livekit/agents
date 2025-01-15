@@ -1,5 +1,19 @@
 # livekit-agents
 
+## 0.12.8
+
+### Patch Changes
+
+- Fix not awaiting forward task in TTS forwarder, leading to warnings. - [#1339](https://github.com/livekit/agents/pull/1339) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- reduces initial delay before model retries - [#1337](https://github.com/livekit/agents/pull/1337) ([@davidzhao](https://github.com/davidzhao))
+
+- fix the function calls without a text response are not added to chat ctx - [#1349](https://github.com/livekit/agents/pull/1349) ([@longcw](https://github.com/longcw))
+
+- add timeout for EOU inference requests made to the inference process - [#1315](https://github.com/livekit/agents/pull/1315) ([@theomonnom](https://github.com/theomonnom))
+
+- support disabling server VAD for OpenAI realtime model - [#1347](https://github.com/livekit/agents/pull/1347) ([@longcw](https://github.com/longcw))
+
 ## 0.12.7
 
 ### Patch Changes

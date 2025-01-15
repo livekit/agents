@@ -906,6 +906,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     },
                 )
 
+        @utils.log_exceptions(logger=logger)
         async def _execute_function_calls() -> None:
             nonlocal interrupted, collected_text
 
@@ -1058,6 +1059,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle._set_done()
             return
 
+        speech_handle._nested_speech_done_fut = asyncio.Future[None]()
         fnc_task = asyncio.create_task(_execute_function_calls())
         while not speech_handle.nested_speech_done:
             nesting_changed = asyncio.create_task(
