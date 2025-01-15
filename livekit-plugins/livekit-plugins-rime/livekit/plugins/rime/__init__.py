@@ -19,12 +19,10 @@ __all__ = ["TTS", "ChunkedStream", "__version__"]
 
 from livekit.agents import Plugin
 
-from .log import logger
-
 
 class RimePlugin(Plugin):
-    def __init__(self):
-        super().__init__(__name__, __version__, __package__, logger)
+    def __init__(self) -> None:
+        super().__init__(__name__, __version__, __package__)
 
 
 Plugin.register_plugin(RimePlugin())
