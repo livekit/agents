@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 import asyncio
 import time
+from typing import TYPE_CHECKING, Any, Literal
 
 from aiohttp import web
-from typing import TYPE_CHECKING, Any, Literal
+
 from .. import job
 
 if TYPE_CHECKING:
@@ -138,8 +140,9 @@ class Tracing:
 
 def _create_tracing_app(w: Worker) -> web.Application:
     async def tracing_index(request: web.Request) -> web.Response:
-        import aiofiles
         import importlib.resources
+
+        import aiofiles
 
         with importlib.resources.path("livekit.agents.debug", "index.html") as path:
             async with aiofiles.open(path, mode="r") as f:

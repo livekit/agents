@@ -6,11 +6,10 @@ from typing import TYPE_CHECKING, AsyncIterable, Literal, Protocol
 from livekit import rtc
 
 from .. import llm, stt, utils, vad
+from ..debug import tracing
 from ..log import logger
 from ..utils import aio
 from . import io
-
-from ..debug import tracing
 
 if TYPE_CHECKING:
     from .pipeline2 import PipelineAgent
