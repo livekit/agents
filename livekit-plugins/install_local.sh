@@ -19,4 +19,5 @@ pip install \
   "${SCRIPT_DIR}/livekit-plugins-rag" \
   "${SCRIPT_DIR}/livekit-plugins-playai" \
   "${SCRIPT_DIR}/livekit-plugins-silero" \
-  "${SCRIPT_DIR}/livekit-plugins-turn-detector"
+  "${SCRIPT_DIR}/livekit-plugins-turn-detector" \
+  "${SCRIPT_DIR}/livekit-plugins-rime"
