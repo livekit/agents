@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import string
 import time
@@ -16,6 +17,7 @@ HG_MODEL = "livekit/turn-detector"
 ONNX_FILENAME = "model_quantized.onnx"
 PUNCS = string.punctuation.replace("'", "")
 MAX_HISTORY = 4
+MAX_HISTORY_TOKENS = 512
 
 
 def _download_from_hf_hub(repo_id, filename, **kwargs):
@@ -76,7 +78,7 @@ class _EUORunner(_InferenceRunner):
             )
 
             self._tokenizer = AutoTokenizer.from_pretrained(
-                HG_MODEL, local_files_only=True
+                HG_MODEL, local_files_only=True, truncation_side="left"
             )
             self._eou_index = self._tokenizer.encode("<|im_end|>")[-1]
         except (errors.LocalEntryNotFoundError, OSError):
@@ -104,6 +106,8 @@ class _EUORunner(_InferenceRunner):
             text,
             add_special_tokens=False,
             return_tensors="np",
+            max_length=MAX_HISTORY_TOKENS,
+            truncation=True,
         )
 
         input_dict = {"input_ids": np.array(inputs["input_ids"], dtype=np.int64)}
@@ -152,7 +156,10 @@ class EOUModel:
     async def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
         return await self.predict_end_of_turn(chat_ctx)
 
-    async def predict_end_of_turn(self, chat_ctx: llm.ChatContext) -> float:
+    # our EOU model inference should be fast, 3 seconds is more than enough
+    async def predict_end_of_turn(
+        self, chat_ctx: llm.ChatContext, *, timeout: float | None = 3
+    ) -> float:
         messages = []
 
         for msg in chat_ctx.messages:
@@ -180,13 +187,15 @@ class EOUModel:
         messages = messages[-MAX_HISTORY:]
 
         json_data = json.dumps({"chat_ctx": messages}).encode()
-        result = await self._executor.do_inference(
-            _EUORunner.INFERENCE_METHOD, json_data
+
+        result = await asyncio.wait_for(
+            self._executor.do_inference(_EUORunner.INFERENCE_METHOD, json_data),
+            timeout=timeout,
         )
 
-        assert (
-            result is not None
-        ), "end_of_utterance prediction should always returns a result"
+        assert result is not None, (
+            "end_of_utterance prediction should always returns a result"
+        )
 
         result_json = json.loads(result.decode())
         return result_json["eou_probability"]

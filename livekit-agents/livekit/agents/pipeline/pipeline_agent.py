@@ -473,7 +473,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         synthesis_handle = self._synthesize_agent_speech(new_handle.id, source)
         new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
 
-        if self._playing_speech and not self._playing_speech.nested_speech_finished:
+        if self._playing_speech and not self._playing_speech.nested_speech_done:
             self._playing_speech.add_nested_speech(new_handle)
         else:
             self._add_speech_for_playout(new_handle)
@@ -496,6 +496,23 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             )
 
         return new_handle
+
+    def interrupt(self, interrupt_all: bool = True) -> None:
+        """Interrupt the current speech
+
+        Args:
+            interrupt_all: Whether to interrupt all pending speech
+        """
+        if interrupt_all:
+            # interrupt all pending speech
+            if self._pending_agent_reply is not None:
+                self._pending_agent_reply.cancel(cancel_nested=True)
+            for speech in self._speech_q:
+                speech.cancel(cancel_nested=True)
+
+        # interrupt the playing speech
+        if self._playing_speech is not None:
+            self._playing_speech.cancel()
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -813,11 +830,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
+        # add tool calls and text message to the chat context
         message_id_committed: str | None = None
-        if (
-            collected_text
-            and speech_handle.add_to_chat_ctx
-            and (not user_question or speech_handle.user_committed)
+        if speech_handle.add_to_chat_ctx and (
+            not user_question or speech_handle.user_committed
         ):
             if speech_handle.extra_tools_messages:
                 if speech_handle.fnc_text_message_id is not None:
@@ -831,28 +847,30 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         speech_handle.extra_tools_messages[0].content = ""
                 self._chat_ctx.messages.extend(speech_handle.extra_tools_messages)
 
-            if interrupted:
-                collected_text += "..."
+            if collected_text:
+                if interrupted:
+                    collected_text += "..."
 
-            msg = ChatMessage.create(text=collected_text, role="assistant")
-            self._chat_ctx.messages.append(msg)
-            message_id_committed = msg.id
-            speech_handle.mark_speech_committed()
+                msg = ChatMessage.create(text=collected_text, role="assistant")
+                self._chat_ctx.messages.append(msg)
+                message_id_committed = msg.id
+                speech_handle.mark_speech_committed()
 
-            if interrupted:
-                self.emit("agent_speech_interrupted", msg)
-            else:
-                self.emit("agent_speech_committed", msg)
+                if interrupted:
+                    self.emit("agent_speech_interrupted", msg)
+                else:
+                    self.emit("agent_speech_committed", msg)
 
-            logger.debug(
-                "committed agent speech",
-                extra={
-                    "agent_transcript": collected_text,
-                    "interrupted": interrupted,
-                    "speech_id": speech_handle.id,
-                },
-            )
+                logger.debug(
+                    "committed agent speech",
+                    extra={
+                        "agent_transcript": collected_text,
+                        "interrupted": interrupted,
+                        "speech_id": speech_handle.id,
+                    },
+                )
 
+        @utils.log_exceptions(logger=logger)
         async def _execute_function_calls() -> None:
             nonlocal interrupted, collected_text
 
@@ -872,9 +890,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             assert isinstance(speech_handle.source, LLMStream)
-            assert (
-                not user_question or speech_handle.user_committed
-            ), "user speech should have been committed before using tools"
+            assert not user_question or speech_handle.user_committed, (
+                "user speech should have been committed before using tools"
+            )
 
             llm_stream = speech_handle.source
 
@@ -943,7 +961,25 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             chat_ctx = call_ctx.chat_ctx.copy()
             chat_ctx.messages.extend(extra_tools_messages)
             chat_ctx.messages.extend(call_ctx.extra_chat_messages)
-            answer_llm_stream = self._llm.chat(chat_ctx=chat_ctx, fnc_ctx=self.fnc_ctx)
+            fnc_ctx = self.fnc_ctx
+            if (
+                fnc_ctx
+                and new_speech_handle.fnc_nested_depth
+                >= self._opts.max_nested_fnc_calls
+            ):
+                if len(fnc_ctx.ai_functions) > 1:
+                    logger.info(
+                        "max function calls nested depth reached, dropping function context. increase max_nested_fnc_calls to enable additional nesting.",
+                        extra={
+                            "speech_id": speech_handle.id,
+                            "fnc_nested_depth": speech_handle.fnc_nested_depth,
+                        },
+                    )
+                fnc_ctx = None
+            answer_llm_stream = self._llm.chat(
+                chat_ctx=chat_ctx,
+                fnc_ctx=fnc_ctx,
+            )
 
             synthesis_handle = self._synthesize_agent_speech(
                 new_speech_handle.id, answer_llm_stream
@@ -956,19 +992,32 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self.emit("function_calls_finished", called_fncs)
             _CallContextVar.reset(tk)
 
+        if not is_using_tools:
+            speech_handle._set_done()
+            return
+
+        speech_handle._nested_speech_done_fut = asyncio.Future[None]()
         fnc_task = asyncio.create_task(_execute_function_calls())
-        while not speech_handle.nested_speech_finished:
-            event_wait_task = asyncio.create_task(
+        while not speech_handle.nested_speech_done:
+            nesting_changed = asyncio.create_task(
                 speech_handle.nested_speech_changed.wait()
             )
+            nesting_done_fut: asyncio.Future = speech_handle._nested_speech_done_fut
             await asyncio.wait(
-                [event_wait_task, fnc_task], return_when=asyncio.FIRST_COMPLETED
+                [nesting_changed, fnc_task, nesting_done_fut],
+                return_when=asyncio.FIRST_COMPLETED,
             )
-            if not event_wait_task.done():
-                event_wait_task.cancel()
+            if not nesting_changed.done():
+                nesting_changed.cancel()
 
             while speech_handle.nested_speech_handles:
                 speech = speech_handle.nested_speech_handles[0]
+                if speech_handle.nested_speech_done:
+                    # in case tool speech is added after nested speech done
+                    speech.cancel(cancel_nested=True)
+                    speech_handle.nested_speech_handles.pop(0)
+                    continue
+
                 self._playing_speech = speech
                 await self._play_speech(speech)
                 speech_handle.nested_speech_handles.pop(0)
@@ -977,7 +1026,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.nested_speech_changed.clear()
             # break if the function calls task is done
             if fnc_task.done():
-                speech_handle.mark_nested_speech_finished()
+                speech_handle.mark_nested_speech_done()
+
+        if not fnc_task.done():
+            logger.debug(
+                "cancelling function calls task", extra={"speech_id": speech_handle.id}
+            )
+            fnc_task.cancel()
 
         # mark the speech as done
         speech_handle._set_done()
@@ -987,9 +1042,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         speech_id: str,
         source: str | LLMStream | AsyncIterable[str],
     ) -> SynthesisHandle:
-        assert (
-            self._agent_output is not None
-        ), "agent output should be initialized when ready"
+        assert self._agent_output is not None, (
+            "agent output should be initialized when ready"
+        )
 
         tk = SpeechDataContextVar.set(SpeechData(speech_id))
 
@@ -1252,12 +1307,16 @@ class _DeferredReplyValidation:
                 and self._turn_detector.supports_language(self._last_language)
             ):
                 start_time = time.perf_counter()
-                eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
-                unlikely_threshold = self._turn_detector.unlikely_threshold()
-                elasped = time.perf_counter() - start_time
-                if eot_prob < unlikely_threshold:
-                    delay = self._max_endpointing_delay
-                delay = max(0, delay - elasped)
+                try:
+                    eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
+                    unlikely_threshold = self._turn_detector.unlikely_threshold()
+                    elasped = time.perf_counter() - start_time
+                    if eot_prob < unlikely_threshold:
+                        delay = self._max_endpointing_delay
+                    delay = max(0, delay - elasped)
+                except TimeoutError:
+                    pass  # inference process is unresponsive
+
             await asyncio.sleep(delay)
 
             self._reset_states()

@@ -68,6 +68,7 @@ class RunningJobInfo:
     job: agent.Job
     url: str
     token: str
+    worker_id: str
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -122,6 +123,11 @@ class JobContext:
     def job(self) -> agent.Job:
         """Returns the current job that the worker is executing."""
         return self._info.job
+
+    @property
+    def worker_id(self) -> str:
+        """Returns the id of the worker."""
+        return self._info.worker_id
 
     @property
     def room(self) -> rtc.Room:

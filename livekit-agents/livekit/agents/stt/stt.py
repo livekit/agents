@@ -119,6 +119,7 @@ class STT(
                 return event
 
             except APIError as e:
+                retry_interval = conn_options._interval_for_retry(i)
                 if conn_options.max_retry == 0:
                     raise
                 elif i == conn_options.max_retry:
@@ -127,7 +128,7 @@ class STT(
                     ) from e
                 else:
                     logger.warning(
-                        f"failed to recognize speech, retrying in {conn_options.retry_interval}s",
+                        f"failed to recognize speech, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={
                             "tts": self._label,
@@ -136,7 +137,7 @@ class STT(
                         },
                     )
 
-                await asyncio.sleep(conn_options.retry_interval)
+                await asyncio.sleep(retry_interval)
 
         raise RuntimeError("unreachable")
 
@@ -210,28 +211,33 @@ class RecognizeStream(ABC):
     async def _run(self) -> None: ...
 
     async def _main_task(self) -> None:
-        for i in range(self._conn_options.max_retry + 1):
+        max_retries = self._conn_options.max_retry
+        num_retries = 0
+
+        while num_retries <= max_retries:
             try:
                 return await self._run()
             except APIError as e:
-                if self._conn_options.max_retry == 0:
+                if max_retries == 0:
                     raise
-                elif i == self._conn_options.max_retry:
+                elif num_retries == max_retries:
                     raise APIConnectionError(
-                        f"failed to recognize speech after {self._conn_options.max_retry + 1} attempts",
+                        f"failed to recognize speech after {num_retries} attempts",
                     ) from e
                 else:
+                    retry_interval = self._conn_options._interval_for_retry(num_retries)
                     logger.warning(
-                        f"failed to recognize speech, retrying in {self._conn_options.retry_interval}s",
+                        f"failed to recognize speech, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={
                             "tts": self._stt._label,
-                            "attempt": i + 1,
+                            "attempt": num_retries,
                             "streamed": True,
                         },
                     )
+                    await asyncio.sleep(retry_interval)
 
-                await asyncio.sleep(self._conn_options.retry_interval)
+                num_retries += 1
 
     async def _metrics_monitor_task(
         self, event_aiter: AsyncIterable[SpeechEvent]
@@ -242,9 +248,9 @@ class RecognizeStream(ABC):
 
         async for ev in event_aiter:
             if ev.type == SpeechEventType.RECOGNITION_USAGE:
-                assert (
-                    ev.recognition_usage is not None
-                ), "recognition_usage must be provided for RECOGNITION_USAGE event"
+                assert ev.recognition_usage is not None, (
+                    "recognition_usage must be provided for RECOGNITION_USAGE event"
+                )
 
                 duration = time.perf_counter() - start_time
                 stt_metrics = STTMetrics(

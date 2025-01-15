@@ -1,5 +1,6 @@
 import logging
 import random
+import re
 import urllib
 from typing import Annotated
 
@@ -35,22 +36,32 @@ class AssistantFnc(llm.FunctionContext):
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
+        # Clean the location string of special characters
+        location = re.sub(r"[^a-zA-Z0-9]+", " ", location).strip()
+
         # When a function call is running, there are a couple of options to inform the user
         # that it might take awhile:
         # Option 1: you can use .say filler message immediately after the call is triggered
         # Option 2: you can prompt the agent to return a text response when it's making a function call
-        call_ctx = AgentCallContext.get_current()
-        filler_messages = [
-            "Let me check the weather in {location} for you.",
-            "Let me see what the weather is like in {location} right now.",
-            # LLM will complete this sentence if it is added to the end of the chat context
-            "The current weather in {location} is ",
-        ]
-        message = random.choice(filler_messages).format(location=location)
+        agent = AgentCallContext.get_current().agent
 
-        # NOTE: set add_to_chat_ctx=True will add the message to the end
-        #   of the chat context of the function call for answer synthesis
-        speech_handle = await call_ctx.agent.say(message, add_to_chat_ctx=True)  # noqa: F841
+        if (
+            not agent.chat_ctx.messages
+            or agent.chat_ctx.messages[-1].role != "assistant"
+        ):
+            # skip if assistant already said something
+            filler_messages = [
+                "Let me check the weather in {location} for you.",
+                "Let me see what the weather is like in {location} right now.",
+                # LLM will complete this sentence if it is added to the end of the chat context
+                "The current weather in {location} is ",
+            ]
+            message = random.choice(filler_messages).format(location=location)
+            logger.info(f"saying filler message: {message}")
+
+            # NOTE: set add_to_chat_ctx=True will add the message to the end
+            #   of the chat context of the function call for answer synthesis
+            speech_handle = await agent.say(message, add_to_chat_ctx=True)  # noqa: F841
 
         logger.info(f"getting weather for {location}")
         url = f"https://wttr.in/{urllib.parse.quote(location)}?format=%C+%t"
@@ -62,6 +73,7 @@ class AssistantFnc(llm.FunctionContext):
                     weather_data = (
                         f"The weather in {location} is {await response.text()}."
                     )
+                    logger.info(f"weather data: {weather_data}")
                 else:
                     raise Exception(
                         f"Failed to get weather data, status code: {response.status}"
@@ -85,7 +97,7 @@ async def entrypoint(ctx: JobContext):
             "You are a weather assistant created by LiveKit. Your interface with users will be voice. "
             "You will provide weather information for a given location. "
             # when using option 1, you can suppress from the agent with prompt
-            "do not say anything while waiting for the function call to complete."
+            "do not return any text while calling the function."
             # uncomment this to use option 2
             # "when performing function calls, let user know that you are checking the weather."
         ),

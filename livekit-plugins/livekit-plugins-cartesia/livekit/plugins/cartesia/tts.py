@@ -67,7 +67,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels | str = "sonic-english",
+        model: TTSModels | str = "sonic",
         language: str = "en",
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,

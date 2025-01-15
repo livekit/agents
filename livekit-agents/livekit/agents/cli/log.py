@@ -18,6 +18,7 @@ NOISY_LOGGERS = [
     "openai",
     "watchfiles",
     "anthropic",
+    "websockets.client",
 ]
 
 

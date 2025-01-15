@@ -14,6 +14,7 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from typing_extensions import TypedDict
 
 from .._oai_api import build_oai_function_description
@@ -105,8 +106,11 @@ class RealtimeToolCall:
     """id of the tool call"""
 
 
-# TODO(theomonnom): add the content type directly inside RealtimeContent?
-# text/audio/transcript?
+@dataclass
+class Capabilities:
+    supports_truncate: bool
+
+
 @dataclass
 class RealtimeContent:
     response_id: str
@@ -204,7 +208,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -229,7 +233,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -247,7 +251,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -284,6 +288,9 @@ class RealtimeModel:
             ValueError: If the API key is not provided and cannot be found in environment variables.
         """
         super().__init__()
+        self._capabilities = Capabilities(
+            supports_truncate=True,
+        )
         self._base_url = base_url
 
         is_azure = (
@@ -341,7 +348,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -430,6 +437,10 @@ class RealtimeModel:
     def sessions(self) -> list[RealtimeSession]:
         return self._rt_sessions
 
+    @property
+    def capabilities(self) -> Capabilities:
+        return self._capabilities
+
     def session(
         self,
         *,
@@ -441,8 +452,10 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat | None = None,
         output_audio_format: api_proto.AudioFormat | None = None,
         tool_choice: api_proto.ToolChoice | None = None,
-        input_audio_transcription: InputTranscriptionOptions | None = None,
-        turn_detection: ServerVadOptions | None = None,
+        input_audio_transcription: NotGivenOr[
+            InputTranscriptionOptions | None
+        ] = NOT_GIVEN,
+        turn_detection: NotGivenOr[ServerVadOptions | None] = NOT_GIVEN,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
     ) -> RealtimeSession:
@@ -459,9 +472,9 @@ class RealtimeModel:
             opts.output_audio_format = output_audio_format
         if tool_choice is not None:
             opts.tool_choice = tool_choice
-        if input_audio_transcription is not None:
-            opts.input_audio_transcription
-        if turn_detection is not None:
+        if utils.is_given(input_audio_transcription):
+            opts.input_audio_transcription = input_audio_transcription
+        if utils.is_given(turn_detection):
             opts.turn_detection = turn_detection
         if temperature is not None:
             opts.temperature = temperature
@@ -854,6 +867,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     def input_audio_buffer(self) -> InputAudioBuffer:
         return RealtimeSession.InputAudioBuffer(self)
 
+    def _push_audio(self, frame: rtc.AudioFrame) -> None:
+        self.input_audio_buffer.append(frame)
+
     @property
     def response(self) -> Response:
         return RealtimeSession.Response(self)
@@ -866,8 +882,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         voice: api_proto.Voice | None = None,
         input_audio_format: api_proto.AudioFormat | None = None,
         output_audio_format: api_proto.AudioFormat | None = None,
-        input_audio_transcription: InputTranscriptionOptions | None = None,
-        turn_detection: ServerVadOptions | None = None,
+        input_audio_transcription: NotGivenOr[
+            InputTranscriptionOptions | None
+        ] = NOT_GIVEN,
+        turn_detection: NotGivenOr[ServerVadOptions | None] = NOT_GIVEN,
         tool_choice: api_proto.ToolChoice | None = None,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
@@ -883,9 +901,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self._opts.input_audio_format = input_audio_format
         if output_audio_format is not None:
             self._opts.output_audio_format = output_audio_format
-        if input_audio_transcription is not None:
+        if utils.is_given(input_audio_transcription):
             self._opts.input_audio_transcription = input_audio_transcription
-        if turn_detection is not None:
+        if utils.is_given(turn_detection):
             self._opts.turn_detection = turn_detection
         if tool_choice is not None:
             self._opts.tool_choice = tool_choice
@@ -959,12 +977,16 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         """
         original_ctx = self._remote_conversation_items.to_chat_context()
 
-        # filter out messages that are not function calls and content is None
-        filtered_messages = [
-            msg
-            for msg in new_ctx.messages
-            if msg.tool_call_id or msg.content is not None
-        ]
+        def _validate_message(msg: llm.ChatMessage) -> bool:
+            # already exists in the remote conversation items
+            # or is a function call or has content
+            return (
+                self._remote_conversation_items.get(msg.id) is not None
+                or msg.tool_call_id is not None
+                or msg.content is not None
+            )
+
+        filtered_messages = list(filter(_validate_message, new_ctx.messages))
         changes = utils._compute_changes(
             original_ctx.messages, filtered_messages, key_fnc=lambda x: x.id
         )
@@ -1023,6 +1045,15 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self.conversation.item.create(self._create_empty_user_audio_message(1.0))
         self.response.create(on_duplicate="keep_both")
 
+    def _truncate_conversation_item(
+        self, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None:
+        self.conversation.item.truncate(
+            item_id=item_id,
+            content_index=content_index,
+            audio_end_ms=audio_end_ms,
+        )
+
     def _update_conversation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
     ) -> None:
@@ -1030,7 +1061,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         if item is None:
             logger.warning(
                 "conversation item not found, skipping update",
-                extra={"item_id": item_id},
+                extra={"item_id": item_id, "content": str(content)},
             )
             return
         item.content = content
@@ -1662,7 +1693,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 "function": fnc_call_info.function_info.name,
             },
         )
-        if called_fnc.result is not None:
+        if tool_call.content is not None:
             create_fut = self.conversation.item.create(
                 tool_call,
                 previous_item_id=item_id,
