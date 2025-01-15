@@ -17,19 +17,22 @@ from livekit.agents import (
 )
 
 from .log import logger
-from .models import TTSModels, TTSEncoding
+from .models import TTSEncoding, TTSModels
 
 _Encoding = Literal["pcm", "mp3", "x-mulaw"]
+
 
 def _sampling_rate_from_format(output_format: TTSEncoding) -> int:
     split = output_format.split("_")
     return int(split[1])
+
 
 ACCEPT_HEADER = {
     "pcm": "audio/pcm",
     "mp3": "audio/mp3",
     "mulaw": "audio/x-mulaw",
 }
+
 
 def _sampling_rate_from_format(output_format: TTSEncoding) -> int | None:
     if output_format.startswith("pcm"):
@@ -53,9 +56,11 @@ class _TTSOptions:
     phonemizeBetweenBrackets: bool
     api_key: str
 
+
 @dataclass
 class Voice:
     name: str
+
 
 DEFAULT_API_URL = "https://users.rime.ai/v1/rime-tts"
 VOICES_URL = "https://users.rime.ai/data/voices/all.json"
@@ -67,6 +72,7 @@ DEFAULT_PAUSE_BETWEEN_BRACKETS = False
 DEFAULT_PHONEMIZE_BETWEEN_BRACKETS = False
 AUTHORIZATION_HEADER = "rime-api-key"
 RIME_TTS_CHANNELS = 1
+
 
 class TTS(tts.TTS):
     def __init__(
@@ -115,9 +121,7 @@ class TTS(tts.TTS):
         return self._session
 
     async def list_voices(self) -> List[Voice]:
-        async with self._ensure_session().get(
-            VOICES_URL
-        ) as resp:
+        async with self._ensure_session().get(VOICES_URL) as resp:
             return await resp.json()
 
     def synthesize(
@@ -215,4 +219,3 @@ class ChunkedStream(tts.ChunkedStream):
             ) from e
         except Exception as e:
             raise APIConnectionError() from e
-
