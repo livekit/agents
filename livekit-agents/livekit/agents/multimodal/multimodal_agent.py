@@ -19,6 +19,7 @@ from livekit import rtc
 from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 from livekit.agents.llm import ChatMessage
 from livekit.agents.metrics import MultimodalLLMMetrics
+from livekit.agents.pipeline.agent_task import AgentTask
 
 from ..log import logger
 from ..types import ATTRIBUTE_AGENT_STATE, AgentState
@@ -72,6 +73,7 @@ class _RealtimeAPI(Protocol):
         *,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
+        init_task: AgentTask | None = None,
     ) -> _RealtimeAPISession:
         """
         Create a new realtime session with the given chat and function contexts.
@@ -143,7 +145,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         model: _RealtimeAPI,
         vad: vad.VAD | None = None,
         chat_ctx: llm.ChatContext | None = None,
-        fnc_ctx: llm.FunctionContext | None = None,
+        # fnc_ctx: llm.FunctionContext | None = None,
+        initial_task: AgentTask | None = None,
         transcription: AgentTranscriptionOptions = AgentTranscriptionOptions(),
         max_text_response_retries: int = 5,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -170,7 +173,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         self._model = model
         self._vad = vad
         self._chat_ctx = chat_ctx
-        self._fnc_ctx = fnc_ctx
+        self._initial_task = initial_task or AgentTask()
+        # self._fnc_ctx = fnc_ctx
 
         self._opts = _ImplOptions(
             transcription=transcription,
@@ -235,7 +239,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 break
 
         self._session = self._model.session(
-            chat_ctx=self._chat_ctx, fnc_ctx=self._fnc_ctx
+            chat_ctx=self._chat_ctx, init_task=self._initial_task
         )
 
         # Create a task to wait for initialization and start the main task

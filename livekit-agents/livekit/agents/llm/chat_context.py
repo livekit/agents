@@ -113,7 +113,7 @@ class ChatMessage:
 
         tool_exception: Exception | None = None
         try:
-            content = called_function.task.result()
+            content = called_function.get_content()
         except BaseException as e:
             if isinstance(e, Exception):
                 tool_exception = e
@@ -176,6 +176,12 @@ class ChatMessage:
         copied_msg._metadata = self._metadata
         return copied_msg
 
+    @property
+    def is_tool_call(self) -> bool:
+        return self.role == "tool" or (
+            self.role == "assistant" and bool(self.tool_calls)
+        )
+
 
 @dataclass
 class ChatContext:
@@ -192,3 +198,28 @@ class ChatContext:
         copied_chat_ctx = ChatContext(messages=[m.copy() for m in self.messages])
         copied_chat_ctx._metadata = self._metadata
         return copied_chat_ctx
+
+    def truncate(
+        self,
+        keep_last_n: int,
+        *,
+        keep_system_message: bool = False,
+        keep_tool_calls: bool = True,
+    ) -> ChatContext:
+        messages = self.messages
+        if not keep_tool_calls:
+            messages = [m for m in messages if not m.is_tool_call]
+        if keep_last_n > 0:
+            copied_messages = [msg.copy() for msg in messages[-keep_last_n:]]
+        else:
+            copied_messages = [msg.copy() for msg in messages]
+
+        remove_roles = {"tool"}  # tool message at the first position is invalid
+        if not keep_system_message:
+            remove_roles.add("system")
+        while copied_messages and copied_messages[0].role in remove_roles:
+            copied_messages.pop(0)
+
+        new_ctx = ChatContext(messages=copied_messages)
+        new_ctx._metadata = self._metadata
+        return new_ctx

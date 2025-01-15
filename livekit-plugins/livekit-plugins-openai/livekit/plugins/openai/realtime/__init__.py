@@ -3,6 +3,7 @@ from .realtime_model import (
     DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
     DEFAULT_SERVER_VAD_OPTIONS,
     InputTranscriptionOptions,
+    RealtimeCallContext,
     RealtimeContent,
     RealtimeError,
     RealtimeModel,
@@ -30,4 +31,5 @@ __all__ = [
     "api_proto",
     "DEFAULT_INPUT_AUDIO_TRANSCRIPTION",
     "DEFAULT_SERVER_VAD_OPTIONS",
+    "RealtimeCallContext",
 ]
