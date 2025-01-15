@@ -967,7 +967,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     )
 
             tool_calls_info = []
-            tool_calls_results = []
+            tool_calls_results: list[ChatMessage] = []
             tool_calls_chat_ctx = call_ctx.chat_ctx
             should_create_response = True
             original_task = self.current_agent_task
@@ -985,8 +985,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     logger.debug(
                         "switching to next agent task",
                         extra={
-                            "new_task": new_task,
-                            "previous_task": self.current_agent_task,
+                            "new_task": str(new_task),
+                            "previous_task": str(self.current_agent_task),
                         },
                     )
                     self.update_task(new_task)
@@ -1012,6 +1012,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if original_task != self.current_agent_task:
                 # add the function call results to the original task
                 original_task.chat_ctx.messages.extend(extra_tools_messages)
+                extra_tools_messages = []
 
             new_speech_handle = SpeechHandle.create_tool_speech(
                 allow_interruptions=speech_handle.allow_interruptions,

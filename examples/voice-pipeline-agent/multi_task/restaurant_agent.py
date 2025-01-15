@@ -37,9 +37,16 @@ class UserData(TypedDict):
     checked_out: Optional[bool]
 
 
-def update_context(task: AgentTask, chat_ctx: llm.ChatContext) -> None:
-    last_chat_ctx = chat_ctx.truncate(keep_last_n=4, keep_tool_calls=False)
-    task.inject_chat_ctx(last_chat_ctx)
+def update_context(
+    task: AgentTask, chat_ctx: llm.ChatContext, user_data: UserData
+) -> None:
+    injected_chat_ctx = chat_ctx.truncate(keep_last_n=4, keep_tool_calls=False)
+    injected_chat_ctx.append(
+        role="system",
+        text=f"Currently collected user data: {user_data}",
+    )
+    logger.info("update task context", extra={"user_data": user_data})
+    task.inject_chat_ctx(injected_chat_ctx)
 
 
 # some common functions
@@ -73,8 +80,8 @@ async def to_greeter() -> tuple[AgentTask, str]:
     """Called when user asks any unrelated questions or requests any other services not in your job description."""
     agent = AgentCallContext.get_current().agent
     next_task = AgentTask.get_task("greeter")
-    update_context(next_task, agent.chat_ctx)
-    return next_task, f"User data: {agent.user_data}"
+    update_context(next_task, agent.chat_ctx, agent.user_data)
+    return next_task, "Transferred to greeter."
 
 
 class Greeter(AgentTask):
@@ -83,8 +90,9 @@ class Greeter(AgentTask):
             instructions=(
                 f"You are a friendly restaurant receptionist. The menu is: {menu}\n"
                 "Your jobs are to greet the caller and understand if they want to "
-                "make a reservation or order takeaway. Guide them to the right agent."
-            )
+                "make a reservation or order takeaway. Guide them to the right agent. "
+            ),
+            llm=openai.LLM(model="gpt-4o-mini", parallel_tool_calls=False),
         )
         self.menu = menu
 
@@ -94,8 +102,8 @@ class Greeter(AgentTask):
         who will collect the necessary details like reservation time, customer name and phone number."""
         agent = AgentCallContext.get_current().agent
         next_task = AgentTask.get_task("reservation")
-        update_context(next_task, agent.chat_ctx)
-        return next_task, f"User info: {agent.user_data}"
+        update_context(next_task, agent.chat_ctx, agent.user_data)
+        return next_task, "Transferred to reservation."
 
     @llm.ai_callable()
     async def to_takeaway(self) -> tuple[AgentTask, str]:
@@ -103,8 +111,8 @@ class Greeter(AgentTask):
         delivery, or when the user wants to proceed to checkout with their existing order."""
         agent = AgentCallContext.get_current().agent
         next_task = AgentTask.get_task("takeaway")
-        update_context(next_task, agent.chat_ctx)
-        return next_task, f"User info: {agent.user_data}"
+        update_context(next_task, agent.chat_ctx, agent.user_data)
+        return next_task, "Transferred to takeaway."
 
 
 class Reservation(AgentTask):
@@ -143,8 +151,8 @@ class Reservation(AgentTask):
             return "Please provide reservation time first."
 
         next_task = AgentTask.get_task("greeter")
-        update_context(next_task, agent.chat_ctx)
-        return next_task, f"Reservation confirmed. User data: {user_data}"
+        update_context(next_task, agent.chat_ctx, agent.user_data)
+        return next_task, "Transferred to greeter."
 
 
 class Takeaway(AgentTask):
@@ -181,8 +189,8 @@ class Takeaway(AgentTask):
             return "No takeaway order found. Please make an order first."
 
         next_task = AgentTask.get_task("checkout")
-        update_context(next_task, agent.chat_ctx)
-        return next_task, f"User info: {user_data}"
+        update_context(next_task, agent.chat_ctx, agent.user_data)
+        return next_task, "Transferred to checkout."
 
 
 class Checkout(AgentTask):
@@ -244,16 +252,16 @@ class Checkout(AgentTask):
 
         user_data["checked_out"] = True
         next_task = AgentTask.get_task("greeter")
-        update_context(next_task, agent.chat_ctx)
-        return next_task, f"User checked out. User info: {user_data}"
+        update_context(next_task, agent.chat_ctx, agent.user_data)
+        return next_task, "Transferred to greeter."
 
     @llm.ai_callable()
     async def to_takeaway(self) -> tuple[AgentTask, str]:
         """Called when the user wants to update their order."""
         agent = AgentCallContext.get_current().agent
         next_task = AgentTask.get_task("takeaway")
-        update_context(next_task, agent.chat_ctx)
-        return next_task, f"User info: {agent.user_data}"
+        update_context(next_task, agent.chat_ctx, agent.user_data)
+        return next_task, "Transferred to takeaway."
 
 
 async def entrypoint(ctx: JobContext):
@@ -288,7 +296,7 @@ async def entrypoint(ctx: JobContext):
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
-        llm=openai.LLM(),
+        llm=openai.LLM(model="gpt-4o-mini"),
         tts=cartesia.TTS(),
         initial_task=AgentTask.get_task("greeter"),
         max_nested_fnc_calls=3,  # may call functions in the transition function

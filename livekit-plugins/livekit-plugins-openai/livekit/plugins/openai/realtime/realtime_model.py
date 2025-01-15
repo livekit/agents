@@ -1744,8 +1744,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             logger.debug(
                 "switching to next agent task",
                 extra={
-                    "new_task": new_task,
-                    "previous_task": self.current_task,
+                    "new_task": str(new_task),
+                    "previous_task": str(self.current_task),
                 },
             )
             await self.update_task(new_task)
