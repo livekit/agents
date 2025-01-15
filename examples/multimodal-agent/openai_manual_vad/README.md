@@ -5,17 +5,51 @@ This example demonstrates how to manually control the VAD of the OpenAI realtime
 ## How It Works
 
 1. The agent sets a `supports-ptt` attribute to indicate it supports push-to-talk functionality
-2. The agent registers an RPC method `ptt` that handles push/release actions
-3. When the button is pressed, the frontend sends an RPC call with `push` payload to interrupt the agent
-4. When the button is released, the frontend sends an RPC call with `release` payload to commit the audio buffer
+2. The agent registers two RPC methods: `ptt.start` and `ptt.end` to handle push/release actions
+3. When the button is pressed, the frontend sends an RPC call to `ptt.start` to interrupt the agent
+4. When the button is released, the frontend sends an RPC call to `ptt.end` to generate a reply
 
 ## Frontend Integration
 
-A complete frontend implementation can be found in the [voice-assistant-frontend](https://github.com/livekit-examples/voice-assistant-frontend) repository. The frontend will:
+Here's a basic example of how to implement PTT in your frontend using LiveKit's RPC:
 
-1. Check for the `supports-ptt` attribute on the agent
-2. If PTT is supported, enable the push-to-talk button
-3. Send RPC calls to the agent when the button is pressed/released
+```javascript
+// Find agent participant that supports PTT
+const agent = participants.find(
+  (p) => p.attributes?.["supports-ptt"] === "1"
+);
+if (!agent) return;
+
+// Handle push to talk start
+const handlePushStart = async () => {
+  try {
+    await localParticipant.setMicrophoneEnabled(true);
+    await localParticipant.performRpc({
+      destinationIdentity: agent.identity,
+      method: "ptt.start",
+    });
+  } catch (error) {
+    console.error("Failed to send PTT push:", error);
+  }
+};
+
+// Handle push to talk end
+const handlePushEnd = async () => {
+  try {
+    await localParticipant.setMicrophoneEnabled(false);
+    await localParticipant.performRpc({
+      destinationIdentity: agent.identity,
+      method: "ptt.end",
+    });
+  } catch (error) {
+    console.error("Failed to send PTT release:", error);
+  }
+};
+```
+
+Note: In a production environment, consider implementing PTT heartbeats to handle potential state synchronization issues between the frontend and agent.
+
+For more details about LiveKit's RPC functionality, see the [RPC documentation](https://docs.livekit.io/home/client/data/rpc/).
 
 ## Running the Example
 
@@ -24,4 +58,4 @@ A complete frontend implementation can be found in the [voice-assistant-frontend
    python push_to_talk.py dev
    ```
 
-2. Run the frontend application from [voice-assistant-frontend](https://github.com/livekit-examples/voice-assistant-frontend)
+2. Implement the frontend RPC calls as shown in the example above

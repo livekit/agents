@@ -35,11 +35,17 @@ async def entrypoint(ctx: JobContext):
     agent.start(ctx.room, participant)
 
     @ctx.room.local_participant.register_rpc_method("ptt.start")
-    async def handle_ptt(data: RpcInvocationData):
+    async def handle_ptt_start(data: RpcInvocationData):
         logger.info("Received PTT start")
         agent.interrupt()
         return "ok"
 
+    # NOTE: There's a potential risk of state getting out of sync if something
+    # goes wrong in the remote client. In a production environment, consider
+    # implementing PTT heartbeats where the frontend sends periodic signals
+    # (e.g., every few seconds) while PTT is held. This allows the agent to
+    # timeout and reset its state if heartbeats stop, preventing the agent from
+    # hanging indefinitely.
     @ctx.room.local_participant.register_rpc_method("ptt.end")
     async def handle_ptt_end(data: RpcInvocationData):
         logger.info("Received PTT end")
