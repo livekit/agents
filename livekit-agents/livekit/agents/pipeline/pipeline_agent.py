@@ -1025,7 +1025,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             chat_ctx = tool_calls_chat_ctx.copy()
             chat_ctx.messages.extend(extra_tools_messages)
             chat_ctx.messages.extend(call_ctx.extra_chat_messages)
-            fnc_ctx = self.fnc_ctx
+            fnc_ctx: Optional[FunctionContext] = self.fnc_ctx
             if (
                 fnc_ctx
                 and len(fnc_ctx.ai_functions) > 0

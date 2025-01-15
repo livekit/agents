@@ -22,7 +22,7 @@ class TaskFailed(Exception):
 class SilentSentinel:
     """Sentinel value to indicate the function call shouldn't create a response."""
 
-    def __init__(self, result: Any = None, error: Optional[Exception] = None):
+    def __init__(self, result: Any = None, error: Optional[BaseException] = None):
         self._result = result
         self._error = error
 
@@ -80,7 +80,9 @@ class AgentTask:
             # register by type
             task_type = type(task)
             if task_type in cls._registered_tasks:
-                raise ValueError(f"Task of type {task_type.__name__} already registered")
+                raise ValueError(
+                    f"Task of type {task_type.__name__} already registered"
+                )
             cls._registered_tasks[task_type] = task
 
         return task
@@ -140,8 +142,8 @@ class AgentInlineTask(AgentTask):
         self._done_fut: asyncio.Future[None] = asyncio.Future()
         self._result: Optional[Any] = preset_result
 
-        self._parent_task: AgentTask | None = None
-        self._parent_speech: SpeechHandle | None = None
+        self._parent_task: Optional[AgentTask] = None
+        self._parent_speech: Optional[SpeechHandle] = None
 
     async def run(self, proactive_reply: bool = True) -> Any:
         from ..pipeline.pipeline_agent import AgentCallContext
@@ -173,8 +175,8 @@ class AgentInlineTask(AgentTask):
 
             # wait for the task to complete
             await self._done_fut
-            if self._done_fut.exception():
-                raise self._done_fut.exception()
+            if self.exception:
+                raise self.exception
 
             if self._result is None:
                 raise ResultNotSet()
@@ -222,7 +224,7 @@ class AgentInlineTask(AgentTask):
         return self._result
 
     @property
-    def exception(self) -> Optional[Exception]:
+    def exception(self) -> Optional[BaseException]:
         return self._done_fut.exception()
 
     def __repr__(self) -> str:

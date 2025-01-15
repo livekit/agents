@@ -178,7 +178,9 @@ class ChatMessage:
 
     @property
     def is_tool_call(self) -> bool:
-        return self.role == "tool" or (self.role == "assistant" and self.tool_calls)
+        return self.role == "tool" or (
+            self.role == "assistant" and bool(self.tool_calls)
+        )
 
 
 @dataclass
