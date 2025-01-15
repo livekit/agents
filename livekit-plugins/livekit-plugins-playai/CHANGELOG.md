@@ -1,5 +1,11 @@
 # livekit-plugins-playht
 
+## 1.0.5
+
+### Patch Changes
+
+- playai: enable streaming TTS - [#1340](https://github.com/livekit/agents/pull/1340) ([@davidzhao](https://github.com/davidzhao))
+
 ## 1.0.4
 
 ### Patch Changes

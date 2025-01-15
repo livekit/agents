@@ -1,5 +1,11 @@
 # livekit-plugins-cartesia
 
+## 0.4.6
+
+### Patch Changes
+
+- update Cartesia plugin default model and voice id - [#1346](https://github.com/livekit/agents/pull/1346) ([@noahlt](https://github.com/noahlt))
+
 ## 0.4.5
 
 ### Patch Changes

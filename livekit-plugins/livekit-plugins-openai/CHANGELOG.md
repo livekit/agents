@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.10.15
+
+### Patch Changes
+
+- support disabling server VAD for OpenAI realtime model - [#1347](https://github.com/livekit/agents/pull/1347) ([@longcw](https://github.com/longcw))
+
 ## 0.10.14
 
 ### Patch Changes
