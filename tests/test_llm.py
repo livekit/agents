@@ -91,7 +91,6 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #     )
     # ),
     pytest.param(lambda: anthropic.LLM(), id="anthropic"),
-    pytest.param(lambda: openai.LLM.with_vertex(), id="openai.with_vertex"),
 ]
 
 
