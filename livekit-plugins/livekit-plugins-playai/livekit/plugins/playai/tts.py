@@ -162,15 +162,15 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = opts
         self._config = self._opts.tts_options
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
+        self._client = PlayHTAsyncClient(
+            user_id=self._user_id,
+            api_key=self._api_key,
+        )
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
         bstream = utils.audio.AudioByteStream(
             sample_rate=self._config.sample_rate, num_channels=NUM_CHANNELS
-        )
-        self._client = PlayHTAsyncClient(
-            user_id=self._user_id,
-            api_key=self._api_key,
         )
 
         try:
@@ -211,6 +211,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._config = self._opts.tts_options
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
+        self._client = PlayHTAsyncClient(
+            user_id=self._user_id,
+            api_key=self._api_key,
+        )
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
@@ -238,10 +242,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             text_stream = await self._create_text_stream()
-            self._client = PlayHTAsyncClient(
-                user_id=self._user_id,
-                api_key=self._api_key,
-            )
             async for chunk in self._client.stream_tts_input(
                 text_stream=text_stream,
                 options=self._config,
@@ -261,7 +261,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(input_task)
-            await self._client.close()
 
     @utils.log_exceptions(logger=logger)
     async def _tokenize_input(self):
