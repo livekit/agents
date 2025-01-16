@@ -263,7 +263,12 @@ class ChunkedStream(tts.ChunkedStream):
 
         def _synthesize() -> speechsdk.SpeechSynthesisResult:
             if self._opts.prosody or self._opts.style:
-                ssml = f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{self._opts.language or "en-US"}">'
+                ssml = (
+                    '<speak version="1.0" '
+                    'xmlns="http://www.w3.org/2001/10/synthesis" '
+                    'xmlns:mstts="http://www.w3.org/2001/mstts" '
+                    f'xml:lang="{self._opts.language or "en-US"}">'
+                )
                 ssml += f'<voice name="{self._opts.voice}">'
                 
                 # Add style if specified
