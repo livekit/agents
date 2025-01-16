@@ -158,6 +158,7 @@ class LLM(llm.LLM):
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
+        parallel_tool_calls: bool = True,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
         | None = None,
     ) -> "LLMStream":
