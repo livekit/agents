@@ -9,7 +9,7 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _is_optional_type
 
-from google.genai import types  # type: ignore
+from google.genai import types
 
 JSON_SCHEMA_TYPE_MAP = {
     str: "STRING",
