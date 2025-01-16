@@ -158,7 +158,7 @@ class LLM(llm.LLM):
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
-        parallel_tool_calls: bool = True,
+        parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
         | None = None,
     ) -> "LLMStream":
@@ -354,6 +354,13 @@ class LLMStream(llm.LLMStream):
     ) -> llm.ChatChunk | None:
         if part.function_call.id is None:
             part.function_call.id = utils.shortuuid()
+
+        if self._fnc_ctx is None:
+            logger.warning(
+                "google stream tried to run function without function context"
+            )
+            return None
+
         fnc_info = _create_ai_function_info(
             self._fnc_ctx,
             part.function_call.id,
