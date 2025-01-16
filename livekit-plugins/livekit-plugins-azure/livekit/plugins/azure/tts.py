@@ -104,6 +104,26 @@ class ProsodyConfig:
 
 
 @dataclass
+class StyleConfig:
+    """
+    Style configuration for Azure TTS neural voices.
+
+    Args:
+        style: Speaking style for neural voices. Examples: "cheerful", "sad", "angry", etc.
+        degree: Intensity of the style, from 0.1 to 2.0.
+    """
+    style: str
+    degree: float | None = None
+
+    def validate(self) -> None:
+        if self.degree is not None and not 0.1 <= self.degree <= 2.0:
+            raise ValueError("Style degree must be between 0.1 and 2.0")
+
+    def __post_init__(self):
+        self.validate()
+
+
+@dataclass
 class _TTSOptions:
     sample_rate: int
     speech_key: str | None = None
@@ -121,6 +141,7 @@ class _TTSOptions:
     # See https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-voice#adjust-prosody
     prosody: ProsodyConfig | None = None
     speech_endpoint: str | None = None
+    style: StyleConfig | None = None
 
 
 class TTS(tts.TTS):
@@ -136,6 +157,7 @@ class TTS(tts.TTS):
         speech_host: str | None = None,
         speech_auth_token: str | None = None,
         endpoint_id: str | None = None,
+        style: StyleConfig | None = None,
     ) -> None:
         """
         Create a new instance of Azure TTS.
@@ -176,6 +198,9 @@ class TTS(tts.TTS):
         if prosody:
             prosody.validate()
 
+        if style:
+            style.validate()
+
         self._opts = _TTSOptions(
             sample_rate=sample_rate,
             speech_key=speech_key,
@@ -186,6 +211,7 @@ class TTS(tts.TTS):
             endpoint_id=endpoint_id,
             language=language,
             prosody=prosody,
+            style=style,
         )
 
     def update_options(
@@ -194,10 +220,12 @@ class TTS(tts.TTS):
         voice: str | None = None,
         language: str | None = None,
         prosody: ProsodyConfig | None = None,
+        style: StyleConfig | None = None,
     ) -> None:
         self._opts.voice = voice or self._opts.voice
         self._opts.language = language or self._opts.language
         self._opts.prosody = prosody or self._opts.prosody
+        self._opts.style = style or self._opts.style
 
     def synthesize(
         self,
@@ -234,22 +262,35 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         def _synthesize() -> speechsdk.SpeechSynthesisResult:
-            if self._opts.prosody:
+            if self._opts.prosody or self._opts.style:
                 ssml = f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{self._opts.language or "en-US"}">'
-                prosody_ssml = f'<voice name="{self._opts.voice}"><prosody'
-                if self._opts.prosody.rate:
-                    prosody_ssml += f' rate="{self._opts.prosody.rate}"'
-
-                if self._opts.prosody.volume:
-                    prosody_ssml += f' volume="{self._opts.prosody.volume}"'
-
-                if self._opts.prosody.pitch:
-                    prosody_ssml += f' pitch="{self._opts.prosody.pitch}"'
-
-                prosody_ssml += ">"
-                ssml += prosody_ssml
-                ssml += self._input_text
-                ssml += "</prosody></voice></speak>"
+                ssml += f'<voice name="{self._opts.voice}">'
+                
+                # Add style if specified
+                if self._opts.style:
+                    style_degree = f' styledegree="{self._opts.style.degree}"' if self._opts.style.degree else ''
+                    ssml += f'<mstts:express-as style="{self._opts.style.style}"{style_degree}>'
+                
+                # Add prosody if specified
+                if self._opts.prosody:
+                    ssml += '<prosody'
+                    if self._opts.prosody.rate:
+                        ssml += f' rate="{self._opts.prosody.rate}"'
+                    if self._opts.prosody.volume:
+                        ssml += f' volume="{self._opts.prosody.volume}"'
+                    if self._opts.prosody.pitch:
+                        ssml += f' pitch="{self._opts.prosody.pitch}"'
+                    ssml += ">"
+                    ssml += self._input_text
+                    ssml += "</prosody>"
+                else:
+                    ssml += self._input_text
+                
+                # Close style tag if it was opened
+                if self._opts.style:
+                    ssml += "</mstts:express-as>"
+                    
+                ssml += "</voice></speak>"
                 return synthesizer.speak_ssml_async(ssml).get()  # type: ignore
 
             return synthesizer.speak_text_async(self.input_text).get()  # type: ignore
