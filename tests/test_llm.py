@@ -9,7 +9,7 @@ from typing import Annotated, Callable, Literal, Optional, Union
 import pytest
 from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
-from livekit.plugins import anthropic, openai
+from livekit.plugins import anthropic, google, openai
 from livekit.rtc import VideoBufferType, VideoFrame
 
 
@@ -91,6 +91,7 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #     )
     # ),
     pytest.param(lambda: anthropic.LLM(), id="anthropic"),
+    pytest.param(lambda: google.LLM(), id="google"),
 ]
 
 
