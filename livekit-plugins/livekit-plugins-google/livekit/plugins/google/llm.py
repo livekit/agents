@@ -36,14 +36,12 @@ from google.genai import types
 
 from ._utils import _build_gemini_ctx, _build_tools
 from .log import logger
-from .models import (
-    ChatModels,
-)
+from .models import ChatModels
 
 
 @dataclass
 class LLMOptions:
-    model: str
+    model: ChatModels | str
     temperature: float | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto"
     vertexai: bool = False
@@ -61,7 +59,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str = "gemini-2.0-flash-exp",
+        model: ChatModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
         vertexai: bool = False,
         project: str | None = None,
@@ -86,7 +84,7 @@ class LLM(llm.LLM):
         - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
 
         Args:
-            model (str, optional): The model name to use. Defaults to "gemini-2.0-flash-exp".
+            model (ChatModels | str, optional): The model name to use. Defaults to "gemini-2.0-flash-exp".
             api_key (str, optional): The API key for Google Gemini. If not provided, it attempts to read from the `GOOGLE_API_KEY` environment variable.
             vertexai (bool, optional): Whether to use VertexAI. Defaults to False.
             project (str, optional): The Google Cloud project to use (only for VertexAI). Defaults to None.
