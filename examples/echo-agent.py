@@ -15,7 +15,7 @@ from livekit.agents.vad import VADEventType
 from livekit.plugins import silero
 
 load_dotenv()
-logger = logging.getLogger("voice-assistant")
+logger = logging.getLogger("echo-agent")
 
 
 # An example agent that echos each utterance from the user back to them
