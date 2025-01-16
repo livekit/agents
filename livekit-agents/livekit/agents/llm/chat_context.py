@@ -13,6 +13,7 @@
 # limitations under the License.
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Literal, Union
 
@@ -114,6 +115,8 @@ class ChatMessage:
         tool_exception: Exception | None = None
         try:
             content = called_function.task.result()
+        except (GeneratorExit, asyncio.CancelledError):
+            raise
         except BaseException as e:
             if isinstance(e, Exception):
                 tool_exception = e

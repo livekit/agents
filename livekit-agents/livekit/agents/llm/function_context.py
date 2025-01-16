@@ -87,6 +87,8 @@ class FunctionCallInfo:
         def _on_done(fut):
             try:
                 called_fnc.result = fut.result()
+            except (GeneratorExit, asyncio.CancelledError):
+                raise
             except BaseException as e:
                 called_fnc.exception = e
 
