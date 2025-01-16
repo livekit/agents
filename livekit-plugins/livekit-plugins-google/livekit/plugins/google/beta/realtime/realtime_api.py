@@ -286,9 +286,9 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         @utils.log_exceptions(logger=logger)
         async def _send_task():
             async for msg in self._send_ch:
-                await self._session.send(msg)
+                await self._session.send(input=msg)
 
-            await self._session.send(".", end_of_turn=True)
+            await self._session.send(input=".", end_of_turn=True)
 
         @utils.log_exceptions(logger=logger)
         async def _recv_task():
@@ -419,6 +419,6 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                     )
                 ]
             )
-            await self._session.send(tool_response)
+            await self._session.send(input=tool_response)
 
             self.emit("function_calls_finished", [called_fnc])
