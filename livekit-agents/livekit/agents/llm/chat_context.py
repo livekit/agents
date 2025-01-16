@@ -206,19 +206,22 @@ class ChatContext:
         keep_system_message: bool = False,
         keep_tool_calls: bool = True,
     ) -> ChatContext:
-        messages = self.messages
-        if not keep_tool_calls:
-            messages = [m for m in messages if not m.is_tool_call]
-        if keep_last_n > 0:
-            copied_messages = [msg.copy() for msg in messages[-keep_last_n:]]
-        else:
-            copied_messages = [msg.copy() for msg in messages]
+        def _keep_message(msg: ChatMessage) -> bool:
+            if not keep_tool_calls and msg.is_tool_call:
+                return False
+            if not keep_system_message and msg.role == "system":
+                return False
+            return True
 
-        remove_roles = {"tool"}  # tool message at the first position is invalid
-        if not keep_system_message:
-            remove_roles.add("system")
-        while copied_messages and copied_messages[0].role in remove_roles:
-            copied_messages.pop(0)
+        messages = [msg for msg in self.messages if _keep_message(msg)]
+
+        start = 0 if keep_last_n <= 0 else len(messages) - keep_last_n
+        copied_messages = [msg.copy() for msg in messages[start:]]
+
+        if keep_tool_calls:
+            # tool message at the first position is invalid
+            while copied_messages and copied_messages[0].role == "tool":
+                copied_messages.pop(0)
 
         new_ctx = ChatContext(messages=copied_messages)
         new_ctx._metadata = self._metadata
