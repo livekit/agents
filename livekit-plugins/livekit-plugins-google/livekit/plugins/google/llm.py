@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass
 from typing import Any, Literal, MutableSet, Union
 
@@ -30,6 +31,7 @@ from livekit.agents.llm import ToolChoice, _create_ai_function_info
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from google import genai  # type: ignore
+from google.auth._default_async import default_async
 from google.genai import types  # type: ignore
 
 from ._utils import _build_gemini_ctx, _build_tools
@@ -43,7 +45,6 @@ from .models import (
 class LLMOptions:
     model: str
     temperature: float | None
-    parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto"
     vertexai: bool = False
     project: str | None = None
@@ -66,25 +67,70 @@ class LLM(llm.LLM):
         project: str | None = None,
         location: str | None = None,
         candidate_count: int = 1,
-        temperature: float | None = None,
+        temperature: float = 0.8,
         max_output_tokens: int | None = None,
         top_p: float | None = None,
         top_k: float | None = None,
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
-        parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
+
+        Environment Requirements:
+        - For VertexAI: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the service account key file.
+        The Google Cloud project and location can be set via `project` and `location` arguments or the environment variables
+        `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. By default, the project is inferred from the service account key file,
+        and the location defaults to "us-central1".
+        - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
+
+        Args:
+            model (str, optional): The model name to use. Defaults to "gemini-2.0-flash-exp".
+            api_key (str, optional): The API key for Google Gemini. If not provided, it attempts to read from the `GOOGLE_API_KEY` environment variable.
+            vertexai (bool, optional): Whether to use VertexAI. Defaults to False.
+            project (str, optional): The Google Cloud project to use (only for VertexAI). Defaults to None.
+            location (str, optional): The location to use for VertexAI API requests. Defaults value is "us-central1".
+            candidate_count (int, optional): Number of candidate responses to generate. Defaults to 1.
+            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+            max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
+            top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
+            top_k (int, optional): The top-k sampling value for response generation. Defaults to None.
+            presence_penalty (float, optional): Penalizes the model for generating previously mentioned concepts. Defaults to None.
+            frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
+            tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
         """
         super().__init__()
         self._capabilities = llm.LLMCapabilities(supports_choices_on_int=False)
+        self._project_id = project or os.environ.get("GOOGLE_CLOUD_PROJECT", None)
+        self._location = location or os.environ.get(
+            "GOOGLE_CLOUD_LOCATION", "us-central1"
+        )
+        self._api_key = api_key or os.environ.get("GOOGLE_API_KEY", None)
+        _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        if _gac is None:
+            logger.warning(
+                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file. Otherwise, use any of the other Google Cloud auth methods."
+            )
+
+        if vertexai:
+            if not self._project_id:
+                _, self._project_id = default_async(
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+            self._api_key = None  # VertexAI does not require an API key
+
+        else:
+            self._project_id = None
+            self._location = None
+            if not self._api_key:
+                raise ValueError(
+                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
+                )
 
         self._opts = LLMOptions(
             model=model,
             temperature=temperature,
-            parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             vertexai=vertexai,
             project=project,
@@ -97,10 +143,10 @@ class LLM(llm.LLM):
             frequency_penalty=frequency_penalty,
         )
         self._client = genai.Client(
-            api_key=api_key,
+            api_key=self._api_key,
             vertexai=vertexai,
-            project=project,
-            location=location,
+            project=self._project_id,
+            location=self._location,
         )
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
@@ -112,13 +158,9 @@ class LLM(llm.LLM):
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
-        parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
         | None = None,
     ) -> "LLMStream":
-        if parallel_tool_calls is None:
-            parallel_tool_calls = self._opts.parallel_tool_calls
-
         if tool_choice is None:
             tool_choice = self._opts.tool_choice
 
@@ -139,7 +181,6 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             n=n,
             temperature=temperature,
-            parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
         )
 
@@ -161,7 +202,6 @@ class LLMStream(llm.LLMStream):
         top_k: float | None,
         presence_penalty: float | None,
         frequency_penalty: float | None,
-        parallel_tool_calls: bool | None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]],
     ) -> None:
         super().__init__(
@@ -175,10 +215,8 @@ class LLMStream(llm.LLMStream):
         self._top_k = top_k
         self._presence_penalty = presence_penalty
         self._frequency_penalty = frequency_penalty
-
         self._temperature = temperature
         self._n = n
-        self._parallel_tool_calls = parallel_tool_calls
         self._tool_choice = tool_choice
 
     async def _run(self) -> None:
@@ -247,23 +285,26 @@ class LLMStream(llm.LLMStream):
             ):
                 response_id = utils.shortuuid()
                 if response.prompt_feedback:
-                    logger.warning(
-                        "genai llm prompt feedback: %s",
+                    raise APIStatusError(
                         response.prompt_feedback,
+                        retryable=False,
+                        request_id=response_id,
                     )
-                    raise APIStatusError(response.prompt_feedback)
 
                 if (
                     not response.candidates
                     or not response.candidates[0].content
                     or not response.candidates[0].content.parts
                 ):
-                    raise APIStatusError("No candidates in the response")
+                    raise APIStatusError(
+                        "No candidates in the response",
+                        retryable=True,
+                        request_id=response_id,
+                    )
 
                 if len(response.candidates) > 1:
                     logger.warning(
-                        "Warning: there are multiple candidates in the response, returning"
-                        " function calls from the first one."
+                        "gemini llm: there are multiple candidates in the response, returning response from the first one."
                     )
 
                 for index, part in enumerate(response.candidates[0].content.parts):
@@ -286,9 +327,9 @@ class LLMStream(llm.LLMStream):
                     )
 
         except Exception as e:
-            print("\ne", e)
             raise APIConnectionError(
-                "Error generating content", retryable=retryable
+                "gemini llm: error generating content",
+                retryable=retryable,
             ) from e
 
     def _parse_part(
@@ -312,7 +353,6 @@ class LLMStream(llm.LLMStream):
     ) -> llm.ChatChunk | None:
         if part.function_call.id is None:
             part.function_call.id = utils.shortuuid()
-        print(f"\nfunction_call: {part.function_call}")
         fnc_info = _create_ai_function_info(
             self._fnc_ctx,
             part.function_call.id,
