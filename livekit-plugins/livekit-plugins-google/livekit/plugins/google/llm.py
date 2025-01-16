@@ -30,9 +30,9 @@ from livekit.agents import (
 from livekit.agents.llm import ToolChoice, _create_ai_function_info
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
-from google import genai  # type: ignore
+from google import genai
 from google.auth._default_async import default_async
-from google.genai import types  # type: ignore
+from google.genai import types
 
 from ._utils import _build_gemini_ctx, _build_tools
 from .log import logger
