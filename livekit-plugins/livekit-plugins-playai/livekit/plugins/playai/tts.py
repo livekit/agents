@@ -39,7 +39,7 @@ class TTS(tts.TTS):
         voice: str = "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
         language: str = "english",
         sample_rate: int = 24000,
-        model: TTSModel | str = "Play3.0-mini-ws",
+        model: TTSModel | str = "Play3.0-mini",
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False
         ),
@@ -52,7 +52,7 @@ class TTS(tts.TTS):
             api_key (str): PlayAI API key.
             user_id (str): PlayAI user ID.
             voice (str): Voice manifest URL.
-            model (TTSModel): TTS model, defaults to "Play3.0-mini-ws".
+            model (TTSModel): TTS model, defaults to "Play3.0-mini".
             language (str): language, defaults to "english".
             sample_rate (int): sample rate (Hz), A number greater than or equal to 8000, and must be less than or equal to 48000
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
@@ -175,6 +175,7 @@ class ChunkedStream(tts.ChunkedStream):
                 text=self._input_text,
                 options=self._config,
                 voice_engine=self._opts.model,
+                protocol="http",
                 streaming=True,
             ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
@@ -238,6 +239,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 text_stream=text_stream,
                 options=self._config,
                 voice_engine=self._opts.model,
+                protocol="ws",
             ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
                     for frame in bstream.write(frame.data.tobytes()):
