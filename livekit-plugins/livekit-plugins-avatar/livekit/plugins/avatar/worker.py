@@ -1,13 +1,22 @@
-from __future__ import annotations
-
 import asyncio
-from typing import Dict, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 from livekit import rtc
-from livekit.rtc import data_stream
+from livekit.agents.pipeline.io import PlaybackFinishedEvent
 
-from .protocol import AvatarProtocol, PlaybackFinishedEvent, RPCProtocol
-from .transport import AudioTransport, AudioFrameMetadata
+from .sink import DataStreamAudioReceiver
+
+
+@dataclass
+class MediaInfo:
+    """Configuration for media streams"""
+
+    video_width: int
+    video_height: int
+    video_fps: float
+    audio_sample_rate: int
+    audio_channels: int
 
 
 class AvatarWorker:
@@ -16,83 +25,127 @@ class AvatarWorker:
     def __init__(
         self,
         room: rtc.Room,
-        transport: AudioTransport,
-        protocol: AvatarProtocol,
-        video_width: int = 1280,
-        video_height: int = 720,
-        video_fps: float = 30.0,
+        media_info: MediaInfo,
+        queue_size_ms: int = 50,
     ) -> None:
         self._room = room
-        self._transport = transport
-        self._protocol = protocol
-        
-        self._video_source = rtc.VideoSource(width=video_width, height=video_height)
-        self._audio_source = rtc.AudioSource(sample_rate=48000, num_channels=2)
+        self._media_info = media_info
+        self._queue_size_ms = queue_size_ms
+
+        # Audio/video sources
+        self._audio_source = rtc.AudioSource(
+            sample_rate=media_info.audio_sample_rate,
+            num_channels=media_info.audio_channels,
+            queue_size_ms=queue_size_ms,
+        )
+        self._video_source = rtc.VideoSource(
+            width=media_info.video_width,
+            height=media_info.video_height,
+        )
+
+        # Tracks for publishing
+        self._audio_track = rtc.LocalAudioTrack.create_audio_track(
+            "avatar_audio", self._audio_source
+        )
+        self._video_track = rtc.LocalVideoTrack.create_video_track(
+            "avatar_video", self._video_source
+        )
+
+        # Audio receiver
+        self._audio_receiver = DataStreamAudioReceiver(room)
+
+        # AV synchronizer
         self._av_sync = rtc.AVSynchronizer(
             audio_source=self._audio_source,
             video_source=self._video_source,
-            video_fps=video_fps,
-        )
-        
-        self._active_streams: Dict[str, asyncio.Task] = {}
-        
-        # Register RPC handlers
-        room.local_participant.register_rpc_method(
-            RPCProtocol.RPC_INTERRUPT, self._handle_interrupt
+            video_fps=media_info.video_fps,
+            video_queue_size_ms=queue_size_ms,
         )
 
-    async def _handle_interrupt(self, data: rtc.RpcInvocationData) -> None:
-        """Handle interrupt RPC from sink"""
-        stream_id = data.payload
-        if stream_id in self._active_streams:
-            # Cancel stream processing
-            self._active_streams[stream_id].cancel()
-            # Notify sink about interrupted playback
-            await self._protocol.notify_playback_finished(
-                stream_id=stream_id,
-                playback_position=self._audio_source.queued_duration,
-                interrupted=True,
-            )
+        self._current_position: float = 0.0
 
     async def start(self) -> None:
-        """Start processing audio streams"""
-        try:
-            await self._transport.start(data_stream.TransportMode.RECEIVE)
-            async for stream_frame in self._transport.receive():
-                if stream_frame.stream_id not in self._active_streams:
-                    # Start new stream processing
-                    task = asyncio.create_task(
-                        self._process_stream(stream_frame.stream_id)
-                    )
-                    self._active_streams[stream_frame.stream_id] = task
-                
-                # Generate and sync frames
-                video_frame = self._generate_video_frame(stream_frame.frame)
-                await self._av_sync.push(stream_frame.frame)
-                await self._av_sync.push(video_frame)
-        except asyncio.CancelledError:
-            # Cancel all active streams
-            for task in self._active_streams.values():
-                task.cancel()
-            await self._transport.close()
-            raise
+        """Start the worker"""
+        # Start audio receiver
+        await self._audio_receiver.start()
 
-    async def _process_stream(self, stream_id: str) -> None:
-        """Process a single audio stream"""
-        try:
-            # Process until stream ends or interrupted
-            await asyncio.Future()  # Wait forever until cancelled
-        except asyncio.CancelledError:
-            # Stream interrupted
-            await self._protocol.notify_playback_finished(
-                stream_id=stream_id,
-                playback_position=self._audio_source.queued_duration,
+        # Publish tracks
+        audio_options = rtc.TrackPublishOptions(
+            source=rtc.TrackSource.SOURCE_MICROPHONE
+        )
+        video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+        await self._room.local_participant.publish_track(
+            self._audio_track, audio_options
+        )
+        await self._room.local_participant.publish_track(
+            self._video_track, video_options
+        )
+
+        # Handle interrupts
+        self._audio_receiver.on(
+            "playback_interrupted",
+            lambda: asyncio.create_task(self._handle_interrupt()),
+        )
+
+        # Start processing
+        asyncio.create_task(self._process_audio())
+
+    async def _handle_interrupt(self) -> None:
+        """Handle playback interrupt from sink"""
+        await self._audio_receiver.control.notify_playback_finished(
+            PlaybackFinishedEvent(
+                playback_position=self._current_position,
                 interrupted=True,
             )
-        finally:
-            if stream_id in self._active_streams:
-                del self._active_streams[stream_id]
+        )
+        self._current_position = 0.0
 
-    def _generate_video_frame(self, audio_frame: rtc.AudioFrame) -> rtc.VideoFrame:
-        """Generate avatar video frame based on audio frame (to be implemented)"""
-        pass
+    async def _process_audio(self) -> None:
+        """Process audio frames and generate synchronized video"""
+        try:
+            async for frame in self._audio_receiver.receive():
+                # Update position
+                self._current_position += frame.duration
+
+                # Generate video frame
+                video_frame = self._generate_video_frame(frame)
+
+                # Push frames to synchronizer
+                await self._av_sync.push(frame)
+                if video_frame:
+                    await self._av_sync.push(video_frame)
+
+            # Normal end of segment
+            await self._audio_receiver.control.notify_playback_finished(
+                PlaybackFinishedEvent(
+                    playback_position=self._current_position,
+                    interrupted=False,
+                )
+            )
+            self._current_position = 0.0
+
+        except asyncio.CancelledError:
+            raise
+        finally:
+            # Cleanup
+            await self._av_sync.aclose()
+            await self._audio_source.aclose()
+            await self._video_source.aclose()
+
+    def _generate_video_frame(
+        self, audio_frame: rtc.AudioFrame
+    ) -> Optional[rtc.VideoFrame]:
+        """Generate avatar video frame based on audio frame"""
+        # TODO: Implement avatar video generation
+        # For now, return None to skip video generation
+        return None
+
+    async def close(self) -> None:
+        """Close the worker and cleanup resources"""
+        await self._audio_receiver.close()
+        if self._av_sync:
+            await self._av_sync.aclose()
+        if self._audio_source:
+            await self._audio_source.aclose()
+        if self._video_source:
+            await self._video_source.aclose()

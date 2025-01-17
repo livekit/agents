@@ -1,135 +1,203 @@
-from __future__ import annotations
-
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Optional
+import asyncio
+import json
+from typing import AsyncIterator, Literal, Optional
 
 from livekit import rtc
-from livekit.agents import utils
-from livekit.agents.pipeline.io import AudioSink
-from livekit.rtc import data_stream
-from pydantic import BaseModel
+from livekit.agents.pipeline.io import AudioSink, PlaybackFinishedEvent
 
-from .protocol import AvatarProtocol, PlaybackFinishedEvent, RPCProtocol
-from .transport import AudioStreamFrame, TransportMode
+from .control import AvatarPlaybackControl, RPCPlaybackControl
 
-
-@dataclass
-class AvatarConfig:
-    """Configuration for the avatar plugin"""
-
-    worker_identity: str  # Identity of the remote avatar worker
-    mime_type: str = "audio/raw"  # Mime type for audio stream
-    chunk_size: int = 15_000  # Max size of each audio chunk
+# Participant attribute keys
+DATASTREAM_AUDIO_SENDER = "datastream_audio.sender"
+DATASTREAM_AUDIO_WORKER = "datastream_audio.worker"
 
 
-class AudioTransport(ABC):
-    """Abstract interface for audio transport protocols"""
+async def wait_for_participant(room: rtc.Room, attribute: str) -> rtc.RemoteParticipant:
+    """Wait for a participant with the given attribute to join the room"""
+    # Wait for participant to join
+    future = asyncio.Future[rtc.RemoteParticipant]()
 
-    @abstractmethod
-    async def start_stream(self, stream_id: str) -> None:
-        """Start a new audio stream"""
-        pass
+    def on_participant_join(participant: rtc.RemoteParticipant):
+        if attribute in participant.attributes and not future.done():
+            future.set_result(participant)
 
-    @abstractmethod
-    async def write_chunk(self, chunk: bytes) -> None:
-        """Write audio chunk to current stream"""
-        pass
+    room.on("participant_joined", on_participant_join)
+    try:
+        # check if participant already in room
+        for participant in room.participants.values():
+            if attribute in participant.attributes:
+                return participant
 
-    @abstractmethod
-    async def end_stream(self) -> None:
-        """End current audio stream"""
-        pass
+        return await future
+    finally:
+        room.off("participant_joined", on_participant_join)
 
 
-class DataStreamTransport(AudioTransport):
-    """LiveKit DataStream implementation of audio transport"""
+class DataStreamAudioSink(AudioSink):
+    """
+    AudioSink implementation that streams audio to a remote avatar worker using LiveKit DataStream.
+    Sends audio frames to a worker participant identified by the DATASTREAM_AUDIO_WORKER attribute.
+    """
 
-    def __init__(self, local_participant: rtc.LocalParticipant, config: AvatarConfig):
-        self._local = local_participant
-        self._config = config
-        self._stream_writer: Optional[data_stream.FileStreamWriter] = None
+    def __init__(self, room: rtc.Room):
+        super().__init__()
+        self._room = room
+        self._remote_participant: Optional[rtc.RemoteParticipant] = None
+        self._stream_writer: Optional[rtc.FileStreamWriter] = None
+        self._control: Optional[AvatarPlaybackControl] = None
 
-    async def start_stream(self, stream_id: str) -> None:
-        self._stream_writer = await self._local.send_file(
-            file_name=f"{stream_id}.raw",
-            mime_type=self._config.mime_type,
-            destination_identities=[self._config.worker_identity],
+    async def start(self) -> None:
+        """Wait for worker participant to join and start streaming"""
+        # mark self as sender
+        await self._room.local_participant.set_attributes(
+            {DATASTREAM_AUDIO_SENDER: "true"}
+        )
+        self._remote_participant = await wait_for_participant(
+            self._room, attribute=DATASTREAM_AUDIO_WORKER
         )
 
-    async def write_chunk(self, chunk: bytes) -> None:
-        if self._stream_writer:
-            await self._stream_writer.write(chunk)
+        # setup control channel
+        self._control = RPCPlaybackControl(
+            self._room.local_participant,
+            self._remote_participant.identity,
+        )
 
-    async def end_stream(self) -> None:
-        if self._stream_writer:
-            await self._stream_writer.close()
-            self._stream_writer = None
+        self._room.local_participant.register_rpc_method(
+            RPCPlaybackControl.RPC_PLAYBACK_FINISHED,
+            self._handle_playback_finished,
+        )
 
-
-class AvatarAudioSink(AudioSink):
-    """
-    AudioSink implementation that streams audio to a remote avatar worker.
-    Captures audio from the agent and streams it to a remote worker for avatar generation.
-    """
-
-    def __init__(
-        self,
-        transport: AudioTransport,
-        protocol: AvatarProtocol,
-        sample_rate: int = 48000,
-        num_channels: int = 2,
-    ) -> None:
-        super().__init__(sample_rate=sample_rate)
-        self._transport = transport
-        self._protocol = protocol
-        self._num_channels = num_channels
-        self._current_stream_id: Optional[str] = None
-        self._protocol.on_playback_finished = self._on_playback_finished
+    async def _handle_playback_finished(self, data: rtc.RpcInvocationData) -> None:
+        """Handle playback finished RPC from worker"""
+        event = PlaybackFinishedEvent(**json.loads(data.payload))
+        self.on_playback_finished(
+            playback_position=event.playback_position, interrupted=event.interrupted
+        )
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        """Capture audio frame and stream to avatar worker"""
+        """Capture and stream audio frame to remote worker"""
+        if not self._remote_participant:
+            raise RuntimeError("Worker participant not found")
+
         await super().capture_frame(frame)
 
-        if self._current_stream_id is None:
-            # Generate new stream ID and start transport if needed
-            self._current_stream_id = utils.shortuuid("audio_")
-            await self._transport.start(TransportMode.SEND)
+        if not self._stream_writer:
+            # Start new stream if needed
+            self._stream_writer = await self._room.local_participant.send_file(
+                file_name="audio_stream",
+                mime_type="audio/raw",
+                destination_identities=[self._remote_participant.identity],
+            )
 
-        # Send frame
-        stream_frame = AudioStreamFrame(
-            stream_id=self._current_stream_id,
-            frame=frame,
-        )
-        await self._transport.send(stream_frame)
+        # Pack frame metadata and data
+        metadata = {
+            "sample_rate": frame.sample_rate,
+            "num_channels": frame.num_channels,
+            "samples_per_channel": frame.samples_per_channel,
+        }
+        # TODO: Pack metadata + frame.data into binary format and send
+        # await self._stream_writer.write(packed_data)
 
     def flush(self) -> None:
         """Mark end of current audio segment"""
         super().flush()
-        if self._current_stream_id:
-            await self._transport.close()
-            self._current_stream_id = None
+        if self._stream_writer:
+            # Send end of segment marker
+            metadata = {"type": "end_of_segment"}
+            # TODO: Pack metadata into binary format and send
+            # await self._stream_writer.write(packed_data)
 
     def clear_buffer(self) -> None:
         """Stop current stream immediately"""
-        if self._current_stream_id:
-            await self._protocol.interrupt_playback(self._current_stream_id)
-        self.flush()
+        if not self._control:
+            raise RuntimeError("Control channel not initialized")
 
-    async def _on_playback_finished(self, event: PlaybackFinishedEvent) -> None:
-        """Handle playback finished event from worker"""
-        if event.stream_id == self._current_stream_id:
-            self.on_playback_finished(
-                playback_position=event.playback_position, interrupted=event.interrupted
-            )
+        # Interrupt remote playback
+        asyncio.create_task(self._control.interrupt_playback())
+        super().clear_buffer()
+
+    @property
+    def control(self) -> AvatarPlaybackControl:
+        """Get the playback control"""
+        if not self._control:
+            raise RuntimeError("Control channel not initialized")
+        return self._control
 
 
-# Factory function to create DataStream-based sink
-def create_datastream_sink(
-    local_participant: rtc.LocalParticipant,
-    config: AvatarConfig,
-) -> AvatarAudioSink:
-    """Create an AvatarAudioSink that uses LiveKit DataStream for transport"""
-    transport = DataStreamTransport(local_participant, config)
-    protocol = RPCProtocol(local_participant, config.worker_identity)
-    return AvatarAudioSink(transport, protocol)
+class DataStreamAudioReceiver(rtc.EventEmitter[Literal["playback_interrupted"]]):
+    """
+    Audio receiver that receives streamed audio from a sender participant using LiveKit DataStream.
+    Used by the worker to receive audio frames from a sender identified by the DATASTREAM_AUDIO_SENDER attribute.
+    """
+
+    def __init__(self, room: rtc.Room):
+        self._room = room
+        self._sender_participant: Optional[rtc.RemoteParticipant] = None
+        self._stream_reader: Optional[rtc.FileStreamReader] = None
+        self._control: Optional[AvatarPlaybackControl] = None
+
+    async def start(self) -> None:
+        """
+        Wait for sender participant to join and start receiving.
+        Also marks this participant as a worker.
+        """
+        # mark self as worker
+        await self._room.local_participant.set_attributes(
+            {DATASTREAM_AUDIO_WORKER: "true"}
+        )
+
+        self._sender_participant = await wait_for_participant(
+            self._room, attribute=DATASTREAM_AUDIO_SENDER
+        )
+        self._control = RPCPlaybackControl(
+            self._room.local_participant,
+            self._sender_participant.identity,
+        )
+
+        def handle_interrupt(data: rtc.RpcInvocationData) -> None:
+            self.emit("playback_interrupted")
+
+        self._room.local_participant.register_rpc_method(
+            RPCPlaybackControl.RPC_INTERRUPT,
+            handle_interrupt,
+        )
+
+        self._stream_reader = await self._room.local_participant.receive_file()
+
+    async def receive(self) -> AsyncIterator[rtc.AudioFrame]:
+        """Receive audio frames from sender"""
+        if not self._stream_reader:
+            raise RuntimeError("Receiver not started")
+
+        if not self._sender_participant:
+            raise RuntimeError("Sender participant not found")
+
+        while True:
+            # TODO: Read and unpack binary data
+            # data = await self._stream_reader.read()
+            # metadata, frame_data = unpack_data(data)
+
+            # if metadata.get('type') == 'end_of_segment':
+            #     break
+
+            # frame = rtc.AudioFrame(
+            #     data=frame_data,
+            #     sample_rate=metadata['sample_rate'],
+            #     num_channels=metadata['num_channels'],
+            #     samples_per_channel=metadata['samples_per_channel']
+            # )
+            # yield frame
+            pass
+
+    async def close(self) -> None:
+        """Close the audio receiver"""
+        if self._stream_reader:
+            await self._stream_reader.close()
+            self._stream_reader = None
+
+    @property
+    def control(self) -> AvatarPlaybackControl:
+        """Get the playback control"""
+        if not self._control:
+            raise RuntimeError("Control channel not initialized")
+        return self._control
