@@ -44,7 +44,7 @@ EventTypes = Literal[
     "function_calls_cancelled",
     "input_speech_transcription_completed",
     "agent_speech_transcription_completed",
-    "agent_speech_completed",
+    "agent_speech_stopped",
 ]
 
 
@@ -435,7 +435,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                                 if isinstance(stream, utils.aio.Chan):
                                     stream.close()
 
-                            self.emit("agent_speech_completed")
+                            self.emit("agent_speech_stopped")
                             self._is_interrupted = True
 
                             self._active_response_id = None
