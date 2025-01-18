@@ -41,6 +41,7 @@ class STTOptions:
     languages: list[
         str
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
+    speech_endpoint: str | None = None
 
 
 class STT(stt.STT):
@@ -206,6 +207,9 @@ class SpeechStream(stt.SpeechStream):
                     for task in done:
                         if task != wait_reconnect_task:
                             task.result()
+                    if wait_reconnect_task not in done:
+                        break
+                    self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(
                         process_input_task, wait_reconnect_task
@@ -220,9 +224,6 @@ class SpeechStream(stt.SpeechStream):
                     del self._recognizer
 
                 await asyncio.to_thread(_cleanup)
-                if not self._reconnect_event.is_set():
-                    break
-                self._reconnect_event.clear()
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs):
         detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
@@ -305,16 +306,14 @@ class SpeechStream(stt.SpeechStream):
 def _create_speech_recognizer(
     *, config: STTOptions, stream: speechsdk.audio.AudioInputStream
 ) -> speechsdk.SpeechRecognizer:
-    if config.speech_host:
-        speech_config = speechsdk.SpeechConfig(host=config.speech_host)
-    if config.speech_auth_token:
-        speech_config = speechsdk.SpeechConfig(
-            auth_token=config.speech_auth_token, region=config.speech_region
-        )
-    else:
-        speech_config = speechsdk.SpeechConfig(
-            subscription=config.speech_key, region=config.speech_region
-        )
+    # let the SpeechConfig constructor to validate the arguments
+    speech_config = speechsdk.SpeechConfig(
+        subscription=config.speech_key,
+        region=config.speech_region,
+        endpoint=config.speech_endpoint,
+        host=config.speech_host,
+        auth_token=config.speech_auth_token,
+    )
 
     if config.segmentation_silence_timeout_ms:
         speech_config.set_property(

@@ -39,7 +39,7 @@ class TTS(tts.TTS):
         voice: str = "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
         language: str = "english",
         sample_rate: int = 24000,
-        model: TTSModel | str = "Play3.0-mini-ws",
+        model: TTSModel | str = "Play3.0-mini",
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False
         ),
@@ -52,7 +52,7 @@ class TTS(tts.TTS):
             api_key (str): PlayAI API key.
             user_id (str): PlayAI user ID.
             voice (str): Voice manifest URL.
-            model (TTSModel): TTS model, defaults to "Play3.0-mini-ws".
+            model (TTSModel): TTS model, defaults to "Play3.0-mini".
             language (str): language, defaults to "english".
             sample_rate (int): sample rate (Hz), A number greater than or equal to 8000, and must be less than or equal to 48000
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
@@ -61,7 +61,7 @@ class TTS(tts.TTS):
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
-                streaming=False,
+                streaming=True,
             ),
             sample_rate=sample_rate,
             num_channels=1,
@@ -89,11 +89,11 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
         )
 
-        # Initialize client
         self._client = PlayHTAsyncClient(
             user_id=user_id,
             api_key=api_key,
         )
+
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     def update_options(
@@ -175,6 +175,7 @@ class ChunkedStream(tts.ChunkedStream):
                 text=self._input_text,
                 options=self._config,
                 voice_engine=self._opts.model,
+                protocol="http",
                 streaming=True,
             ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
@@ -231,12 +232,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 last_frame = None
 
         input_task = asyncio.create_task(self._tokenize_input())
+
         try:
             text_stream = await self._create_text_stream()
             async for chunk in self._client.stream_tts_input(
                 text_stream=text_stream,
                 options=self._config,
                 voice_engine=self._opts.model,
+                protocol="ws",
             ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
                     for frame in bstream.write(frame.data.tobytes()):
@@ -247,11 +250,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 _send_last_frame(segment_id=segment_id, is_final=False)
                 last_frame = frame
             _send_last_frame(segment_id=segment_id, is_final=True)
+
         except Exception as e:
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(input_task)
-            self._client.close()
 
     @utils.log_exceptions(logger=logger)
     async def _tokenize_input(self):

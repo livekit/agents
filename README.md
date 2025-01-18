@@ -15,10 +15,6 @@ Looking for the JS/TS library? Check out [AgentsJS](https://github.com/livekit/a
 
 ## ✨ NEW ✨
 
-### Google Gemini 2.0 support
-
-Introducing support for the new Gemini 2.0 model. Here's an example voice agent running Google STT, TTS, and Gemini 2.0 Flash: [code](./examples/voice-pipeline-agent/gemini_voice_agent.py)
-
 ### In-house phrase endpointing model
 
 We’ve trained a new, open weights phrase endpointing model that significantly improves end-of-turn detection and conversational flow between voice agents and users by reducing agent interruptions. Optimized to run on CPUs, it’s available via [livekit-plugins-turn-detector](https://pypi.org/project/livekit-plugins-turn-detector/) package.
@@ -75,7 +71,7 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Ollama          | livekit-plugins-openai    | [openai.LLM.with_ollama()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_ollama)         |
 | Perplexity      | livekit-plugins-openai    | [openai.LLM.with_perplexity()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_perplexity) |
 | Together.ai     | livekit-plugins-openai    | [openai.LLM.with_together()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_together)     |
-| X.ai (Groq)     | livekit-plugins-openai    | [openai.LLM.with_x_ai()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_x_ai)             |
+| X.ai (Grok)     | livekit-plugins-openai    | [openai.LLM.with_x_ai()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_x_ai)             |
 
 ### STT
 
@@ -116,21 +112,22 @@ Documentation on the framework and how to use it can be found [here](https://doc
 
 ## Example agents
 
-| Description                                                           | Demo Link                                      | Code Link                                                                                              |
-| --------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| A basic voice agent using a pipeline of STT, LLM, and TTS             | [demo](https://kitt.livekit.io)                | [code](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/minimal_assistant.py) |
-| Voice agent using the new OpenAI Realtime API                         | [demo](https://playground.livekit.io)          | [code](https://github.com/livekit-examples/realtime-playground)                                        |
-| Super fast voice agent using Cerebras hosted Llama 3.1                | [demo](https://cerebras.vercel.app)            | [code](https://github.com/dsa/fast-voice-assistant/)                                                   |
-| Voice agent using Cartesia's Sonic model                              | [demo](https://cartesia-assistant.vercel.app/) | [code](https://github.com/livekit-examples/cartesia-voice-agent)                                       |
-| Agent that looks up the current weather via function call             | N/A                                            | [code](https://github.com/livekit-examples/cartesia-voice-agent)                                       |
-| Voice Agent using Gemini 2.0 Flash                                    | N/A                                            | [code](https://github.com/livekit-examples/voice-pipeline-agent/gemini_voice_agent.py)                 |
-| Voice agent with custom turn-detection model                          | N/A                                            | [code](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/turn_detector.py)     |
-| Voice agent that performs a RAG-based lookup                          | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/voice-pipeline-agent/simple-rag)           |
-| Video agent that publishes a stream of RGB frames                     | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/simple-color)                              |
-| Transcription agent that generates text captions from a user's speech | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/speech-to-text)                            |
-| A chat agent you can text who will respond back with generated speech | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/text-to-speech)                            |
-| Localhost multi-agent conference call                                 | N/A                                            | [code](https://github.com/dsa/multi-agent-meeting)                                                     |
-| Moderation agent that uses Hive to detect spam/abusive video          | N/A                                            | [code](https://github.com/dsa/livekit-agents/tree/main/hive-moderation-agent)                          |
+| Description                                                           | Demo Link                                      | Code Link                                                                                                     |
+| --------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| A basic voice agent using a pipeline of STT, LLM, and TTS             | [demo](https://kitt.livekit.io)                | [code](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/minimal_assistant.py)        |
+| Voice agent using the new OpenAI Realtime API                         | [demo](https://playground.livekit.io)          | [code](https://github.com/livekit-examples/realtime-playground)                                               |
+| Super fast voice agent using Cerebras hosted Llama 3.1                | [demo](https://cerebras.vercel.app)            | [code](https://github.com/dsa/fast-voice-assistant/)                                                          |
+| Voice agent using Cartesia's Sonic model                              | [demo](https://cartesia-assistant.vercel.app/) | [code](https://github.com/livekit-examples/cartesia-voice-agent)                                              |
+| Agent that looks up the current weather via function call             | N/A                                            | [code](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/function_calling_weather.py) |
+| Voice Agent using Gemini 2.0 Flash                                    | N/A                                            | [code](https://github.com/livekit-examples/voice-pipeline-agent/gemini_voice_agent.py)                        |
+| Voice agent with custom turn-detection model                          | N/A                                            | [code](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/turn_detector.py)            |
+| Voice agent that performs a RAG-based lookup                          | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/voice-pipeline-agent/simple-rag)                  |
+| Simple agent that echos back the last utterance                       | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/echo-agent)                                       |
+| Video agent that publishes a stream of RGB frames                     | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/simple-color)                                     |
+| Transcription agent that generates text captions from a user's speech | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/speech-to-text)                                   |
+| A chat agent you can text who will respond back with generated speech | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/text-to-speech)                                   |
+| Localhost multi-agent conference call                                 | N/A                                            | [code](https://github.com/dsa/multi-agent-meeting)                                                            |
+| Moderation agent that uses Hive to detect spam/abusive video          | N/A                                            | [code](https://github.com/dsa/livekit-agents/tree/main/hive-moderation-agent)                                 |
 
 ## Contributing
 

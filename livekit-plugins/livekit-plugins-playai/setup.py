@@ -33,7 +33,7 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents[codecs]>=0.12.3",
-        "pyht>=0.1.10",
+        "pyht>=0.1.11",
         "aiohttp",
         "livekit",
     ],

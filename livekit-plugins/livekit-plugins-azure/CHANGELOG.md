@@ -1,5 +1,19 @@
 # livekit-plugins-azure
 
+## 0.5.3
+
+### Patch Changes
+
+- azure speech support all different configs - [#1362](https://github.com/livekit/agents/pull/1362) ([@longcw](https://github.com/longcw))
+
+- reduces initial delay before model retries - [#1337](https://github.com/livekit/agents/pull/1337) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.5.2
+
+### Patch Changes
+
+- fix: Ensure STT exceptions are being propagated - [#1291](https://github.com/livekit/agents/pull/1291) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.5.1
 
 ### Patch Changes
