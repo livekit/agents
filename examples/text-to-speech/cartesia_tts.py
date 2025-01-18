@@ -35,7 +35,7 @@ async def entrypoint(job: JobContext):
         async for audio in stream:
             await source.capture_frame(audio.frame)
 
-    asyncio.create_task(_playback_task())
+    task = asyncio.create_task(_playback_task())
 
     text = "hello from Cartesia. I hope you are having a great day."
 
@@ -50,6 +50,7 @@ async def entrypoint(job: JobContext):
     # Mark end of input segment
     stream.flush()
     stream.end_input()
+    await asyncio.gather(task)
 
 
 if __name__ == "__main__":
