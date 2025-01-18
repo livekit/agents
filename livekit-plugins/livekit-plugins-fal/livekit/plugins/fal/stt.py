@@ -47,7 +47,7 @@ class WizperSTT(stt.STT):
 
         if not self._api_key:
             raise ValueError(
-                "FAL AI API key is required. It should be set with env FAL_KEY"
+                "fal AI API key is required. It should be set with env FAL_KEY"
             )
 
     def update_options(self, *, language: Optional[str] = None) -> None:
