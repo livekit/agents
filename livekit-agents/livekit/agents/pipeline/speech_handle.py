@@ -46,7 +46,7 @@ class SpeechHandle:
 
         self._nested_speech_handles: list[SpeechHandle] = []
         self._nested_speech_changed = asyncio.Event()
-        self._nested_speech_done_fut = asyncio.Future[None]()
+        self._nested_speech_done_fut: asyncio.Future[None] | None = None
 
     @staticmethod
     def create_assistant_reply(
@@ -227,9 +227,12 @@ class SpeechHandle:
 
     @property
     def nested_speech_done(self) -> bool:
-        return self._nested_speech_done_fut.done()
+        # True if not started or done
+        return (
+            self._nested_speech_done_fut is None or self._nested_speech_done_fut.done()
+        )
 
     def mark_nested_speech_done(self) -> None:
-        if self._nested_speech_done_fut.done():
+        if self._nested_speech_done_fut is None or self._nested_speech_done_fut.done():
             return
         self._nested_speech_done_fut.set_result(None)

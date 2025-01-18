@@ -1,5 +1,17 @@
 # livekit-plugins-openai
 
+## 0.10.15
+
+### Patch Changes
+
+- support disabling server VAD for OpenAI realtime model - [#1347](https://github.com/livekit/agents/pull/1347) ([@longcw](https://github.com/longcw))
+
+## 0.10.14
+
+### Patch Changes
+
+- fix: revert from weakset to list in multimodal for maintaining sessions - [#1326](https://github.com/livekit/agents/pull/1326) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.10.13
 
 ### Patch Changes

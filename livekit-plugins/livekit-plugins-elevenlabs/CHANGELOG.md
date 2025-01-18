@@ -1,5 +1,11 @@
 # livekit-plugins-elevenlabs
 
+## 0.7.10
+
+### Patch Changes
+
+- Add language param to ElevenLabs TTS update_options - [#1333](https://github.com/livekit/agents/pull/1333) ([@cch41](https://github.com/cch41))
+
 ## 0.7.9
 
 ### Patch Changes

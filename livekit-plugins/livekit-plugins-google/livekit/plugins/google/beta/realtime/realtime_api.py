@@ -121,7 +121,7 @@ class RealtimeModel:
 
         Args:
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
-            api_key (str or None, optional): OpenAI API key. If None, will attempt to read from the environment variable OPENAI_API_KEY
+            api_key (str or None, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
             modalities (ResponseModality): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
             model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
@@ -368,7 +368,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             async for msg in self._send_ch:
                 await self._session.send(input=msg)
 
-            await self._session.send(".", end_of_turn=True)
+            await self._session.send(input=".", end_of_turn=True)
 
         @utils.log_exceptions(logger=logger)
         async def _recv_task():

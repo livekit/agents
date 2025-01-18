@@ -29,6 +29,7 @@ EventTypes = Literal[
     "user_stopped_speaking",
     "agent_started_speaking",
     "agent_stopped_speaking",
+    "input_speech_committed",
     "user_speech_committed",
     "agent_speech_committed",
     "agent_speech_interrupted",
@@ -302,6 +303,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     alternatives=[stt.SpeechData(language="", text="")],
                 )
             )
+            self.emit("input_speech_committed")
 
         @self._session.on("input_speech_transcription_completed")
         def _input_speech_transcription_completed(ev: _InputTranscriptionProto):
@@ -343,18 +345,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         @self._session.on("input_speech_started")
         def _input_speech_started():
             self.emit("user_started_speaking")
-            self._update_state("listening")
-            if self._playing_handle is not None and not self._playing_handle.done():
-                self._playing_handle.interrupt()
-
-                if self._model.capabilities.supports_truncate:
-                    self._session._truncate_conversation_item(
-                        item_id=self._playing_handle.item_id,
-                        content_index=self._playing_handle.content_index,
-                        audio_end_ms=int(
-                            self._playing_handle.audio_samples / 24000 * 1000
-                        ),
-                    )
+            self.interrupt()
 
         @self._session.on("input_speech_stopped")
         def _input_speech_stopped():
@@ -371,6 +362,18 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         @self._session.on("metrics_collected")
         def _metrics_collected(metrics: MultimodalLLMMetrics):
             self.emit("metrics_collected", metrics)
+
+    def interrupt(self) -> None:
+        if self._playing_handle is not None and not self._playing_handle.done():
+            self._playing_handle.interrupt()
+
+            if self._model.capabilities.supports_truncate:
+                self._session._truncate_conversation_item(
+                    item_id=self._playing_handle.item_id,
+                    content_index=self._playing_handle.content_index,
+                    audio_end_ms=int(self._playing_handle.audio_samples / 24000 * 1000),
+                )
+        self._update_state("listening")
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""

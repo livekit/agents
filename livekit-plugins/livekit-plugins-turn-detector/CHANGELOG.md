@@ -1,5 +1,13 @@
 # livekit-plugins-eou
 
+## 0.3.6
+
+### Patch Changes
+
+- prevent arbitrarily long inputs being passed to turn detector - [#1345](https://github.com/livekit/agents/pull/1345) ([@jeradf](https://github.com/jeradf))
+
+- add timeout for EOU inference requests made to the inference process - [#1315](https://github.com/livekit/agents/pull/1315) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.3.5
 
 ### Patch Changes

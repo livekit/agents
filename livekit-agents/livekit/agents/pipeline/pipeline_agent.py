@@ -721,6 +721,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 # the speech is playing but not committed yet, add it to the chat context for this new reply synthesis
                 # First add the previous function call message if any
                 if playing_speech.extra_tools_messages:
+                    if playing_speech.fnc_text_message_id is not None:
+                        # there is a message alongside the function calls
+                        msgs = copied_ctx.messages
+                        if msgs and msgs[-1].id == playing_speech.fnc_text_message_id:
+                            # replace it with the tool call message if it's the last in the ctx
+                            msgs.pop()
                     copied_ctx.messages.extend(playing_speech.extra_tools_messages)
 
                 # Then add the previous assistant message
@@ -830,11 +836,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
+        # add tool calls and text message to the chat context
         message_id_committed: str | None = None
-        if (
-            collected_text
-            and speech_handle.add_to_chat_ctx
-            and (not user_question or speech_handle.user_committed)
+        if speech_handle.add_to_chat_ctx and (
+            not user_question or speech_handle.user_committed
         ):
             if speech_handle.extra_tools_messages:
                 if speech_handle.fnc_text_message_id is not None:
@@ -848,28 +853,30 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         speech_handle.extra_tools_messages[0].content = ""
                 self._chat_ctx.messages.extend(speech_handle.extra_tools_messages)
 
-            if interrupted:
-                collected_text += "..."
+            if collected_text:
+                if interrupted:
+                    collected_text += "..."
 
-            msg = ChatMessage.create(text=collected_text, role="assistant")
-            self._chat_ctx.messages.append(msg)
-            message_id_committed = msg.id
-            speech_handle.mark_speech_committed()
+                msg = ChatMessage.create(text=collected_text, role="assistant")
+                self._chat_ctx.messages.append(msg)
+                message_id_committed = msg.id
+                speech_handle.mark_speech_committed()
 
-            if interrupted:
-                self.emit("agent_speech_interrupted", msg)
-            else:
-                self.emit("agent_speech_committed", msg)
+                if interrupted:
+                    self.emit("agent_speech_interrupted", msg)
+                else:
+                    self.emit("agent_speech_committed", msg)
 
-            logger.debug(
-                "committed agent speech",
-                extra={
-                    "agent_transcript": collected_text,
-                    "interrupted": interrupted,
-                    "speech_id": speech_handle.id,
-                },
-            )
+                logger.debug(
+                    "committed agent speech",
+                    extra={
+                        "agent_transcript": collected_text,
+                        "interrupted": interrupted,
+                        "speech_id": speech_handle.id,
+                    },
+                )
 
+        @utils.log_exceptions(logger=logger)
         async def _execute_function_calls() -> None:
             nonlocal interrupted, collected_text
 
@@ -889,9 +896,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             assert isinstance(speech_handle.source, LLMStream)
-            assert (
-                not user_question or speech_handle.user_committed
-            ), "user speech should have been committed before using tools"
+            assert not user_question or speech_handle.user_committed, (
+                "user speech should have been committed before using tools"
+            )
 
             llm_stream = speech_handle.source
 
@@ -995,6 +1002,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle._set_done()
             return
 
+        speech_handle._nested_speech_done_fut = asyncio.Future[None]()
         fnc_task = asyncio.create_task(_execute_function_calls())
         while not speech_handle.nested_speech_done:
             nesting_changed = asyncio.create_task(
@@ -1040,9 +1048,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         speech_id: str,
         source: str | LLMStream | AsyncIterable[str],
     ) -> SynthesisHandle:
-        assert (
-            self._agent_output is not None
-        ), "agent output should be initialized when ready"
+        assert self._agent_output is not None, (
+            "agent output should be initialized when ready"
+        )
 
         tk = SpeechDataContextVar.set(SpeechData(speech_id))
 
@@ -1305,12 +1313,16 @@ class _DeferredReplyValidation:
                 and self._turn_detector.supports_language(self._last_language)
             ):
                 start_time = time.perf_counter()
-                eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
-                unlikely_threshold = self._turn_detector.unlikely_threshold()
-                elasped = time.perf_counter() - start_time
-                if eot_prob < unlikely_threshold:
-                    delay = self._max_endpointing_delay
-                delay = max(0, delay - elasped)
+                try:
+                    eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
+                    unlikely_threshold = self._turn_detector.unlikely_threshold()
+                    elasped = time.perf_counter() - start_time
+                    if eot_prob < unlikely_threshold:
+                        delay = self._max_endpointing_delay
+                    delay = max(0, delay - elasped)
+                except TimeoutError:
+                    pass  # inference process is unresponsive
+
             await asyncio.sleep(delay)
 
             self._reset_states()
