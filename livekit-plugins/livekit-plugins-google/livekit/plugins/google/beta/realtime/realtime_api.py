@@ -317,7 +317,9 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._send_ch.send_nowait(msg)
 
     def generate_reply(
-        self, ctx: llm.ChatContext | llm.ChatMessage, turn_complete: bool = True
+        self,
+        ctx: llm.ChatContext | llm.ChatMessage,
+        turn_complete: bool = True,
     ) -> None:
         if isinstance(ctx, llm.ChatMessage) and isinstance(ctx.content, str):
             new_chat_ctx = llm.ChatContext()
@@ -338,6 +340,23 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
 
     async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
         self._chat_ctx = ctx.copy()
+
+    def cancel_response(self) -> None:
+        raise NotImplementedError("cancel_response is not supported yet")
+
+    def create_response(
+        self,
+        on_duplicate: Literal[
+            "cancel_existing", "cancel_new", "keep_both"
+        ] = "keep_both",
+    ) -> None:
+        raise NotImplementedError("create_response is not supported yet")
+
+    def commit_audio_buffer(self) -> None:
+        raise NotImplementedError("commit_audio_buffer is not supported yet")
+
+    def server_vad_enabled(self) -> bool:
+        return True
 
     def _on_input_speech_done(self, content: TranscriptionContent) -> None:
         self.emit(
