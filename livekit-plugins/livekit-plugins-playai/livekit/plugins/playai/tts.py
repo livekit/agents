@@ -39,7 +39,7 @@ class TTS(tts.TTS):
         voice: str = "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
         language: str = "english",
         sample_rate: int = 24000,
-        model: TTSModel | str = "Play3.0-mini-ws",
+        model: TTSModel | str = "Play3.0-mini",
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False
         ),
@@ -52,7 +52,7 @@ class TTS(tts.TTS):
             api_key (str): PlayAI API key.
             user_id (str): PlayAI user ID.
             voice (str): Voice manifest URL.
-            model (TTSModel): TTS model, defaults to "Play3.0-mini-ws".
+            model (TTSModel): TTS model, defaults to "Play3.0-mini".
             language (str): language, defaults to "english".
             sample_rate (int): sample rate (Hz), A number greater than or equal to 8000, and must be less than or equal to 48000
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
@@ -89,8 +89,10 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
         )
 
-        self._api_key = api_key
-        self._user_id = user_id
+        self._client = PlayHTAsyncClient(
+            user_id=user_id,
+            api_key=api_key,
+        )
 
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
@@ -160,8 +162,7 @@ class ChunkedStream(tts.ChunkedStream):
         segment_id: str | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._api_key = tts._api_key
-        self._user_id = tts._user_id
+        self._client = tts._client
         self._opts = opts
         self._config = self._opts.tts_options
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
@@ -172,16 +173,13 @@ class ChunkedStream(tts.ChunkedStream):
         bstream = utils.audio.AudioByteStream(
             sample_rate=self._config.sample_rate, num_channels=NUM_CHANNELS
         )
-        self._client = PlayHTAsyncClient(
-            user_id=self._user_id,
-            api_key=self._api_key,
-        )
 
         try:
             async for chunk in self._client.tts(
                 text=self._input_text,
                 options=self._config,
                 voice_engine=self._opts.model,
+                protocol="http",
                 streaming=True,
             ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
@@ -214,8 +212,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         opts: _Options,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._api_key = tts._api_key
-        self._user_id = tts._user_id
+        self._client = tts._client
         self._opts = opts
         self._config = self._opts.tts_options
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
@@ -247,14 +244,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             text_stream = await self._create_text_stream()
-            self._client = PlayHTAsyncClient(
-                user_id=self._user_id,
-                api_key=self._api_key,
-            )
             async for chunk in self._client.stream_tts_input(
                 text_stream=text_stream,
                 options=self._config,
                 voice_engine=self._opts.model,
+                protocol="ws",
             ):
                 for frame in self._mp3_decoder.decode_chunk(chunk):
                     for frame in bstream.write(frame.data.tobytes()):
@@ -269,7 +263,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(input_task)
-            await self._client.close()
 
     @utils.log_exceptions(logger=logger)
     async def _tokenize_input(self):
