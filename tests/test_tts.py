@@ -119,48 +119,55 @@ async def test_stream(tts_factory):
 
     stream = tts.stream()
 
-    segments = set()
-    for i in range(2):  # Testing 2 segments
-        text = text_segments[i]
-
-        # Generate chunks for the current segment
-        pattern = [1, 2, 4]
-        chunks = []
+    pattern = [1, 2, 4]
+    for i, text in enumerate(text_segments):
         text_remaining = text
-        pattern_iter = iter(pattern * (len(text) // sum(pattern) + 1))
+        chunk_iter = iter(pattern * (len(text) // sum(pattern) + 1))
 
-        for chunk_size in pattern_iter:
-            if not text_remaining:
-                break
-            chunks.append(text_remaining[:chunk_size])
-            text_remaining = text_remaining[chunk_size:]
-
-        for chunk in chunks:
-            stream.push_text(chunk)
+        while text_remaining:
+            size = next(chunk_iter)
+            stream.push_text(text_remaining[:size])
+            text_remaining = text_remaining[size:]
 
         stream.flush()
         if i == 1:
             stream.end_input()
 
-    frames = []
-    is_final = 0
-    async for audio in stream:
-        if audio.is_final:
-            is_final += 1
-        segments.add(audio.segment_id)
-        frames.append(audio.frame)
+    events = []
+    segment_ids = []
+    async for event in stream:
+        events.append(event)
+        if event.segment_id and event.segment_id not in segment_ids:
+            segment_ids.append(event.segment_id)
 
-    assert is_final >= 2, (
-        "both segments should be marked as final"
-    )  # (>= 2) tts streamadapter class could have multiple final audio based on number of sentences
-
-    # Combine the segments for expected text
-    expected_text = "".join(text_segments)
-
-    await _assert_valid_synthesized_audio(frames, tts, expected_text, WER_THRESHOLD)
-
-    assert len(segments) == 2, "should have 2 segments"
     await stream.aclose()
+
+    assert len(segment_ids) == 2, (
+        f"Expected 2 unique segments, got {len(segment_ids)}: {segment_ids}"
+    )
+
+    seg0_id, seg1_id = segment_ids
+
+    # Each segment has at least one final frame
+    seg0_final_indices = [
+        i for i, e in enumerate(events) if e.segment_id == seg0_id and e.is_final
+    ]
+    seg1_final_indices = [
+        i for i, e in enumerate(events) if e.segment_id == seg1_id and e.is_final
+    ]
+    assert seg0_final_indices, f"No final frame found for segment {seg0_id}"
+    assert seg1_final_indices, f"No final frame found for segment {seg1_id}"
+
+    # Ensure segment #0's final occurs before segment #1's final
+    assert max(seg0_final_indices) < min(seg1_final_indices), (
+        f"Segment #0 final (index={max(seg0_final_indices)}) did NOT occur "
+        f"before segment #1 final (index={min(seg1_final_indices)})."
+    )
+
+    # Validate the synthesized audio frames
+    frames = [e.frame for e in events if e.frame is not None]
+    expected_text = "".join(text_segments)
+    await _assert_valid_synthesized_audio(frames, tts, expected_text, WER_THRESHOLD)
 
 
 async def test_retry():
