@@ -348,7 +348,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         # Similar to _input_speech_started, this handles updating the state to "listening" when the agent's speech is complete.
         # However, since Gemini doesn't support VAD events, we are not emitting the `user_started_speaking` event here.
         @self._session.on("agent_speech_stopped")
-        def _agent_speech_completed():
+        def _agent_speech_stopped():
             self.interrupt()
 
         @self._session.on("input_speech_started")
@@ -373,12 +373,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             self.emit("metrics_collected", metrics)
 
     def interrupt(self) -> None:
-        self._session.cancel_response()
-
         if self._playing_handle is not None and not self._playing_handle.done():
             self._playing_handle.interrupt()
 
             if self._model.capabilities.supports_truncate:
+                self._session.cancel_response()  # Only supported by OpenAI
+
                 self._session._truncate_conversation_item(
                     item_id=self._playing_handle.item_id,
                     content_index=self._playing_handle.content_index,
