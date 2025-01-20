@@ -19,7 +19,6 @@ NOISY_LOGGERS = [
     "watchfiles",
     "anthropic",
     "websockets.client",
-    "root",
 ]
 
 

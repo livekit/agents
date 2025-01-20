@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import inspect
 import json
-from typing import Any, Dict, List, Optional, Union, cast, get_args, get_origin
+from typing import Any, Dict, List, Optional, get_args, get_origin
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -88,18 +88,16 @@ def _build_tools(fnc_ctx: Any) -> List[types.FunctionDeclaration]:
 
 def _build_gemini_ctx(
     chat_ctx: llm.ChatContext, cache_key: Any
-) -> tuple[
-    Union[types.ContentListUnion, types.ContentListUnionDict], Optional[types.Part]
-]:
+) -> tuple[list[types.Content], Optional[types.Content]]:
     turns: list[types.Content] = []
     current_content: Optional[types.Content] = None
-    system_instruction: Optional[types.Part] = None
+    system_instruction: Optional[types.Content] = None
     current_role: Optional[str] = None
 
     for msg in chat_ctx.messages:
         if msg.role == "system":
             if isinstance(msg.content, str):
-                system_instruction = types.Part(text=msg.content)
+                system_instruction = types.Content(parts=[types.Part(text=msg.content)])
             continue
 
         if msg.role == "assistant":
@@ -169,8 +167,7 @@ def _build_gemini_ctx(
                                 _build_gemini_image_part(item, cache_key)
                             )
 
-    ctx = cast(Union[types.ContentListUnion, types.ContentListUnionDict], turns)
-    return ctx, system_instruction
+    return turns, system_instruction
 
 
 def _build_gemini_image_part(image: llm.ChatImage, cache_key: Any) -> types.Part:
