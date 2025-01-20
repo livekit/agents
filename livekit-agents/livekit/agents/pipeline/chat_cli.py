@@ -15,7 +15,7 @@ from livekit import rtc
 from ..log import logger
 from ..utils import aio, log_exceptions
 from . import io
-from .pipeline2 import PipelineAgent
+from .pipeline_agent import PipelineAgent
 
 MAX_AUDIO_BAR = 30
 INPUT_DB_MIN = -70.0

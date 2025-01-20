@@ -6,7 +6,8 @@ from dataclasses import dataclass
 
 from livekit import rtc
 from livekit.agents import llm, multimodal, utils
-from livekit.agents.llm.function_context import _create_ai_function_info
+from livekit.agents.llm.function_context import build_legacy_openai_schema
+from pydantic import ValidationError
 
 import openai
 from openai.resources.beta.realtime.realtime import AsyncRealtimeConnection
@@ -31,6 +32,8 @@ from openai.types.beta.realtime import (
     ResponseDoneEvent,
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
+    SessionUpdateEvent,
+    session_update_event,
 )
 
 from .log import logger
@@ -46,7 +49,7 @@ from .log import logger
 # 8. response.output_item.done (contains item_status: "completed/incomplete")
 # 9. response.done (contains status_details for cancelled/failed/turn_detected/content_filter)
 #
-# Ourcode assumes a response will generate only one item with type "message."
+# Ourcode assumes a response will generate only one item with type "message"
 
 
 SAMPLE_RATE = 24000
@@ -64,7 +67,7 @@ class _ResponseGeneration:
     item_id: str
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
     text_ch: utils.aio.Chan[str]
-    tool_calls_ch: utils.aio.Chan[llm.FunctionCallInfo]
+    function_ch: utils.aio.Chan[llm.FunctionCall]
 
 
 class RealtimeModel(multimodal.RealtimeModel):
@@ -92,7 +95,7 @@ class RealtimeSession(multimodal.RealtimeSession):
         super().__init__(realtime_model)
         self._realtime_model = realtime_model
         self._chat_ctx = llm.ChatContext()
-        self._fnc_ctx: llm.FunctionContext | None = None
+        self._fnc_ctx = llm.FunctionContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent]()
 
         self._conn: AsyncRealtimeConnection | None = None
@@ -167,7 +170,7 @@ class RealtimeSession(multimodal.RealtimeSession):
             item_id="",
             audio_ch=utils.aio.Chan(),
             text_ch=utils.aio.Chan(),
-            tool_calls_ch=utils.aio.Chan(),
+            function_ch=utils.aio.Chan(),
         )
 
     def _handle_response_output_item_added(
@@ -186,6 +189,16 @@ class RealtimeSession(multimodal.RealtimeSession):
             return
 
         self._current_generation.item_id = item_id
+
+        self.emit(
+            "generation_created",
+            multimodal.GenerationCreatedEvent(
+                message_id=item_id,
+                text_stream=self._current_generation.text_ch,
+                audio_stream=self._current_generation.audio_ch,
+                function_stream=self._current_generation.function_ch,
+            ),
+        )
 
     def _handle_response_audio_transcript_delta(
         self, event: ResponseAudioTranscriptDeltaEvent
@@ -221,9 +234,9 @@ class RealtimeSession(multimodal.RealtimeSession):
 
         item = event.item
         if item.type == "function_call":
-            if self.fnc_ctx is None:
+            if len(self.fnc_ctx.ai_functions) == 0:
                 logger.warning(
-                    "received a function_call item without a function context",
+                    "received a function_call item without ai functions",
                     extra={"item": item},
                 )
                 return
@@ -232,17 +245,17 @@ class RealtimeSession(multimodal.RealtimeSession):
             assert item.name is not None, "name is None"
             assert item.arguments is not None, "arguments is None"
 
-            fnc_call_info = _create_ai_function_info(
-                self.fnc_ctx,
-                item.call_id,
-                item.name,
-                item.arguments,
+            self._current_generation.function_ch.send_nowait(
+                llm.FunctionCall(
+                    call_id=item.call_id,
+                    name=item.name,
+                    arguments=item.arguments,
+                )
             )
-            self._current_generation.tool_calls_ch.send_nowait(fnc_call_info)
 
     def _handle_response_done(self, _: ResponseDoneEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
-        self._current_generation.tool_calls_ch.close()
+        # self._current_generation.tool_calls_ch.close()
         self._current_generation = None
 
     def _handle_error(self, event: ErrorEvent) -> None:
@@ -286,11 +299,45 @@ class RealtimeSession(multimodal.RealtimeSession):
         # TODO(theomonnom): wait for the server confirmation
 
     @property
-    def fnc_ctx(self) -> llm.FunctionContext | None:
+    def fnc_ctx(self) -> llm.FunctionContext:
         return self._fnc_ctx
 
-    async def update_fnc_ctx(self, fnc_ctx: llm.FunctionContext | None) -> None:
-        pass
+    async def update_fnc_ctx(
+        self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]
+    ) -> None:
+        if isinstance(fnc_ctx, list):
+            fnc_ctx = llm.FunctionContext(fnc_ctx)
+
+        tools: list[session_update_event.SessionTool] = []
+        retained_functions: list[llm.AIFunction] = []
+
+        for ai_fnc in fnc_ctx.ai_functions.values():
+            tool_desc = build_legacy_openai_schema(ai_fnc, internally_tagged=True)
+            try:
+                session_tool = session_update_event.SessionTool.model_validate(
+                    tool_desc
+                )
+                tools.append(session_tool)
+                retained_functions.append(ai_fnc)
+            except ValidationError:
+                logger.error(
+                    "OpenAI Realtime API doesn't support this tool",
+                    extra={"tool": tool_desc},
+                )
+                continue
+
+        self._msg_ch.send_nowait(
+            SessionUpdateEvent(
+                type="session.update",
+                session=session_update_event.Session(
+                    model=self._realtime_model._opts.model,  # type: ignore (str -> Literal)
+                    tools=tools,
+                ),
+            )
+        )
+
+        # TODO(theomonnom): wait for the server confirmation before updating the local state
+        self._fnc_ctx = llm.FunctionContext(retained_functions)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         self._msg_ch.send_nowait(
@@ -321,28 +368,24 @@ class RealtimeSession(multimodal.RealtimeSession):
             await self._conn.close()
 
 
-def _chat_item_to_conversation_item(msg: llm.ChatItem) -> ConversationItem:
-    if not msg.content:
-        raise ValueError("ChatItem has no content")
-
-    item = msg.content[0]
+def _chat_item_to_conversation_item(item: llm.ChatItem) -> ConversationItem:
     conversation_item = ConversationItem(
-        id=msg.id,
+        id=item.id,
         object="realtime.item",
     )
 
-    if isinstance(item, llm.FunctionCall):
+    if item.type == "function_call":
         conversation_item.type = "function_call"
         conversation_item.call_id = item.call_id
         conversation_item.name = item.name
         conversation_item.arguments = item.arguments
 
-    elif isinstance(item, llm.FunctionCallOutput):
+    elif item.type == "function_call_output":
         conversation_item.type = "function_call_output"
         conversation_item.call_id = item.call_id
         conversation_item.output = item.output
 
-    elif isinstance(item, llm.ChatMessage):
+    elif item.type == "message":
         role = "system" if item.role == "developer" else item.role
         conversation_item.type = "message"
         conversation_item.role = role
@@ -374,8 +417,5 @@ def _chat_item_to_conversation_item(msg: llm.ChatItem) -> ConversationItem:
                     )
 
         conversation_item.content = content_list
-
-    else:
-        raise ValueError(f"Unsupported ChatItem content: {item}")
 
     return conversation_item
