@@ -204,24 +204,8 @@ class WaveformVisualizer:
         self.draw_volume_history(canvas, current_volume)
 
 
-async def entrypoint(room: rtc.Room, room_name: str):
-    token = (
-        api.AccessToken()
-        .with_identity("video-publisher")
-        .with_name("Video Publisher")
-        .with_grants(
-            api.VideoGrants(
-                room_join=True,
-                room=room_name,
-                agent=True,
-            )
-        )
-        .with_attributes({AUDIO_RECEIVER_ATTR: "true"})
-        .to_jwt()
-    )
-    url = os.getenv("LIVEKIT_URL")
+async def entrypoint(room: rtc.Room, url: str, token: str):
     logging.info("connecting to %s", url)
-
     try:
         await room.connect(url, token)
         logging.info("connected to room %s", room.name)
@@ -244,11 +228,10 @@ async def entrypoint(room: rtc.Room, room_name: str):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python example.py <room-name>")
-        sys.exit(1)
+    # TODO: get url and token from agent
+    url = "wss://livekit.example.com"
+    token = "token"
 
-    room_name = sys.argv[1]
     loop = asyncio.get_event_loop()
     room = rtc.Room(loop=loop)
 
@@ -256,7 +239,7 @@ if __name__ == "__main__":
         await room.disconnect()
         loop.stop()
 
-    asyncio.ensure_future(entrypoint(room, room_name))
+    asyncio.ensure_future(entrypoint(room, url, token))
     for signal in [signal.SIGINT, signal.SIGTERM]:
         loop.add_signal_handler(signal, lambda: asyncio.ensure_future(cleanup()))
 

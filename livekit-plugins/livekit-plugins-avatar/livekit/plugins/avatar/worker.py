@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Optional, Protocol
 
 from livekit import rtc
-from livekit.agents import utils
+from livekit.agents import JobContext, utils
 
 from .io import AudioFlushSentinel, AudioReceiver
 

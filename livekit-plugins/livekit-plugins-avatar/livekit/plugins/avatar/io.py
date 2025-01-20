@@ -1,41 +1,47 @@
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
 from typing import AsyncIterator, Literal, Optional, Union
 
-from livekit import rtc
+from livekit import api, rtc
+from livekit.agents import JobContext
 from livekit.agents.pipeline import io as agent_io
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 
 logger = logging.getLogger(__name__)
 
-AUDIO_SENDER_ATTR = "__livekit_avatar_audio_sender"
-AUDIO_RECEIVER_ATTR = "__livekit_avatar_audio_receiver"
-RPC_INTERRUPT_PLAYBACK = "__livekit_avatar_interrupt_playback"
-RPC_PLAYBACK_FINISHED = "__livekit_avatar_playback_finished"
+DEFAULT_AVATAR_IDENTITY = "lk.avatar_worker"
+RPC_INTERRUPT_PLAYBACK = "lk.interrupt_playback"
+RPC_PLAYBACK_FINISHED = "lk.playback_finished"
+AUDIO_STREAM_NAME = "lk.audio_stream"
 
 
 class AudioSink(agent_io.AudioSink):
     """
     AudioSink implementation that streams audio to a remote avatar worker using LiveKit DataStream.
-    Sends audio frames to the first participant identified by the AUDIO_RECEIVER_ATTR attribute.
     """
 
-    def __init__(self, room: rtc.Room):
+    def __init__(self, ctx: JobContext, avatar_identity: str = DEFAULT_AVATAR_IDENTITY):
         super().__init__()
-        self._room = room
+        self._ctx = ctx
+        self._room = self._ctx.room
+        self._avatar_identity = avatar_identity
         self._remote_participant: Optional[rtc.RemoteParticipant] = None
 
         self._stream_writer: Optional[rtc.FileStreamWriter] = None
 
     async def start(self) -> None:
         """Wait for worker participant to join and start streaming"""
-        # mark self as sender
-        await self._room.local_participant.set_attributes({AUDIO_SENDER_ATTR: "true"})
-        self._remote_participant = await wait_for_participant(
-            room=self._room, attribute=AUDIO_RECEIVER_ATTR
+        # create a token for the avatar worker
+        token = (
+            api.AccessToken()
+            .with_identity(self._avatar_identity)
+            .with_name("Avatar Worker")
+            .with_grants(api.VideoGrants(room_join=True, room=self._room.name))
+            .to_jwt()
         )
+        # TODO: send the token to remote for handshake
+        connection_info = {"ws_url": self._ctx._info.url, "token": token}
 
         # playback finished handler
         def _handle_playback_finished(data: rtc.RpcInvocationData) -> None:
@@ -49,6 +55,11 @@ class AudioSink(agent_io.AudioSink):
             RPC_PLAYBACK_FINISHED, _handle_playback_finished
         )
 
+        # wait for the remote participant to join
+        self._remote_participant = await self._ctx.wait_for_participant(
+            identity=self._avatar_identity
+        )
+
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture and stream audio frame to remote worker"""
         if not self._remote_participant:
@@ -57,12 +68,15 @@ class AudioSink(agent_io.AudioSink):
         if not self._stream_writer:
             # start new stream
             # TODO: any better option to send the metadata?
-            name = f"audio_{frame.sample_rate}_{frame.num_channels}"
             self._stream_writer = await self._room.local_participant.stream_file(
-                file_name=name,
-                mime_type="audio/raw",
+                file_name=AUDIO_STREAM_NAME,
                 destination_identities=[self._remote_participant.identity],
+                extensions={
+                    "sample_rate": frame.sample_rate,
+                    "num_channels": frame.num_channels,
+                },
             )
+
         await self._stream_writer.write(frame.data)
 
         await super().capture_frame(frame)
@@ -94,13 +108,6 @@ class AudioFlushSentinel:
     pass
 
 
-@dataclass
-class _AudioReader:
-    stream_reader: rtc.FileStreamReader
-    sample_rate: int
-    num_channels: int
-
-
 class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
     """
     Audio receiver that receives streamed audio from a sender participant using LiveKit DataStream.
@@ -111,13 +118,12 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
         self._room = room
         self._remote_participant: Optional[rtc.RemoteParticipant] = None
 
-        self._stream_readers: list[_AudioReader] = []
-        self._stream_received: asyncio.Event = asyncio.Event()
+        self._stream_readers: list[rtc.FileStreamReader] = []
+        self._stream_reader_changed: asyncio.Event = asyncio.Event()
 
     async def start(self) -> None:
         """
         Wait for sender participant to join and start receiving.
-        Also marks this participant as a receiver.
         Usage:
             audio_receiver = AudioReceiver(room)
             await audio_receiver.start()
@@ -129,12 +135,8 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
                     # process frame
                     pass
         """
-        # mark self as receiver
-        await self._room.local_participant.set_attributes({AUDIO_RECEIVER_ATTR: "true"})
 
-        self._remote_participant = await wait_for_participant(
-            room=self._room, attribute=AUDIO_SENDER_ATTR
-        )
+        self._remote_participant = await self._wait_for_agent()
 
         def _handle_interrupt(data: rtc.RpcInvocationData) -> None:
             self.emit("interrupt_playback")
@@ -147,21 +149,12 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
             reader: rtc.FileStreamReader, remote_participant_id: str
         ) -> None:
             if remote_participant_id != self._remote_participant.identity:
-                logger.warning(
-                    "Received stream from unexpected participant",
-                    extra={
-                        "remote_participant_id": remote_participant_id,
-                        "expected_participant_id": self._remote_participant.identity,
-                    },
-                )
                 return
 
-            file_name = reader.info.file_name
-            _, sample_rate, num_channels = file_name.split("_")
-            self._stream_readers.append(
-                _AudioReader(reader, int(sample_rate), int(num_channels))
-            )
-            self._stream_received.set()
+            if reader.info.file_name != AUDIO_STREAM_NAME:
+                return
+            self._stream_readers.append(reader)
+            self._stream_reader_changed.set()
 
         self._room.on("file_stream_received", _handle_stream_received)
 
@@ -181,43 +174,33 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
 
     async def stream(self) -> AsyncIterator[Union[rtc.AudioFrame, AudioFlushSentinel]]:
         while True:
-            await self._stream_received.wait()
+            await self._stream_reader_changed.wait()
 
             while self._stream_readers:
                 reader = self._stream_readers.pop(0)
+                sample_rate = reader.info.extensions["sample_rate"]
+                num_channels = reader.info.extensions["num_channels"]
                 async for data in reader.stream_reader:
                     yield rtc.AudioFrame(
-                        data=data,
-                        sample_rate=reader.sample_rate,
-                        num_channels=reader.num_channels,
+                        data=data, sample_rate=sample_rate, num_channels=num_channels
                     )
                 yield AudioFlushSentinel()
 
-            self._stream_received.clear()
+            self._stream_reader_changed.clear()
 
-
-async def wait_for_participant(room: rtc.Room, attribute: str) -> rtc.RemoteParticipant:
-    """Wait for a participant with the given attribute to join the room"""
-    # Wait for participant to join
-    future = asyncio.Future[rtc.RemoteParticipant]()
-
-    def on_attribute_changed(changed_attributes: dict, participant: rtc.Participant):
-        if attribute in changed_attributes and not future.done():
-            future.set_result(participant)
-
-    def on_participant_join(participant: rtc.RemoteParticipant):
-        if attribute in participant.attributes and not future.done():
-            future.set_result(participant)
-
-    room.on("participant_joined", on_participant_join)
-    room.on("participant_attributes_changed", on_attribute_changed)
-    try:
-        # check if participant already in room
-        for participant in room.participants.values():
-            if attribute in participant.attributes:
+    async def _wait_for_agent(self) -> rtc.RemoteParticipant:
+        for participant in self._room.remote_participants.values():
+            if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
                 return participant
 
-        return await future
-    finally:
-        room.off("participant_joined", on_participant_join)
-        room.off("participant_attributes_changed", on_attribute_changed)
+        fut = asyncio.Future[rtc.RemoteParticipant]()
+
+        def _handle_participant_joined(participant: rtc.RemoteParticipant) -> None:
+            if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+                fut.set_result(participant)
+
+        self._room.on("participant_joined", _handle_participant_joined)
+        try:
+            return await fut
+        finally:
+            self._room.off("participant_joined", _handle_participant_joined)
