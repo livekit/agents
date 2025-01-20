@@ -112,6 +112,7 @@ class StyleConfig:
         style: Speaking style for neural voices. Examples: "cheerful", "sad", "angry", etc.
         degree: Intensity of the style, from 0.1 to 2.0.
     """
+
     style: str
     degree: float | None = None
 
@@ -270,15 +271,19 @@ class ChunkedStream(tts.ChunkedStream):
                     f'xml:lang="{self._opts.language or "en-US"}">'
                 )
                 ssml += f'<voice name="{self._opts.voice}">'
-                
+
                 # Add style if specified
                 if self._opts.style:
-                    style_degree = f' styledegree="{self._opts.style.degree}"' if self._opts.style.degree else ''
+                    style_degree = (
+                        f' styledegree="{self._opts.style.degree}"'
+                        if self._opts.style.degree
+                        else ""
+                    )
                     ssml += f'<mstts:express-as style="{self._opts.style.style}"{style_degree}>'
-                
+
                 # Add prosody if specified
                 if self._opts.prosody:
-                    ssml += '<prosody'
+                    ssml += "<prosody"
                     if self._opts.prosody.rate:
                         ssml += f' rate="{self._opts.prosody.rate}"'
                     if self._opts.prosody.volume:
@@ -290,11 +295,11 @@ class ChunkedStream(tts.ChunkedStream):
                     ssml += "</prosody>"
                 else:
                     ssml += self._input_text
-                
+
                 # Close style tag if it was opened
                 if self._opts.style:
                     ssml += "</mstts:express-as>"
-                    
+
                 ssml += "</voice></speak>"
                 return synthesizer.speak_ssml_async(ssml).get()  # type: ignore
 
