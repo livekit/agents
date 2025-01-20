@@ -19,7 +19,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, MutableSet, Union
+from typing import Any, Literal, MutableSet, Union, cast
 
 from livekit.agents import (
     APIConnectionError,
@@ -278,7 +278,7 @@ class LLMStream(llm.LLMStream):
             )
             async for response in self._client.aio.models.generate_content_stream(
                 model=self._model,
-                contents=turns,
+                contents=cast(types.ContentListUnion, turns),
                 config=config,
             ):
                 response_id = utils.shortuuid()

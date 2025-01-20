@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 from dataclasses import dataclass
 from typing import Literal
 
@@ -57,11 +56,14 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         self._client = client
         self._model = model
         self._closed = False
+        system_instructions = types.Content(
+            parts=[types.Part(text=SYSTEM_INSTRUCTIONS)]
+        )
 
-        self._config = types.LiveConnectConfigDict(
-            response_modalities="TEXT",
-            system_instruction=SYSTEM_INSTRUCTIONS,
-            generation_config=types.GenerationConfigDict(
+        self._config = types.LiveConnectConfig(
+            response_modalities=["TEXT"],
+            system_instruction=system_instructions,
+            generation_config=types.GenerationConfig(
                 temperature=0.0,
             ),
         )
@@ -74,8 +76,13 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
     def _push_audio(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
             return
-        data = base64.b64encode(frame.data).decode("utf-8")
-        self._queue_msg({"mime_type": "audio/pcm", "data": data})
+        self._queue_msg(
+            types.LiveClientRealtimeInput(
+                media_chunks=[
+                    types.Blob(data=frame.data.tobytes(), mime_type="audio/pcm")
+                ]
+            )
+        )
 
     def _queue_msg(self, msg: ClientEvents) -> None:
         if not self._closed:

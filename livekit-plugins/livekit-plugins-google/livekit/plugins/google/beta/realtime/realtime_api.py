@@ -17,6 +17,7 @@ from google.genai.types import (
     Content,
     FunctionResponse,
     GenerationConfig,
+    LiveClientContent,
     LiveClientRealtimeInput,
     LiveClientToolResponse,
     LiveConnectConfig,
@@ -339,10 +340,10 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             new_chat_ctx = ctx
         else:
             raise ValueError("Invalid chat context")
-        gemini_ctx = _build_gemini_ctx(new_chat_ctx)
+        turns, _ = _build_gemini_ctx(new_chat_ctx, id(self))
         client_content = LiveClientContent(
             turn_complete=turn_complete,
-            turns=gemini_ctx,
+            turns=turns,
         )
         self._queue_msg(client_content)
 
