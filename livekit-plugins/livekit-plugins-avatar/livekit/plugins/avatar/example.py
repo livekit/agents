@@ -12,7 +12,7 @@ import numpy as np
 from dotenv import load_dotenv
 from livekit import api, rtc
 
-from .io import AudioFlushSentinel
+from .io import AudioFlushSentinel, AUDIO_RECEIVER_ATTR
 from .worker import AvatarWorker, MediaOptions
 
 # ensure LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET are set
@@ -216,6 +216,7 @@ async def entrypoint(room: rtc.Room, room_name: str):
                 agent=True,
             )
         )
+        .with_attributes({AUDIO_RECEIVER_ATTR: "true"})
         .to_jwt()
     )
     url = os.getenv("LIVEKIT_URL")

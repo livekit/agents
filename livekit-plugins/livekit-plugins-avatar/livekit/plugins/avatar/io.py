@@ -201,11 +201,16 @@ async def wait_for_participant(room: rtc.Room, attribute: str) -> rtc.RemotePart
     # Wait for participant to join
     future = asyncio.Future[rtc.RemoteParticipant]()
 
+    def on_attribute_changed(changed_attributes: dict, participant: rtc.Participant):
+        if attribute in changed_attributes and not future.done():
+            future.set_result(participant)
+
     def on_participant_join(participant: rtc.RemoteParticipant):
         if attribute in participant.attributes and not future.done():
             future.set_result(participant)
 
     room.on("participant_joined", on_participant_join)
+    room.on("participant_attributes_changed", on_attribute_changed)
     try:
         # check if participant already in room
         for participant in room.participants.values():
@@ -215,3 +220,4 @@ async def wait_for_participant(room: rtc.Room, attribute: str) -> rtc.RemotePart
         return await future
     finally:
         room.off("participant_joined", on_participant_join)
+        room.off("participant_attributes_changed", on_attribute_changed)
