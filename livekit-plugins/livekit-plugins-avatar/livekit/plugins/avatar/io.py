@@ -19,7 +19,7 @@ RPC_PLAYBACK_FINISHED = "__livekit_avatar_playback_finished"
 class AudioSink(agent_io.AudioSink):
     """
     AudioSink implementation that streams audio to a remote avatar worker using LiveKit DataStream.
-    Sends audio frames to a worker participant identified by the AUDIO_RECEIVER_ATTR attribute.
+    Sends audio frames to the first participant identified by the AUDIO_RECEIVER_ATTR attribute.
     """
 
     def __init__(self, room: rtc.Room):
@@ -69,19 +69,20 @@ class AudioSink(agent_io.AudioSink):
 
     async def flush(self) -> None:
         """Mark end of current audio segment"""
-        assert self._stream_writer is not None
+        super().flush()  # TODO: should the flush and clear_buffer async?
+
+        if self._stream_writer is None:
+            return
 
         # close the stream marking the end of the segment
         await self._stream_writer.aclose()
         self._stream_writer = None
 
-        # TODO: should the flush and clear_buffer async?
-        super().flush()
-
     async def clear_buffer(self) -> None:
         """Stop current stream immediately"""
         assert self._remote_participant is not None
 
+        self.__nb_playback_finished_needed = 0  # Is this needed?
         await self._room.local_participant.perform_rpc(
             destination_identity=self._remote_participant.identity,
             method=RPC_INTERRUPT_PLAYBACK,
@@ -89,7 +90,7 @@ class AudioSink(agent_io.AudioSink):
         )
 
 
-class AudioEndSentinel:
+class AudioFlushSentinel:
     pass
 
 
@@ -116,9 +117,19 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
     async def start(self) -> None:
         """
         Wait for sender participant to join and start receiving.
-        Also marks this participant as a worker.
+        Also marks this participant as a receiver.
+        Usage:
+            audio_receiver = AudioReceiver(room)
+            await audio_receiver.start()
+            async for frame in audio_receiver.stream():
+                if isinstance(frame, AudioFlushSentinel):
+                    # segment completed
+                    pass
+                else:
+                    # process frame
+                    pass
         """
-        # mark self as worker
+        # mark self as receiver
         await self._room.local_participant.set_attributes({AUDIO_RECEIVER_ATTR: "true"})
 
         self._remote_participant = await wait_for_participant(
@@ -168,7 +179,7 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
             ),
         )
 
-    async def stream(self) -> AsyncIterator[Union[rtc.AudioFrame, AudioEndSentinel]]:
+    async def stream(self) -> AsyncIterator[Union[rtc.AudioFrame, AudioFlushSentinel]]:
         while True:
             await self._stream_received.wait()
 
@@ -180,7 +191,7 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
                         sample_rate=reader.sample_rate,
                         num_channels=reader.num_channels,
                     )
-                yield AudioEndSentinel()
+                yield AudioFlushSentinel()
 
             self._stream_received.clear()
 
