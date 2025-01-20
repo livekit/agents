@@ -170,6 +170,8 @@ class RealtimeModel:
             self._api_key = None  # VertexAI does not require an API key
 
         else:
+            self._project_id = None
+            self._location = None
             if not self._api_key:
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
@@ -385,7 +387,8 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             ),
         )
 
-        self._chat_ctx.append(text=content.text, role="user")
+        # self._chat_ctx.append(text=content.text, role="user")
+        # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech
 
     def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
         if not self._is_interrupted:
@@ -396,7 +399,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                     transcript=content.text,
                 ),
             )
-            self._chat_ctx.append(text=content.text, role="assistant")
+            # self._chat_ctx.append(text=content.text, role="assistant")
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
