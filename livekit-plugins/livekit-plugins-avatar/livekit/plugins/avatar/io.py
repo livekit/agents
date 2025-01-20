@@ -67,7 +67,6 @@ class AudioSink(agent_io.AudioSink):
 
         if not self._stream_writer:
             # start new stream
-            # TODO: any better option to send the metadata?
             self._stream_writer = await self._room.local_participant.stream_file(
                 file_name=AUDIO_STREAM_NAME,
                 destination_identities=[self._remote_participant.identity],
@@ -96,7 +95,6 @@ class AudioSink(agent_io.AudioSink):
         """Stop current stream immediately"""
         assert self._remote_participant is not None
 
-        self.__nb_playback_finished_needed = 0  # Is this needed?
         await self._room.local_participant.perform_rpc(
             destination_identity=self._remote_participant.identity,
             method=RPC_INTERRUPT_PLAYBACK,

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Optional, Protocol
 
 from livekit import rtc
-from livekit.agents import JobContext, utils
+from livekit.agents import utils
 
 from .io import AudioFlushSentinel, AudioReceiver
 
@@ -53,7 +53,7 @@ class AvatarWorker:
 
         self._audio_receiver = AudioReceiver(room)
         self._audio_stream_received: asyncio.Event = asyncio.Event()
-        self._interrupted = False
+        self._playback_position = 0.0
 
         # Audio/video sources
         self._audio_source = rtc.AudioSource(
@@ -106,31 +106,31 @@ class AvatarWorker:
     async def _stream_video(self) -> None:
         """Process audio frames and generate synchronized video"""
 
-        playback_position = 0.0
         video_stream = await self._video_generator.stream()
         async for frame in video_stream:
             if isinstance(frame, AudioFlushSentinel):
                 # notify the agent that the audio has finished playing
                 self._audio_receiver.notify_playback_finished(
-                    playback_position=playback_position,
-                    interrupted=self._interrupted,
+                    playback_position=self._playback_position,
+                    interrupted=False,
                 )
-                self._interrupted = False
-                playback_position = 0.0
+                self._playback_position = 0.0
                 continue
 
             video_frame, audio_frame = frame
             self._av_sync.push(video_frame)
             if audio_frame:
                 self._av_sync.push(audio_frame)
-                playback_position += audio_frame.duration
+                self._playback_position += audio_frame.duration
 
     def _handle_interrupt(self) -> None:
-        # clear the audio queue
-        self._interrupted = True
+        # clear the audio queue, notify the agent the playback finished
         self._video_generator.clear_buffer()
-        # TODO: this may clear the audio end sentinel,
-        # do we still need a playback finished event for interrupted audios?
+        self._audio_receiver.notify_playback_finished(
+            playback_position=self._playback_position,
+            interrupted=True,
+        )
+        self._playback_position = 0.0
 
     async def aclose(self) -> None:
         await utils.aio.gracefully_cancel(self._video_gen_atask)
