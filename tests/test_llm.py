@@ -9,7 +9,7 @@ from typing import Annotated, Callable, Literal, Optional, Union
 import pytest
 from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
-from livekit.plugins import anthropic, google, openai
+from livekit.plugins import anthropic, openai
 from livekit.rtc import VideoBufferType, VideoFrame
 
 
@@ -48,22 +48,14 @@ class FncCtx(FunctionContext):
         await asyncio.sleep(60)
 
     # used to test arrays as arguments
-    @ai_callable(description="Schedule recurring events on selected days")
-    def schedule_meeting(
+    @ai_callable(description="Select currencies of a specific area")
+    def select_currencies(
         self,
-        meeting_days: Annotated[
+        currencies: Annotated[
             list[str],
             TypeInfo(
-                description="The days of the week on which meetings will occur",
-                choices=[
-                    "monday",
-                    "tuesday",
-                    "wednesday",
-                    "thursday",
-                    "friday",
-                    "saturday",
-                    "sunday",
-                ],
+                description="The currencies to select",
+                choices=["usd", "eur", "gbp", "jpy", "sek"],
             ),
         ],
     ) -> None: ...
@@ -99,8 +91,7 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #     )
     # ),
     pytest.param(lambda: anthropic.LLM(), id="anthropic"),
-    pytest.param(lambda: google.LLM(), id="google"),
-    pytest.param(lambda: google.LLM(vertexai=True), id="google-vertexai"),
+    pytest.param(lambda: openai.LLM.with_vertex(), id="openai.with_vertex"),
 ]
 
 
@@ -215,7 +206,7 @@ async def test_calls_arrays(llm_factory: Callable[[], llm.LLM]):
 
     stream = await _request_fnc_call(
         input_llm,
-        "can you schedule a meeting on monday and wednesday?",
+        "Can you select all currencies in Europe at once from given choices using function call `select_currencies`?",
         fnc_ctx,
         temperature=0.2,
     )
@@ -223,13 +214,13 @@ async def test_calls_arrays(llm_factory: Callable[[], llm.LLM]):
     await asyncio.gather(*[f.task for f in calls])
     await stream.aclose()
 
-    assert len(calls) == 1, "schedule_meeting should have been called only once"
+    assert len(calls) == 1, "select_currencies should have been called only once"
 
     call = calls[0]
-    meeting_days = call.call_info.arguments["meeting_days"]
-    assert len(meeting_days) == 2, "schedule_meeting should have 2 days"
-    assert "monday" in meeting_days and "wednesday" in meeting_days, (
-        "meeting_days should have monday, wednesday"
+    currencies = call.call_info.arguments["currencies"]
+    assert len(currencies) == 3, "select_currencies should have 3 currencies"
+    assert "eur" in currencies and "gbp" in currencies and "sek" in currencies, (
+        "select_currencies should have eur, gbp, sek"
     )
 
 

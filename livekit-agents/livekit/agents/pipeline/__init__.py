@@ -1,4 +1,4 @@
 from .chat_cli import ChatCLI
-from .pipeline2 import PipelineAgent
+from .pipeline_agent import PipelineAgent
 
 __all__ = ["ChatCLI", "PipelineAgent"]
