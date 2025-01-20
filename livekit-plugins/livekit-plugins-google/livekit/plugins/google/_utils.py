@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import inspect
 import json
-from typing import Any, Dict, List, Optional, get_args, get_origin
+from typing import Any, Dict, List, Optional, Union, cast, get_args, get_origin
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -11,7 +11,7 @@ from livekit.agents.llm.function_context import _is_optional_type
 
 from google.genai import types
 
-JSON_SCHEMA_TYPE_MAP = {
+JSON_SCHEMA_TYPE_MAP: dict[type, types.Type] = {
     str: "STRING",
     int: "INTEGER",
     float: "NUMBER",
@@ -23,14 +23,14 @@ JSON_SCHEMA_TYPE_MAP = {
 __all__ = ["_build_gemini_ctx", "_build_tools"]
 
 
-def _build_parameters(arguments: Dict[str, Any]) -> types.SchemaDict:
-    properties: Dict[str, types.SchemaDict] = {}
+def _build_parameters(arguments: Dict[str, Any]) -> types.Schema | None:
+    properties: Dict[str, types.Schema] = {}
     required: List[str] = []
 
     for arg_name, arg_info in arguments.items():
-        prop: types.SchemaDict = {}
+        prop = types.Schema()
         if arg_info.description:
-            prop["description"] = arg_info.description
+            prop.description = arg_info.description
 
         _, py_type = _is_optional_type(arg_info.type)
         origin = get_origin(py_type)
@@ -38,19 +38,19 @@ def _build_parameters(arguments: Dict[str, Any]) -> types.SchemaDict:
             item_type = get_args(py_type)[0]
             if item_type not in JSON_SCHEMA_TYPE_MAP:
                 raise ValueError(f"Unsupported type: {item_type}")
-            prop["type"] = "ARRAY"
-            prop["items"] = {"type": JSON_SCHEMA_TYPE_MAP[item_type]}
+            prop.type = "ARRAY"
+            prop.items = types.Schema(type=JSON_SCHEMA_TYPE_MAP[item_type])
 
             if arg_info.choices:
-                prop["items"]["enum"] = arg_info.choices
+                prop.items.enum = arg_info.choices
         else:
             if py_type not in JSON_SCHEMA_TYPE_MAP:
                 raise ValueError(f"Unsupported type: {py_type}")
 
-            prop["type"] = JSON_SCHEMA_TYPE_MAP[py_type]
+            prop.type = JSON_SCHEMA_TYPE_MAP[py_type]
 
             if arg_info.choices:
-                prop["enum"] = arg_info.choices
+                prop.enum = arg_info.choices
                 if py_type is int:
                     raise ValueError(
                         f"Parameter '{arg_info.name}' uses integer choices, not supported by this model."
@@ -62,10 +62,9 @@ def _build_parameters(arguments: Dict[str, Any]) -> types.SchemaDict:
             required.append(arg_name)
 
     if properties:
-        parameters: types.SchemaDict = {"type": "OBJECT", "properties": properties}
-
+        parameters = types.Schema(type="OBJECT", properties=properties)
         if required:
-            parameters["required"] = required
+            parameters.required = required
 
         return parameters
 
@@ -77,37 +76,48 @@ def _build_tools(fnc_ctx: Any) -> List[types.FunctionDeclaration]:
     for fnc_info in fnc_ctx.ai_functions.values():
         parameters = _build_parameters(fnc_info.arguments)
 
-        func_decl: types.FunctionDeclaration = {
-            "name": fnc_info.name,
-            "description": fnc_info.description,
-            "parameters": parameters,
-        }
+        func_decl = types.FunctionDeclaration(
+            name=fnc_info.name,
+            description=fnc_info.description,
+            parameters=parameters,
+        )
 
         function_declarations.append(func_decl)
     return function_declarations
 
 
-def _build_gemini_ctx(chat_ctx: llm.ChatContext, cache_key: Any) -> Dict[str, Any]:
-    ctx: Dict[str, Any] = {}
-    turns: List[types.Content] = []
+def _build_gemini_ctx(
+    chat_ctx: llm.ChatContext, cache_key: Any
+) -> tuple[
+    Union[types.ContentListUnion, types.ContentListUnionDict], Optional[types.Part]
+]:
+    turns: list[types.Content] = []
     current_content: Optional[types.Content] = None
+    system_instruction: Optional[types.Part] = None
+    current_role: Optional[str] = None
 
     for msg in chat_ctx.messages:
         if msg.role == "system":
             if isinstance(msg.content, str):
-                ctx["system_instruction"] = msg.content
+                system_instruction = types.Part(text=msg.content)
             continue
-        elif msg.role == "assistant":
+
+        if msg.role == "assistant":
             role = "model"
-        elif msg.role == "tool" or msg.role == "user":
+        elif msg.role == "tool":
+            role = "user"
+        else:
             role = "user"
 
-        # Start new turn if role changes
-        if not current_content or current_content.role != role:
+        # Start new turn if role changes or if none is set
+        if current_content is None or current_role != role:
             current_content = types.Content(role=role, parts=[])
             turns.append(current_content)
+            current_role = role
 
-        # Add any function calls
+        if current_content.parts is None:
+            current_content.parts = []
+
         if msg.tool_calls:
             for fnc in msg.tool_calls:
                 current_content.parts.append(
@@ -120,14 +130,15 @@ def _build_gemini_ctx(chat_ctx: llm.ChatContext, cache_key: Any) -> Dict[str, An
                     )
                 )
 
-        # If tool message, it's a function response
         if msg.role == "tool":
             if msg.content:
                 if isinstance(msg.content, dict):
                     current_content.parts.append(
                         types.Part(
                             function_response=types.FunctionResponse(
-                                id=msg.tool_call_id, name=msg.name, response=msg.content
+                                id=msg.tool_call_id,
+                                name=msg.name,
+                                response=msg.content,
                             )
                         )
                     )
@@ -142,7 +153,6 @@ def _build_gemini_ctx(chat_ctx: llm.ChatContext, cache_key: Any) -> Dict[str, An
                         )
                     )
         else:
-            # Otherwise, it's plain text (or JSON/stringified dict/list)
             if msg.content:
                 if isinstance(msg.content, str):
                     current_content.parts.append(types.Part(text=msg.content))
@@ -159,8 +169,8 @@ def _build_gemini_ctx(chat_ctx: llm.ChatContext, cache_key: Any) -> Dict[str, An
                                 _build_gemini_image_part(item, cache_key)
                             )
 
-    ctx["turns"] = turns
-    return ctx
+    ctx = cast(Union[types.ContentListUnion, types.ContentListUnionDict], turns)
+    return ctx, system_instruction
 
 
 def _build_gemini_image_part(image: llm.ChatImage, cache_key: Any) -> types.Part:
@@ -172,7 +182,9 @@ def _build_gemini_image_part(image: llm.ChatImage, cache_key: Any) -> types.Part
         else:
             base64_data = image.image
 
-        return types.Part.from_bytes(data=base64_data, mime_type="image/jpeg")
+        return types.Part.from_bytes(
+            data=cast(bytes, base64_data), mime_type="image/jpeg"
+        )
 
     elif isinstance(image.image, rtc.VideoFrame):
         if cache_key not in image._cache:
@@ -189,3 +201,4 @@ def _build_gemini_image_part(image: llm.ChatImage, cache_key: Any) -> types.Part
         return types.Part.from_bytes(
             data=image._cache[cache_key], mime_type="image/jpeg"
         )
+    raise ValueError(f"Unsupported image type: {type(image.image)}")

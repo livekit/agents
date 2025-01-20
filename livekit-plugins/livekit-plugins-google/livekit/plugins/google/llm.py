@@ -223,9 +223,7 @@ class LLMStream(llm.LLMStream):
 
         try:
             opts: dict[str, Any] = dict()
-            ctx = _build_gemini_ctx(self._chat_ctx, id(self))
-            if ctx.get("system_instruction"):
-                opts["system_instruction"] = ctx.get("system_instruction")
+            turns, system_instruction = _build_gemini_ctx(self._chat_ctx, id(self))
 
             if self._fnc_ctx and len(self._fnc_ctx.ai_functions) > 0:
                 functions = _build_tools(self._fnc_ctx)
@@ -275,11 +273,12 @@ class LLMStream(llm.LLMStream):
                 top_k=self._top_k,
                 presence_penalty=self._presence_penalty,
                 frequency_penalty=self._frequency_penalty,
+                system_instruction=system_instruction,
                 **opts,
             )
             async for response in self._client.aio.models.generate_content_stream(
                 model=self._model,
-                contents=ctx.get("turns"),
+                contents=turns,
                 config=config,
             ):
                 response_id = utils.shortuuid()
@@ -332,7 +331,7 @@ class LLMStream(llm.LLMStream):
             ) from e
 
     def _parse_part(
-        self, id: str, index: int, part: types.ContentPart
+        self, id: str, index: int, part: types.Part
     ) -> llm.ChatChunk | None:
         if part.function_call:
             return self._try_build_function(id, index, part)
@@ -348,8 +347,12 @@ class LLMStream(llm.LLMStream):
         )
 
     def _try_build_function(
-        self, id: str, index: int, part: types.ContentPart
+        self, id: str, index: int, part: types.Part
     ) -> llm.ChatChunk | None:
+        if part.function_call is None:
+            logger.warning("gemini llm: no function call in the response")
+            return None
+
         if part.function_call.id is None:
             part.function_call.id = utils.shortuuid()
 

@@ -11,14 +11,19 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 
-from google import genai  # type: ignore
-from google.genai.types import (  # type: ignore
+from google import genai
+from google.genai._api_client import HttpOptions
+from google.genai.types import (
+    Content,
     FunctionResponse,
-    GenerationConfigDict,
+    GenerationConfig,
     LiveClientToolResponse,
-    LiveConnectConfigDict,
+    LiveConnectConfig,
+    Modality,
+    Part,
     PrebuiltVoiceConfig,
     SpeechConfig,
+    Tool,
     VoiceConfig,
 )
 
@@ -26,7 +31,6 @@ from ...log import logger
 from .api_proto import (
     ClientEvents,
     LiveAPIModels,
-    ResponseModality,
     Voice,
     _build_tools,
 )
@@ -52,7 +56,7 @@ class GeminiContent:
     audio: list[rtc.AudioFrame]
     text_stream: AsyncIterable[str]
     audio_stream: AsyncIterable[rtc.AudioFrame]
-    content_type: Literal["text", "audio"]
+    content_type: Literal["TEXT", "AUDIO"]
 
 
 @dataclass
@@ -65,7 +69,7 @@ class ModelOptions:
     model: LiveAPIModels | str
     api_key: str | None
     voice: Voice | str
-    response_modalities: ResponseModality
+    response_modalities: list[Modality] | None
     vertexai: bool
     project: str | None
     location: str | None
@@ -76,18 +80,18 @@ class ModelOptions:
     top_k: int | None
     presence_penalty: float | None
     frequency_penalty: float | None
-    instructions: str
+    instructions: Content | None
 
 
 class RealtimeModel:
     def __init__(
         self,
         *,
-        instructions: str = "",
+        instructions: str | None = None,
         model: LiveAPIModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
-        modalities: ResponseModality = "AUDIO",
+        modalities: list[Modality] = ["AUDIO"],
         vertexai: bool = False,
         project: str | None = None,
         location: str | None = None,
@@ -106,7 +110,7 @@ class RealtimeModel:
         Args:
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
             api_key (str or None, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
-            modalities (ResponseModality): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
+            modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
             model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
@@ -136,6 +140,11 @@ class RealtimeModel:
         if self._api_key is None and not self._vertexai:
             raise ValueError("GOOGLE_API_KEY is not set")
 
+        if instructions:
+            instructions_content = Content(parts=[Part(text=instructions)])
+        else:
+            instructions_content = None
+
         self._rt_sessions: list[GeminiRealtimeSession] = []
         self._opts = ModelOptions(
             model=model,
@@ -152,7 +161,7 @@ class RealtimeModel:
             top_k=top_k,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
-            instructions=instructions,
+            instructions=instructions_content,
         )
 
     @property
@@ -212,12 +221,11 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         tools = []
         if self._fnc_ctx is not None:
             functions = _build_tools(self._fnc_ctx)
-            tools.append({"function_declarations": functions})
+            tools.append(Tool(function_declarations=functions))
 
-        self._config = LiveConnectConfigDict(
-            model=self._opts.model,
+        self._config = LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
-            generation_config=GenerationConfigDict(
+            generation_config=GenerationConfig(
                 candidate_count=self._opts.candidate_count,
                 temperature=self._opts.temperature,
                 max_output_tokens=self._opts.max_output_tokens,
@@ -237,7 +245,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             tools=tools,
         )
         self._client = genai.Client(
-            http_options={"api_version": "v1alpha"},
+            http_options=HttpOptions(api_version="v1alpha"),
             api_key=self._opts.api_key,
             vertexai=self._opts.vertexai,
             project=self._opts.project,
