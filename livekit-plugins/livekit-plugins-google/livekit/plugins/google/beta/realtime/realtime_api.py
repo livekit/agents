@@ -110,7 +110,7 @@ class RealtimeModel:
         enable_user_audio_transcription: bool = True,
         enable_agent_audio_transcription: bool = True,
         vertexai: bool = False,
-        project_id: str | None = None,
+        project: str | None = None,
         location: str | None = None,
         candidate_count: int = 1,
         temperature: float | None = None,
@@ -141,7 +141,7 @@ class RealtimeModel:
             enable_agent_audio_transcription (bool, optional): Whether to enable agent audio transcription. Defaults to True
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
-                project_id (str or None, optional): The project id to use for the API. Defaults to None. (for vertexai)
+                project (str or None, optional): The project id to use for the API. Defaults to None. (for vertexai)
                 location (str or None, optional): The location to use for the API. Defaults to None. (for vertexai)
             candidate_count (int, optional): The number of candidate responses to generate. Defaults to 1.
             top_p (float, optional): The top-p value for response generation
@@ -160,17 +160,17 @@ class RealtimeModel:
         self._model = model
         self._loop = loop or asyncio.get_event_loop()
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
-        self._project_id = project_id or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        self._project = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
         self._location = location or os.environ.get("GOOGLE_CLOUD_LOCATION")
         if vertexai:
-            if not self._project_id or not self._location:
+            if not self._project or not self._location:
                 raise ValueError(
                     "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"
                 )
             self._api_key = None  # VertexAI does not require an API key
 
         else:
-            self._project_id = None
+            self._project = None
             self._location = None
             if not self._api_key:
                 raise ValueError(
@@ -190,7 +190,7 @@ class RealtimeModel:
             enable_agent_audio_transcription=enable_agent_audio_transcription,
             response_modalities=modalities,
             vertexai=vertexai,
-            project=self._project_id,
+            project=self._project,
             location=self._location,
             candidate_count=candidate_count,
             temperature=temperature,
