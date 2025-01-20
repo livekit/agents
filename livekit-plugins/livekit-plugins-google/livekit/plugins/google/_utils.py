@@ -179,12 +179,15 @@ def _build_gemini_image_part(image: llm.ChatImage, cache_key: Any) -> types.Part
         if image.image.startswith("data:image/jpeg;base64,"):
             # Extract the base64 part after the comma
             base64_data = image.image.split(",", 1)[1]
-        else:
-            base64_data = image.image
+            try:
+                image_bytes = base64.b64decode(base64_data)
+            except base64.binascii.Error as e:
+                raise ValueError("Invalid base64 data in image URL") from e
 
-        return types.Part.from_bytes(
-            data=cast(bytes, base64_data), mime_type="image/jpeg"
-        )
+            return types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+        else:
+            # Assume it's a regular URL
+            return types.Part.from_uri(file_uri=image.image, mime_type="image/jpeg")
 
     elif isinstance(image.image, rtc.VideoFrame):
         if cache_key not in image._cache:

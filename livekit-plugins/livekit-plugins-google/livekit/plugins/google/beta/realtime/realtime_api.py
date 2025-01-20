@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import os
 from dataclasses import dataclass
@@ -279,9 +278,8 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._fnc_ctx = value
 
     def _push_audio(self, frame: rtc.AudioFrame) -> None:
-        data = base64.b64encode(frame.data).decode("utf-8")
         realtime_input = LiveClientRealtimeInput(
-            media_chunks=[Blob(data=data, mime_type="audio/pcm")],
+            media_chunks=[Blob(data=frame.data.tobytes(), mime_type="audio/pcm")],
         )
         self._queue_msg(realtime_input)
 
