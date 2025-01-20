@@ -152,15 +152,11 @@ class SpeechStream(stt.SpeechStream):
             # this function basically convert the queue into a async generator
             async def input_generator():
                 try:
-                    print("input channel closed", self._input_ch.closed)
                     async for frame in self._input_ch:
                         if isinstance(frame, rtc.AudioFrame):
                             await stream.input_stream.send_audio_event(
                                 audio_chunk=frame.data.tobytes()
                             )
-                            print("sent frame")  # tempory log
-
-                    print("sent end stream")  # temporary log
                     await stream.input_stream.end_stream()
 
                 except Exception as e:
