@@ -11,7 +11,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import google, openai, silero
+from livekit.plugins import google, silero
 
 load_dotenv()
 logger = logging.getLogger("voice-assistant")
@@ -54,7 +54,7 @@ async def entrypoint(ctx: JobContext):
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=google.STT(),
-        llm=openai.LLM.with_vertex(model="google/gemini-2.0-flash-exp"),
+        llm=google.LLM(),
         tts=google.TTS(
             voice_name="en-US-Journey-D",
         ),
