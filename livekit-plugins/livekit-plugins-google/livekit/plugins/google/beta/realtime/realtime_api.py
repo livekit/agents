@@ -124,6 +124,13 @@ class RealtimeModel:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
 
+        Environment Requirements:
+        - For VertexAI: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the service account key file.
+        The Google Cloud project and location can be set via `project` and `location` arguments or the environment variables
+        `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. By default, the project is inferred from the service account key file,
+        and the location defaults to "us-central1".
+        - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
+
         Args:
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
             api_key (str or None, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
@@ -153,12 +160,12 @@ class RealtimeModel:
         self._model = model
         self._loop = loop or asyncio.get_event_loop()
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
-        self._project_id = project_id or os.environ.get("GOOGLE_PROJECT_ID")
-        self._location = location or os.environ.get("GOOGLE_LOCATION")
+        self._project_id = project_id or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        self._location = location or os.environ.get("GOOGLE_CLOUD_LOCATION")
         if vertexai:
             if not self._project_id or not self._location:
                 raise ValueError(
-                    "Project and location are required for VertexAI either via project and location or GOOGLE_PROJECT_ID and GOOGLE_LOCATION environment variables"
+                    "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"
                 )
             self._api_key = None  # VertexAI does not require an API key
 
@@ -168,10 +175,9 @@ class RealtimeModel:
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
                 )
 
-        if instructions:
-            instructions_content = Content(parts=[Part(text=instructions)])
-        else:
-            instructions_content = None
+        instructions_content = (
+            Content(parts=[Part(text=instructions)]) if instructions else None
+        )
 
         self._rt_sessions: list[GeminiRealtimeSession] = []
         self._opts = ModelOptions(
