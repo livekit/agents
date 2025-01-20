@@ -16,8 +16,8 @@ async def entrypoint(job: JobContext):
     logger.info("starting tts example agent")
 
     tts = cartesia.TTS(
-        speed="fastest",
-        emotion=["surprise:highest"],
+        # speed="fastest",
+        # emotion=["surprise:highest"],
     )
 
     source = rtc.AudioSource(tts.sample_rate, tts.num_channels)
@@ -29,14 +29,28 @@ async def entrypoint(job: JobContext):
     publication = await job.room.local_participant.publish_track(track, options)
     await publication.wait_for_subscription()
 
-    logger.info('Saying "Hello!"')
-    async for output in tts.synthesize("Hello I hope you are having a great day."):
-        await source.capture_frame(output.frame)
+    stream = tts.stream()
 
-    await asyncio.sleep(4)
-    logger.info('Saying "Goodbye."')
-    async for output in tts.synthesize("Goodbye I hope to see you again soon."):
-        await source.capture_frame(output.frame)
+    async def _playback_task():
+        async for audio in stream:
+            await source.capture_frame(audio.frame)
+
+    task = asyncio.create_task(_playback_task())
+
+    text = "hello from Cartesia. I hope you are having a great day."
+
+    # split into two word chunks to simulate LLM streaming
+    words = text.split()
+    for i in range(0, len(words), 2):
+        chunk = " ".join(words[i : i + 2])
+        if chunk:
+            logger.info(f'pushing chunk: "{chunk} "')
+            stream.push_text(chunk + " ")
+
+    # Mark end of input segment
+    stream.flush()
+    stream.end_input()
+    await asyncio.gather(task)
 
 
 if __name__ == "__main__":
