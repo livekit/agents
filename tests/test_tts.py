@@ -148,7 +148,7 @@ async def test_stream(tts_factory):
 
     seg0_id, seg1_id = segment_ids
 
-    # Each segment has at least one final frame
+    # Each segment should have at least one final frame
     seg0_final_indices = [
         i for i, e in enumerate(events) if e.segment_id == seg0_id and e.is_final
     ]
