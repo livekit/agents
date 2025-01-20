@@ -280,7 +280,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         data = base64.b64encode(frame.data).decode("utf-8")
         self._queue_msg({"mime_type": "audio/pcm", "data": data})
 
-    def _queue_msg(self, msg: dict) -> None:
+    def _queue_msg(self, msg: ClientEvents) -> None:
         self._send_ch.send_nowait(msg)
 
     def chat_ctx_copy(self) -> llm.ChatContext:

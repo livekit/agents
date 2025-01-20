@@ -284,7 +284,7 @@ class LLMStream(llm.LLMStream):
                 response_id = utils.shortuuid()
                 if response.prompt_feedback:
                     raise APIStatusError(
-                        response.prompt_feedback,
+                        response.prompt_feedback.json(),
                         retryable=False,
                         request_id=response_id,
                     )
@@ -317,9 +317,9 @@ class LLMStream(llm.LLMStream):
                         llm.ChatChunk(
                             request_id=response_id,
                             usage=llm.CompletionUsage(
-                                completion_tokens=usage.candidates_token_count,
-                                prompt_tokens=usage.prompt_token_count,
-                                total_tokens=usage.total_token_count,
+                                completion_tokens=usage.candidates_token_count or 0,
+                                prompt_tokens=usage.prompt_token_count or 0,
+                                total_tokens=usage.total_token_count or 0,
                             ),
                         )
                     )
@@ -351,6 +351,10 @@ class LLMStream(llm.LLMStream):
     ) -> llm.ChatChunk | None:
         if part.function_call is None:
             logger.warning("gemini llm: no function call in the response")
+            return None
+
+        if part.function_call.name is None:
+            logger.warning("gemini llm: no function name in the response")
             return None
 
         if part.function_call.id is None:
