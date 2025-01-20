@@ -14,9 +14,11 @@ from livekit.agents.llm.function_context import _create_ai_function_info
 from google import genai
 from google.genai._api_client import HttpOptions
 from google.genai.types import (
+    Blob,
     Content,
     FunctionResponse,
     GenerationConfig,
+    LiveClientRealtimeInput,
     LiveClientToolResponse,
     LiveConnectConfig,
     Modality,
@@ -56,7 +58,7 @@ class GeminiContent:
     audio: list[rtc.AudioFrame]
     text_stream: AsyncIterable[str]
     audio_stream: AsyncIterable[rtc.AudioFrame]
-    content_type: Literal["TEXT", "AUDIO"]
+    content_type: Literal["text", "audio"]
 
 
 @dataclass
@@ -278,7 +280,10 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
 
     def _push_audio(self, frame: rtc.AudioFrame) -> None:
         data = base64.b64encode(frame.data).decode("utf-8")
-        self._queue_msg({"mime_type": "audio/pcm", "data": data})
+        realtime_input = LiveClientRealtimeInput(
+            media_chunks=[Blob(data=data, mime_type="audio/pcm")],
+        )
+        self._queue_msg(realtime_input)
 
     def _queue_msg(self, msg: ClientEvents) -> None:
         self._send_ch.send_nowait(msg)
@@ -332,7 +337,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                             audio=[],
                             text_stream=text_stream,
                             audio_stream=audio_stream,
-                            content_type=self._opts.response_modalities,
+                            content_type="audio",
                         )
                         self.emit("response_content_added", content)
 
