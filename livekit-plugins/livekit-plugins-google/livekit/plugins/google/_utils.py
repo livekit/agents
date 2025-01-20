@@ -181,7 +181,7 @@ def _build_gemini_image_part(image: llm.ChatImage, cache_key: Any) -> types.Part
             base64_data = image.image.split(",", 1)[1]
             try:
                 image_bytes = base64.b64decode(base64_data)
-            except base64.binascii.Error as e:
+            except Exception as e:
                 raise ValueError("Invalid base64 data in image URL") from e
 
             return types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
