@@ -16,6 +16,8 @@ from livekit import rtc
 
 from .. import llm, stt
 
+from ..log import logger
+
 STTNode = Callable[
     [AsyncIterable[rtc.AudioFrame]],
     Union[Awaitable[Optional[AsyncIterable[stt.SpeechEvent]]]],
@@ -61,7 +63,7 @@ class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
         self.__capturing = False
         self.__playback_finished_event = asyncio.Event()
 
-        self.__nb_playback_finished_needed = 0
+        self.__playback_segments_count = 0
         self.__playback_finished_count = 0
 
     def on_playback_finished(
@@ -71,9 +73,13 @@ class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
         Developers building audio sinks must call this method when a playback/segment is finished.
         Segments are segmented by calls to flush() or clear_buffer()
         """
-        self.__nb_playback_finished_needed = max(
-            0, self.__nb_playback_finished_needed - 1
-        )
+
+        if self.__playback_finished_count >= self.__playback_segments_count:
+            logger.warning(
+                "playback_finished called more times than playback segments were captured"
+            )
+            return
+
         self.__playback_finished_count += 1
         self.__playback_finished_event.set()
 
@@ -91,11 +97,9 @@ class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
             PlaybackFinishedEvent: The event that was emitted when the audio finished playing out
             (only the last segment information)
         """
-        needed = self.__nb_playback_finished_needed
-        initial_count = self.__playback_finished_count
-        target_count = initial_count + needed
+        target = self.__playback_segments_count
 
-        while self.__playback_finished_count < target_count:
+        while self.__playback_finished_count < target:
             await self.__playback_finished_event.wait()
             self.__playback_finished_event.clear()
 
@@ -111,18 +115,16 @@ class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
         """Capture an audio frame for playback, frames can be pushed faster than real-time"""
         if not self.__capturing:
             self.__capturing = True
-            self.__nb_playback_finished_needed += 1
+            self.__playback_segments_count += 1
 
     @abstractmethod
     def flush(self) -> None:
         """Flush any buffered audio, marking the current playback/segment as complete"""
-        if self.__capturing:
-            self.__capturing = False
+        self.__capturing = False
 
     @abstractmethod
     def clear_buffer(self) -> None:
         """Clear the buffer, stopping playback immediately"""
-        ...
 
 
 class TextSink(ABC):

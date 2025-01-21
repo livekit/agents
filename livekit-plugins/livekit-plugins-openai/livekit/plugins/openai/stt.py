@@ -138,7 +138,6 @@ class STT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
-            print("buffer", buffer)
             config = self._sanitize_options(language=language)
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
             resp = await self._client.audio.transcriptions.create(
