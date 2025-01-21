@@ -83,7 +83,7 @@ class WhisperSTT(stt.STT):
     @classmethod
     def load(cls, opts: WhisperSTTOptions | None = None) -> "WhisperSTT":
         """
-        Load and initialize the Silero VAD model.
+        Load and initialize the Whisper model.
 
         This method loads the Whisper model and prepares it for inference. When options are not provided,
         sane defaults are used.
