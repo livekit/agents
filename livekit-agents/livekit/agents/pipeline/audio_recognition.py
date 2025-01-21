@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, AsyncIterable, Literal, Protocol
+from typing import AsyncIterable, Protocol
 
 from livekit import rtc
 
@@ -10,9 +10,6 @@ from ..debug import tracing
 from ..log import logger
 from ..utils import aio
 from . import io
-
-if TYPE_CHECKING:
-    from .pipeline2 import PipelineAgent
 
 
 class _TurnDetector(Protocol):
@@ -23,50 +20,39 @@ class _TurnDetector(Protocol):
     async def predict_end_of_turn(self, chat_ctx: llm.ChatContext) -> float: ...
 
 
-EventTypes = Literal[
-    "start_of_speech",
-    "vad_inference_done",
-    "end_of_speech",
-    "interim_transcript",
-    "final_transcript",
-    "end_of_turn",
-]
+class RecognitionHooks(Protocol):
+    def on_start_of_speech(self, ev: vad.VADEvent) -> None: ...
+    def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
+    def on_end_of_speech(self, ev: vad.VADEvent) -> None: ...
+    def on_interim_transcript(self, ev: stt.SpeechEvent) -> None: ...
+    def on_final_transcript(self, ev: stt.SpeechEvent) -> None: ...
+    def on_end_of_turn(self, new_transcript: str) -> None: ...
+
+    def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
 
-class AudioRecognition(rtc.EventEmitter[EventTypes]):
-    """
-    Audio recognition part of the PipelineAgent.
-    The class is always instantiated but no tasks may be running if STT/VAD is disabled
-
-    This class is also responsible for the end of turn detection.
-    """
-
+class AudioRecognition:
     UNLIKELY_END_OF_TURN_EXTRA_DELAY = 6.0
 
     def __init__(
         self,
         *,
-        agent: PipelineAgent,
-        stt: io.STTNode,
+        hooks: RecognitionHooks,
+        stt: io.STTNode | None,
         vad: vad.VAD | None,
         turn_detector: _TurnDetector | None,
         min_endpointing_delay: float,
-        chat_ctx: llm.ChatContext,
-        loop: asyncio.AbstractEventLoop,
     ) -> None:
-        super().__init__()
-        self._agent = agent
+        self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
         self._stt_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
         self._audio_input: io.AudioStream | None = None
         self._min_endpointing_delay = min_endpointing_delay
-        self._chat_ctx = chat_ctx
-        self._loop = loop
+        self._turn_detector = turn_detector
         self._stt = stt
         self._vad = vad
-        self._turn_detector = turn_detector
 
         self._speaking = False
         self._audio_transcript = ""
@@ -87,28 +73,18 @@ class AudioRecognition(rtc.EventEmitter[EventTypes]):
         self.update_stt(self._stt)
         self.update_vad(self._vad)
 
-    @property
-    def audio_input(self) -> io.AudioStream | None:
-        return self._audio_input
+    def stop(self) -> None:
+        self.update_stt(None)
+        self.update_vad(None)
 
-    @audio_input.setter
-    def audio_input(self, audio_input: io.AudioStream | None) -> None:
-        self._audio_input = audio_input
-        self.update_stt(self._stt)
-        self.update_vad(self._vad)
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if self._stt_ch is not None:
+            self._stt_ch.send_nowait(frame)
 
-        if self._audio_input and self._audio_input_atask is None:
-            self._audio_input_atask = asyncio.create_task(
-                self._audio_input_task(self._audio_input)
-            )
-        elif self._audio_input_atask is not None:
-            self._audio_input_atask.cancel()
-            self._audio_input_atask = None
+        if self._vad_ch is not None:
+            self._vad_ch.send_nowait(frame)
 
     async def aclose(self) -> None:
-        if self._audio_input_atask is not None:
-            await aio.gracefully_cancel(self._audio_input_atask)
-
         if self._stt_atask is not None:
             await aio.gracefully_cancel(self._stt_atask)
 
@@ -144,7 +120,7 @@ class AudioRecognition(rtc.EventEmitter[EventTypes]):
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-            self.emit("final_transcript", ev)
+            self._hooks.on_final_transcript(ev)
             transcript = ev.alternatives[0].text
             if not transcript:
                 return
@@ -166,13 +142,14 @@ class AudioRecognition(rtc.EventEmitter[EventTypes]):
             self._audio_transcript = self._audio_transcript.lstrip()
 
             if not self._speaking:
-                self._run_eou_detection(self._agent.chat_ctx)
+                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                self._run_eou_detection(chat_ctx)
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-            self.emit("interim_transcript", ev)
+            self._hooks.on_interim_transcript(ev)
 
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
-            self.emit("start_of_speech", ev)
+            self._hooks.on_start_of_speech(ev)
             self._speaking = True
 
             if self._end_of_turn_task is not None:
@@ -180,21 +157,23 @@ class AudioRecognition(rtc.EventEmitter[EventTypes]):
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._vad_graph.plot(ev.timestamp, ev.probability)
-            self.emit("vad_inference_done", ev)
+            self._hooks.on_vad_inference_done(ev)
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
-            self.emit("end_of_speech", ev)
+            self._hooks.on_end_of_speech(ev)
             self._speaking = False
 
             if not self._speaking:
-                self._run_eou_detection(self._agent.chat_ctx)
+                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                self._run_eou_detection(chat_ctx)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
         if not self._audio_transcript:
             return
 
-        chat_ctx = self._chat_ctx.copy()
-        chat_ctx.append(role="user", text=self._audio_transcript)
+        # TODO
+        # chat_ctx = self._agent._chat_ctx.copy()
+        # chat_ctx.append(role="user", text=self._audio_transcript)
         turn_detector = self._turn_detector
 
         @utils.log_exceptions(logger=logger)
@@ -218,7 +197,7 @@ class AudioRecognition(rtc.EventEmitter[EventTypes]):
             tracing.Tracing.log_event(
                 "end of user turn", {"transcript": self._audio_transcript}
             )
-            self.emit("end_of_turn", self._audio_transcript)
+            self._hooks.on_end_of_turn(self._audio_transcript)
             self._audio_transcript = ""
 
         if self._end_of_turn_task is not None:
@@ -244,9 +223,9 @@ class AudioRecognition(rtc.EventEmitter[EventTypes]):
 
         if isinstance(node, AsyncIterable):
             async for ev in node:
-                assert isinstance(
-                    ev, stt.SpeechEvent
-                ), "STT node must yield SpeechEvent"
+                assert isinstance(ev, stt.SpeechEvent), (
+                    "STT node must yield SpeechEvent"
+                )
                 await self._on_stt_event(ev)
 
     async def _vad_task(
@@ -269,11 +248,3 @@ class AudioRecognition(rtc.EventEmitter[EventTypes]):
         finally:
             await stream.aclose()
             await aio.gracefully_cancel(forward_task)
-
-    async def _audio_input_task(self, audio_input: io.AudioStream) -> None:
-        async for frame in audio_input:
-            if self._stt_ch is not None:
-                self._stt_ch.send_nowait(frame)
-
-            if self._vad_ch is not None:
-                self._vad_ch.send_nowait(frame)

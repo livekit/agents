@@ -24,14 +24,14 @@ from ..metrics import LLMMetrics
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..utils import aio
 from . import function_context
-from .chat_context import ChatContext, ChatRole
+from .chat_context import ChatContext
 
 
 @dataclass
 class ChoiceDelta:
-    role: ChatRole
+    # role: ChatRole
     content: str | None = None
-    tool_calls: list[function_context.FunctionCallInfo] | None = None
+    # tool_calls: list[function_context.FunctionCallInfo] | None = None
 
 
 @dataclass

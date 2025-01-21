@@ -6,7 +6,7 @@ from typing import AsyncIterable, Protocol, Tuple, runtime_checkable
 
 from livekit import rtc
 
-from ..llm import ChatChunk, ChatContext, FunctionCallInfo, FunctionContext
+from ..llm import ChatChunk, ChatContext, FunctionContext
 from ..utils import aio
 from . import io
 

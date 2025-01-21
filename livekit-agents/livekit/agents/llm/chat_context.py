@@ -11,14 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 from __future__ import annotations
 
 from typing import (
     Literal,
+    Optional,
+    Union,
 )
 
 from livekit import rtc
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing_extensions import TypeAlias
+
+from .. import utils
 
 
 class ImageContent(BaseModel):
@@ -54,15 +60,17 @@ class ImageContent(BaseModel):
     ```
     """
 
-    image: str | rtc.VideoFrame
+    type: Literal["image_content"] = Field(default="image_content")
+
+    image: Union[str, rtc.VideoFrame]
     """
     Either a string URL or a VideoFrame object
     """
-    inference_width: int | None = None
+    inference_width: Optional[int] = None
     """
     Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
     """
-    inference_height: int | None = None
+    inference_height: Optional[int] = None
     """
     Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
     """
@@ -75,39 +83,45 @@ class ImageContent(BaseModel):
 
 
 class AudioContent(BaseModel):
+    type: Literal["audio_content"] = Field(default="audio_content")
     frame: list[rtc.AudioFrame]
-    transcript: str | None = None
+    transcript: Optional[str] = None
+
+
+class ChatMessage(BaseModel):
+    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+    type: Literal["message"] = "message"
+    role: Literal["developer", "system", "user", "assistant"]
+    content: list[Union[str, ImageContent, AudioContent]]
+    hash: Optional[bytes] = None
 
 
 class FunctionCall(BaseModel):
-    type: Literal["function_call"]
+    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+    type: Literal["function_call"] = "function_call"
     call_id: str
-    name: str
     arguments: str
+    name: str
 
 
 class FunctionCallOutput(BaseModel):
-    type: Literal["function_call_output"]
+    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+    type: Literal["function_call_output"] = Field(default="function_call_output")
     call_id: str
     output: str
     is_error: bool
 
 
-class ChatMessage(BaseModel):
-    type: Literal["message"]
-    role: Literal["developer", "system", "user", "assistant"]
-    content: list[str | ImageContent | AudioContent]
-    hash: bytes | None = None
-
-
-class ChatItem(BaseModel):
-    id: str
-    content: list[ChatMessage | FunctionCall | FunctionCallOutput]
+ChatItem: TypeAlias = Union[ChatMessage, FunctionCall, FunctionCallOutput]
 
 
 class ChatContext:
-    def __init__(self, items: list[ChatItem] | None = None):
-        self._items: list[ChatItem] = items or []
+    def __init__(self, items: list[ChatItem]):
+        self._items: list[ChatItem] = items
+
+    @classmethod
+    def empty(cls) -> "ChatContext":
+        return cls([])
 
     @property
     def items(self) -> list[ChatItem]:

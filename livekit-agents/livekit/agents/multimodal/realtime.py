@@ -24,7 +24,7 @@ class GenerationCreatedEvent:
     message_id: str
     text_stream: AsyncIterable[str]
     audio_stream: AsyncIterable[rtc.AudioFrame]
-    tool_calls: AsyncIterable[llm.FunctionCallInfo]
+    function_stream: AsyncIterable[llm.FunctionCall]
 
 
 @dataclass
@@ -85,10 +85,12 @@ class RealtimeSession(
 
     @property
     @abstractmethod
-    def fnc_ctx(self) -> llm.FunctionContext | None: ...
+    def fnc_ctx(self) -> llm.FunctionContext: ...
 
     @abstractmethod
-    async def update_fnc_ctx(self, fnc_ctx: llm.FunctionContext | None) -> None: ...
+    async def update_fnc_ctx(
+        self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]
+    ) -> None: ...
 
     @abstractmethod
     def push_audio(self, frame: rtc.AudioFrame) -> None: ...
