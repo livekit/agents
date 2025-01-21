@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import sys
 import termios
-import contextlib
 import time
 import tty
 from typing import Literal
@@ -65,45 +65,49 @@ class _AudioSink(io.AudioSink):
         self._flush_complete = asyncio.Event()
         self._flush_complete.set()
 
+        self._output_buf = bytearray()
+        self._output_lock = threading.Lock()
+
+    @property
+    def lock(self) -> threading.Lock:
+        return self._output_lock
+
+    @property
+    def audio_buffer(self) -> bytearray:
+        return self._output_buf
+
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
         await self._flush_complete.wait()
 
-        if not frame.duration:
-            return
-
         if not self._capturing:
             self._capturing = True
-            self._buffer_duration = 0.0
+            self._pushed_duration = 0.0
             self._capture_start = time.monotonic()
 
         self._pushed_duration += frame.duration
+        print(f"Pushed audio frame, duration: {self._pushed_duration:.2f}s")
+        with self._output_lock:
+            self._output_buf += frame.data
 
-        if self._cli._output_stream is not None:
-
-            def _write(output_stream: sd.OutputStream, data: memoryview) -> None:
-                if (
-                    output_stream.active
-                    and self._cli._output_stream == output_stream
-                ):
-                    print("Writing data", output_stream)
-                    with contextlib.suppress(sd.PortAudioError):
-                        output_stream.write(data)
-                else:
-                    print("Output stream closed")
-
-            await self._cli._loop.run_in_executor(
-                None, _write, self._cli._output_stream, frame.data
+    def flush(self) -> None:
+        super().flush()
+        if self._capturing:
+            self._flush_complete.clear()
+            self._capturing = False
+            to_wait = max(
+                0.0, self._pushed_duration - (time.monotonic() - self._capture_start)
+            )
+            print(f"Flushing audio buffer, waiting for {to_wait:.2f}s")
+            self._dispatch_handle = self._cli._loop.call_later(
+                to_wait, self._dispatch_playback_finished
             )
 
     def clear_buffer(self) -> None:
         self._capturing = False
 
-        if self._cli._output_stream is not None:
-            # hacky
-            print("Clearing buffer")
-            self._cli._update_speaker(enable=False)
-            self._cli._update_speaker(enable=True)
+        with self._output_lock:
+            self._output_buf.clear()
 
         if self._pushed_duration > 0.0:
             if self._dispatch_handle is not None:
@@ -119,18 +123,8 @@ class _AudioSink(io.AudioSink):
                 interrupted=played_duration + 1.0 < self._pushed_duration,
             )
 
-    def flush(self) -> None:
-        if self._capturing:
-            self._flush_complete.clear()
-            self._capturing = False
-            to_wait = min(
-                0.0, self._pushed_duration - (time.monotonic() - self._capture_start)
-            )
-            self._dispatch_handle = self._cli._loop.call_later(
-                to_wait, self._dispatch_playback_finished
-            )
-
     def _dispatch_playback_finished(self) -> None:
+        print("sending playback finished event")
         self.on_playback_finished(
             playback_position=self._pushed_duration, interrupted=False
         )
@@ -160,8 +154,6 @@ class ChatCLI:
 
         self._text_sink = _TextSink(self)
         self._audio_sink = _AudioSink(self)
-
-        self._saved_frames = []
 
     def _print_welcome(self):
         print(_esc(34) + "=" * 50 + _esc(0))
@@ -212,7 +204,7 @@ class ChatCLI:
 
             self._input_device_name = device_info.get("name", "Microphone")
             self._input_stream = sd.InputStream(
-                callback=self._input_sd_callback,
+                callback=self._sd_input_callback,
                 dtype="int16",
                 channels=1,
                 device=input_device,
@@ -230,10 +222,12 @@ class ChatCLI:
         _, output_device = sd.default.device
         if output_device is not None and enable:
             self._output_stream = sd.OutputStream(
+                callback=self._sd_output_callback,
                 dtype="int16",
                 channels=1,
                 device=output_device,
                 samplerate=24000,
+                blocksize=4800,
             )
             self._output_stream.start()
             self._agent.output.audio = self._audio_sink
@@ -249,7 +243,25 @@ class ChatCLI:
             self._agent.output.text = None
             self._text_input_buf = []
 
-    def _input_sd_callback(self, indata: np.ndarray, frame_count: int, *_) -> None:
+    def _sd_output_callback(self, outdata: np.ndarray, frames: int, *_) -> None:
+        with self._audio_sink.lock:
+            bytes_needed = frames * 2
+            if len(self._audio_sink.audio_buffer) < bytes_needed:
+                available_bytes = len(self._audio_sink.audio_buffer)
+                outdata[: available_bytes // 2, 0] = np.frombuffer(
+                    self._audio_sink.audio_buffer,
+                    dtype=np.int16,
+                    count=available_bytes // 2,
+                )
+
+                outdata[available_bytes // 2 :, 0] = 0
+                del self._audio_sink.audio_buffer[:available_bytes]
+            else:
+                chunk = self._audio_sink.audio_buffer[:bytes_needed]
+                outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
+                del self._audio_sink.audio_buffer[:bytes_needed]
+
+    def _sd_input_callback(self, indata: np.ndarray, frame_count: int, *_) -> None:
         rms = np.sqrt(np.mean(indata.astype(np.float32) ** 2))
         max_int16 = np.iinfo(np.int16).max
         self._micro_db = 20.0 * np.log10(rms / max_int16 + 1e-6)
@@ -260,7 +272,6 @@ class ChatCLI:
             sample_rate=24000,
             num_channels=1,
         )
-        self._saved_frames.append(frame)
         self._loop.call_soon_threadsafe(self._audio_input_ch.send_nowait, frame)
 
     @log_exceptions(logger=logger)

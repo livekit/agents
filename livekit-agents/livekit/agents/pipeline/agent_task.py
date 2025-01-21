@@ -213,6 +213,9 @@ class ActiveTask(RecognitionHooks):
                 self._rt_session.on(
                     "input_speech_started", self._on_input_speech_started
                 )
+                self._rt_session.on(
+                    "input_speech_stopped", self._on_input_speech_stopped
+                )
                 await self._rt_session.update_chat_ctx(self._task.chat_ctx)
 
             self._started = True
@@ -309,8 +312,12 @@ class ActiveTask(RecognitionHooks):
 
     # -- Realtime Session events --
 
-    def _on_input_speech_started(self, ev: multimodal.InputSpeechStartedEvent) -> None:
+    def _on_input_speech_started(self, _: multimodal.InputSpeechStartedEvent) -> None:
+        debug.Tracing.log_event("input_speech_started")
         self.interrupt()
+
+    def _on_input_speech_stopped(self, _: multimodal.InputSpeechStoppedEvent) -> None:
+        debug.Tracing.log_event("input_speech_stopped")
 
     def _on_generation_created(self, ev: multimodal.GenerationCreatedEvent) -> None:
         if self.draining:
@@ -739,7 +746,6 @@ class ActiveTask(RecognitionHooks):
 
             if self._agent.output.audio is not None:
                 self._agent.output.audio.clear_buffer()
-                print("wtf?")
                 playback_ev = await self._agent.output.audio.wait_for_playout()
 
                 debug.Tracing.log_event(
