@@ -61,7 +61,7 @@ async def entrypoint(ctx: JobContext):
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
-        return "The weather in {location} is sunny."
+        return f"The weather in {location} is sunny."
 
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
