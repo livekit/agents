@@ -54,7 +54,7 @@ class RealtimeModel:
 
 
 EventTypes = Literal[
-    "input_speech_started",  # serverside VAD
+    "input_speech_started",  # serverside VAD (also used for interruptions)
     "input_speech_stopped",  # serverside VAD
     "generation_created",
     "error",
@@ -80,12 +80,15 @@ class RealtimeSession(
     @abstractmethod
     def chat_ctx(self) -> llm.ChatContext: ...
 
-    @abstractmethod
-    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None: ...
-
     @property
     @abstractmethod
     def fnc_ctx(self) -> llm.FunctionContext: ...
+
+    @abstractmethod
+    async def update_instructions(self, instructions: str) -> None: ...
+
+    @abstractmethod
+    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None: ...
 
     @abstractmethod
     async def update_fnc_ctx(
@@ -100,9 +103,7 @@ class RealtimeSession(
 
     # cancel the current generation (do nothing if no generation is in progress)
     @abstractmethod
-    def interrupt(
-        self,
-    ) -> None: ...
+    def interrupt(self) -> None: ...
 
     # message_id is the ID of the message to truncate (inside the ChatCtx)
     @abstractmethod

@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, WorkerType, cli
-from livekit.agents.pipeline import ChatCLI, PipelineAgent
+from livekit.agents.pipeline import ChatCLI, PipelineAgent, AgentTask
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
@@ -12,10 +12,11 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
-
     agent = PipelineAgent(
-        llm=openai.LLM(), stt=deepgram.STT(), tts=cartesia.TTS(), vad=silero.VAD.load()
+        task=AgentTask(
+            instructions="Talk to me!",
+            llm=openai.realtime.RealtimeModel(),
+        )
     )
     agent.start()
 

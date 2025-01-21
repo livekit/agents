@@ -75,10 +75,6 @@ class AgentTask:
     def instructions(self) -> str:
         return self._instructions
 
-    @instructions.setter
-    def instructions(self, instructions: str) -> None:
-        self._instructions = instructions
-
     @property
     def chat_ctx(self) -> llm.ChatContext:
         return self._chat_ctx
@@ -217,6 +213,7 @@ class ActiveTask(RecognitionHooks):
                     "input_speech_stopped", self._on_input_speech_stopped
                 )
                 await self._rt_session.update_chat_ctx(self._task.chat_ctx)
+                await self._rt_session.update_instructions(self._task.instructions)
 
             self._started = True
 
@@ -668,85 +665,61 @@ class ActiveTask(RecognitionHooks):
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
 
+        audio_output = self._agent.output.audio
+        text_output = self._agent.output.text
+
         @utils.log_exceptions(logger=logger)
         async def _forward_text(llm_output: AsyncIterable[str]) -> None:
+            assert text_output is not None, "text_output is not available"
             try:
                 async for delta in llm_output:
-                    if self._agent.output.text is None:
-                        break
-
-                    await self._agent.output.text.capture_text(delta)
+                    await text_output.capture_text(delta)
             finally:
-                if self._agent.output.text is not None:
-                    self._agent.output.text.flush()
+                text_output.flush()
 
         @utils.log_exceptions(logger=logger)
         async def _forward_audio(tts_output: AsyncIterable[rtc.AudioFrame]) -> None:
+            assert audio_output is not None, "audio_output is not available"
             try:
                 async for frame in tts_output:
-                    if self._agent.output.audio is None:
-                        break
-                    await self._agent.output.audio.capture_frame(frame)
+                    await audio_output.capture_frame(frame)
             finally:
-                if self._agent.output.audio is not None:
-                    self._agent.output.audio.flush()  # always flush (even if the task is interrupted)
+                audio_output.flush()
 
-        # wait for the play() method to be called
-        await asyncio.wait(
-            [
-                speech_handle._wait_for_authorization(),
-                speech_handle._interrupt_fut,
-            ],
-            return_when=asyncio.FIRST_COMPLETED,
+        await speech_handle.wait_until_interrupted(
+            [speech_handle._wait_for_authorization()]
         )
 
         if speech_handle.interrupted:
-            speech_handle._mark_playout_done()
-            # TODO(theomonnom): remove the message from the serverside history
+            speech_handle._mark_playout_done() # TODO(theomonnom): remove the message from the serverside history
             return
 
-        wg = utils.aio.WaitGroup()
-        tasks: list[asyncio.Task] = []
+        ts = utils.aio.TaskSet()
+        if text_output is not None:
+            ts.create_task(
+                _forward_text(generation_ev.text_stream),
+                name="_realtime_reply_task.forward_text",
+            )
 
-        forward_text_task = asyncio.create_task(
-            _forward_text(generation_ev.text_stream),
-            name="_realtime_reply_task.forward_text",
-        )
-        wg.add(1)
-        forward_text_task.add_done_callback(lambda _: wg.done())
-        tasks.append(forward_text_task)
+        if audio_output is not None:
+            ts.create_task(
+                _forward_audio(generation_ev.audio_stream),
+                name="_realtime_reply_task.forward_audio",
+            )
 
-        forward_audio_task = asyncio.create_task(
-            _forward_audio(generation_ev.audio_stream),
-            name="_realtime_reply_task.forward_audio",
-        )
-        wg.add(1)
-        forward_audio_task.add_done_callback(lambda _: wg.done())
-        tasks.append(forward_text_task)
+        await speech_handle.wait_until_interrupted([*ts.tasks])
 
-        await asyncio.wait(
-            [
-                wg.wait(),
-                speech_handle._interrupt_fut,
-            ],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-        if forward_audio_task is not None and self._agent.output.audio is not None:
-            await asyncio.wait(
-                [
-                    self._agent.output.audio.wait_for_playout(),
-                    speech_handle._interrupt_fut,
-                ],
-                return_when=asyncio.FIRST_COMPLETED,
+        if audio_output is not None:
+            await speech_handle.wait_until_interrupted(
+                [audio_output.wait_for_playout()]
             )
 
         if speech_handle.interrupted:
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.gracefully_cancel(*ts.tasks)
 
-            if self._agent.output.audio is not None:
-                self._agent.output.audio.clear_buffer()
-                playback_ev = await self._agent.output.audio.wait_for_playout()
+            if audio_output is not None:
+                audio_output.clear_buffer()
+                playback_ev = await audio_output.wait_for_playout()
 
                 debug.Tracing.log_event(
                     "playout interrupted",
