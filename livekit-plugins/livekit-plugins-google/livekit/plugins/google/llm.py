@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, MutableSet, Union, cast
 
 from livekit.agents import (
+    APIConnectionError,
     APIStatusError,
     llm,
     utils,
@@ -345,6 +346,11 @@ class LLMStream(llm.LLMStream):
                 status_code=e.code,
                 body=e.message,
                 request_id=request_id,
+                retryable=retryable,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError(
+                "gemini llm: error generating content",
                 retryable=retryable,
             ) from e
 
