@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from typing import Any, Literal, MutableSet, Union, cast
 
 from livekit.agents import (
-    APIConnectionError,
     APIStatusError,
     llm,
     utils,
@@ -33,6 +32,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from google import genai
 from google.auth._default_async import default_async
 from google.genai import types
+from google.genai.errors import APIError, ClientError, ServerError
 
 from ._utils import _build_gemini_ctx, _build_tools
 from .log import logger
@@ -220,6 +220,7 @@ class LLMStream(llm.LLMStream):
 
     async def _run(self) -> None:
         retryable = True
+        request_id = utils.shortuuid()
 
         try:
             opts: dict[str, Any] = dict()
@@ -281,12 +282,11 @@ class LLMStream(llm.LLMStream):
                 contents=cast(types.ContentListUnion, turns),
                 config=config,
             ):
-                response_id = utils.shortuuid()
                 if response.prompt_feedback:
                     raise APIStatusError(
                         response.prompt_feedback.json(),
                         retryable=False,
-                        request_id=response_id,
+                        request_id=request_id,
                     )
 
                 if (
@@ -297,7 +297,7 @@ class LLMStream(llm.LLMStream):
                     raise APIStatusError(
                         "No candidates in the response",
                         retryable=True,
-                        request_id=response_id,
+                        request_id=request_id,
                     )
 
                 if len(response.candidates) > 1:
@@ -306,7 +306,7 @@ class LLMStream(llm.LLMStream):
                     )
 
                 for index, part in enumerate(response.candidates[0].content.parts):
-                    chat_chunk = self._parse_part(response_id, index, part)
+                    chat_chunk = self._parse_part(request_id, index, part)
                     if chat_chunk is not None:
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
@@ -315,7 +315,7 @@ class LLMStream(llm.LLMStream):
                     usage = response.usage_metadata
                     self._event_ch.send_nowait(
                         llm.ChatChunk(
-                            request_id=response_id,
+                            request_id=request_id,
                             usage=llm.CompletionUsage(
                                 completion_tokens=usage.candidates_token_count or 0,
                                 prompt_tokens=usage.prompt_token_count or 0,
@@ -323,10 +323,28 @@ class LLMStream(llm.LLMStream):
                             ),
                         )
                     )
-
-        except Exception as e:
-            raise APIConnectionError(
-                "gemini llm: error generating content",
+        except ClientError as e:
+            raise APIStatusError(
+                "gemini llm: client error",
+                status_code=e.code,
+                body=e.message,
+                request_id=request_id,
+                retryable=False if e.code != 429 else True,
+            ) from e
+        except ServerError as e:
+            raise APIStatusError(
+                "gemini llm: server error",
+                status_code=e.code,
+                body=e.message,
+                request_id=request_id,
+                retryable=retryable,
+            ) from e
+        except APIError as e:
+            raise APIStatusError(
+                "gemini llm: api error",
+                status_code=e.code,
+                body=e.message,
+                request_id=request_id,
                 retryable=retryable,
             ) from e
 
