@@ -1,5 +1,13 @@
 # livekit-agents
 
+## 0.12.9
+
+### Patch Changes
+
+- add generate_reply api for multimodal agent - [#1359](https://github.com/livekit/agents/pull/1359) ([@longcw](https://github.com/longcw))
+
+- remove aiodns from livekit-agents - [#1368](https://github.com/livekit/agents/pull/1368) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.12.8
 
 ### Patch Changes

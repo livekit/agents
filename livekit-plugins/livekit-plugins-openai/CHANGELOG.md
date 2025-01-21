@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.10.16
+
+### Patch Changes
+
+- add generate_reply api for multimodal agent - [#1359](https://github.com/livekit/agents/pull/1359) ([@longcw](https://github.com/longcw))
+
 ## 0.10.15
 
 ### Patch Changes
