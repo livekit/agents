@@ -104,7 +104,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: Voice = DEFAULT_VOICE,
-        model: TTSModels | str = "eleven_turbo_v2_5",
+        model: TTSModels | str = "eleven_flash_v2_5",
         api_key: str | None = None,
         base_url: str | None = None,
         encoding: TTSEncoding = "mp3_22050_32",
