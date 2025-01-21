@@ -189,7 +189,6 @@ class RealtimeSession(multimodal.RealtimeSession):
             return
 
         self._current_generation.item_id = item_id
-
         self.emit(
             "generation_created",
             multimodal.GenerationCreatedEvent(
@@ -272,6 +271,10 @@ class RealtimeSession(multimodal.RealtimeSession):
     def chat_ctx(self) -> llm.ChatContext:
         return self._chat_ctx.copy()
 
+    @property
+    def fnc_ctx(self) -> llm.FunctionContext:
+        return self._fnc_ctx.copy()
+
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         diff_ops = llm.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
 
@@ -297,10 +300,6 @@ class RealtimeSession(multimodal.RealtimeSession):
             )
 
         # TODO(theomonnom): wait for the server confirmation
-
-    @property
-    def fnc_ctx(self) -> llm.FunctionContext:
-        return self._fnc_ctx
 
     async def update_fnc_ctx(
         self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]
@@ -338,6 +337,19 @@ class RealtimeSession(multimodal.RealtimeSession):
 
         # TODO(theomonnom): wait for the server confirmation before updating the local state
         self._fnc_ctx = llm.FunctionContext(retained_functions)
+
+    async def update_instructions(self, instructions: str) -> None:
+        self._msg_ch.send_nowait(
+            SessionUpdateEvent(
+                type="session.update",
+                session=session_update_event.Session(
+                    model=self._realtime_model._opts.model,  # type: ignore
+                    instructions=instructions,
+                ),
+            )
+        )
+
+        # TODO(theomonnom): wait for the server confirmation
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         self._msg_ch.send_nowait(
