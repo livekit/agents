@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import time
 import asyncio
+import heapq
 from typing import (
     AsyncIterable,
     Optional,
@@ -12,14 +14,18 @@ from livekit import rtc
 from .. import debug, llm, multimodal, stt, tokenize, tts, utils, vad
 from ..llm import ChatContext, FunctionContext, find_ai_functions
 from ..log import logger
-from .agent_task import AgentTask
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
 from .generation import (
     _TTSGenerationData,
     do_llm_inference,
     do_tts_inference,
 )
-from .pipeline_agent import PipelineAgent, SpeechHandle
+from typing import TYPE_CHECKING
+
+from .speech_handle import SpeechHandle
+
+if TYPE_CHECKING:
+    from .pipeline_agent import PipelineAgent
 
 
 class AgentTask:
@@ -64,8 +70,6 @@ class AgentTask:
         )
         self._turn_detector = turn_detector
         self._stt, self._llm, self._tts, self._vad = stt, llm, tts, vad
-
-        self._active_task: ActiveTask | None = None
 
     @property
     def instructions(self) -> str:
@@ -157,15 +161,8 @@ class AgentTask:
             finally:
                 await utils.aio.gracefully_cancel(forward_task)
 
-    async def _on_start(self, agent: PipelineAgent) -> None:
-        if self._active_task is not None:
-            raise RuntimeError("task is already active")
-
-        self._active_task = ActiveTask(task=self, agent=agent)
-
-    async def _on_close(self) -> None:
-        if self._active_task is not None:
-            await self._active_task.aclose()
+    def _create_activity(self, agent: PipelineAgent) -> ActiveTask:
+        return ActiveTask(task=self, agent=agent)
 
 
 class ActiveTask(RecognitionHooks):
@@ -173,33 +170,68 @@ class ActiveTask(RecognitionHooks):
         self._task, self._agent = task, agent
         self._rt_session: multimodal.RealtimeSession | None = None
         self._audio_recognition: AudioRecognition | None = None
+        self._lock = asyncio.Lock()
+
+        self._done_fut = asyncio.Future()
+        self._draining = False
+
+        self._current_speech: SpeechHandle | None = None
+        self._speech_q: list[tuple[int, float, SpeechHandle]] = []
+        self._speech_q_changed = asyncio.Event()
+
+        self._main_atask: asyncio.Task | None = None
+        self._tasks: list[asyncio.Task] = []
+        self._started = False
+
+    @property
+    def draining(self) -> bool:
+        return self._draining
+
+    async def drain(self) -> None:
+        self._speech_q_changed.set()  # TODO(theomonnom): refactor so we don't need this here
+        self._draining = True
+
+        if self._main_atask is not None:
+            await asyncio.shield(self._main_atask)
 
     async def start(self) -> None:
-        if self._rt_session is not None:
-            logger.warning("starting a new task while rt_session is not None")
+        async with self._lock:
+            self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
 
-        self._audio_recognition = AudioRecognition(
-            hooks=self,
-            stt=self._task.stt_node,
-            vad=self._task.vad,
-            turn_detector=self._task.turn_detector,
-            min_endpointing_delay=self._agent.options.min_endpointing_delay,
-        )
-        self._audio_recognition.start()
+            self._audio_recognition = AudioRecognition(
+                hooks=self,
+                stt=self._task.stt_node,
+                vad=self._task.vad,
+                turn_detector=self._task.turn_detector,
+                min_endpointing_delay=self._agent.options.min_endpointing_delay,
+            )
+            self._audio_recognition.start()
 
-        if isinstance(self._task.llm, multimodal.RealtimeModel):
-            self._rt_session = self._task.llm.session()
-            self._rt_session.on("generation_created", self._on_generation_created)
-            await self._rt_session.update_chat_ctx(self._task.chat_ctx)
+            if isinstance(self._task.llm, multimodal.RealtimeModel):
+                self._rt_session = self._task.llm.session()
+                self._rt_session.on("generation_created", self._on_generation_created)
+                self._rt_session.on(
+                    "input_speech_started", self._on_input_speech_started
+                )
+                await self._rt_session.update_chat_ctx(self._task.chat_ctx)
+
+            self._started = True
 
     async def aclose(self) -> None:
-        if self._rt_session is not None:
-            await self._rt_session.aclose()
+        async with self._lock:
+            if self._rt_session is not None:
+                await self._rt_session.aclose()
 
-        if self._audio_recognition is not None:
-            await self._audio_recognition.aclose()
+            if self._audio_recognition is not None:
+                await self._audio_recognition.aclose()
+
+            if self._main_atask is not None:
+                await utils.aio.gracefully_cancel(self._main_atask)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if not self._started:
+            return
+
         if self._rt_session is not None:
             self._rt_session.push_audio(frame)
 
@@ -233,24 +265,71 @@ class ActiveTask(RecognitionHooks):
             ),
             name="_pipeline_reply_task",
         )
-        self._agent._schedule_speech(handle, PipelineAgent.SPEECH_PRIORITY_NORMAL)
+        self._tasks.append(task)
+        task.add_done_callback(lambda _: self._tasks.remove(task))
+        self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
+
+    def interrupt(self) -> None:
+        if self._current_speech is not None:
+            self._current_speech.interrupt()
+
+        for speech in self._speech_q:
+            _, _, speech = speech
+            speech.interrupt()
+
+    def _schedule_speech(self, speech: SpeechHandle, priority: int) -> None:
+        if self._draining:
+            raise RuntimeError("cannot schedule new speech, task is draining")
+
+        heapq.heappush(self._speech_q, (priority, time.time(), speech))
+        self._speech_q_changed.set()
+
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
+        try:
+            while True:
+                await self._speech_q_changed.wait()
+                while self._speech_q:
+                    _, _, speech = heapq.heappop(self._speech_q)
+                    self._current_speech = speech
+                    speech._authorize_playout()
+                    await speech.wait_for_playout()
+                    self._current_speech = None
+
+                if self._draining:  # no more speech can be scheduled
+                    break
+
+                self._speech_q_changed.clear()
+        finally:
+            await asyncio.gather(*self._tasks)
+            debug.Tracing.log_event(f"task done, waiting for {len(self._tasks)} tasks")
+            debug.Tracing.log_event("marking agent task as done")
+            self._done_fut.set_result(None)
 
     # -- Realtime Session events --
 
+    def _on_input_speech_started(self, ev: multimodal.InputSpeechStartedEvent) -> None:
+        self.interrupt()
+
     def _on_generation_created(self, ev: multimodal.GenerationCreatedEvent) -> None:
+        if self.draining:
+            logger.warning("skipping new generation, task is draining")
+            debug.Tracing.log_event("skipping new generation, task is draining")
+            return
+
         handle = SpeechHandle.create(
             allow_interruptions=self._agent.options.allow_interruptions
         )
         task = asyncio.create_task(
-            self._pipeline_reply_task(
-                handle=handle,
-                chat_ctx=self._task.chat_ctx,
-                fnc_ctx=self._task.fnc_ctx,
+            self._realtime_reply_task(
+                speech_handle=handle,
+                generation_ev=ev,
             ),
-            name="_generate_pipeline_reply",
         )
-        self._agent._schedule_speech(handle, PipelineAgent.SPEECH_PRIORITY_NORMAL)
+        self._tasks.append(task)
+        task.add_done_callback(lambda _: self._tasks.remove(task))
+        self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
     # -- Recognition Hooks --
 
@@ -301,6 +380,17 @@ class ActiveTask(RecognitionHooks):
                 {"speech_id": self._agent.current_speech.id},
             )
             self._agent.current_speech.interrupt()
+
+        if self.draining:
+            logger.warning(
+                "skipping user input, task is draining",
+                extra={"user_input": new_transcript},
+            )
+            debug.Tracing.log_event(
+                "skipping user input, task is draining",
+                {"user_input": new_transcript},
+            )
+            return
 
         self.generate_reply(new_transcript)
 
@@ -557,7 +647,7 @@ class ActiveTask(RecognitionHooks):
                 name="_pipeline_fnc_reply_task",
             )
             self._agent._schedule_speech(
-                speech_handle, PipelineAgent.SPEECH_PRIORITY_NORMAL
+                speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL
             )
 
         speech_handle._mark_done()
@@ -565,6 +655,7 @@ class ActiveTask(RecognitionHooks):
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
         self,
+        *,
         speech_handle: SpeechHandle,
         generation_ev: multimodal.GenerationCreatedEvent,
     ) -> None:
@@ -596,17 +687,15 @@ class ActiveTask(RecognitionHooks):
         # wait for the play() method to be called
         await asyncio.wait(
             [
-                speech_handle._play_fut,
+                speech_handle._wait_for_authorization(),
                 speech_handle._interrupt_fut,
             ],
             return_when=asyncio.FIRST_COMPLETED,
         )
 
         if speech_handle.interrupted:
-            self._rt_session.interrupt()
-            speech_handle._mark_done()
-
-            # TODO(theomonnom): Remove the message
+            speech_handle._mark_playout_done()
+            # TODO(theomonnom): remove the message from the serverside history
             return
 
         wg = utils.aio.WaitGroup()
@@ -646,11 +735,11 @@ class ActiveTask(RecognitionHooks):
             )
 
         if speech_handle.interrupted:
-            self._rt_session.interrupt()
             await utils.aio.gracefully_cancel(*tasks)
 
             if self._agent.output.audio is not None:
                 self._agent.output.audio.clear_buffer()
+                print("wtf?")
                 playback_ev = await self._agent.output.audio.wait_for_playout()
 
                 debug.Tracing.log_event(
@@ -663,12 +752,9 @@ class ActiveTask(RecognitionHooks):
 
             # TODO(theomonnom): truncate serverside message
             speech_handle._mark_playout_done()
-            speech_handle._mark_done()
             return
 
         # TODO(theomonnom): tools
 
-        speech_handle._mark_playout_done()
         debug.Tracing.log_event("playout completed", {"speech_id": speech_handle.id})
-
-        speech_handle._mark_done()
+        speech_handle._mark_playout_done()

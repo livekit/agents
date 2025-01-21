@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import termios
+import contextlib
 import time
 import tty
 from typing import Literal
@@ -79,17 +80,30 @@ class _AudioSink(io.AudioSink):
         self._pushed_duration += frame.duration
 
         if self._cli._output_stream is not None:
+
+            def _write(output_stream: sd.OutputStream, data: memoryview) -> None:
+                if (
+                    output_stream.active
+                    and self._cli._output_stream == output_stream
+                ):
+                    print("Writing data", output_stream)
+                    with contextlib.suppress(sd.PortAudioError):
+                        output_stream.write(data)
+                else:
+                    print("Output stream closed")
+
             await self._cli._loop.run_in_executor(
-                None, self._cli._output_stream.write, frame.data
+                None, _write, self._cli._output_stream, frame.data
             )
 
     def clear_buffer(self) -> None:
         self._capturing = False
 
-        if self._cli._output_stream is not None and self._cli._output_stream.active:
-            # restarting the stream will clear the buffer
-            self._cli._output_stream.stop()
-            self._cli._output_stream.start()
+        if self._cli._output_stream is not None:
+            # hacky
+            print("Clearing buffer")
+            self._cli._update_speaker(enable=False)
+            self._cli._update_speaker(enable=True)
 
         if self._pushed_duration > 0.0:
             if self._dispatch_handle is not None:
@@ -224,10 +238,9 @@ class ChatCLI:
             self._output_stream.start()
             self._agent.output.audio = self._audio_sink
         elif self._output_stream is not None:
-            self._output_stream.stop()
             self._output_stream.close()
             self._output_stream = None
-            self._agent.output.audio
+            self._agent.output.audio = None
 
     def _update_text_output(self, *, enable: bool) -> None:
         if enable:
@@ -248,13 +261,6 @@ class ChatCLI:
             num_channels=1,
         )
         self._saved_frames.append(frame)
-
-        if len(self._saved_frames) > 20 * 5:
-            frmae = rtc.combine_audio_frames(self._saved_frames)
-            wav = frmae.to_wav_bytes()
-            with open("audio.wav", "wb") as f:
-                f.write(wav)
-
         self._loop.call_soon_threadsafe(self._audio_input_ch.send_nowait, frame)
 
     @log_exceptions(logger=logger)
