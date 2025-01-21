@@ -29,7 +29,7 @@ from livekit.agents import (
     APITimeoutError,
     llm,
 )
-from livekit.agents.llm import ToolChoice, _create_ai_function_info
+from livekit.agents.llm import ToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import openai

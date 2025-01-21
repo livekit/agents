@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from typing import Callable
 
 from .. import utils
 
 
 class SpeechHandle:
+    SPEECH_PRIORITY_LOW = 0
+    """Priority for messages that should be played after all other messages in the queue"""
+    SPEECH_PRIORITY_NORMAL = 5
+    """Every speech generates by the PipelineAgent defaults to this priority."""
+    SPEECH_PRIORITY_HIGH = 10
+    """Priority for important messages that should be played before others."""
+
     def __init__(
         self, *, speech_id: str, allow_interruptions: bool, step_index: int
     ) -> None:
@@ -14,8 +22,7 @@ class SpeechHandle:
         self._step_index = step_index
         self._allow_interruptions = allow_interruptions
         self._interrupt_fut = asyncio.Future()
-        self._done_fut = asyncio.Future()
-        self._play_fut = asyncio.Future()
+        self._authorize_fut = asyncio.Future()
         self._playout_done_fut = asyncio.Future()
 
     @staticmethod
@@ -42,11 +49,8 @@ class SpeechHandle:
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
 
-    def _authorize_playout(self) -> None:
-        self._play_fut.set_result(None)
-
     def done(self) -> bool:
-        return self._done_fut.done()
+        return self._playout_done_fut.done()
 
     def interrupt(self) -> None:
         if not self._allow_interruptions:
@@ -55,16 +59,21 @@ class SpeechHandle:
         if self.done():
             return
 
-        self._done_fut.set_result(None)
         self._interrupt_fut.set_result(None)
 
     async def wait_for_playout(self) -> None:
         await asyncio.shield(self._playout_done_fut)
 
-    def _mark_playout_done(self) -> None:
-        self._playout_done_fut.set_result(None)
+    def add_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
+        self._playout_done_fut.add_done_callback(lambda _: callback(self))
 
-    def _mark_done(self) -> None:
+    def _authorize_playout(self) -> None:
+        self._authorize_fut.set_result(None)
+
+    async def _wait_for_authorization(self) -> None:
+        await asyncio.shield(self._authorize_fut)
+
+    def _mark_playout_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
             # will raise InvalidStateError if the future is already done (interrupted)
-            self._done_fut.set_result(None)
+            self._playout_done_fut.set_result(None)

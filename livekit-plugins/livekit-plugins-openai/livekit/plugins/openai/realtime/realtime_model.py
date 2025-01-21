@@ -94,7 +94,7 @@ class RealtimeSession(multimodal.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._realtime_model = realtime_model
-        self._chat_ctx = llm.ChatContext()
+        self._chat_ctx = llm.ChatContext.empty()
         self._fnc_ctx = llm.FunctionContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent]()
 

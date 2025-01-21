@@ -49,15 +49,15 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
     """Computes the minimal list of create/remove operations to transform old_ctx into new_ctx."""
     # TODO(theomonnom): Make ChatMessage hashable and also add update ops
 
-    old_ids = [m.id for m in old_ctx.messages]
-    new_ids = [m.id for m in new_ctx.messages]
+    old_ids = [m.id for m in old_ctx.items]
+    new_ids = [m.id for m in new_ctx.items]
     lcs_ids = set(_compute_lcs(old_ids, new_ids))
 
-    to_remove = [msg.id for msg in old_ctx.messages if msg.id not in lcs_ids]
+    to_remove = [msg.id for msg in old_ctx.items if msg.id not in lcs_ids]
     to_create: list[tuple[str | None, str]] = []
 
     last_id_in_sequence: str | None = None
-    for new_msg in new_ctx.messages:
+    for new_msg in new_ctx.items:
         if new_msg.id in lcs_ids:
             last_id_in_sequence = new_msg.id
         else:

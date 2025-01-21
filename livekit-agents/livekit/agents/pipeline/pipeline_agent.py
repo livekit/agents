@@ -42,13 +42,6 @@ class AgentContext:
 
 
 class PipelineAgent(rtc.EventEmitter[EventTypes]):
-    SPEECH_PRIORITY_LOW = 0
-    """Priority for messages that should be played after all other messages in the queue"""
-    SPEECH_PRIORITY_NORMAL = 5
-    """Every speech generates by the PipelineAgent defaults to this priority."""
-    SPEECH_PRIORITY_HIGH = 10
-    """Priority for important messages that should be played before others."""
-
     def __init__(
         self,
         *,
@@ -70,6 +63,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             min_endpointing_delay=min_endpointing_delay,
             max_fnc_steps=max_fnc_steps,
         )
+        self._started = False
 
         # configurable IO
         self._input = io.AgentInput(
@@ -81,27 +75,39 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             self._on_text_output_changed,
         )
 
-        # speech state
-        self._current_speech: SpeechHandle | None = None
-        self._speech_q: list[Tuple[int, SpeechHandle]] = []
-        self._speech_q_changed = asyncio.Event()
-
-        self._main_atask: asyncio.Task | None = None
+        self._forward_audio_atask: asyncio.Task | None = None
+        self._update_activity_atask: asyncio.Task | None = None
+        self._lock = asyncio.Lock()
 
         # agent tasks
         self._current_task: AgentTask = task
-        self._active_task: ActiveTask
+        self._active_task: ActiveTask | None = None
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
     # constructor of the PipelineAgent
 
     def start(self) -> None:
-        self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
+        if self._started:
+            return
+
+        if self.input.audio is not None:
+            self._forward_audio_atask = asyncio.create_task(
+                self._forward_audio_task(), name="_forward_audio_task"
+            )
+
+        self._update_activity_atask = asyncio.create_task(
+            self._update_activity_task(self._current_task), name="_update_activity_task"
+        )
+
+        self._started = True
 
     async def aclose(self) -> None:
-        if self._main_atask is not None:
-            await utils.aio.gracefully_cancel(self._main_atask)
+        if not self._started:
+            return
+
+        if self._forward_audio_atask is not None:
+            await utils.aio.gracefully_cancel(self._forward_audio_atask)
 
     @property
     def options(self) -> PipelineOptions:
@@ -121,7 +127,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
     @property
     def current_speech(self) -> SpeechHandle | None:
-        return self._current_speech
+        raise NotImplementedError()
 
     @property
     def current_task(self) -> AgentTask:
@@ -140,39 +146,34 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     def generate_reply(self, user_input: str) -> SpeechHandle:
         raise NotImplementedError()
 
-    def _update_task(self, task: AgentTask) -> None:
-        pass
+    def update_task(self, task: AgentTask) -> None:
+        self._current_task = task
 
-    def _schedule_speech(self, speech: SpeechHandle, priority: int) -> None:
-        heapq.heappush(self._speech_q, (priority, speech))
-        self._speech_q_changed.set()
+        if self._started:
+            self._update_activity_task = asyncio.create_task(
+                self._update_activity_task(self._current_task),
+                name="_update_activity_task",
+            )
 
     @utils.log_exceptions(logger=logger)
-    async def _main_task(self) -> None:
-        @utils.log_exceptions(logger=logger)
-        async def _speech_scheduling_task() -> None:
-            while True:
-                await self._speech_q_changed.wait()
+    async def _update_activity_task(self, task: AgentTask) -> None:
+        async with self._lock:
+            if self._active_task is not None:
+                await self._active_task.drain()
+                await self._active_task.aclose()
 
-                while self._speech_q:
-                    _, speech = heapq.heappop(self._speech_q)
-                    self._current_speech = speech
-                    speech._authorize_playout()
-                    await speech.wait_for_playout()
-                    self._current_speech = None
+            self._active_task = task._create_activity(self)
+            await self._active_task.start()
 
-                self._speech_q_changed.clear()
+    @utils.log_exceptions(logger=logger)
+    async def _forward_audio_task(self) -> None:
+        audio_input = self.input.audio
+        if audio_input is None:
+            return
 
-        tasks = [
-            asyncio.create_task(
-                _speech_scheduling_task(), name="_speech_scheduling_task"
-            )
-        ]
-
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
+        async for frame in audio_input:
+            if self._active_task is not None:
+                self._active_task.push_audio(frame)
 
     # -- User changed input/output streams/sinks --
 
@@ -180,7 +181,15 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         pass
 
     def _on_audio_input_changed(self) -> None:
-        pass
+        if not self._started:
+            return
+
+        if self._forward_audio_atask is not None:
+            self._forward_audio_atask.cancel()
+
+        self._forward_audio_atask = asyncio.create_task(
+            self._forward_audio_task(), name="_forward_audio_task"
+        )
 
     def _on_video_output_changed(self) -> None:
         pass
