@@ -379,19 +379,20 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         return True
 
     def _on_input_speech_done(self, content: TranscriptionContent) -> None:
-        self.emit(
-            "input_speech_transcription_completed",
-            InputTranscription(
-                item_id=content.response_id,
-                transcript=content.text,
-            ),
-        )
+        if content.response_id and content.text:
+            self.emit(
+                "input_speech_transcription_completed",
+                InputTranscription(
+                    item_id=content.response_id,
+                    transcript=content.text,
+                ),
+            )
 
         # self._chat_ctx.append(text=content.text, role="user")
         # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech
 
     def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
-        if not self._is_interrupted:
+        if not self._is_interrupted and content.response_id and content.text:
             self.emit(
                 "agent_speech_transcription_completed",
                 InputTranscription(

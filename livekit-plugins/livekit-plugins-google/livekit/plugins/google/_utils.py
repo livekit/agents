@@ -90,9 +90,9 @@ def _build_gemini_ctx(
     chat_ctx: llm.ChatContext, cache_key: Any
 ) -> tuple[list[types.Content], Optional[types.Content]]:
     turns: list[types.Content] = []
-    current_content: Optional[types.Content] = None
     system_instruction: Optional[types.Content] = None
     current_role: Optional[str] = None
+    parts: list[types.Part] = []
 
     for msg in chat_ctx.messages:
         if msg.role == "system":
@@ -107,18 +107,16 @@ def _build_gemini_ctx(
         else:
             role = "user"
 
-        # Start new turn if role changes or if none is set
-        if current_content is None or current_role != role:
-            current_content = types.Content(role=role, parts=[])
-            turns.append(current_content)
+        # If role changed, finalize previous parts into a turn
+        if role != current_role:
+            if current_role is not None and parts:
+                turns.append(types.Content(role=current_role, parts=parts))
             current_role = role
-
-        if current_content.parts is None:
-            current_content.parts = []
+            parts = []
 
         if msg.tool_calls:
             for fnc in msg.tool_calls:
-                current_content.parts.append(
+                parts.append(
                     types.Part(
                         function_call=types.FunctionCall(
                             id=fnc.tool_call_id,
@@ -131,7 +129,7 @@ def _build_gemini_ctx(
         if msg.role == "tool":
             if msg.content:
                 if isinstance(msg.content, dict):
-                    current_content.parts.append(
+                    parts.append(
                         types.Part(
                             function_response=types.FunctionResponse(
                                 id=msg.tool_call_id,
@@ -141,7 +139,7 @@ def _build_gemini_ctx(
                         )
                     )
                 elif isinstance(msg.content, str):
-                    current_content.parts.append(
+                    parts.append(
                         types.Part(
                             function_response=types.FunctionResponse(
                                 id=msg.tool_call_id,
@@ -153,19 +151,19 @@ def _build_gemini_ctx(
         else:
             if msg.content:
                 if isinstance(msg.content, str):
-                    current_content.parts.append(types.Part(text=msg.content))
+                    parts.append(types.Part(text=msg.content))
                 elif isinstance(msg.content, dict):
-                    current_content.parts.append(
-                        types.Part(text=json.dumps(msg.content))
-                    )
+                    parts.append(types.Part(text=json.dumps(msg.content)))
                 elif isinstance(msg.content, list):
                     for item in msg.content:
                         if isinstance(item, str):
-                            current_content.parts.append(types.Part(text=item))
+                            parts.append(types.Part(text=item))
                         elif isinstance(item, llm.ChatImage):
-                            current_content.parts.append(
-                                _build_gemini_image_part(item, cache_key)
-                            )
+                            parts.append(_build_gemini_image_part(item, cache_key))
+
+    # Finalize last role's parts if any remain
+    if current_role is not None and parts:
+        turns.append(types.Content(role=current_role, parts=parts))
 
     return turns, system_instruction
 
