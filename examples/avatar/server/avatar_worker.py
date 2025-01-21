@@ -7,14 +7,10 @@ from typing import AsyncIterator, Generator, Optional, Union
 
 import cv2
 import numpy as np
-from dotenv import load_dotenv
 from livekit import rtc
 
-from .io import AudioFlushSentinel
-from .worker import AvatarWorker, MediaOptions
-
-# ensure LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET are set
-load_dotenv()
+from ..plugin.io import AudioFlushSentinel
+from ..plugin.worker import AvatarWorker, MediaOptions
 
 logger = logging.getLogger(__name__)
 
@@ -165,9 +161,11 @@ class WaveformVisualizer:
         self.volume_history: deque[float] = deque(maxlen=history_length)
         self.start_time = time.time()
 
-    def draw_timestamp(self, canvas: np.ndarray, fps: float):
+    def draw_timestamp(self, canvas: np.ndarray, fps: Optional[float] = None):
         height, width = canvas.shape[:2]
-        text = f"{time.time() - self.start_time:.1f}s @ {fps:.1f}fps"
+        text = f"{time.time() - self.start_time:.1f}s"
+        if fps is not None:
+            text = f"{text} @ {fps:.1f}fps"
         font_face = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 2.0
         thickness = 2
@@ -227,8 +225,7 @@ class WaveformVisualizer:
         audio_samples: np.ndarray,
         fps: Optional[float] = None,
     ):
-        if fps:
-            self.draw_timestamp(canvas, fps)
+        self.draw_timestamp(canvas, fps)
         plot_data = self.draw_current_wave(canvas, audio_samples)
         current_volume = np.abs(plot_data).mean()
         self.draw_volume_history(canvas, current_volume)
@@ -258,9 +255,29 @@ async def entrypoint(room: rtc.Room, url: str, token: str):
 
 
 if __name__ == "__main__":
-    # TODO: get url and token from agent
-    url = "wss://livekit.example.com"
-    token = "token"
+    from argparse import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_argument("--url", required=True, help="LiveKit server URL")
+    parser.add_argument("--token", required=True, help="Token for joining room")
+    parser.add_argument("--room", default=None, help="Room name")
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level",
+    )
+    args = parser.parse_args()
+
+    # add room as a prefix to the all logs
+    log_level = getattr(logging, args.log_level.upper())
+    if args.room:
+        logging.basicConfig(
+            level=log_level,
+            format=f"[{args.room}] %(asctime)s - %(levelname)s - %(message)s",
+        )
+    else:
+        logging.basicConfig(level=log_level)
 
     loop = asyncio.get_event_loop()
     room = rtc.Room(loop=loop)
@@ -269,7 +286,7 @@ if __name__ == "__main__":
         await room.disconnect()
         loop.stop()
 
-    asyncio.ensure_future(entrypoint(room, url, token))
+    asyncio.ensure_future(entrypoint(room, args.url, args.token))
     for signal in [signal.SIGINT, signal.SIGTERM]:
         loop.add_signal_handler(signal, lambda: asyncio.ensure_future(cleanup()))
 

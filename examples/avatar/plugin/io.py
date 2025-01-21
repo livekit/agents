@@ -3,6 +3,7 @@ import json
 import logging
 from typing import AsyncIterator, Literal, Optional, Union
 
+import httpx
 from livekit import api, rtc
 from livekit.agents import JobContext
 from livekit.agents.pipeline import io as agent_io
@@ -21,11 +22,17 @@ class AudioSink(agent_io.AudioSink):
     AudioSink implementation that streams audio to a remote avatar worker using LiveKit DataStream.
     """
 
-    def __init__(self, ctx: JobContext, avatar_identity: str = DEFAULT_AVATAR_IDENTITY):
+    def __init__(
+        self,
+        ctx: JobContext,
+        avatar_identity: str = DEFAULT_AVATAR_IDENTITY,
+        avatar_dispatcher_url: str = "http://localhost:8080/launch",
+    ):
         super().__init__()
         self._ctx = ctx
         self._room = self._ctx.room
         self._avatar_identity = avatar_identity
+        self._avatar_dispatcher_url = avatar_dispatcher_url
         self._remote_participant: Optional[rtc.RemoteParticipant] = None
 
         self._stream_writer: Optional[rtc.FileStreamWriter] = None
@@ -41,7 +48,20 @@ class AudioSink(agent_io.AudioSink):
             .to_jwt()
         )
         # TODO: send the token to remote for handshake
-        connection_info = {"ws_url": self._ctx._info.url, "token": token}
+        connection_info = {
+            "ws_url": self._ctx._info.url,
+            "token": token,
+            "room_name": self._room.name,
+        }
+
+        logger.info(
+            f"Sending connection info to avatar dispatcher {self._avatar_dispatcher_url}"
+        )
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                self._avatar_dispatcher_url, json={"request": connection_info}
+            )
+            response.raise_for_status()
 
         # playback finished handler
         def _handle_playback_finished(data: rtc.RpcInvocationData) -> None:
