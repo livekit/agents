@@ -79,6 +79,17 @@ class SpeechHandle:
             self._playout_done_fut.set_result(None)
 
     async def wait_until_interrupted(self, aw: list[Awaitable]) -> None:
+        temp_tasks = []
+        tasks = []
+        for task in aw:
+            if not isinstance(task, asyncio.Task):
+                task = asyncio.create_task(task)
+                temp_tasks.append(task)
+            tasks.append(task)
+
         await asyncio.wait(
-            [*aw, self._interrupt_fut], return_when=asyncio.FIRST_COMPLETED
+            [*tasks, self._interrupt_fut], return_when=asyncio.FIRST_COMPLETED
         )
+        for task in temp_tasks:
+            if not task.done():
+                task.cancel()
