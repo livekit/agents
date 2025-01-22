@@ -91,7 +91,7 @@ class STT(stt.STT):
         punctuate: bool = True,
         spoken_punctuation: bool = True,
         model: SpeechModels = "chirp_2",
-        location: str = "global",
+        location: str = "us-central1",
         sample_rate: int = 16000,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
