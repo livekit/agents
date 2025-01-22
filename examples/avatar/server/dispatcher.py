@@ -9,15 +9,10 @@ from typing import Dict, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+
+from ..plugin.io import AvatarConnectionInfo
 
 logger = logging.getLogger(__name__)
-
-
-class WorkerRequest(BaseModel):
-    room_name: str  # Room name to track workers
-    url: str  # LiveKit server URL
-    token: str  # Token for avatar worker to join
 
 
 @dataclass
@@ -30,7 +25,7 @@ class WorkerLauncher(ABC):
     """Abstract base class for launching avatar workers"""
 
     @abstractmethod
-    async def launch_worker(self, request: WorkerRequest) -> None:
+    async def launch_worker(self, connection_info: AvatarConnectionInfo) -> None:
         """Launch a new avatar worker"""
         pass
 
@@ -47,9 +42,9 @@ class LocalWorkerLauncher(WorkerLauncher):
         self.workers: Dict[str, WorkerInfo] = {}
         self.log_level = log_level
 
-    async def launch_worker(self, request: WorkerRequest) -> None:
+    async def launch_worker(self, connection_info: AvatarConnectionInfo) -> None:
         # Cleanup existing worker if any
-        await self.cleanup_worker(request.room_name)
+        await self.cleanup_worker(connection_info.room_name)
 
         # Launch new worker process
         cmd = [
@@ -57,24 +52,23 @@ class LocalWorkerLauncher(WorkerLauncher):
             "-m",
             "server.avatar_worker",
             "--url",
-            request.url,
+            connection_info.url,
             "--token",
-            request.token,
+            connection_info.token,
             "--room",
-            request.room_name,
+            connection_info.room_name,
             "--log-level",
             self.log_level,
         ]
 
         try:
+            room_name = connection_info.room_name
             process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
-            self.workers[request.room_name] = WorkerInfo(
-                room_name=request.room_name, process=process
-            )
-            logger.info(f"Launched avatar worker for room: {request.room_name}")
+            self.workers[room_name] = WorkerInfo(room_name=room_name, process=process)
+            logger.info(f"Launched avatar worker for room: {room_name}")
 
             # Monitor process in background
-            asyncio.create_task(self._monitor_process(request.room_name))
+            asyncio.create_task(self._monitor_process(room_name))
 
         except Exception as e:
             logger.error(f"Failed to launch worker: {e}")
@@ -126,13 +120,13 @@ class AvatarDispatcher:
         self.app = FastAPI(title="Avatar Dispatcher", lifespan=lifespan)
         self.app.post("/launch")(self.handle_launch)
 
-    async def handle_launch(self, request: WorkerRequest) -> dict:
+    async def handle_launch(self, connection_info: AvatarConnectionInfo) -> dict:
         """Handle request to launch an avatar worker"""
         try:
-            await self.launcher.launch_worker(request)
+            await self.launcher.launch_worker(connection_info)
             return {
                 "status": "success",
-                "message": f"Avatar worker launching for room: {request.room_name}",
+                "message": f"Avatar worker launched for room: {connection_info.room_name}",
             }
         except Exception as e:
             logger.error(f"Error handling launch request: {e}")

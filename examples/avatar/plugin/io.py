@@ -8,6 +8,7 @@ from livekit import api, rtc
 from livekit.agents import JobContext
 from livekit.agents.pipeline import io as agent_io
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,12 @@ DEFAULT_AVATAR_IDENTITY = "lk.avatar_worker"
 RPC_INTERRUPT_PLAYBACK = "lk.interrupt_playback"
 RPC_PLAYBACK_FINISHED = "lk.playback_finished"
 AUDIO_STREAM_NAME = "lk.audio_stream"
+
+
+class AvatarConnectionInfo(BaseModel):
+    room_name: str
+    url: str  # LiveKit server URL
+    token: str  # Token for avatar worker to join
 
 
 class AudioSink(agent_io.AudioSink):
@@ -47,21 +54,15 @@ class AudioSink(agent_io.AudioSink):
             .with_grants(api.VideoGrants(room_join=True, room=self._room.name))
             .to_jwt()
         )
-        # TODO: send the token to remote for handshake
-        connection_info = {
-            "ws_url": self._ctx._info.url,
-            "token": token,
-            "room_name": self._room.name,
-        }
 
         logger.info(
             f"Sending connection info to avatar dispatcher {self._avatar_dispatcher_url}"
         )
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._avatar_dispatcher_url, json={"request": connection_info}
+        await self._handshake(
+            AvatarConnectionInfo(
+                room_name=self._room.name, url=self._ctx._info.url, token=token
             )
-            response.raise_for_status()
+        )
 
         # playback finished handler
         def _handle_playback_finished(data: rtc.RpcInvocationData) -> None:
@@ -120,6 +121,14 @@ class AudioSink(agent_io.AudioSink):
             method=RPC_INTERRUPT_PLAYBACK,
             payload="",
         )
+
+    async def _handshake(self, connection_info: AvatarConnectionInfo) -> None:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                self._avatar_dispatcher_url,
+                json={"connection_info": connection_info.model_dump()},
+            )
+            response.raise_for_status()
 
 
 class AudioFlushSentinel:
