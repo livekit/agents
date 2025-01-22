@@ -192,7 +192,6 @@ class ChunkedStream(tts.ChunkedStream):
                 input=texttospeech.SynthesisInput(text=self._input_text),
                 voice=self._opts.voice,
                 audio_config=self._opts.audio_config,
-                timeout=self._conn_options.timeout,
             )
 
             if self._opts.audio_config.audio_encoding == "mp3":

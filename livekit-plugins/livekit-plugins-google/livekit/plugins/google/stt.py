@@ -224,7 +224,6 @@ class STT(stt.STT):
                     config=config,
                     content=frame.data.tobytes(),
                 ),
-                timeout=conn_options.timeout,
             )
 
             return _recognize_response_to_speech_event(raw)
