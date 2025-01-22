@@ -5,9 +5,8 @@ from typing import Optional
 
 from livekit import rtc
 
-from ..log import logger
 from ..utils import aio
-from .io import AudioStream, VideoStream
+from .io import AudioSink, AudioStream, VideoStream
 
 
 class RoomInput:
@@ -174,3 +173,87 @@ class RoomInput:
         for streamer in [self._audio_streamer, self._video_streamer]:
             if streamer.task is not None:
                 await aio.graceful_cancel(streamer.task)
+
+
+class RoomAudioSink(AudioSink):
+    """AudioSink implementation that publishes audio to a LiveKit room using a LocalAudioTrack"""
+
+    def __init__(
+        self, room: rtc.Room, sample_rate: int = 24000, num_channels: int = 1
+    ) -> None:
+        """Initialize the RoomAudioSink
+
+        Args:
+            room: The LiveKit room to publish audio to
+            sample_rate: Sample rate of the audio in Hz
+            num_channels: Number of audio channels
+        """
+        super().__init__(sample_rate=sample_rate)
+        self._room = room
+        self._num_channels = num_channels
+
+        # Create audio source and track
+        self._audio_source = rtc.AudioSource(
+            sample_rate=sample_rate, num_channels=num_channels
+        )
+        self._track = rtc.LocalAudioTrack.create_audio_track(
+            "assistant_voice", self._audio_source
+        )
+
+        self._publication: rtc.LocalTrackPublication | None = None
+        self._publish_task: asyncio.Task | None = None
+        self._pushed_duration: float | None = None
+
+    async def start(self) -> None:
+        """Start publishing the audio track to the room"""
+        if self._publication:
+            return
+
+        self._publication = await self._room.local_participant.publish_track(
+            self._track,
+            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+        )
+
+        # is this necessary?
+        await self._publication.wait_for_subscription()
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        """Capture an audio frame and publish it to the room
+
+        Args:
+            frame: The audio frame to publish
+        """
+        await super().capture_frame(frame)
+
+        if self._pushed_duration is None:
+            self._pushed_duration = 0.0
+
+        self._pushed_duration += frame.duration
+        await self._audio_source.capture_frame(frame)
+
+    def flush(self) -> None:
+        """Flush the current audio segment and notify when complete"""
+        super().flush()
+
+        if self._pushed_duration is not None:
+            # Notify that playback finished
+            self.on_playback_finished(
+                playback_position=self._pushed_duration, interrupted=False
+            )
+            self._pushed_duration = None
+
+    def clear_buffer(self) -> None:
+        """Clear the audio buffer immediately"""
+        # Clear the buffer
+        self._audio_source.clear_queue()
+
+        if self._pushed_duration is not None:
+            # Notify that playback was interrupted
+            self.on_playback_finished(
+                playback_position=self._pushed_duration, interrupted=True
+            )
+            self._pushed_duration = None
+
+    async def aclose(self) -> None:
+        """Clean up resources"""
+        await self._audio_source.aclose()
