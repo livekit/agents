@@ -63,6 +63,7 @@ async def entrypoint(ctx: JobContext):
         model=google.beta.realtime.RealtimeModel(
             voice="Puck",
             temperature=0.8,
+            instructions="You are a helpful assistant, greet the user and help them with their trip planning",
         ),
         fnc_ctx=fnc_ctx,
         chat_ctx=chat_ctx,
