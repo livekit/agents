@@ -91,7 +91,7 @@ class STT(stt.STT):
         punctuate: bool = True,
         spoken_punctuation: bool = True,
         model: SpeechModels = "long",
-        location: str = "global",
+        location: str = "us-central1",
         sample_rate: int = 16000,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
@@ -224,6 +224,7 @@ class STT(stt.STT):
                     config=config,
                     content=frame.data.tobytes(),
                 ),
+                timeout=conn_options.timeout,
             )
 
             return _recognize_response_to_speech_event(raw)
