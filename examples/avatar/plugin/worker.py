@@ -91,12 +91,22 @@ class AvatarWorker:
             source=rtc.TrackSource.SOURCE_MICROPHONE
         )
         video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
-        await self._room.local_participant.publish_track(audio_track, audio_options)
-        await self._room.local_participant.publish_track(video_track, video_options)
+        self._avatar_audio_publication = (
+            await self._room.local_participant.publish_track(audio_track, audio_options)
+        )
+        self._avatar_video_publication = (
+            await self._room.local_participant.publish_track(video_track, video_options)
+        )
 
         # Start processing
         self._audio_receive_atask = asyncio.create_task(self._read_audio())
         self._video_gen_atask = asyncio.create_task(self._stream_video())
+
+    async def wait_for_subscription(self) -> None:
+        await asyncio.gather(
+            self._avatar_audio_publication.wait_for_subscription(),
+            self._avatar_video_publication.wait_for_subscription(),
+        )
 
     async def _read_audio(self) -> None:
         async for frame in self._audio_receiver.stream():
