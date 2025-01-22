@@ -50,30 +50,25 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()
 
-    # chat_ctx is used to serve as initial context, Agent will start the conversation first if chat_ctx is provided
+    # create a chat context with chat history, these will be synchronized with the server
+    # upon calling `agent.generate_reply()`
     chat_ctx = llm.ChatContext()
-    chat_ctx.append(text="What is LiveKit?", role="user")
-    chat_ctx.append(
-        text="LiveKit is the platform for building realtime AI. The main use cases are to build AI voice agents. LiveKit also powers livestreaming apps, robotics, and video conferencing.",
-        role="assistant",
-    )
-    chat_ctx.append(text="What is the LiveKit Agents framework?", role="user")
+    # chat_ctx.append(text="I'm planning a trip to Paris next month.", role="user")
+    # chat_ctx.append(
+    #     text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",
+    #     role="assistant",
+    # )
 
     agent = multimodal.MultimodalAgent(
         model=google.beta.realtime.RealtimeModel(
             voice="Puck",
             temperature=0.8,
-            instructions="""
-            You are a helpful assistant
-            Here are some helpful information about LiveKit and its products and services:
-            - LiveKit is the platform for building realtime AI. The main use cases are to build AI voice agents. LiveKit also powers livestreaming apps, robotics, and video conferencing.
-            - LiveKit provides an Agents framework for building server-side AI agents, client SDKs for building frontends, and LiveKit Cloud is a global network that transports voice, video, and data traffic in realtime.
-            """,
         ),
         fnc_ctx=fnc_ctx,
         chat_ctx=chat_ctx,
     )
     agent.start(ctx.room, participant)
+    agent.generate_reply()
 
 
 if __name__ == "__main__":
