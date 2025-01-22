@@ -29,14 +29,13 @@ from livekit.agents import (
     APITimeoutError,
     llm,
 )
-from livekit.agents.llm import ToolChoice, _create_ai_function_info
+from livekit.agents.llm import ToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import openai
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import Choice
 
-from ._oai_api import build_oai_function_description
 from .log import logger
 from .models import (
     CerebrasChatModels,
