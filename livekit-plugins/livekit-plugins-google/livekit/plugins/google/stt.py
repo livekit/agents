@@ -89,7 +89,7 @@ class STT(stt.STT):
         detect_language: bool = True,
         interim_results: bool = True,
         punctuate: bool = True,
-        spoken_punctuation: bool = True,
+        spoken_punctuation: bool = False,
         model: SpeechModels = "chirp_2",
         location: str = "us-central1",
         sample_rate: int = 16000,
