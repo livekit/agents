@@ -1,10 +1,11 @@
 import logging
 
 from dotenv import load_dotenv
+from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, ChatCLI, PipelineAgent
-from livekit.agents.pipeline.room_io import RoomAudioSink, RoomInput
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
+from livekit.agents.pipeline.room_io import RoomAudioSink, RoomInput, RoomInputOptions
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
@@ -28,7 +29,13 @@ async def entrypoint(ctx: JobContext):
     # chat_cli = ChatCLI(agent)
     # await chat_cli.run()
 
-    room_input = RoomInput(ctx.room, audio_enabled=True, video_enabled=False)
+    room_input = RoomInput(
+        ctx.room,
+        options=RoomInputOptions(
+            subscribe_audio=True,
+            subscribe_video=False,
+        ),
+    )
     audio_output = RoomAudioSink(ctx.room, sample_rate=24000, num_channels=1)
 
     agent.input.audio = room_input.audio

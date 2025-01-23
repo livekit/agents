@@ -1,6 +1,6 @@
 import asyncio
-from functools import partial
-from typing import Callable, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 from livekit import rtc
 
@@ -41,7 +41,7 @@ class RoomAudioSink(AudioSink):
         if self._publication:
             return
 
-        # TODO: handle reconnected, do we need to cancel and re-publish?
+        # TODO: handle reconnected, do we need to cancel and re-publish? seems no
         self._publication = await self._room.local_participant.publish_track(
             self._track,
             rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
@@ -88,91 +88,115 @@ class RoomAudioSink(AudioSink):
         )
 
 
+@dataclass
+class RoomInputOptions:
+    subscribe_audio: bool = True
+    """Whether to subscribe to audio"""
+    subscribe_video: bool = False
+    """Whether to subscribe to video"""
+    audio_sample_rate: int = 16000
+    """Sample rate of the input audio in Hz"""
+    audio_num_channels: int = 1
+    """Number of audio channels"""
+
+
+DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
+
+
 class RoomInput:
     """Creates video and audio streams from a remote participant in a LiveKit room"""
 
     class _RemoteTrackHandler:
         """Manages streaming from a remote track to a aio.Chan"""
 
-        def __init__(
-            self,
-            track_to_stream: Callable[
-                [rtc.RemoteTrack], rtc.AudioStream | rtc.VideoStream
-            ],
-            enabled: bool = False,
-        ) -> None:
-            self.track_to_stream = track_to_stream
-            self.enabled = enabled
+        def __init__(self, options: RoomInputOptions) -> None:
+            self._options = options
 
-            self.track: rtc.RemoteTrack | None = None
-            self.stream_task: asyncio.Task | None = None
-            self._data_ch: aio.Chan[rtc.AudioFrame | rtc.VideoFrame] | None = None
+            self._remote_track: rtc.RemoteTrack | None = None
+            self._main_atask: asyncio.Task | None = None
 
-            if enabled:
-                self._data_ch = aio.Chan()
+            self._data_ch: aio.Chan[rtc.AudioFrame | rtc.VideoFrame] = aio.Chan()
+            self._enabled = True  # stream the frame or not
 
         @property
-        def data_ch(self) -> aio.Chan | None:
+        def data_ch(self) -> aio.Chan[rtc.AudioFrame | rtc.VideoFrame]:
             return self._data_ch
+
+        @property
+        def enabled(self) -> bool:
+            return self._enabled
+
+        @enabled.setter
+        def enabled(self, enabled: bool) -> None:
+            """Drop frames if the stream is not enabled"""
+            self._enabled = enabled
 
         def setup(self, track: rtc.RemoteTrack) -> None:
             """Set up streaming for a new track"""
-            if track == self.track:
+            if track == self._remote_track:
                 return
 
-            if self.stream_task is not None:
-                self.stream_task.cancel()
+            if self._main_atask is not None:
+                self._main_atask.cancel()
 
-            assert self._data_ch is not None
-            self.track = track
-            stream = self.track_to_stream(track)
-            self.stream_task = asyncio.create_task(self._stream_frames(stream))
+            self._remote_track = track
+            if isinstance(track, rtc.RemoteAudioTrack):
+                stream = rtc.AudioStream(
+                    track=track,
+                    sample_rate=self._options.audio_sample_rate,
+                    num_channels=self._options.audio_num_channels,
+                )
+            elif isinstance(track, rtc.RemoteVideoTrack):
+                stream = rtc.VideoStream(track=track)
+            else:
+                raise ValueError(f"Unsupported track source type: {type(track)}")
 
-        async def _stream_frames(
-            self, stream: rtc.AudioStream | rtc.VideoStream
-        ) -> None:
-            assert self._data_ch is not None
+            self._main_atask = asyncio.create_task(self._read_stream(stream))
+
+        async def _read_stream(self, stream: rtc.AudioStream | rtc.VideoStream) -> None:
             async for event in stream:
+                if not self._enabled:
+                    continue
                 self._data_ch.send_nowait(event.frame)
+
+        async def aclose(self) -> None:
+            if self._main_atask is not None:
+                await aio.graceful_cancel(self._main_atask)
+            self._main_atask = None
+            self._remote_track = None
+            self._data_ch.close()
 
     def __init__(
         self,
         room: rtc.Room,
         participant_identity: Optional[str] = None,
-        *,
-        audio_enabled: bool = True,
-        video_enabled: bool = False,
-        audio_sample_rate: int = 16000,
-        audio_num_channels: int = 1,
+        options: RoomInputOptions = DEFAULT_ROOM_INPUT_OPTIONS,
     ) -> None:
         """
         Args:
             room: The LiveKit room to get streams from
             participant_identity: Optional identity of the participant to get streams from.
                                 If None, will use the first participant that joins.
-            audio_enabled: Whether to enable audio input
-            video_enabled: Whether to enable video input
-            audio_sample_rate: Sample rate of the audio in Hz
-            audio_num_channels: Number of audio channels
+            options: RoomInputOptions
         """
+        self._options = options
         self._room = room
         self._expected_identity = participant_identity
         self._participant: rtc.RemoteParticipant | None = None
         self._closed = False
 
-        # set up track streamers
-        self._audio_streamer = self._RemoteTrackHandler(
-            track_to_stream=partial(
-                rtc.AudioStream,
-                sample_rate=audio_sample_rate,
-                num_channels=audio_num_channels,
-            ),
-            enabled=audio_enabled,
-        )
-        self._video_streamer = self._RemoteTrackHandler(
-            track_to_stream=rtc.VideoStream,
-            enabled=video_enabled,
-        )
+        # set up track handlers
+        self._track_handlers: dict[
+            rtc.TrackSource.ValueType, RoomInput._RemoteTrackHandler
+        ] = {}
+        if self._options.subscribe_audio:
+            self._track_handlers[rtc.TrackSource.SOURCE_MICROPHONE] = (
+                self._RemoteTrackHandler(self._options)
+            )
+        if self._options.subscribe_video:
+            self._track_handlers[rtc.TrackSource.SOURCE_CAMERA] = (
+                self._RemoteTrackHandler(self._options)
+            )
 
         self._participant_ready = asyncio.Event()
         self._room.on("participant_connected", self._on_participant_connected)
@@ -198,11 +222,32 @@ class RoomInput:
 
     @property
     def audio(self) -> AudioStream | None:
-        return self._audio_streamer.data_ch
+        if rtc.TrackSource.SOURCE_MICROPHONE not in self._track_handlers:
+            return None
+        return self._track_handlers[rtc.TrackSource.SOURCE_MICROPHONE].data_ch
 
     @property
     def video(self) -> VideoStream | None:
-        return self._video_streamer.data_ch
+        if rtc.TrackSource.SOURCE_CAMERA not in self._track_handlers:
+            return None
+        return self._track_handlers[rtc.TrackSource.SOURCE_CAMERA].data_ch
+
+    @property
+    def audio_enabled(self) -> bool:
+        if rtc.TrackSource.SOURCE_MICROPHONE not in self._track_handlers:
+            return False
+        return self._track_handlers[rtc.TrackSource.SOURCE_MICROPHONE].enabled
+
+    @property
+    def video_enabled(self) -> bool:
+        if rtc.TrackSource.SOURCE_CAMERA not in self._track_handlers:
+            return False
+        return self._track_handlers[rtc.TrackSource.SOURCE_CAMERA].enabled
+
+    def set_enabled(self, source: rtc.TrackSource.ValueType, enabled: bool) -> None:
+        if source not in self._track_handlers:
+            raise ValueError(f"Track {source} is not subscribed")
+        self._track_handlers[source].enabled = enabled
 
     def _link_participant(self, participant: rtc.RemoteParticipant) -> None:
         if (
@@ -233,12 +278,8 @@ class RoomInput:
 
         for publication in self._participant.track_publications.values():
             # skip tracks we don't care about
-            streamer = {
-                rtc.TrackSource.SOURCE_MICROPHONE: self._audio_streamer,
-                rtc.TrackSource.SOURCE_CAMERA: self._video_streamer,
-            }.get(publication.source)
-
-            if streamer is None or not streamer.enabled:
+            handler = self._track_handlers.get(publication.source)
+            if handler is None:
                 continue
 
             # subscribe and setup streaming
@@ -247,7 +288,7 @@ class RoomInput:
 
             track: rtc.RemoteTrack | None = publication.track
             if track is not None:
-                streamer.setup(track)
+                handler.setup(track)
 
     async def aclose(self) -> None:
         if self._closed:
@@ -259,7 +300,5 @@ class RoomInput:
         self._room.off("track_subscribed", self._subscribe_to_tracks)
         self._participant = None
 
-        # Cancel stream tasks
-        for streamer in [self._audio_streamer, self._video_streamer]:
-            if streamer.stream_task is not None:
-                await aio.graceful_cancel(streamer.stream_task)
+        for handler in self._track_handlers.values():
+            await handler.aclose()
