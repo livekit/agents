@@ -1,12 +1,10 @@
 import asyncio
 from dataclasses import dataclass
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from livekit import rtc
 
-from ..utils import aio
-from .io import AudioSink, AudioStream, VideoStream
-from .log import logger
+from .io import AudioSink
 
 
 class RoomAudioSink(AudioSink):
@@ -99,23 +97,13 @@ class RoomInputOptions:
     """Sample rate of the input audio in Hz"""
     audio_num_channels: int = 1
     """Number of audio channels"""
-    video_buffer_size: Optional[int] = 30
-    """Buffer size of the video in number of frames, None means unlimited"""
-    warn_dropped_video_frames: bool = True
-    """Whether to warn when video frames are dropped"""
+    audio_queue_capacity: int = 0
+    """Capacity of the internal audio queue, 0 means unlimited"""
+    video_queue_capacity: int = 0
+    """Capacity of the internal video queue, 0 means unlimited"""
 
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
-
-
-@dataclass
-class _TrackState:
-    """State for a single audio or video track"""
-
-    stream: aio.Chan[rtc.AudioFrame | rtc.VideoFrame]
-    enabled: bool = True
-    task: Optional[asyncio.Task] = None
-    track: Optional[rtc.RemoteTrack] = None
 
 
 class RoomInput:
@@ -140,23 +128,12 @@ class RoomInput:
         self._participant: rtc.RemoteParticipant | None = None
         self._closed = False
 
-        # Track state
-        self._track_states: dict[rtc.TrackSource.ValueType, _TrackState] = {}
-
-        # Initialize track state for subscribed sources
-        if self._options.subscribe_audio:
-            source = rtc.TrackSource.SOURCE_MICROPHONE
-            self._track_states[source] = _TrackState(stream=aio.Chan())
-
-        if self._options.subscribe_video:
-            source = rtc.TrackSource.SOURCE_CAMERA
-            self._track_states[source] = _TrackState(stream=aio.Chan())
+        # streams
+        self._audio_stream: Optional[rtc.AudioStream] = None
+        self._video_stream: Optional[rtc.VideoStream] = None
 
         self._participant_ready = asyncio.Event()
         self._room.on("participant_connected", self._on_participant_connected)
-        self._room.on("track_published", self._subscribe_to_tracks)
-        self._room.on("track_subscribed", self._subscribe_to_tracks)
-        self._room.on("reconnected", self._subscribe_to_tracks)
 
         # try to find participant
         if self._expected_identity is not None:
@@ -175,33 +152,22 @@ class RoomInput:
         return self._participant
 
     @property
-    def audio(self) -> AudioStream | None:
-        if rtc.TrackSource.SOURCE_MICROPHONE not in self._track_states:
+    def audio(self) -> AsyncIterator[rtc.AudioFrame]:
+        if self._audio_stream is None:
             return None
-        return self._track_states[rtc.TrackSource.SOURCE_MICROPHONE].stream
+        return self._read_stream(self._audio_stream)
 
     @property
-    def video(self) -> VideoStream | None:
-        if rtc.TrackSource.SOURCE_CAMERA not in self._track_states:
+    def video(self) -> AsyncIterator[rtc.VideoFrame]:
+        if self._video_stream is None:
             return None
-        return self._track_states[rtc.TrackSource.SOURCE_CAMERA].stream
+        return self._read_stream(self._video_stream)
 
-    @property
-    def audio_enabled(self) -> bool:
-        if rtc.TrackSource.SOURCE_MICROPHONE not in self._track_states:
-            return False
-        return self._track_states[rtc.TrackSource.SOURCE_MICROPHONE].enabled
-
-    @property
-    def video_enabled(self) -> bool:
-        if rtc.TrackSource.SOURCE_CAMERA not in self._track_states:
-            return False
-        return self._track_states[rtc.TrackSource.SOURCE_CAMERA].enabled
-
-    def set_enabled(self, source: rtc.TrackSource.ValueType, enabled: bool) -> None:
-        if source not in self._track_states:
-            raise ValueError(f"Track {source} is not subscribed")
-        self._track_states[source].enabled = enabled
+    async def _read_stream(
+        self, stream: rtc.AudioStream | rtc.VideoStream
+    ) -> AsyncIterator[rtc.AudioFrame | rtc.VideoFrame]:
+        async for event in stream:
+            yield event.frame
 
     def _link_participant(self, participant: rtc.RemoteParticipant) -> None:
         if (
@@ -211,87 +177,29 @@ class RoomInput:
             return
 
         self._participant = participant
-        self._participant_ready.set()
 
         # set up tracks
-        self._subscribe_to_tracks()
+        if self._options.subscribe_audio:
+            self._audio_stream = rtc.AudioStream.from_participant(
+                participant=participant,
+                track_source=rtc.TrackSource.SOURCE_MICROPHONE,
+                sample_rate=self._options.audio_sample_rate,
+                num_channels=self._options.audio_num_channels,
+                capacity=self._options.audio_queue_capacity,
+            )
+        if self._options.subscribe_video:
+            self._video_stream = rtc.VideoStream.from_participant(
+                participant=participant,
+                track_source=rtc.TrackSource.SOURCE_CAMERA,
+                capacity=self._options.video_queue_capacity,
+            )
+
+        self._participant_ready.set()
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant is not None:
             return
         self._link_participant(participant)
-
-    def _subscribe_to_tracks(self, *args) -> None:
-        if self._participant is None:
-            return
-        if args and isinstance(args[-1], rtc.RemoteParticipant):
-            # track_published: (publication, participant)
-            # track_subscribed: (track, publication, participant)
-            if args[-1].identity != self._participant.identity:
-                return
-
-        for publication in self._participant.track_publications.values():
-            # skip tracks we don't care about
-            if publication.source not in self._track_states:
-                continue
-
-            # subscribe and setup streaming
-            if not publication.subscribed:
-                publication.set_subscribed(True)
-
-            track: rtc.RemoteTrack | None = publication.track
-            if track is not None:
-                self._setup_track(publication.source, track)
-
-    def _setup_track(
-        self, source: rtc.TrackSource.ValueType, track: rtc.RemoteTrack
-    ) -> None:
-        """Set up streaming for a new track"""
-        state = self._track_states[source]
-        if track == state.track:
-            return
-
-        # Cancel existing task if any
-        if state.task is not None:
-            state.task.cancel()
-
-        state.track = track
-        if isinstance(track, rtc.RemoteAudioTrack):
-            stream = rtc.AudioStream(
-                track=track,
-                sample_rate=self._options.audio_sample_rate,
-                num_channels=self._options.audio_num_channels,
-            )
-        elif isinstance(track, rtc.RemoteVideoTrack):
-            stream = rtc.VideoStream(track=track)
-        else:
-            raise ValueError(f"Unsupported track source type: {type(track)}")
-
-        async def _read_stream(stream: rtc.AudioStream | rtc.VideoStream) -> None:
-            """Handle reading from an audio or video stream"""
-
-            async for event in stream:
-                if not state.enabled:
-                    continue
-                state.stream.send_nowait(event.frame)
-                if (
-                    isinstance(event.frame, rtc.VideoFrame)
-                    and self._options.video_buffer_size is not None
-                ):
-                    dropped = 0
-                    while state.stream.qsize() > self._options.video_buffer_size:
-                        await state.stream.recv()  # drop old frames if buffer is full
-                        dropped += 1
-                    if dropped > 0 and self._options.warn_dropped_video_frames:
-                        logger.warning(
-                            "dropping video frames since buffer is full",
-                            extra={
-                                "buffer_size": self._options.video_buffer_size,
-                                "dropped": dropped,
-                            },
-                        )
-
-        state.task = asyncio.create_task(_read_stream(stream))
 
     async def aclose(self) -> None:
         if self._closed:
@@ -299,13 +207,9 @@ class RoomInput:
 
         self._closed = True
         self._room.off("participant_connected", self._on_participant_connected)
-        self._room.off("track_published", self._subscribe_to_tracks)
-        self._room.off("track_subscribed", self._subscribe_to_tracks)
         self._participant = None
 
-        # Cancel all track tasks and close channels
-        for state in self._track_states.values():
-            if state.task is not None:
-                await aio.graceful_cancel(state.task)
-            state.stream.close()
-        self._track_states.clear()
+        if self._audio_stream is not None:
+            await self._audio_stream.aclose()
+        if self._video_stream is not None:
+            await self._video_stream.aclose()
