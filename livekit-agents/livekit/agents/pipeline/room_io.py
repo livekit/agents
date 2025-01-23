@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 from functools import partial
 from typing import Callable, Optional
@@ -43,6 +41,7 @@ class RoomAudioSink(AudioSink):
         if self._publication:
             return
 
+        # TODO: handle reconnected, do we need to cancel and re-publish?
         self._publication = await self._room.local_participant.publish_track(
             self._track,
             rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
@@ -66,23 +65,27 @@ class RoomAudioSink(AudioSink):
         super().flush()
 
         if self._pushed_duration is not None:
-            # Notify that playback finished
-            self.on_playback_finished(
-                playback_position=self._pushed_duration, interrupted=False
-            )
+            self._notify_playback_finished(self._pushed_duration, interrupted=False)
             self._pushed_duration = None
 
     def clear_buffer(self) -> None:
         """Clear the audio buffer immediately"""
-        # Clear the buffer
         self._audio_source.clear_queue()
 
         if self._pushed_duration is not None:
-            # Notify that playback was interrupted
-            self.on_playback_finished(
-                playback_position=self._pushed_duration, interrupted=True
-            )
+            self._notify_playback_finished(self._pushed_duration, interrupted=True)
             self._pushed_duration = None
+
+    def _notify_playback_finished(
+        self, playback_position: float, interrupted: bool
+    ) -> None:
+        """Wait for the audio to be played out and notify when complete"""
+        playout_task = asyncio.create_task(self._audio_source.wait_for_playout())
+        playout_task.add_done_callback(
+            lambda _: self.on_playback_finished(
+                playback_position=playback_position, interrupted=interrupted
+            )
+        )
 
 
 class RoomInput:
@@ -175,6 +178,7 @@ class RoomInput:
         self._room.on("participant_connected", self._on_participant_connected)
         self._room.on("track_published", self._subscribe_to_tracks)
         self._room.on("track_subscribed", self._subscribe_to_tracks)
+        self._room.on("reconnected", self._subscribe_to_tracks)
 
         # try to find participant
         if self._expected_identity is not None:
