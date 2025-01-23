@@ -116,7 +116,7 @@ def run_app(opts: WorkerOptions) -> None:
             asyncio_debug=asyncio_debug,
             watch=watch,
             drain_timeout=0,
-            register=False,
+            register=True,
         )
 
         _run_dev(args)

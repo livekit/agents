@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from functools import partial
+from typing import Callable, Optional
 
 from livekit import rtc
 
@@ -9,24 +10,99 @@ from ..utils import aio
 from .io import AudioSink, AudioStream, VideoStream
 
 
+class RoomAudioSink(AudioSink):
+    """AudioSink implementation that publishes audio to a LiveKit room"""
+
+    def __init__(
+        self, room: rtc.Room, *, sample_rate: int = 24000, num_channels: int = 1
+    ) -> None:
+        """Initialize the RoomAudioSink
+
+        Args:
+            room: The LiveKit room to publish audio to
+            sample_rate: Sample rate of the audio in Hz
+            num_channels: Number of audio channels
+        """
+        super().__init__(sample_rate=sample_rate)
+        self._room = room
+
+        # Create audio source and track
+        self._audio_source = rtc.AudioSource(
+            sample_rate=sample_rate, num_channels=num_channels
+        )
+        self._track = rtc.LocalAudioTrack.create_audio_track(
+            "assistant_voice", self._audio_source
+        )
+
+        self._publication: rtc.LocalTrackPublication | None = None
+        self._publish_task: asyncio.Task | None = None
+        self._pushed_duration: float | None = None
+
+    async def start(self) -> None:
+        """Start publishing the audio track to the room"""
+        if self._publication:
+            return
+
+        self._publication = await self._room.local_participant.publish_track(
+            self._track,
+            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+        )
+
+        # is this necessary?
+        await self._publication.wait_for_subscription()
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        """Capture an audio frame and publish it to the room"""
+        await super().capture_frame(frame)
+
+        if self._pushed_duration is None:
+            self._pushed_duration = 0.0
+
+        self._pushed_duration += frame.duration
+        await self._audio_source.capture_frame(frame)
+
+    def flush(self) -> None:
+        """Flush the current audio segment and notify when complete"""
+        super().flush()
+
+        if self._pushed_duration is not None:
+            # Notify that playback finished
+            self.on_playback_finished(
+                playback_position=self._pushed_duration, interrupted=False
+            )
+            self._pushed_duration = None
+
+    def clear_buffer(self) -> None:
+        """Clear the audio buffer immediately"""
+        # Clear the buffer
+        self._audio_source.clear_queue()
+
+        if self._pushed_duration is not None:
+            # Notify that playback was interrupted
+            self.on_playback_finished(
+                playback_position=self._pushed_duration, interrupted=True
+            )
+            self._pushed_duration = None
+
+
 class RoomInput:
     """Creates video and audio streams from a remote participant in a LiveKit room"""
 
-    class _RemoteTrackStreamer:
-        """Manages streaming from a remote track to a channel"""
+    class _RemoteTrackHandler:
+        """Manages streaming from a remote track to a aio.Chan"""
 
         def __init__(
             self,
-            source: rtc.TrackSource.ValueType,
+            track_to_stream: Callable[
+                [rtc.RemoteTrack], rtc.AudioStream | rtc.VideoStream
+            ],
             enabled: bool = False,
-            sample_rate: int | None = None,
         ) -> None:
-            self.source = source
+            self.track_to_stream = track_to_stream
             self.enabled = enabled
-            self.sample_rate = sample_rate
 
             self.track: rtc.RemoteTrack | None = None
-            self.task: asyncio.Task | None = None
+            self.stream_task: asyncio.Task | None = None
             self._data_ch: aio.Chan[rtc.AudioFrame | rtc.VideoFrame] | None = None
 
             if enabled:
@@ -41,17 +117,13 @@ class RoomInput:
             if track == self.track:
                 return
 
-            if self.task is not None:
-                self.task.cancel()
+            if self.stream_task is not None:
+                self.stream_task.cancel()
 
             assert self._data_ch is not None
             self.track = track
-            stream = (
-                rtc.AudioStream(track, sample_rate=self.sample_rate)
-                if self.source == rtc.TrackSource.SOURCE_MICROPHONE
-                else rtc.VideoStream(track)
-            )
-            self.task = asyncio.create_task(self._stream_frames(stream))
+            stream = self.track_to_stream(track)
+            self.stream_task = asyncio.create_task(self._stream_frames(stream))
 
         async def _stream_frames(
             self, stream: rtc.AudioStream | rtc.VideoStream
@@ -67,6 +139,8 @@ class RoomInput:
         *,
         audio_enabled: bool = True,
         video_enabled: bool = False,
+        audio_sample_rate: int = 16000,
+        audio_num_channels: int = 1,
     ) -> None:
         """
         Args:
@@ -75,6 +149,8 @@ class RoomInput:
                                 If None, will use the first participant that joins.
             audio_enabled: Whether to enable audio input
             video_enabled: Whether to enable video input
+            audio_sample_rate: Sample rate of the audio in Hz
+            audio_num_channels: Number of audio channels
         """
         self._room = room
         self._expected_identity = participant_identity
@@ -82,11 +158,17 @@ class RoomInput:
         self._closed = False
 
         # set up track streamers
-        self._audio_streamer = self._RemoteTrackStreamer(
-            rtc.TrackSource.SOURCE_MICROPHONE, enabled=audio_enabled, sample_rate=16000
+        self._audio_streamer = self._RemoteTrackHandler(
+            track_to_stream=partial(
+                rtc.AudioStream,
+                sample_rate=audio_sample_rate,
+                num_channels=audio_num_channels,
+            ),
+            enabled=audio_enabled,
         )
-        self._video_streamer = self._RemoteTrackStreamer(
-            rtc.TrackSource.SOURCE_CAMERA, enabled=video_enabled
+        self._video_streamer = self._RemoteTrackHandler(
+            track_to_stream=rtc.VideoStream,
+            enabled=video_enabled,
         )
 
         self._participant_ready = asyncio.Event()
@@ -136,17 +218,21 @@ class RoomInput:
             return
         self._link_participant(participant)
 
-    def _subscribe_to_tracks(self, *args, **kwargs) -> None:
+    def _subscribe_to_tracks(self, *args) -> None:
         if self._participant is None:
             return
+        if args and isinstance(args[-1], rtc.RemoteParticipant):
+            # track_published: (publication, participant)
+            # track_subscribed: (track, publication, participant)
+            if args[-1].identity != self._participant.identity:
+                return
 
         for publication in self._participant.track_publications.values():
             # skip tracks we don't care about
-            streamer = None
-            if publication.source == rtc.TrackSource.SOURCE_MICROPHONE:
-                streamer = self._audio_streamer
-            elif publication.source == rtc.TrackSource.SOURCE_CAMERA:
-                streamer = self._video_streamer
+            streamer = {
+                rtc.TrackSource.SOURCE_MICROPHONE: self._audio_streamer,
+                rtc.TrackSource.SOURCE_CAMERA: self._video_streamer,
+            }.get(publication.source)
 
             if streamer is None or not streamer.enabled:
                 continue
@@ -171,89 +257,5 @@ class RoomInput:
 
         # Cancel stream tasks
         for streamer in [self._audio_streamer, self._video_streamer]:
-            if streamer.task is not None:
-                await aio.graceful_cancel(streamer.task)
-
-
-class RoomAudioSink(AudioSink):
-    """AudioSink implementation that publishes audio to a LiveKit room using a LocalAudioTrack"""
-
-    def __init__(
-        self, room: rtc.Room, sample_rate: int = 24000, num_channels: int = 1
-    ) -> None:
-        """Initialize the RoomAudioSink
-
-        Args:
-            room: The LiveKit room to publish audio to
-            sample_rate: Sample rate of the audio in Hz
-            num_channels: Number of audio channels
-        """
-        super().__init__(sample_rate=sample_rate)
-        self._room = room
-        self._num_channels = num_channels
-
-        # Create audio source and track
-        self._audio_source = rtc.AudioSource(
-            sample_rate=sample_rate, num_channels=num_channels
-        )
-        self._track = rtc.LocalAudioTrack.create_audio_track(
-            "assistant_voice", self._audio_source
-        )
-
-        self._publication: rtc.LocalTrackPublication | None = None
-        self._publish_task: asyncio.Task | None = None
-        self._pushed_duration: float | None = None
-
-    async def start(self) -> None:
-        """Start publishing the audio track to the room"""
-        if self._publication:
-            return
-
-        self._publication = await self._room.local_participant.publish_track(
-            self._track,
-            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
-        )
-
-        # is this necessary?
-        await self._publication.wait_for_subscription()
-
-    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        """Capture an audio frame and publish it to the room
-
-        Args:
-            frame: The audio frame to publish
-        """
-        await super().capture_frame(frame)
-
-        if self._pushed_duration is None:
-            self._pushed_duration = 0.0
-
-        self._pushed_duration += frame.duration
-        await self._audio_source.capture_frame(frame)
-
-    def flush(self) -> None:
-        """Flush the current audio segment and notify when complete"""
-        super().flush()
-
-        if self._pushed_duration is not None:
-            # Notify that playback finished
-            self.on_playback_finished(
-                playback_position=self._pushed_duration, interrupted=False
-            )
-            self._pushed_duration = None
-
-    def clear_buffer(self) -> None:
-        """Clear the audio buffer immediately"""
-        # Clear the buffer
-        self._audio_source.clear_queue()
-
-        if self._pushed_duration is not None:
-            # Notify that playback was interrupted
-            self.on_playback_finished(
-                playback_position=self._pushed_duration, interrupted=True
-            )
-            self._pushed_duration = None
-
-    async def aclose(self) -> None:
-        """Clean up resources"""
-        await self._audio_source.aclose()
+            if streamer.stream_task is not None:
+                await aio.graceful_cancel(streamer.stream_task)
