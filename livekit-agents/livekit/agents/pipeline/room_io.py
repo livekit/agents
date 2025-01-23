@@ -6,6 +6,7 @@ from livekit import rtc
 
 from ..utils import aio
 from .io import AudioSink, AudioStream, VideoStream
+from .log import logger
 
 
 class RoomAudioSink(AudioSink):
@@ -98,6 +99,10 @@ class RoomInputOptions:
     """Sample rate of the input audio in Hz"""
     audio_num_channels: int = 1
     """Number of audio channels"""
+    video_buffer_size: Optional[int] = 30
+    """Buffer size of the video in number of frames, None means unlimited"""
+    warn_dropped_video_frames: bool = True
+    """Whether to warn when video frames are dropped"""
 
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
@@ -158,6 +163,22 @@ class RoomInput:
                 if not self._enabled:
                     continue
                 self._data_ch.send_nowait(event.frame)
+                if (
+                    isinstance(event.frame, rtc.VideoFrame)
+                    and self._options.video_buffer_size is not None
+                ):
+                    dropped = 0
+                    while self._data_ch.qsize() > self._options.video_buffer_size:
+                        await self._data_ch.recv()  # drop old frames if buffer is full
+                        dropped += 1
+                    if dropped > 0 and self._options.warn_dropped_video_frames:
+                        logger.warning(
+                            "dropping video frames since buffer is full",
+                            extra={
+                                "buffer_size": self._options.video_buffer_size,
+                                "dropped": dropped,
+                            },
+                        )
 
         async def aclose(self) -> None:
             if self._main_atask is not None:
