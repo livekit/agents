@@ -1,5 +1,11 @@
 # livekit-plugins-elevenlabs
 
+## 0.7.11
+
+### Patch Changes
+
+- add latest model by 11labs - [#1396](https://github.com/livekit/agents/pull/1396) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.7.10
 
 ### Patch Changes

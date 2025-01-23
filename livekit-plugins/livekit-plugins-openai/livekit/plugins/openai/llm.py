@@ -216,6 +216,9 @@ class LLM(llm.LLM):
 
         `GOOGLE_APPLICATION_CREDENTIALS` environment variable must be set to the path of the service account key file.
         """
+        logger.warning(
+            "`openai.LLM.with_vertex()` is deprecated. Use `google.LLM()` instead."
+        )
         project_id = project_id
         location = location
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
