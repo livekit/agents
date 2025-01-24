@@ -49,6 +49,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         *,
         client: genai.Client,
         model: LiveAPIModels | str,
+        sample_rate: int = 16000,
     ):
         """
         Initializes a TranscriberSession instance for interacting with Google's Realtime API.
@@ -56,6 +57,12 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         super().__init__()
         self._client = client
         self._model = model
+        self._sample_rate = sample_rate
+        self._bstream = utils.audio.AudioByteStream(
+            16000,
+            1,
+            samples_per_channel=1200,
+        )
         self._closed = False
         system_instructions = types.Content(
             parts=[types.Part(text=SYSTEM_INSTRUCTIONS)]
@@ -77,13 +84,28 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
     def _push_audio(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
             return
-        self._queue_msg(
-            types.LiveClientRealtimeInput(
-                media_chunks=[
-                    types.Blob(data=frame.data.tobytes(), mime_type="audio/pcm")
-                ]
+        if self._sample_rate != 16000:
+            bstream = utils.audio.AudioByteStream(
+                16000,
+                1,
+                samples_per_channel=1200,
             )
-        )
+            for f in bstream.write(frame.data.tobytes()):
+                self._queue_msg(
+                    types.LiveClientRealtimeInput(
+                        media_chunks=[
+                            types.Blob(data=f.data.tobytes(), mime_type="audio/pcm")
+                        ]
+                    )
+                )
+        else:
+            self._queue_msg(
+                types.LiveClientRealtimeInput(
+                    media_chunks=[
+                        types.Blob(data=frame.data.tobytes(), mime_type="audio/pcm")
+                    ]
+                )
+            )
 
     def _queue_msg(self, msg: ClientEvents) -> None:
         if not self._closed:

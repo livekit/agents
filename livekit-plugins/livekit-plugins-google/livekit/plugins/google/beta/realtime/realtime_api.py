@@ -302,7 +302,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             self._transcriber.on("input_speech_done", self._on_input_speech_done)
         if self._opts.enable_agent_audio_transcription:
             self._agent_transcriber = TranscriberSession(
-                client=self._client, model=self._opts.model
+                client=self._client, model=self._opts.model, sample_rate=24000
             )
             self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
         # init dummy task
