@@ -75,7 +75,7 @@ class InputTranscription:
 @dataclass
 class Capabilities:
     supports_truncate: bool
-    input_audio_sample_rate: int | None
+    input_audio_sample_rate: int | None = None
 
 
 @dataclass
