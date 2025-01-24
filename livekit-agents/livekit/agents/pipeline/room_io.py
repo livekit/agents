@@ -7,6 +7,7 @@ from livekit import rtc
 from .io import AudioSink
 
 
+# TODO: add RoomOutput that has audio and video sinks, optionally with av sync?
 class RoomAudioSink(AudioSink):
     """AudioSink implementation that publishes audio to a LiveKit room"""
 
@@ -89,9 +90,9 @@ class RoomAudioSink(AudioSink):
 
 @dataclass
 class RoomInputOptions:
-    subscribe_audio: bool = True
+    audio_enabled: bool = True
     """Whether to subscribe to audio"""
-    subscribe_video: bool = False
+    video_enabled: bool = False
     """Whether to subscribe to video"""
     audio_sample_rate: int = 16000
     """Sample rate of the input audio in Hz"""
@@ -152,22 +153,26 @@ class RoomInput:
         return self._participant
 
     @property
-    def audio(self) -> AsyncIterator[rtc.AudioFrame]:
+    def audio(self) -> AsyncIterator[rtc.AudioFrame] | None:
         if self._audio_stream is None:
             return None
-        return self._read_stream(self._audio_stream)
+
+        async def _read_stream():
+            async for event in self._audio_stream:
+                yield event.frame
+
+        return _read_stream()
 
     @property
-    def video(self) -> AsyncIterator[rtc.VideoFrame]:
+    def video(self) -> AsyncIterator[rtc.VideoFrame] | None:
         if self._video_stream is None:
             return None
-        return self._read_stream(self._video_stream)
 
-    async def _read_stream(
-        self, stream: rtc.AudioStream | rtc.VideoStream
-    ) -> AsyncIterator[rtc.AudioFrame | rtc.VideoFrame]:
-        async for event in stream:
-            yield event.frame
+        async def _read_stream():
+            async for event in self._video_stream:
+                yield event.frame
+
+        return _read_stream()
 
     def _link_participant(self, participant: rtc.RemoteParticipant) -> None:
         if (
@@ -179,7 +184,7 @@ class RoomInput:
         self._participant = participant
 
         # set up tracks
-        if self._options.subscribe_audio:
+        if self._options.audio_enabled:
             self._audio_stream = rtc.AudioStream.from_participant(
                 participant=participant,
                 track_source=rtc.TrackSource.SOURCE_MICROPHONE,
@@ -187,7 +192,7 @@ class RoomInput:
                 num_channels=self._options.audio_num_channels,
                 capacity=self._options.audio_queue_capacity,
             )
-        if self._options.subscribe_video:
+        if self._options.video_enabled:
             self._video_stream = rtc.VideoStream.from_participant(
                 participant=participant,
                 track_source=rtc.TrackSource.SOURCE_CAMERA,
@@ -211,5 +216,7 @@ class RoomInput:
 
         if self._audio_stream is not None:
             await self._audio_stream.aclose()
+            self._audio_stream = None
         if self._video_stream is not None:
             await self._video_stream.aclose()
+            self._video_stream = None
