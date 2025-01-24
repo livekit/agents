@@ -232,8 +232,6 @@ class TTSSegmentsSync:
                 / audio_data.pushed_duration
             )
 
-        print(f"Real speed: {real_speed}, base speed: {self._opts.speed}")
-
         seg_id = _utils.segment_uuid()
         words = self._opts.word_tokenizer.tokenize(text=sentence)
         processed_words: list[str] = []

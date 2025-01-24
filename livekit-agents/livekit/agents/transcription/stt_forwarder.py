@@ -1,126 +1,156 @@
 from __future__ import annotations
 
+import abc
 import asyncio
-import contextlib
-from typing import Awaitable, Callable, Optional, Union
+import sys
+from typing import AsyncIterator
 
 from livekit import rtc
 
-from .. import stt
+from .. import stt, utils
 from ..log import logger
+from ..utils import log_exceptions
 from . import _utils
 
-BeforeForwardCallback = Callable[
-    ["STTSegmentsForwarder", rtc.Transcription],
-    Union[rtc.Transcription, Awaitable[Optional[rtc.Transcription]]],
-]
+
+class STTSegmentsForwarder(abc.ABC):
+    """Base class for forwarding STT segments from speech recognition."""
+
+    def __init__(self):
+        self._forward_task: asyncio.Task | None = None
+        self._current_id = _utils.segment_uuid()
+        self._segment_stream = utils.aio.Chan[rtc.TranscriptionSegment]()
+
+    def update(self, ev: stt.SpeechEvent) -> None:
+        """Update with new speech recognition event."""
+        if self._forward_task is None:
+            self._forward_task = asyncio.create_task(
+                self._forward_segments(self._segment_stream)
+            )
+
+        # Common handling of speech events
+        if not ev.alternatives:
+            return
+
+        text = ev.alternatives[0].text
+        is_final = ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+
+        segment = rtc.TranscriptionSegment(
+            id=self._current_id,
+            text=text,
+            start_time=0,
+            end_time=0,
+            final=is_final,
+            language="",  # TODO: Add language support
+        )
+
+        if is_final:
+            self._current_id = _utils.segment_uuid()
+
+        self._segment_stream.send_nowait(segment)
+
+    async def aclose(self) -> None:
+        """Close the forwarder."""
+        self._segment_stream.close()
+        if self._forward_task:
+            await self._forward_task
+
+    @abc.abstractmethod
+    async def _forward_segments(
+        self, segment_stream: AsyncIterator[rtc.TranscriptionSegment]
+    ) -> None:
+        """Forward segments to the target destination.
+
+        Args:
+            segment_stream: Stream of transcription segments from speech recognition
+        """
+        pass
 
 
-WillForwardTranscription = BeforeForwardCallback
-
-
-def _default_before_forward_cb(
-    fwd: STTSegmentsForwarder, transcription: rtc.Transcription
-) -> rtc.Transcription:
-    return transcription
-
-
-class STTSegmentsForwarder:
-    """
-    Forward STT transcription to the users. (Useful for client-side rendering)
-    """
+class STTRoomForwarder(STTSegmentsForwarder):
+    """Forwards STT segments to a LiveKit room."""
 
     def __init__(
         self,
-        *,
         room: rtc.Room,
         participant: rtc.Participant | str,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
-        before_forward_cb: BeforeForwardCallback = _default_before_forward_cb,
-        # backward compatibility
-        will_forward_transcription: WillForwardTranscription | None = None,
     ):
+        super().__init__()
         identity = participant if isinstance(participant, str) else participant.identity
         if track is None:
             track = _utils.find_micro_track_id(room, identity)
         elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
             track = track.sid
 
-        if will_forward_transcription is not None:
-            logger.warning(
-                "will_forward_transcription is deprecated and will be removed in 1.5.0, use before_forward_cb instead",
-            )
-            before_forward_cb = will_forward_transcription
+        self._room = room
+        self._participant_identity = identity
+        self._track_id = track
 
-        self._room, self._participant_identity, self._track_id = room, identity, track
-        self._before_forward_cb = before_forward_cb
-        self._queue = asyncio.Queue[Optional[rtc.TranscriptionSegment]]()
-        self._main_task = asyncio.create_task(self._run())
-        self._current_id = _utils.segment_uuid()
-
-    async def _run(self):
+    @log_exceptions(logger=logger)
+    async def _forward_segments(
+        self, segment_stream: AsyncIterator[rtc.TranscriptionSegment]
+    ) -> None:
+        """Forward segments to LiveKit room."""
         try:
-            while True:
-                seg = await self._queue.get()
-                if seg is None:
-                    break
+            async for segment in segment_stream:
+                if not self._room.isconnected():
+                    continue
 
-                base_transcription = rtc.Transcription(
+                transcription = rtc.Transcription(
                     participant_identity=self._participant_identity,
                     track_sid=self._track_id,
-                    segments=[seg],  # no history for now
+                    segments=[segment],
                 )
 
-                transcription = self._before_forward_cb(self, base_transcription)
-                if asyncio.iscoroutine(transcription):
-                    transcription = await transcription
-
-                if not isinstance(transcription, rtc.Transcription):
-                    transcription = _default_before_forward_cb(self, base_transcription)
-
-                if transcription.segments and self._room.isconnected():
+                try:
                     await self._room.local_participant.publish_transcription(
                         transcription
                     )
+                except Exception:
+                    logger.exception("Failed to publish transcription")
+                    continue
 
         except Exception:
-            logger.exception("error in stt transcription")
+            logger.exception("Error in forward segments task")
 
-    def update(self, ev: stt.SpeechEvent):
-        if ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-            # TODO(theomonnom): We always take the first alternative, we should mb expose opt to the
-            # user?
-            text = ev.alternatives[0].text
-            self._queue.put_nowait(
-                rtc.TranscriptionSegment(
-                    id=self._current_id,
-                    text=text,
-                    start_time=0,
-                    end_time=0,
-                    final=False,
-                    language="",  # TODO
-                )
-            )
-        elif ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-            text = ev.alternatives[0].text
-            self._queue.put_nowait(
-                rtc.TranscriptionSegment(
-                    id=self._current_id,
-                    text=text,
-                    start_time=0,
-                    end_time=0,
-                    final=True,
-                    language="",  # TODO
-                )
-            )
 
-            self._current_id = _utils.segment_uuid()
+class STTStdoutForwarder(STTSegmentsForwarder):
+    """Forwards STT segments to stdout with real-time display."""
 
-    async def aclose(self, *, wait: bool = True) -> None:
-        self._queue.put_nowait(None)
+    def __init__(self, *, show_timing: bool = False):
+        super().__init__()
+        self._show_timing = show_timing
+        self._start_time = asyncio.get_running_loop().time()
+        self._last_text = ""
 
-        if not wait:
-            self._main_task.cancel()
+    @log_exceptions(logger=logger)
+    async def _forward_segments(
+        self, segment_stream: AsyncIterator[rtc.TranscriptionSegment]
+    ) -> None:
+        """Forward segments to console with real-time display."""
+        try:
+            async for segment in segment_stream:
+                text = segment.text
+                if text == self._last_text:
+                    continue
 
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_task
+                # Clear the line and write the new text
+                sys.stdout.write("\r" + " " * len(self._last_text) + "\r")
+
+                if self._show_timing:
+                    elapsed = asyncio.get_running_loop().time() - self._start_time
+                    timing = f"[{elapsed:.2f}s] "
+                    sys.stdout.write(timing)
+
+                sys.stdout.write(text)
+                sys.stdout.flush()
+                self._last_text = text
+
+                if segment.final:
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    self._last_text = ""
+
+        except Exception:
+            logger.exception("Error in forward segments task")
