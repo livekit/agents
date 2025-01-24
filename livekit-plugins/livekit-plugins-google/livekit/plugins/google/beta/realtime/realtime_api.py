@@ -75,6 +75,7 @@ class InputTranscription:
 @dataclass
 class Capabilities:
     supports_truncate: bool
+    input_audio_sample_rate: int | None
 
 
 @dataclass
@@ -156,6 +157,7 @@ class RealtimeModel:
         super().__init__()
         self._capabilities = Capabilities(
             supports_truncate=False,
+            input_audio_sample_rate=16000,
         )
         self._model = model
         self._loop = loop or asyncio.get_event_loop()
