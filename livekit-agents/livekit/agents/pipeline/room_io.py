@@ -7,87 +7,6 @@ from livekit import rtc
 from .io import AudioSink
 
 
-# TODO: add RoomOutput that has audio and video sinks, optionally with av sync?
-class RoomAudioSink(AudioSink):
-    """AudioSink implementation that publishes audio to a LiveKit room"""
-
-    def __init__(
-        self, room: rtc.Room, *, sample_rate: int = 24000, num_channels: int = 1
-    ) -> None:
-        """Initialize the RoomAudioSink
-
-        Args:
-            room: The LiveKit room to publish audio to
-            sample_rate: Sample rate of the audio in Hz
-            num_channels: Number of audio channels
-        """
-        super().__init__(sample_rate=sample_rate)
-        self._room = room
-
-        # Create audio source and track
-        self._audio_source = rtc.AudioSource(
-            sample_rate=sample_rate, num_channels=num_channels
-        )
-        self._track = rtc.LocalAudioTrack.create_audio_track(
-            "assistant_voice", self._audio_source
-        )
-
-        self._publication: rtc.LocalTrackPublication | None = None
-        self._publish_task: asyncio.Task | None = None
-        self._pushed_duration: float | None = None
-
-    async def start(self) -> None:
-        """Start publishing the audio track to the room"""
-        if self._publication:
-            return
-
-        # TODO: handle reconnected, do we need to cancel and re-publish? seems no
-        self._publication = await self._room.local_participant.publish_track(
-            self._track,
-            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
-        )
-
-        # is this necessary?
-        await self._publication.wait_for_subscription()
-
-    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        """Capture an audio frame and publish it to the room"""
-        await super().capture_frame(frame)
-
-        if self._pushed_duration is None:
-            self._pushed_duration = 0.0
-
-        self._pushed_duration += frame.duration
-        await self._audio_source.capture_frame(frame)
-
-    def flush(self) -> None:
-        """Flush the current audio segment and notify when complete"""
-        super().flush()
-
-        if self._pushed_duration is not None:
-            self._notify_playback_finished(self._pushed_duration, interrupted=False)
-            self._pushed_duration = None
-
-    def clear_buffer(self) -> None:
-        """Clear the audio buffer immediately"""
-        self._audio_source.clear_queue()
-
-        if self._pushed_duration is not None:
-            self._notify_playback_finished(self._pushed_duration, interrupted=True)
-            self._pushed_duration = None
-
-    def _notify_playback_finished(
-        self, playback_position: float, interrupted: bool
-    ) -> None:
-        """Wait for the audio to be played out and notify when complete"""
-        playout_task = asyncio.create_task(self._audio_source.wait_for_playout())
-        playout_task.add_done_callback(
-            lambda _: self.on_playback_finished(
-                playback_position=playback_position, interrupted=interrupted
-            )
-        )
-
-
 @dataclass
 class RoomInputOptions:
     audio_enabled: bool = True
@@ -220,3 +139,111 @@ class RoomInput:
         if self._video_stream is not None:
             await self._video_stream.aclose()
             self._video_stream = None
+
+
+class RoomOutput:
+    """Manages audio output to a LiveKit room"""
+
+    def __init__(
+        self, room: rtc.Room, *, sample_rate: int = 24000, num_channels: int = 1
+    ) -> None:
+        """Initialize the RoomOutput
+
+        Args:
+            room: The LiveKit room to publish media to
+            sample_rate: Sample rate of the audio in Hz
+            num_channels: Number of audio channels
+        """
+        self._audio_sink = RoomAudioSink(
+            room=room, sample_rate=sample_rate, num_channels=num_channels
+        )
+
+    async def start(self) -> None:
+        await self._audio_sink.start()
+
+    @property
+    def audio(self) -> "RoomAudioSink":
+        return self._audio_sink
+
+
+class RoomAudioSink(AudioSink):
+    """AudioSink implementation that publishes audio to a LiveKit room"""
+
+    def __init__(
+        self, room: rtc.Room, *, sample_rate: int = 24000, num_channels: int = 1
+    ) -> None:
+        """Initialize the RoomAudioSink
+
+        Args:
+            room: The LiveKit room to publish audio to
+            sample_rate: Sample rate of the audio in Hz
+            num_channels: Number of audio channels
+        """
+        super().__init__(sample_rate=sample_rate)
+        self._room = room
+
+        # create audio source
+        self._audio_source = rtc.AudioSource(
+            sample_rate=sample_rate, num_channels=num_channels
+        )
+
+        self._publication: rtc.LocalTrackPublication | None = None
+        self._pushed_duration: float | None = None
+
+        def _on_reconnected(self) -> None:
+            self._publication = None
+            asyncio.create_task(self.start())
+
+        self._room.on("reconnected", _on_reconnected)
+
+    async def start(self) -> None:
+        """Start publishing the audio track to the room"""
+        if self._publication:
+            return
+
+        track = rtc.LocalAudioTrack.create_audio_track(
+            "assistant_voice", self._audio_source
+        )
+        self._publication = await self._room.local_participant.publish_track(
+            track=track,
+            options=rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+        )
+
+        await self._publication.wait_for_subscription()
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        """Capture an audio frame and publish it to the room"""
+        await super().capture_frame(frame)
+
+        if self._pushed_duration is None:
+            self._pushed_duration = 0.0
+
+        self._pushed_duration += frame.duration
+        await self._audio_source.capture_frame(frame)
+
+    def flush(self) -> None:
+        """Flush the current audio segment and notify when complete"""
+        super().flush()
+
+        if self._pushed_duration is not None:
+            self._notify_playback_finished(self._pushed_duration, interrupted=False)
+            self._pushed_duration = None
+
+    def clear_buffer(self) -> None:
+        """Clear the audio buffer immediately"""
+        self._audio_source.clear_queue()
+
+        if self._pushed_duration is not None:
+            self._notify_playback_finished(self._pushed_duration, interrupted=True)
+            self._pushed_duration = None
+
+    def _notify_playback_finished(
+        self, playback_position: float, interrupted: bool
+    ) -> None:
+        """Wait for the audio to be played out and notify when complete"""
+        playout_task = asyncio.create_task(self._audio_source.wait_for_playout())
+        playout_task.add_done_callback(
+            lambda _: self.on_playback_finished(
+                playback_position=playback_position, interrupted=interrupted
+            )
+        )

@@ -5,7 +5,7 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, ChatCLI, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import RoomAudioSink, RoomInput, RoomInputOptions
+from livekit.agents.pipeline.room_io import RoomOutput, RoomInput, RoomInputOptions
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
@@ -32,17 +32,17 @@ async def entrypoint(ctx: JobContext):
     room_input = RoomInput(
         ctx.room,
         options=RoomInputOptions(
-            subscribe_audio=True,
-            subscribe_video=False,
+            audio_enabled=True,
+            video_enabled=False,
         ),
     )
-    audio_output = RoomAudioSink(ctx.room, sample_rate=24000, num_channels=1)
+    room_output = RoomOutput(ctx.room, sample_rate=24000, num_channels=1)
 
     agent.input.audio = room_input.audio
-    agent.output.audio = audio_output
+    agent.output.audio = room_output.audio
 
     # TODO: the interrupted flag is not set correctly
-    @audio_output.on("playback_finished")
+    @room_output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(
             "playback_finished",
@@ -53,7 +53,7 @@ async def entrypoint(ctx: JobContext):
         )
 
     await room_input.wait_for_participant()
-    await audio_output.start()
+    await room_output.start()
 
 
 if __name__ == "__main__":
