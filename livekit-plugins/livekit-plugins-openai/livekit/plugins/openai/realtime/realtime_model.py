@@ -507,10 +507,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self._sess = sess
 
         def append(self, frame: rtc.AudioFrame) -> None:
-            self._sess._queue_msg({
-                "type": "input_audio_buffer.append",
-                "audio": base64.b64encode(frame.data).decode("utf-8"),
-            })
+            self._sess._queue_msg(
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(frame.data).decode("utf-8"),
+                }
+            )
 
         def clear(self) -> None:
             self._sess._queue_msg({"type": "input_audio_buffer.clear"})
@@ -590,17 +592,21 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     ] = []
                     for cnt in message_content:
                         if isinstance(cnt, str):
-                            user_contents.append({
-                                "type": "input_text",
-                                "text": cnt,
-                            })
+                            user_contents.append(
+                                {
+                                    "type": "input_text",
+                                    "text": cnt,
+                                }
+                            )
                         elif isinstance(cnt, llm.ChatAudio):
-                            user_contents.append({
-                                "type": "input_audio",
-                                "audio": base64.b64encode(
-                                    utils.merge_frames(cnt.frame).data
-                                ).decode("utf-8"),
-                            })
+                            user_contents.append(
+                                {
+                                    "type": "input_audio",
+                                    "audio": base64.b64encode(
+                                        utils.merge_frames(cnt.frame).data
+                                    ).decode("utf-8"),
+                                }
+                            )
 
                     event = {
                         "type": "conversation.item.create",
@@ -617,10 +623,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     assistant_contents: list[api_proto.TextContent] = []
                     for cnt in message_content:
                         if isinstance(cnt, str):
-                            assistant_contents.append({
-                                "type": "text",
-                                "text": cnt,
-                            })
+                            assistant_contents.append(
+                                {
+                                    "type": "text",
+                                    "text": cnt,
+                                }
+                            )
                         elif isinstance(cnt, llm.ChatAudio):
                             logger.warning(
                                 "audio content in assistant message is not supported"
@@ -675,21 +683,25 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         ) -> asyncio.Future[bool]:
             fut = asyncio.Future[bool]()
             self._sess._item_truncated_futs[item_id] = fut
-            self._sess._queue_msg({
-                "type": "conversation.item.truncate",
-                "item_id": item_id,
-                "content_index": content_index,
-                "audio_end_ms": audio_end_ms,
-            })
+            self._sess._queue_msg(
+                {
+                    "type": "conversation.item.truncate",
+                    "item_id": item_id,
+                    "content_index": content_index,
+                    "audio_end_ms": audio_end_ms,
+                }
+            )
             return fut
 
         def delete(self, *, item_id: str) -> asyncio.Future[bool]:
             fut = asyncio.Future[bool]()
             self._sess._item_deleted_futs[item_id] = fut
-            self._sess._queue_msg({
-                "type": "conversation.item.delete",
-                "item_id": item_id,
-            })
+            self._sess._queue_msg(
+                {
+                    "type": "conversation.item.delete",
+                    "item_id": item_id,
+                }
+            )
             return fut
 
     class Conversation:
@@ -761,15 +773,17 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 or self._sess._pending_responses[active_resp_id].done_fut.done()
             ):
                 # no active response in progress, create a new one
-                self._sess._queue_msg({
-                    "type": "response.create",
-                    "response": {
-                        "instructions": instructions,
-                        "modalities": modalities,
-                        "conversation": conversation,
-                        "metadata": metadata,
-                    },
-                })
+                self._sess._queue_msg(
+                    {
+                        "type": "response.create",
+                        "response": {
+                            "instructions": instructions,
+                            "modalities": modalities,
+                            "conversation": conversation,
+                            "metadata": metadata,
+                        },
+                    }
+                )
                 _fut = asyncio.Future[bool]()
                 _fut.set_result(True)
                 return _fut
@@ -806,15 +820,17 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 )
                 new_create_fut = asyncio.Future[None]()
                 self._sess._response_create_fut = new_create_fut
-                self._sess._queue_msg({
-                    "type": "response.create",
-                    "response": {
-                        "instructions": instructions,
-                        "modalities": modalities,
-                        "conversation": conversation,
-                        "metadata": metadata,
-                    },
-                })
+                self._sess._queue_msg(
+                    {
+                        "type": "response.create",
+                        "response": {
+                            "instructions": instructions,
+                            "modalities": modalities,
+                            "conversation": conversation,
+                            "metadata": metadata,
+                        },
+                    }
+                )
                 return True
 
             return asyncio.create_task(wait_and_create())
@@ -979,10 +995,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         else:
             del session_data["max_response_output_tokens"]  # type: ignore
 
-        self._queue_msg({
-            "type": "session.update",
-            "session": session_data,
-        })
+        self._queue_msg(
+            {
+                "type": "session.update",
+                "session": session_data,
+            }
+        )
 
     def chat_ctx_copy(self) -> llm.ChatContext:
         return self._remote_conversation_items.to_chat_context()
