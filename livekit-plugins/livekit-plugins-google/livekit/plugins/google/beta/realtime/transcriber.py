@@ -57,11 +57,6 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         self._client = client
         self._model = model
         self._needed_sr = 16000
-        self._bstream = utils.audio.AudioByteStream(
-            16000,
-            1,
-            samples_per_channel=1200,
-        )
         self._closed = False
         system_instructions = types.Content(
             parts=[types.Part(text=SYSTEM_INSTRUCTIONS)]
