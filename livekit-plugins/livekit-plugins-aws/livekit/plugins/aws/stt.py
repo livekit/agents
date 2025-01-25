@@ -131,58 +131,45 @@ class SpeechStream(stt.SpeechStream):
         self._client = TranscribeStreamingClient(region=self._opts.speech_region)
 
     async def _run(self) -> None:
-        try:
-            # aws requires a async generator when calling start_stream_transcription
-            stream = await self._client.start_stream_transcription(
-                language_code=self._opts.language,
-                media_sample_rate_hz=self._opts.sample_rate,
-                media_encoding=self._opts.encoding,
-                vocabulary_name=self._opts.vocabulary_name,
-                session_id=self._opts.session_id,
-                vocab_filter_method=self._opts.vocab_filter_method,
-                vocab_filter_name=self._opts.vocab_filter_name,
-                show_speaker_label=self._opts.show_speaker_label,
-                enable_channel_identification=self._opts.enable_channel_identification,
-                number_of_channels=self._opts.number_of_channels,
-                enable_partial_results_stabilization=self._opts.enable_partial_results_stabilization,
-                partial_results_stability=self._opts.partial_results_stability,
-                language_model_name=self._opts.language_model_name,
-            )
+        stream = await self._client.start_stream_transcription(
+            language_code=self._opts.language,
+            media_sample_rate_hz=self._opts.sample_rate,
+            media_encoding=self._opts.encoding,
+            vocabulary_name=self._opts.vocabulary_name,
+            session_id=self._opts.session_id,
+            vocab_filter_method=self._opts.vocab_filter_method,
+            vocab_filter_name=self._opts.vocab_filter_name,
+            show_speaker_label=self._opts.show_speaker_label,
+            enable_channel_identification=self._opts.enable_channel_identification,
+            number_of_channels=self._opts.number_of_channels,
+            enable_partial_results_stabilization=self._opts.enable_partial_results_stabilization,
+            partial_results_stability=self._opts.partial_results_stability,
+            language_model_name=self._opts.language_model_name,
+        )
 
-            # this function basically convert the queue into a async generator
-            async def input_generator():
-                try:
-                    async for frame in self._input_ch:
-                        if isinstance(frame, rtc.AudioFrame):
-                            await stream.input_stream.send_audio_event(
-                                audio_chunk=frame.data.tobytes()
-                            )
-                    await stream.input_stream.end_stream()
-
-                except Exception as e:
-                    logger.exception(f"an error occurred while streaming inputs: {e}")
-
-            async def handle_transcript_events():
-                try:
-                    async for event in stream.output_stream:
-                        if isinstance(event, TranscriptEvent):
-                            self._process_transcript_event(event)
-                except Exception as e:
-                    logger.exception(
-                        f"An error occurred while handling transcript events: {e}"
+        @utils.log_exceptions(logger=logger)
+        async def input_generator():
+            async for frame in self._input_ch:
+                if isinstance(frame, rtc.AudioFrame):
+                    await stream.input_stream.send_audio_event(
+                        audio_chunk=frame.data.tobytes()
                     )
+            await stream.input_stream.end_stream()
 
-            tasks = [
-                asyncio.create_task(input_generator()),
-                asyncio.create_task(handle_transcript_events()),
-            ]
-            # try to connect
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(*tasks)
-        except Exception as e:
-            logger.exception(f"An error occurred while streaming inputs: {e}")
+        @utils.log_exceptions(logger=logger)
+        async def handle_transcript_events():
+            async for event in stream.output_stream:
+                if isinstance(event, TranscriptEvent):
+                    self._process_transcript_event(event)
+
+        tasks = [
+            asyncio.create_task(input_generator()),
+            asyncio.create_task(handle_transcript_events()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
 
     def _process_transcript_event(self, transcript_event: TranscriptEvent):
         stream = transcript_event.transcript.results

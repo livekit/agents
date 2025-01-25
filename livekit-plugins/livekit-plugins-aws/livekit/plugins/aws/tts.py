@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import aiohttp
-from aiobotocore.session import AioSession, get_session  # type: ignore
+from aiobotocore.session import AioSession, get_session
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -105,8 +105,7 @@ class TTS(tts.TTS):
         )
         self._session = session or get_session()
 
-    def get_client(self):
-        """Returns a client creator context."""
+    def _get_client(self):
         return self._session.create_client(
             "polly",
             region_name=self._opts.speech_region,
@@ -126,7 +125,7 @@ class TTS(tts.TTS):
             text=text,
             conn_options=conn_options,
             opts=self._opts,
-            get_client=self.get_client,
+            get_client=self._get_client,
             segment_id=segment_id,
         )
 
