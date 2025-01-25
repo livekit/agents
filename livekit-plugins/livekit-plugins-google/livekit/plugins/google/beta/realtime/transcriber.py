@@ -49,7 +49,6 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         *,
         client: genai.Client,
         model: LiveAPIModels | str,
-        sample_rate: int = 16000,
     ):
         """
         Initializes a TranscriberSession instance for interacting with Google's Realtime API.
@@ -57,7 +56,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         super().__init__()
         self._client = client
         self._model = model
-        self._sample_rate = sample_rate
+        self._needed_sr = 16000
         self._bstream = utils.audio.AudioByteStream(
             16000,
             1,
@@ -85,11 +84,11 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
     def _push_audio(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
             return
-        if self._sample_rate != 16000:
+        if frame.sample_rate != self._needed_sr:
             if not self._resampler:
                 self._resampler = rtc.AudioResampler(
                     frame.sample_rate,
-                    16000,
+                    self._needed_sr,
                     quality=rtc.AudioResamplerQuality.HIGH,
                 )
 
