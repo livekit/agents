@@ -79,18 +79,22 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
             self._main_task(), name="gemini-realtime-transcriber"
         )
         self._send_ch = utils.aio.Chan[ClientEvents]()
+        self._resampler: rtc.AudioResampler | None = None
         self._active_response_id = None
 
     def _push_audio(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
             return
         if self._sample_rate != 16000:
-            bstream = utils.audio.AudioByteStream(
-                16000,
-                1,
-                samples_per_channel=1200,
-            )
-            for f in bstream.write(frame.data.tobytes()):
+            if not self._resampler:
+                self._resampler = rtc.AudioResampler(
+                    frame.sample_rate,
+                    16000,
+                    quality=rtc.AudioResamplerQuality.HIGH,
+                )
+
+        if self._resampler:
+            for f in self._resampler.push(frame):
                 self._queue_msg(
                     types.LiveClientRealtimeInput(
                         media_chunks=[
