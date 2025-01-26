@@ -23,26 +23,28 @@ async def entrypoint(ctx: JobContext):
             llm=openai.realtime.RealtimeModel(),
         )
     )
-    agent.start()
 
-    # # start a chat inside the CLI
-    # chat_cli = ChatCLI(agent)
-    # await chat_cli.run()
+    # default use RoomIO if room is provided
+    await agent.start(room=ctx.room)
 
-    room_input = RoomInput(
-        ctx.room,
-        options=RoomInputOptions(
-            audio_enabled=True,
-            video_enabled=False,
-        ),
-    )
-    room_output = RoomOutput(ctx.room, sample_rate=24000, num_channels=1)
+    # # Or use RoomInput and RoomOutput explicitly
+    # room_input = RoomInput(
+    #     ctx.room,
+    #     options=RoomInputOptions(
+    #         audio_enabled=True,
+    #         video_enabled=False,
+    #     ),
+    # )
+    # room_output = RoomOutput(ctx.room, sample_rate=24000, num_channels=1)
 
-    agent.input.audio = room_input.audio
-    agent.output.audio = room_output.audio
+    # agent.input.audio = room_input.audio
+    # agent.output.audio = room_output.audio
+
+    # await room_input.wait_for_participant()
+    # await room_output.start()
 
     # TODO: the interrupted flag is not set correctly
-    @room_output.audio.on("playback_finished")
+    @agent.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(
             "playback_finished",
@@ -51,9 +53,6 @@ async def entrypoint(ctx: JobContext):
                 "interrupted": ev.interrupted,
             },
         )
-
-    await room_input.wait_for_participant()
-    await room_output.start()
 
 
 if __name__ == "__main__":
