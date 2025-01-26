@@ -192,8 +192,8 @@ class RoomAudioSink(AudioSink):
         super().__init__(sample_rate=sample_rate)
         self._room = room
 
-        # create audio source
-        self._audio_buffer: aio.Chan[rtc.AudioFrame] = aio.Chan(maxsize=capacity)
+        # buffer the audio frames as soon as they are captured
+        self._audio_buffer: aio.Chan[rtc.AudioFrame | None] = aio.Chan(maxsize=capacity)
         self._audio_buffer_lock = threading.Lock()
         self._audio_source = rtc.AudioSource(
             sample_rate=sample_rate, num_channels=num_channels
