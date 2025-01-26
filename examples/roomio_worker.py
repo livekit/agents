@@ -2,11 +2,11 @@ import logging
 
 from dotenv import load_dotenv
 from livekit import rtc
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, WorkerType, cli
-from livekit.agents.pipeline import AgentTask, ChatCLI, PipelineAgent
+from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
+from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import RoomAudioSink, RoomInput, RoomInputOptions
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.agents.pipeline.room_io import RoomInput, RoomInputOptions, RoomOutput
+from livekit.plugins import openai
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -23,26 +23,38 @@ async def entrypoint(ctx: JobContext):
             llm=openai.realtime.RealtimeModel(),
         )
     )
-    agent.start()
 
-    # # start a chat inside the CLI
-    # chat_cli = ChatCLI(agent)
-    # await chat_cli.run()
-
-    room_input = RoomInput(
-        ctx.room,
-        options=RoomInputOptions(
-            subscribe_audio=True,
-            subscribe_video=False,
+    # default use RoomIO if room is provided
+    await agent.start(
+        room=ctx.room,
+        room_input_options=RoomInputOptions(
+            audio_enabled=True,
+            video_enabled=False,
+            audio_sample_rate=24000,
+            audio_num_channels=1,
         ),
     )
-    audio_output = RoomAudioSink(ctx.room, sample_rate=24000, num_channels=1)
 
-    agent.input.audio = room_input.audio
-    agent.output.audio = audio_output
+    # # Or use RoomInput and RoomOutput explicitly
+    # room_input = RoomInput(
+    #     ctx.room,
+    #     options=RoomInputOptions(
+    #         audio_enabled=True,
+    #         video_enabled=False,
+    #         audio_sample_rate=24000,
+    #         audio_num_channels=1,
+    #     ),
+    # )
+    # room_output = RoomOutput(ctx.room, sample_rate=24000, num_channels=1)
+
+    # agent.input.audio = room_input.audio
+    # agent.output.audio = room_output.audio
+
+    # await room_input.wait_for_participant()
+    # await room_output.start()
 
     # TODO: the interrupted flag is not set correctly
-    @audio_output.on("playback_finished")
+    @agent.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(
             "playback_finished",
@@ -51,9 +63,6 @@ async def entrypoint(ctx: JobContext):
                 "interrupted": ev.interrupted,
             },
         )
-
-    await room_input.wait_for_participant()
-    await audio_output.start()
 
 
 if __name__ == "__main__":
