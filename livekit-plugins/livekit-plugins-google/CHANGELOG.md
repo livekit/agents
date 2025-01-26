@@ -1,5 +1,11 @@
 # livekit-plugins-google
 
+## 0.10.1
+
+### Patch Changes
+
+- fix: update default model to chirp2 in google stt & update generate_reply method in gemini realtime - [#1401](https://github.com/livekit/agents/pull/1401) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.10.0
 
 ### Minor Changes
