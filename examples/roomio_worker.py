@@ -1,17 +1,29 @@
+import asyncio
 import logging
 
 from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
-from livekit.agents.pipeline.io import PlaybackFinishedEvent
+from livekit.agents.pipeline.io import PlaybackFinishedEvent, TextSink
 from livekit.agents.pipeline.room_io import RoomInput, RoomInputOptions, RoomOutput
+from livekit.agents.transcription.tts_forwarder import TTSRoomForwarder
 from livekit.plugins import openai
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
+
+
+class MockTextSink(TextSink):
+    """Mock text sink that drops text."""
+
+    async def capture_text(self, text: str) -> None:
+        await super().capture_text(text)  # Emit event
+
+    def flush(self) -> None:
+        super().flush()  # Emit event
 
 
 async def entrypoint(ctx: JobContext):
@@ -52,6 +64,13 @@ async def entrypoint(ctx: JobContext):
 
     # await room_input.wait_for_participant()
     # await room_output.start()
+
+    # TTS transcription forward
+    agent.output.text = MockTextSink()
+    tts_forwarder = TTSRoomForwarder(ctx.room, participant=ctx.room.local_participant)
+    asyncio.create_task(
+        tts_forwarder.run(audio_sink=agent.output.audio, text_sink=agent.output.text)
+    )
 
     # TODO: the interrupted flag is not set correctly
     @agent.output.audio.on("playback_finished")

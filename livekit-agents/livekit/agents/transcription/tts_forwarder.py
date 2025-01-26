@@ -59,7 +59,7 @@ class TTSSegmentsForwarder(TTSSegmentsSync, abc.ABC):
         def on_audio_flush() -> None:
             self.mark_audio_segment_end()
 
-        def on_audio_clear() -> None:
+        def on_audio_clear_buffer() -> None:
             self.mark_audio_segment_end()
 
         def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
@@ -75,7 +75,7 @@ class TTSSegmentsForwarder(TTSSegmentsSync, abc.ABC):
         try:
             audio_sink.on("capture_frame", on_audio_frame)
             audio_sink.on("flush", on_audio_flush)
-            audio_sink.on("clear", on_audio_clear)
+            audio_sink.on("clear_buffer", on_audio_clear_buffer)
             audio_sink.on("playback_finished", on_playback_finished)
 
             text_sink.on("capture_text", on_text)
@@ -89,7 +89,7 @@ class TTSSegmentsForwarder(TTSSegmentsSync, abc.ABC):
             # Clean up event handlers
             audio_sink.off("capture_frame", on_audio_frame)
             audio_sink.off("flush", on_audio_flush)
-            audio_sink.off("clear", on_audio_clear)
+            audio_sink.off("clear_buffer", on_audio_clear_buffer)
             audio_sink.off("playback_finished", on_playback_finished)
 
             text_sink.off("capture_text", on_text)

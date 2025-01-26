@@ -54,7 +54,9 @@ class PlaybackFinishedEvent:
 
 class AudioSink(
     ABC,
-    rtc.EventEmitter[Literal["capture_frame", "flush", "clear", "playback_finished"]],
+    rtc.EventEmitter[
+        Literal["capture_frame", "flush", "clear_buffer", "playback_finished"]
+    ],
 ):
     def __init__(self, *, sample_rate: int | None = None) -> None:
         """
@@ -130,7 +132,7 @@ class AudioSink(
     @abstractmethod
     def clear_buffer(self) -> None:
         """Clear the buffer, stopping playback immediately"""
-        self.emit("clear")
+        self.emit("clear_buffer")
         self.__capturing = False
 
 
