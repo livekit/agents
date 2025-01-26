@@ -2,11 +2,11 @@ import logging
 
 from dotenv import load_dotenv
 from livekit import rtc
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, WorkerType, cli
-from livekit.agents.pipeline import AgentTask, ChatCLI, PipelineAgent
+from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
+from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import RoomOutput, RoomInput, RoomInputOptions
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.agents.pipeline.room_io import RoomInput, RoomInputOptions, RoomOutput
+from livekit.plugins import openai
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -25,7 +25,15 @@ async def entrypoint(ctx: JobContext):
     )
 
     # default use RoomIO if room is provided
-    await agent.start(room=ctx.room)
+    await agent.start(
+        room=ctx.room,
+        room_input_options=RoomInputOptions(
+            audio_enabled=True,
+            video_enabled=False,
+            audio_sample_rate=24000,
+            audio_num_channels=1,
+        ),
+    )
 
     # # Or use RoomInput and RoomOutput explicitly
     # room_input = RoomInput(
@@ -33,6 +41,8 @@ async def entrypoint(ctx: JobContext):
     #     options=RoomInputOptions(
     #         audio_enabled=True,
     #         video_enabled=False,
+    #         audio_sample_rate=24000,
+    #         audio_num_channels=1,
     #     ),
     # )
     # room_output = RoomOutput(ctx.room, sample_rate=24000, num_channels=1)

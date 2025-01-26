@@ -1,10 +1,14 @@
 import asyncio
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
+import threading
 
 from livekit import rtc
 
+from ..utils import aio
+from .. import utils
 from .io import AudioSink
+from .log import logger
 
 
 @dataclass
@@ -170,7 +174,12 @@ class RoomAudioSink(AudioSink):
     """AudioSink implementation that publishes audio to a LiveKit room"""
 
     def __init__(
-        self, room: rtc.Room, *, sample_rate: int = 24000, num_channels: int = 1
+        self,
+        room: rtc.Room,
+        *,
+        sample_rate: int = 24000,
+        num_channels: int = 1,
+        capacity: int = 0,
     ) -> None:
         """Initialize the RoomAudioSink
 
@@ -178,17 +187,21 @@ class RoomAudioSink(AudioSink):
             room: The LiveKit room to publish audio to
             sample_rate: Sample rate of the audio in Hz
             num_channels: Number of audio channels
+            capacity: Capacity of the internal audio queue, 0 means unlimited
         """
         super().__init__(sample_rate=sample_rate)
         self._room = room
 
         # create audio source
+        self._audio_buffer: aio.Chan[rtc.AudioFrame] = aio.Chan(maxsize=capacity)
+        self._audio_buffer_lock = threading.Lock()
         self._audio_source = rtc.AudioSource(
             sample_rate=sample_rate, num_channels=num_channels
         )
 
         self._publication: rtc.LocalTrackPublication | None = None
-        self._pushed_duration: float | None = None
+        self._main_atask: asyncio.Task[None] | None = None
+        self._pushed_duration: Optional[float] = None
 
         def _on_reconnected(self) -> None:
             self._publication = None
@@ -208,42 +221,69 @@ class RoomAudioSink(AudioSink):
             track=track,
             options=rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
         )
+        self._main_atask = asyncio.create_task(self._capture_frame_task())
 
         await self._publication.wait_for_subscription()
+
+    @utils.log_exceptions(logger=logger)
+    async def _capture_frame_task(self) -> None:
+        async for frame in self._audio_buffer:
+            if frame is None:
+                if self._pushed_duration is not None:
+                    # end of segment
+                    await self._notify_playback_finished(
+                        self._pushed_duration, interrupted=False
+                    )
+                    self._pushed_duration = None
+                continue
+
+            # capture frame
+            await self._audio_source.capture_frame(frame)
+            if self._pushed_duration is None:
+                self._pushed_duration = 0.0
+            self._pushed_duration += frame.duration
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture an audio frame and publish it to the room"""
         await super().capture_frame(frame)
-
-        if self._pushed_duration is None:
-            self._pushed_duration = 0.0
-
-        self._pushed_duration += frame.duration
-        await self._audio_source.capture_frame(frame)
+        with self._audio_buffer_lock:
+            await self._audio_buffer.send(frame)
 
     def flush(self) -> None:
         """Flush the current audio segment and notify when complete"""
         super().flush()
-
-        if self._pushed_duration is not None:
-            self._notify_playback_finished(self._pushed_duration, interrupted=False)
-            self._pushed_duration = None
+        if self._pushed_duration is None:
+            return
+        with self._audio_buffer_lock:
+            self._audio_buffer.send_nowait(None)
 
     def clear_buffer(self) -> None:
         """Clear the audio buffer immediately"""
-        self._audio_source.clear_queue()
+        super().clear_buffer()
+        with self._audio_buffer_lock:
+            while not self._audio_buffer.empty():
+                try:
+                    self._audio_buffer.recv_nowait()
+                except aio.ChanEmpty:
+                    break
+            if self._pushed_duration is not None:
+                self._pushed_duration = max(
+                    0, self._pushed_duration - self._audio_source.queued_duration
+                )
+            self._audio_source.clear_queue()
 
         if self._pushed_duration is not None:
-            self._notify_playback_finished(self._pushed_duration, interrupted=True)
+            asyncio.create_task(
+                self._notify_playback_finished(self._pushed_duration, interrupted=True)
+            )
             self._pushed_duration = None
 
-    def _notify_playback_finished(
+    async def _notify_playback_finished(
         self, playback_position: float, interrupted: bool
     ) -> None:
         """Wait for the audio to be played out and notify when complete"""
-        playout_task = asyncio.create_task(self._audio_source.wait_for_playout())
-        playout_task.add_done_callback(
-            lambda _: self.on_playback_finished(
-                playback_position=playback_position, interrupted=interrupted
-            )
+        await self._audio_source.wait_for_playout()
+
+        self.on_playback_finished(
+            playback_position=playback_position, interrupted=interrupted
         )
