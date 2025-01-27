@@ -108,8 +108,8 @@ class LLM(llm.LLM):
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY", None)
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if _gac is None:
-            raise ValueError(
-                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file."
+            logger.warning(
+                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file. Otherwise, use any of the other Google Cloud auth methods."
             )
 
         if vertexai:
