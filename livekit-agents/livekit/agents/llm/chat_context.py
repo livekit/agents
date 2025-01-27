@@ -21,7 +21,7 @@ from typing import (
 )
 
 from livekit import rtc
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing_extensions import TypeAlias
 
 from .. import utils
@@ -81,11 +81,17 @@ class ImageContent(BaseModel):
     Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
     """
 
+    # temporary fix for pydantic
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
 
 class AudioContent(BaseModel):
     type: Literal["audio_content"] = Field(default="audio_content")
     frame: list[rtc.AudioFrame]
     transcript: Optional[str] = None
+
+    # temporary fix for pydantic before rtc.AudioFrame is supported
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class ChatMessage(BaseModel):
