@@ -262,21 +262,19 @@ class LLMStream(llm.LLMStream):
         return None
 
     def _try_build_function(self, request_id: str, chunk: dict) -> llm.ChatChunk | None:
-        missing = []
         if not self._tool_call_id:
-            missing.append("tool_call_id")
+            logger.warning("aws bedrock llm: no tool call id in the response")
+            return None
         if not self._fnc_name:
-            missing.append("fnc_name")
-        if self._fnc_raw_arguments is None:
-            missing.append("fnc_raw_arguments")
+            logger.warning("aws bedrock llm: no function name in the response")
+            return None
+        if not self._fnc_raw_arguments:
+            logger.warning("aws bedrock llm: no function arguments in the response")
+            return None
         if not self._fnc_ctx:
-            missing.append("fnc_ctx")
-
-        if missing:
             logger.warning(
-                f"aws bedrock llm: missing data for function call: {missing}"
+                "aws bedrock llm: stream tried to run function without function context"
             )
-            self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
             return None
 
         fnc_info = _create_ai_function_info(
