@@ -263,10 +263,10 @@ class SupervisedProc(ABC):
         await self._join_fut
         self._exitcode = self._proc.exitcode
         self._proc.close()
-        await aio.gracefully_cancel(ping_task, read_ipc_task, main_task)
+        await aio.cancel_and_wait(ping_task, read_ipc_task, main_task)
 
         if memory_monitor_task is not None:
-            await aio.gracefully_cancel(memory_monitor_task)
+            await aio.cancel_and_wait(memory_monitor_task)
 
         with contextlib.suppress(duplex_unix.DuplexClosed):
             await self._pch.aclose()
@@ -334,7 +334,7 @@ class SupervisedProc(ABC):
         try:
             await asyncio.gather(*tasks)
         finally:
-            await aio.gracefully_cancel(*tasks)
+            await aio.cancel_and_wait(*tasks)
 
     @log_exceptions(logger=logger)
     async def _memory_monitor_task(self) -> None:

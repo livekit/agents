@@ -92,8 +92,11 @@ class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["message"] = "message"
     role: Literal["developer", "system", "user", "assistant"]
-    content: list[Union[str, ImageContent, AudioContent]]
+    content: list[ChatContent]
     hash: Optional[bytes] = None
+
+
+ChatContent: TypeAlias = Union[str, ImageContent, AudioContent]
 
 
 class FunctionCall(BaseModel):
