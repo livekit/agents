@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import (
     AsyncIterable,
     Literal,
+    Optional
 )
 
 from livekit import rtc
@@ -12,6 +13,7 @@ from livekit import rtc
 from .. import debug, llm, utils
 from ..log import logger
 from . import io
+from .room_io import RoomInput, RoomInputOptions, RoomOutput
 from .agent_task import TaskActivity, AgentTask
 from .speech_handle import SpeechHandle
 
@@ -80,9 +82,32 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
     # constructor of the PipelineAgent
 
-    def start(self) -> None:
+    async def start(
+        self,
+        room: Optional[rtc.Room] = None,
+        room_input_options: Optional[RoomInputOptions] = None,
+    ) -> None:
+        """Start the pipeline agent.
+
+        Args:
+            room (Optional[rtc.Room]): The LiveKit room. If provided and no input/output audio
+                is set, automatically configures room audio I/O.
+            room_input_options (Optional[RoomInputOptions]): Options for the room input.
+        """
         if self._started:
             return
+
+        if room is not None:
+            # configure room I/O if not already set
+            if self.input.audio is None:
+                room_input = RoomInput(room=room, options=room_input_options)
+                self._input.audio = room_input.audio
+                await room_input.wait_for_participant()
+
+            if self.output.audio is None:
+                room_output = RoomOutput(room=room)
+                self._output.audio = room_output.audio
+                await room_output.start()
 
         if self.input.audio is not None:
             self._forward_audio_atask = asyncio.create_task(
