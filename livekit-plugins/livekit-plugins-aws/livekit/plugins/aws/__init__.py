@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .llm import LLM
 from .stt import STT, SpeechStream
 from .tts import TTS, ChunkedStream
 from .version import __version__
 
-__all__ = ["STT", "SpeechStream", "TTS", "ChunkedStream", "__version__"]
+__all__ = ["STT", "SpeechStream", "TTS", "ChunkedStream", "LLM", "__version__"]
 
 from livekit.agents import Plugin
 
