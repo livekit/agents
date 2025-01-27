@@ -186,7 +186,7 @@ def _build_aws_ctx(
                 )
 
         if msg.role == "tool":
-            tool_response = {
+            tool_response: dict = {
                 "toolResult": {
                     "toolUseId": msg.tool_call_id,
                     "content": [],

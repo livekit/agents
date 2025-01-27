@@ -173,7 +173,7 @@ class LLMStream(llm.LLMStream):
 
             if self._fnc_ctx and self._fnc_ctx.ai_functions:
                 tools = _build_tools(self._fnc_ctx)
-                tool_config = {"tools": tools}
+                tool_config: dict[str, Any] = {"tools": tools}
 
                 if isinstance(self._tool_choice, ToolChoice):
                     tool_config["toolChoice"] = {
