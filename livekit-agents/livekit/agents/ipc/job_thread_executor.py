@@ -255,8 +255,8 @@ class ThreadJobExecutor:
         monitor_task = asyncio.create_task(self._monitor_task())
 
         await self._join_fut
-        await utils.aio.gracefully_cancel(ping_task, monitor_task)
-        await utils.aio.gracefully_cancel(*self._inference_tasks)
+        await utils.aio.cancel_and_wait(ping_task, monitor_task)
+        await utils.aio.cancel_and_wait(*self._inference_tasks)
 
         with contextlib.suppress(duplex_unix.DuplexClosed):
             await self._pch.aclose()

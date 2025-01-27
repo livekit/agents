@@ -308,7 +308,7 @@ class RecognizeStream(ABC):
     async def aclose(self) -> None:
         """Close ths stream immediately"""
         self._input_ch.close()
-        await aio.gracefully_cancel(self._task)
+        await aio.cancel_and_wait(self._task)
 
         if self._metrics_task is not None:
             await self._metrics_task

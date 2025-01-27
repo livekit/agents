@@ -189,7 +189,7 @@ class _JobProc:
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
 
         await self._exit_proc_flag.wait()
-        await aio.gracefully_cancel(read_task)
+        await aio.cancel_and_wait(read_task)
 
     def _start_job(self, msg: StartJobRequest) -> None:
         self._room = rtc.Room()
