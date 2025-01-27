@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -135,6 +136,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
                                         content.text += part.text
 
                             if server_content.turn_complete:
+                                content.text = clean_transcription(content.text)
                                 self.emit("input_speech_done", content)
                                 self._active_response_id = None
 
@@ -163,3 +165,9 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
                 await self._session.close()
+
+
+def clean_transcription(text: str) -> str:
+    text = text.replace("\n", " ")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()

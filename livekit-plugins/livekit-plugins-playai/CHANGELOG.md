@@ -1,5 +1,11 @@
 # livekit-plugins-playht
 
+## 1.0.6
+
+### Patch Changes
+
+- fix: Avoid websocket reconnections for each request - [#1387](https://github.com/livekit/agents/pull/1387) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 1.0.5
 
 ### Patch Changes

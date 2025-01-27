@@ -76,6 +76,7 @@ class ServerVad(TypedDict):
     threshold: NotRequired[float]
     prefix_padding_ms: NotRequired[int]
     silence_duration_ms: NotRequired[int]
+    create_response: NotRequired[bool]
 
 
 class FunctionTool(TypedDict):
@@ -307,6 +308,8 @@ class ClientEvent:
         tools: list[FunctionTool]
         tool_choice: ToolChoice
         temperature: float
+        conversation: Literal["auto", "none"]
+        metadata: NotRequired[map | None]
         max_output_tokens: int | Literal["inf"]
 
     class ResponseCreate(TypedDict):

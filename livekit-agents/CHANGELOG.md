@@ -1,5 +1,21 @@
 # livekit-agents
 
+## 0.12.10
+
+### Patch Changes
+
+- fix false positive interruption tripping up certain LLMs - [#1410](https://github.com/livekit/agents/pull/1410) ([@davidzhao](https://github.com/davidzhao))
+
+- fix: ensure llm.FallbackAdapter executes function calls - [#1409](https://github.com/livekit/agents/pull/1409) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.12.9
+
+### Patch Changes
+
+- add generate_reply api for multimodal agent - [#1359](https://github.com/livekit/agents/pull/1359) ([@longcw](https://github.com/longcw))
+
+- remove aiodns from livekit-agents - [#1368](https://github.com/livekit/agents/pull/1368) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.12.8
 
 ### Patch Changes
