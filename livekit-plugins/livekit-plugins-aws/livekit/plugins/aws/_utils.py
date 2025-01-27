@@ -175,13 +175,15 @@ def _build_aws_ctx(
 
         if msg.tool_calls:
             for fnc in msg.tool_calls:
-                current_content.append({
-                    "toolUse": {
-                        "toolUseId": fnc.tool_call_id,
-                        "name": fnc.function_info.name,
-                        "input": fnc.arguments,
+                current_content.append(
+                    {
+                        "toolUse": {
+                            "toolUseId": fnc.tool_call_id,
+                            "name": fnc.function_info.name,
+                            "input": fnc.arguments,
+                        }
                     }
-                })
+                )
 
         if msg.role == "tool":
             tool_response = {
