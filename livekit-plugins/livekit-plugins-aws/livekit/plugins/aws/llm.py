@@ -64,21 +64,18 @@ class LLM(llm.LLM):
         ``api_key``  and ``api_secret`` must be set to your AWS Access key id and secret access key, either using the argument or by setting the
         ``AWS_ACCESS_KEY_ID`` and ``AWS_SECRET_ACCESS_KEY`` environmental variables.
 
-        See https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html for more details on the the AWS Polly TTS.
+        See https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html for more details on the the AWS Bedrock Runtime API.
 
         Args:
             model (TEXT_MODEL, optional): The model name to use. Defaults to "anthropic.claude-3-5-sonnet-20241022-v2:0".
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
-            candidate_count (int, optional): Number of candidate responses to generate. Defaults to 1.
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
-            top_k (int, optional): The top-k sampling value for response generation. Defaults to None.
-            presence_penalty (float, optional): Penalizes the model for generating previously mentioned concepts. Defaults to None.
-            frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
+            additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
         """
         super().__init__()
         self._capabilities = llm.LLMCapabilities(supports_choices_on_int=True)
