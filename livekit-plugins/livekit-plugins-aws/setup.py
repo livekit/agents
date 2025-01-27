@@ -49,8 +49,8 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents>=0.12.0",
-        "aiobotocore==2.13.1",
-        "boto3>=1.35.74",
+        "aiobotocore==2.19.0",
+        "boto3==1.36.3",
         "amazon-transcribe>=0.6.2",
     ],
     project_urls={
