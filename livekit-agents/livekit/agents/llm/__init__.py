@@ -1,5 +1,7 @@
+from . import utils
 from .chat_context import (
     AudioContent,
+    ChatContent,
     ChatContext,
     ChatItem,
     ChatMessage,
@@ -11,6 +13,7 @@ from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .function_context import (
     AIFunction,
     FunctionContext,
+    AIError,
     ai_function,
     find_ai_functions,
     is_ai_function,
@@ -25,13 +28,14 @@ from .llm import (
     LLMStream,
     ToolChoice,
 )
-from .utils import compute_chat_ctx_diff
+from . import remote_chat_context
 
 __all__ = [
     "LLM",
     "LLMStream",
     "ChatContext",
     "ChatMessage",
+    "ChatContent",
     "FunctionCall",
     "FunctionCallOutput",
     "AudioContent",
@@ -46,10 +50,12 @@ __all__ = [
     "FallbackAdapter",
     "AvailabilityChangedEvent",
     "ToolChoice",
-    "compute_chat_ctx_diff",
     "is_ai_function",
     "ai_function",
     "find_ai_functions",
     "AIFunction",
     "FunctionContext",
+    "AIError",
+    "utils",
+    "remote_chat_context",
 ]

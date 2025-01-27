@@ -15,12 +15,11 @@ from typing import (
 from livekit import rtc
 
 from .. import llm, stt
-
 from ..log import logger
 
 STTNode = Callable[
     [AsyncIterable[rtc.AudioFrame]],
-    Union[Awaitable[Optional[AsyncIterable[stt.SpeechEvent]]]],
+    Union[Awaitable[Optional[AsyncIterable[stt.SpeechEvent]]]],  # TODO: support str
 ]
 LLMNode = Callable[
     [llm.ChatContext, Optional[llm.FunctionContext]],
@@ -65,6 +64,9 @@ class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
 
         self.__playback_segments_count = 0
         self.__playback_finished_count = 0
+        self.__last_playback_ev: PlaybackFinishedEvent = PlaybackFinishedEvent(
+            playback_position=0, interrupted=False
+        )
 
     def on_playback_finished(
         self, *, playback_position: float, interrupted: bool

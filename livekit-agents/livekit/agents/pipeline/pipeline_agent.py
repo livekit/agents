@@ -2,15 +2,19 @@ from __future__ import annotations, print_function
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal, Optional
+from typing import (
+    AsyncIterable,
+    Literal,
+    Optional
+)
 
 from livekit import rtc
 
 from .. import debug, llm, utils
 from ..log import logger
 from . import io
-from .agent_task import ActiveTask, AgentTask
 from .room_io import RoomInput, RoomInputOptions, RoomOutput
+from .agent_task import TaskActivity, AgentTask
 from .speech_handle import SpeechHandle
 
 EventTypes = Literal[
@@ -30,11 +34,6 @@ class PipelineOptions:
     min_interruption_duration: float
     min_endpointing_delay: float
     max_fnc_steps: int
-
-
-class AgentContext:
-    def __init__(self) -> None:
-        pass
 
 
 class PipelineAgent(rtc.EventEmitter[EventTypes]):
@@ -77,7 +76,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
         # agent tasks
         self._current_task: AgentTask = task
-        self._active_task: ActiveTask | None = None
+        self._active_task: TaskActivity | None = None
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -126,7 +125,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             return
 
         if self._forward_audio_atask is not None:
-            await utils.aio.gracefully_cancel(self._forward_audio_atask)
+            await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
     @property
     def options(self) -> PipelineOptions:
@@ -169,7 +168,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         self._current_task = task
 
         if self._started:
-            self._update_activity_task = asyncio.create_task(
+            self._update_activity_atask = asyncio.create_task(
                 self._update_activity_task(self._current_task),
                 name="_update_activity_task",
             )

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from livekit import rtc
 from livekit.agents import llm, multimodal, utils
-from livekit.agents.llm.function_context import build_legacy_openai_schema
 from pydantic import ValidationError
 
 import openai
@@ -15,7 +14,9 @@ from openai.types.beta.realtime import (
     ConversationItem,
     ConversationItemContent,
     ConversationItemCreateEvent,
+    ConversationItemCreatedEvent,
     ConversationItemDeleteEvent,
+    ConversationItemDeletedEvent,
     ConversationItemTruncateEvent,
     ErrorEvent,
     InputAudioBufferAppendEvent,
@@ -59,29 +60,37 @@ NUM_CHANNELS = 1
 @dataclass
 class _RealtimeOptions:
     model: str
+    voice: str
+
+
+@dataclass
+class _MessageGeneration:
+    message_id: str
+    text_ch: utils.aio.Chan[str]
+    audio_ch: utils.aio.Chan[rtc.AudioFrame]
 
 
 @dataclass
 class _ResponseGeneration:
-    response_id: str
-    item_id: str
-    audio_ch: utils.aio.Chan[rtc.AudioFrame]
-    text_ch: utils.aio.Chan[str]
+    message_ch: utils.aio.Chan[multimodal.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
+
+    messages: dict[str, _MessageGeneration]
 
 
 class RealtimeModel(multimodal.RealtimeModel):
     def __init__(
         self,
         *,
-        model: str = "gpt-4o-realtime-preview-2024-12-17",
+        model: str = "gpt-4o-realtime-preview",
+        voice: str = "alloy",
         client: openai.AsyncClient | None = None,
     ) -> None:
         super().__init__(
             capabilities=multimodal.RealtimeCapabilities(message_truncation=True)
         )
 
-        self._opts = _RealtimeOptions(model=model)
+        self._opts = _RealtimeOptions(model=model, voice=voice)
         self._client = client or openai.AsyncClient()
 
     def session(self) -> "RealtimeSession":
@@ -94,7 +103,6 @@ class RealtimeSession(multimodal.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._realtime_model = realtime_model
-        self._chat_ctx = llm.ChatContext.empty()
         self._fnc_ctx = llm.FunctionContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent]()
 
@@ -104,9 +112,14 @@ class RealtimeSession(multimodal.RealtimeSession):
         )
 
         self._current_generation: _ResponseGeneration | None = None
+        self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+
+        self._update_chat_ctx_lock = asyncio.Lock()
+        self._update_fnc_ctx_lock = asyncio.Lock()
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        # TODO(theomonnom): handle reconnections
         self._conn = conn = await self._realtime_model._client.beta.realtime.connect(
             model=self._realtime_model._opts.model
         ).enter()
@@ -122,6 +135,10 @@ class RealtimeSession(multimodal.RealtimeSession):
                     self._handle_response_created(event)
                 elif event.type == "response.output_item.added":
                     self._handle_response_output_item_added(event)
+                elif event.type == "conversation.item.created":
+                    self._handle_conversion_item_created(event)
+                elif event.type == "conversation.item.deleted":
+                    self._handle_conversion_item_deleted(event)
                 elif event.type == "response.audio_transcript.delta":
                     self._handle_response_audio_transcript_delta(event)
                 elif event.type == "response.audio.delta":
@@ -137,208 +154,133 @@ class RealtimeSession(multimodal.RealtimeSession):
                 elif event.type == "error":
                     self._handle_error(event)
 
+                if event.type != "response.audio.delta":
+                    print(event)
+
         @utils.log_exceptions(logger=logger)
-        async def _forward_input_audio() -> None:
+        async def _forward_input() -> None:
             async for msg in self._msg_ch:
-                await conn.send(msg)
+                try:
+                    await conn.send(msg)
+                except Exception:
+                    break
+
+        self._msg_ch.send_nowait(
+            SessionUpdateEvent(
+                type="session.update",
+                session=session_update_event.Session(
+                    model=self._realtime_model._opts.model,  # type: ignore
+                    voice=self._realtime_model._opts.voice,  # type: ignore
+                ),
+                event_id=utils.shortuuid("session_update_"),
+            )
+        )
 
         tasks = [
             asyncio.create_task(_listen_for_events(), name="_listen_for_events"),
-            asyncio.create_task(_forward_input_audio(), name="_forward_input_audio"),
+            asyncio.create_task(_forward_input(), name="_forward_input"),
         ]
         try:
             await asyncio.gather(*tasks)
         finally:
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)
             await conn.close()
-
-    def _handle_input_audio_buffer_speech_started(
-        self, _: InputAudioBufferSpeechStartedEvent
-    ) -> None:
-        self.emit("input_speech_started", multimodal.InputSpeechStartedEvent())
-
-    def _handle_input_audio_buffer_speech_stopped(
-        self, _: InputAudioBufferSpeechStoppedEvent
-    ) -> None:
-        self.emit("input_speech_stopped", multimodal.InputSpeechStoppedEvent())
-
-    def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
-        response_id = event.response.id
-        assert response_id is not None, "response.id is None"
-        self._current_generation = _ResponseGeneration(
-            response_id=response_id,
-            item_id="",
-            audio_ch=utils.aio.Chan(),
-            text_ch=utils.aio.Chan(),
-            function_ch=utils.aio.Chan(),
-        )
-
-    def _handle_response_output_item_added(
-        self, event: ResponseOutputItemAddedEvent
-    ) -> None:
-        assert self._current_generation is not None, "current_generation is None"
-        item_id = event.item.id
-        assert item_id is not None, "item.id is None"
-
-        # We assume only one "message" item in the current approach
-        if self._current_generation.item_id and event.item.type == "message":
-            logger.warning("Received an unexpected second item with type `message`")
-            return
-
-        if event.item.type == "function_call":
-            return
-
-        self._current_generation.item_id = item_id
-        self.emit(
-            "generation_created",
-            multimodal.GenerationCreatedEvent(
-                message_id=item_id,
-                text_stream=self._current_generation.text_ch,
-                audio_stream=self._current_generation.audio_ch,
-                function_stream=self._current_generation.function_ch,
-            ),
-        )
-
-    def _handle_response_audio_transcript_delta(
-        self, event: ResponseAudioTranscriptDeltaEvent
-    ) -> None:
-        assert self._current_generation is not None, "current_generation is None"
-        self._current_generation.text_ch.send_nowait(event.delta)
-
-    def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
-        data = base64.b64decode(event.delta)
-        frame = rtc.AudioFrame(
-            data=data,
-            sample_rate=SAMPLE_RATE,
-            num_channels=NUM_CHANNELS,
-            samples_per_channel=len(data) // 2,
-        )
-        self._current_generation.audio_ch.send_nowait(frame)
-
-    def _handle_response_audio_transcript_done(
-        self, _: ResponseAudioTranscriptDoneEvent
-    ) -> None:
-        assert self._current_generation is not None, "current_generation is None"
-        self._current_generation.text_ch.close()
-
-    def _handle_response_audio_done(self, _: ResponseAudioDoneEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
-        self._current_generation.audio_ch.close()
-
-    def _handle_response_output_item_done(
-        self, event: ResponseOutputItemDoneEvent
-    ) -> None:
-        assert self._current_generation is not None, "current_generation is None"
-
-        item = event.item
-        if item.type == "function_call":
-            if len(self.fnc_ctx.ai_functions) == 0:
-                logger.warning(
-                    "received a function_call item without ai functions",
-                    extra={"item": item},
-                )
-                return
-
-            assert item.call_id is not None, "call_id is None"
-            assert item.name is not None, "name is None"
-            assert item.arguments is not None, "arguments is None"
-
-            self._current_generation.function_ch.send_nowait(
-                llm.FunctionCall(
-                    call_id=item.call_id,
-                    name=item.name,
-                    arguments=item.arguments,
-                )
-            )
-
-    def _handle_response_done(self, _: ResponseDoneEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
-        # self._current_generation.tool_calls_ch.close()
-        self._current_generation = None
-
-    def _handle_error(self, event: ErrorEvent) -> None:
-        logger.error(
-            "OpenAI Realtime API returned an error",
-            extra={"error": event.error},
-        )
-        self.emit(
-            "error",
-            multimodal.ErrorEvent(type=event.error.type, message=event.error.message),
-        )
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx.copy()
+        return self._remote_chat_ctx.to_chat_ctx()
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext:
         return self._fnc_ctx.copy()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        diff_ops = llm.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
-
-        for msg_id in diff_ops.to_remove:
-            self._msg_ch.send_nowait(
-                ConversationItemDeleteEvent(
-                    type="conversation.item.delete",
-                    item_id=msg_id,
-                )
+        async with self._update_chat_ctx_lock:
+            diff_ops = llm.utils.compute_chat_ctx_diff(
+                self._remote_chat_ctx.to_chat_ctx(), chat_ctx
             )
 
-        for previous_msg_id, msg_id in diff_ops.to_create:
-            chat_item = chat_ctx.get_by_id(msg_id)
-            assert chat_item is not None
-            self._msg_ch.send_nowait(
-                ConversationItemCreateEvent(
-                    type="conversation.item.create",
-                    item=_chat_item_to_conversation_item(chat_item),
-                    previous_item_id=(
-                        "root" if previous_msg_id is None else previous_msg_id
-                    ),
-                )
-            )
+            # futs = []
 
-        # TODO(theomonnom): wait for the server confirmation
+            for msg_id in diff_ops.to_remove:
+                event_id = utils.shortuuid("chat_ctx_delete_")
+                self._msg_ch.send_nowait(
+                    ConversationItemDeleteEvent(
+                        type="conversation.item.delete",
+                        item_id=msg_id,
+                        event_id=event_id,
+                    )
+                )
+                # futs.append(f := asyncio.Future())
+                # self._response_futures[event_id] = f
+
+            for previous_msg_id, msg_id in diff_ops.to_create:
+                event_id = utils.shortuuid("chat_ctx_create_")
+                chat_item = chat_ctx.get_by_id(msg_id)
+                assert chat_item is not None
+
+                self._msg_ch.send_nowait(
+                    ConversationItemCreateEvent(
+                        type="conversation.item.create",
+                        item=_livekit_item_to_openai_item(chat_item),
+                        previous_item_id=(
+                            "root" if previous_msg_id is None else previous_msg_id
+                        ),
+                        event_id=event_id,
+                    )
+                )
+                # futs.append(f := asyncio.Future())
+                # self._response_futures[event_id] = f
+
+            # await asyncio.gather(*futs, return_exceptions=True)
 
     async def update_fnc_ctx(
         self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]
     ) -> None:
-        if isinstance(fnc_ctx, list):
-            fnc_ctx = llm.FunctionContext(fnc_ctx)
+        async with self._update_fnc_ctx_lock:
+            if isinstance(fnc_ctx, list):
+                fnc_ctx = llm.FunctionContext(fnc_ctx)
 
-        tools: list[session_update_event.SessionTool] = []
-        retained_functions: list[llm.AIFunction] = []
+            tools: list[session_update_event.SessionTool] = []
+            retained_functions: list[llm.AIFunction] = []
 
-        for ai_fnc in fnc_ctx.ai_functions.values():
-            tool_desc = build_legacy_openai_schema(ai_fnc, internally_tagged=True)
-            try:
-                session_tool = session_update_event.SessionTool.model_validate(
-                    tool_desc
+            for ai_fnc in fnc_ctx.ai_functions.values():
+                tool_desc = llm.utils.build_legacy_openai_schema(
+                    ai_fnc, internally_tagged=True
                 )
-                tools.append(session_tool)
-                retained_functions.append(ai_fnc)
-            except ValidationError:
-                logger.error(
-                    "OpenAI Realtime API doesn't support this tool",
-                    extra={"tool": tool_desc},
-                )
-                continue
+                try:
+                    session_tool = session_update_event.SessionTool.model_validate(
+                        tool_desc
+                    )
+                    tools.append(session_tool)
+                    retained_functions.append(ai_fnc)
+                except ValidationError:
+                    logger.error(
+                        "OpenAI Realtime API doesn't support this tool",
+                        extra={"tool": tool_desc},
+                    )
+                    continue
 
-        self._msg_ch.send_nowait(
-            SessionUpdateEvent(
-                type="session.update",
-                session=session_update_event.Session(
-                    model=self._realtime_model._opts.model,  # type: ignore (str -> Literal)
-                    tools=tools,
-                ),
+            event_id = utils.shortuuid("fnc_ctx_update_")
+            # f = asyncio.Future()
+            # self._response_futures[event_id] = f
+            self._msg_ch.send_nowait(
+                SessionUpdateEvent(
+                    type="session.update",
+                    session=session_update_event.Session(
+                        model=self._realtime_model._opts.model,  # type: ignore (str -> Literal)
+                        tools=tools,
+                    ),
+                    event_id=event_id,
+                )
             )
-        )
 
-        # TODO(theomonnom): wait for the server confirmation before updating the local state
-        self._fnc_ctx = llm.FunctionContext(retained_functions)
+            self._fnc_ctx = llm.FunctionContext(retained_functions)
 
     async def update_instructions(self, instructions: str) -> None:
+        event_id = utils.shortuuid("instructions_update_")
+        # f = asyncio.Future()
+        # self._response_futures[event_id] = f
         self._msg_ch.send_nowait(
             SessionUpdateEvent(
                 type="session.update",
@@ -346,10 +288,9 @@ class RealtimeSession(multimodal.RealtimeSession):
                     model=self._realtime_model._opts.model,  # type: ignore
                     instructions=instructions,
                 ),
+                event_id=event_id,
             )
         )
-
-        # TODO(theomonnom): wait for the server confirmation
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         self._msg_ch.send_nowait(
@@ -359,8 +300,14 @@ class RealtimeSession(multimodal.RealtimeSession):
             )
         )
 
-    def generate_reply(self) -> None:
-        self._msg_ch.send_nowait(ResponseCreateEvent(type="response.create"))
+    def generate_reply(self) -> asyncio.Future[multimodal.GenerationCreatedEvent]:
+        f = asyncio.Future()
+        event_id = utils.shortuuid("response_create_")
+        self._msg_ch.send_nowait(
+            ResponseCreateEvent(type="response.create", event_id=event_id)
+        )
+        # self._response_futures[event_id] = f
+        return f
 
     def interrupt(self) -> None:
         self._msg_ch.send_nowait(ResponseCancelEvent(type="response.cancel"))
@@ -379,11 +326,151 @@ class RealtimeSession(multimodal.RealtimeSession):
         if self._conn is not None:
             await self._conn.close()
 
+    def _handle_input_audio_buffer_speech_started(
+        self, _: InputAudioBufferSpeechStartedEvent
+    ) -> None:
+        self.emit("input_speech_started", multimodal.InputSpeechStartedEvent())
 
-def _chat_item_to_conversation_item(item: llm.ChatItem) -> ConversationItem:
+    def _handle_input_audio_buffer_speech_stopped(
+        self, _: InputAudioBufferSpeechStoppedEvent
+    ) -> None:
+        self.emit("input_speech_stopped", multimodal.InputSpeechStoppedEvent())
+
+    def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
+        assert event.response.id is not None, "response.id is None"
+
+        self._current_generation = _ResponseGeneration(
+            message_ch=utils.aio.Chan(),
+            function_ch=utils.aio.Chan(),
+            messages={},
+        )
+
+        generation_ev = multimodal.GenerationCreatedEvent(
+            message_stream=self._current_generation.message_ch,
+            function_stream=self._current_generation.function_ch,
+        )
+
+        self.emit("generation_created", generation_ev)
+
+        # fut = self._response_futures.pop(event.event_id, None)
+        # if fut is not None and not fut.done():
+        #    fut.set_result(generation_ev)
+
+    def _handle_response_output_item_added(
+        self, event: ResponseOutputItemAddedEvent
+    ) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+        assert (item_id := event.item.id) is not None, "item.id is None"
+        assert (item_type := event.item.type) is not None, "item.type is None"
+
+        if item_type == "message":
+            item_generation = _MessageGeneration(
+                message_id=item_id,
+                text_ch=utils.aio.Chan(),
+                audio_ch=utils.aio.Chan(),
+            )
+            self._current_generation.message_ch.send_nowait(
+                multimodal.MessageGeneration(
+                    message_id=item_id,
+                    text_stream=item_generation.text_ch,
+                    audio_stream=item_generation.audio_ch,
+                )
+            )
+            self._current_generation.messages[item_id] = item_generation
+
+    def _handle_conversion_item_created(
+        self, event: ConversationItemCreatedEvent
+    ) -> None:
+        self._remote_chat_ctx.insert(
+            event.previous_item_id, _openai_item_to_livekit_item(event.item)
+        )
+
+    def _handle_conversion_item_deleted(
+        self, event: ConversationItemDeletedEvent
+    ) -> None:
+        self._remote_chat_ctx.delete(event.item_id)
+
+    def _handle_response_audio_transcript_delta(
+        self, event: ResponseAudioTranscriptDeltaEvent
+    ) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+        item_generation = self._current_generation.messages[event.item_id]
+        item_generation.text_ch.send_nowait(event.delta)
+
+    def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+        item_generation = self._current_generation.messages[event.item_id]
+
+        data = base64.b64decode(event.delta)
+        item_generation.audio_ch.send_nowait(
+            rtc.AudioFrame(
+                data=data,
+                sample_rate=SAMPLE_RATE,
+                num_channels=NUM_CHANNELS,
+                samples_per_channel=len(data) // 2,
+            )
+        )
+
+    def _handle_response_audio_transcript_done(
+        self, _: ResponseAudioTranscriptDoneEvent
+    ) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+
+    def _handle_response_audio_done(self, _: ResponseAudioDoneEvent) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+
+    def _handle_response_output_item_done(
+        self, event: ResponseOutputItemDoneEvent
+    ) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+        assert (item_id := event.item.id) is not None, "item.id is None"
+        assert (item_type := event.item.type) is not None, "item.type is None"
+
+        if item_type == "function_call":
+            item = event.item
+            assert item.call_id is not None, "call_id is None"
+            assert item.name is not None, "name is None"
+            assert item.arguments is not None, "arguments is None"
+
+            self._current_generation.function_ch.send_nowait(
+                llm.FunctionCall(
+                    call_id=item.call_id,
+                    name=item.name,
+                    arguments=item.arguments,
+                )
+            )
+        elif item_type == "message":
+            item_generation = self._current_generation.messages[item_id]
+            item_generation.text_ch.close()
+            item_generation.audio_ch.close()
+
+    def _handle_response_done(self, _: ResponseDoneEvent) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+        self._current_generation.function_ch.close()
+        self._current_generation = None
+
+    def _handle_error(self, event: ErrorEvent) -> None:
+        if event.error.message.startswith("Cancellation failed"):
+            return
+
+        logger.error(
+            "OpenAI Realtime API returned an error",
+            extra={"error": event.error},
+        )
+        self.emit(
+            "error",
+            multimodal.ErrorEvent(type=event.error.type, message=event.error.message),
+        )
+
+        # if event.error.event_id:
+        #     fut = self._response_futures.pop(event.error.event_id, None)
+        #     if fut is not None and not fut.done():
+        #         fut.set_exception(multimodal.RealtimeError(event.error.message))
+
+
+def _livekit_item_to_openai_item(item: llm.ChatItem) -> ConversationItem:
     conversation_item = ConversationItem(
         id=item.id,
-        object="realtime.item",
     )
 
     if item.type == "function_call":
@@ -431,3 +518,49 @@ def _chat_item_to_conversation_item(item: llm.ChatItem) -> ConversationItem:
         conversation_item.content = content_list
 
     return conversation_item
+
+
+def _openai_item_to_livekit_item(item: ConversationItem) -> llm.ChatItem:
+    assert item.id is not None, "id is None"
+
+    if item.type == "function_call":
+        assert item.call_id is not None, "call_id is None"
+        assert item.name is not None, "name is None"
+        assert item.arguments is not None, "arguments is None"
+
+        return llm.FunctionCall(
+            id=item.id,
+            call_id=item.call_id,
+            name=item.name,
+            arguments=item.arguments,
+        )
+
+    if item.type == "function_call_output":
+        assert item.call_id is not None, "call_id is None"
+        assert item.output is not None, "output is None"
+
+        return llm.FunctionCallOutput(
+            id=item.id,
+            call_id=item.call_id,
+            output=item.output,
+            is_error=False,
+        )
+
+    if item.type == "message":
+        assert item.role is not None, "role is None"
+        assert item.content is not None, "content is None"
+
+        content: list[llm.ChatContent] = []
+
+        for c in item.content:
+            if c.type == "text" or c.type == "input_text":
+                assert c.text is not None, "text is None"
+                content.append(c.text)
+
+        return llm.ChatMessage(
+            id=item.id,
+            role=item.role,
+            content=content,
+        )
+
+    raise ValueError(f"unsupported item type: {item.type}")

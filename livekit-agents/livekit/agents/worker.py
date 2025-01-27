@@ -405,7 +405,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         try:
             await asyncio.gather(*tasks)
         finally:
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)
             if not self._close_future.done():
                 self._close_future.set_result(None)
 
@@ -495,7 +495,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._closed = True
 
         if self._conn_task is not None:
-            await utils.aio.gracefully_cancel(self._conn_task)
+            await utils.aio.cancel_and_wait(self._conn_task)
 
         await self._proc_pool.aclose()
 
@@ -669,7 +669,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         try:
             await asyncio.gather(*tasks)
         finally:
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)
 
     async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
         if not self._opts.api_secret:

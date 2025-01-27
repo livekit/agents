@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import AsyncIterable, Generic, Literal, TypeVar, Union
@@ -20,10 +22,15 @@ class InputSpeechStoppedEvent:
 
 
 @dataclass
-class GenerationCreatedEvent:
+class MessageGeneration:
     message_id: str
     text_stream: AsyncIterable[str]
     audio_stream: AsyncIterable[rtc.AudioFrame]
+
+
+@dataclass
+class GenerationCreatedEvent:
+    message_stream: AsyncIterable[MessageGeneration]
     function_stream: AsyncIterable[llm.FunctionCall]
 
 
@@ -36,6 +43,11 @@ class ErrorEvent:
 @dataclass
 class RealtimeCapabilities:
     message_truncation: bool
+
+
+class RealtimeError(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
 
 
 class RealtimeModel:
@@ -99,7 +111,9 @@ class RealtimeSession(
     def push_audio(self, frame: rtc.AudioFrame) -> None: ...
 
     @abstractmethod
-    def generate_reply(self) -> None: ...  # when VAD is disabled
+    def generate_reply(
+        self,
+    ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError
 
     # cancel the current generation (do nothing if no generation is in progress)
     @abstractmethod

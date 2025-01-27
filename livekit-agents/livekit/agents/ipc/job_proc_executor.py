@@ -114,7 +114,7 @@ class ProcJobExecutor(SupervisedProc):
                         asyncio.create_task(self._do_inference_task(msg))
                     )
         finally:
-            await aio.gracefully_cancel(*self._inference_tasks)
+            await aio.cancel_and_wait(*self._inference_tasks)
 
     @log_exceptions(logger=logger)
     async def _supervise_task(self) -> None:

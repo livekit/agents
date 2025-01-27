@@ -3,8 +3,8 @@ from .channel import Chan, ChanClosed, ChanReceiver, ChanSender
 from .interval import Interval, interval
 from .sleep import Sleep, SleepFinished, sleep
 from .task_set import TaskSet
+from .utils import cancel_and_wait
 from .wait_group import WaitGroup
-from .utils import gracefully_cancel
 
 __all__ = [
     "ChanClosed",
@@ -20,8 +20,8 @@ __all__ = [
     "TaskSet",
     "WaitGroup",
     "debug",
-    "gracefully_cancel",
+    "cancel_and_wait",
     "duplex_unix",
     "itertools",
-    "gracefully_cancel",
+    "cancel_and_wait",
 ]

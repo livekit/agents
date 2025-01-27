@@ -86,13 +86,13 @@ class AudioRecognition:
 
     async def aclose(self) -> None:
         if self._stt_atask is not None:
-            await aio.gracefully_cancel(self._stt_atask)
+            await aio.cancel_and_wait(self._stt_atask)
 
         if self._vad_atask is not None:
-            await aio.gracefully_cancel(self._vad_atask)
+            await aio.cancel_and_wait(self._vad_atask)
 
         if self._end_of_turn_task is not None:
-            await aio.gracefully_cancel(self._end_of_turn_task)
+            await aio.cancel_and_wait(self._end_of_turn_task)
 
     def update_stt(self, stt: io.STTNode | None) -> None:
         self._stt = stt
@@ -212,7 +212,7 @@ class AudioRecognition:
         task: asyncio.Task[None] | None,
     ) -> None:
         if task is not None:
-            await aio.gracefully_cancel(task)
+            await aio.cancel_and_wait(task)
 
         node = stt_node(audio_input)
         if asyncio.iscoroutine(node):
@@ -232,7 +232,7 @@ class AudioRecognition:
         self, vad: vad.VAD, audio_input: io.AudioStream, task: asyncio.Task[None] | None
     ) -> None:
         if task is not None:
-            await aio.gracefully_cancel(task)
+            await aio.cancel_and_wait(task)
 
         stream = vad.stream()
 
@@ -247,4 +247,4 @@ class AudioRecognition:
                 await self._on_vad_event(ev)
         finally:
             await stream.aclose()
-            await aio.gracefully_cancel(forward_task)
+            await aio.cancel_and_wait(forward_task)
