@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from dotenv import load_dotenv
@@ -6,7 +5,8 @@ from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent, TextSink
-from livekit.agents.pipeline.room_io import RoomInput, RoomInputOptions, RoomOutput
+from livekit.agents.pipeline.room_io import RoomInputOptions
+from livekit.agents.transcription.transcription_sync import TranscriptionSyncIO
 from livekit.agents.transcription.tts_forwarder import TTSRoomForwarder
 from livekit.plugins import openai
 
@@ -14,16 +14,6 @@ logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
-
-
-class MockTextSink(TextSink):
-    """Mock text sink that drops text."""
-
-    async def capture_text(self, text: str) -> None:
-        await super().capture_text(text)  # Emit event
-
-    def flush(self) -> None:
-        super().flush()  # Emit event
 
 
 async def entrypoint(ctx: JobContext):
@@ -36,48 +26,40 @@ async def entrypoint(ctx: JobContext):
         )
     )
 
-    # # default use RoomIO if room is provided
-    # await agent.start(
-    #     room=ctx.room,
-    #     room_input_options=RoomInputOptions(
-    #         audio_enabled=True,
-    #         video_enabled=False,
-    #         audio_sample_rate=24000,
-    #         audio_num_channels=1,
-    #     ),
-    # )
-
-    # Or use RoomInput and RoomOutput explicitly
-    room_input = RoomInput(
-        ctx.room,
-        options=RoomInputOptions(
+    # default use RoomIO if room is provided
+    await agent.start(
+        room=ctx.room,
+        room_input_options=RoomInputOptions(
             audio_enabled=True,
             video_enabled=False,
             audio_sample_rate=24000,
             audio_num_channels=1,
         ),
     )
-    room_output = RoomOutput(ctx.room, sample_rate=24000, num_channels=1)
 
-    agent.input.audio = room_input.audio
+    # # Or use RoomInput and RoomOutput explicitly
+    # room_input = RoomInput(
+    #     ctx.room,
+    #     options=RoomInputOptions(
+    #         audio_enabled=True,
+    #         video_enabled=False,
+    #         audio_sample_rate=24000,
+    #         audio_num_channels=1,
+    #     ),
+    # )
+    # room_output = RoomOutput(ctx.room, sample_rate=24000, num_channels=1)
+
+    # agent.input.audio = room_input.audio
     # agent.output.audio = room_output.audio
-    await room_input.wait_for_participant()
-    await room_output.start()
+
+    # await room_input.wait_for_participant()
+    # await room_output.start()
 
     # TTS transcription forward
-    tts_forwarder = TTSRoomForwarder(
-        audio_sink=room_output.audio,
-        text_sink=None,
-        room=ctx.room,
-        participant=ctx.room.local_participant,
+    transcription_sync = TranscriptionSyncIO.from_agent(agent)
+    transcription_sync.on(
+        "transcription_segment", TTSRoomForwarder(ctx.room, ctx.room.local_participant)
     )
-    agent.output.audio = tts_forwarder.audio
-    agent.output.text = tts_forwarder.text
-    await agent.start()
-
-    # asyncio.create_task(
-    #     tts_forwarder.run(audio_sink=agent.output.audio, text_sink=agent.output.text)
-    # )
 
     # TODO: the interrupted flag is not set correctly
     @agent.output.audio.on("playback_finished")

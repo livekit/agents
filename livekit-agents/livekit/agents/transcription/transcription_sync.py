@@ -2,15 +2,15 @@ import asyncio
 import contextlib
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional, Literal
+from typing import Callable, Literal, Optional
 
 from livekit import rtc
 
-from .. import tokenize, utils
+from .. import NOT_GIVEN, NotGivenOr, tokenize, utils
 from ..log import logger
-from ..pipeline.io import AudioSink, PlaybackFinishedEvent, TextSink
+from ..pipeline import PipelineAgent
+from ..pipeline.io import AudioSink, TextSink
 from ..tokenize.tokenizer import PUNCTUATIONS
-from ..utils import aio
 from . import _utils
 
 # Standard speech rate in hyphens per second
@@ -46,7 +46,7 @@ class TranscriptionSyncOptions:
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
 
 
-class TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment"]]):
+class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment"]]):
     """Synchronizes TTS segments with audio playback timing."""
 
     def __init__(self, options: TranscriptionSyncOptions):
@@ -307,57 +307,67 @@ class TranscriptionSyncIO(
         self,
         audio_sink: AudioSink,
         text_sink: Optional[TextSink] = None,
-        sync_options: Optional[TranscriptionSyncOptions] = None,
+        *,
+        sync_options: NotGivenOr[TranscriptionSyncOptions] = NOT_GIVEN,
     ) -> None:
-        """Initialize the TTSForwarderOutput
-
-        Args:
-            audio_sink: The base audio sink to forward audio to
-            text_sink: Optional base text sink to forward text to
-            sync_options: Optional TTSSegmentsSyncOptions for configuring the sync behavior
-        """
         super().__init__()
-
         self._sync_options = sync_options or TranscriptionSyncOptions()
         self._transcription_sync = self._create_transcription_sync()
 
-        self._text_sink = TranscriptionSyncTextSink(text_sink, self)
-        self._audio_sink = TranscriptionSyncAudioSink(audio_sink, self)
+        self._text_sink = _TextSink(text_sink, self)
+        self._audio_sink = _AudioSync(audio_sink, self)
 
-    def segment_playout_started(self) -> None:
-        self._transcription_sync.segment_playout_started()
-        self.emit("segment_playout_started")
-
-    def flush(self) -> None:
-        logger.info("reset sync")
-        asyncio.create_task(self._transcription_sync.aclose())
-        self._transcription_sync = self._create_transcription_sync()
-        logger.info("reset sync 2")
-
-    def _create_transcription_sync(self) -> TranscriptionSynchronizer:
-        def _on_segment(segment: rtc.TranscriptionSegment) -> None:
-            self.emit("transcription_segment", segment)
-
-        synchronizer = TranscriptionSynchronizer(options=self._sync_options)
-        synchronizer.on("transcription_segment", _on_segment)
-        return synchronizer
+    @classmethod
+    def from_agent(
+        cls,
+        agent: PipelineAgent,
+        *,
+        sync_options: NotGivenOr[TranscriptionSyncOptions] = NOT_GIVEN,
+    ) -> "TranscriptionSyncIO":
+        if not agent.output.audio:
+            raise ValueError("audio_output is not set")
+        transcription_sync = cls(
+            audio_sink=agent.output.audio,
+            text_sink=agent.output.text,
+            sync_options=sync_options,
+        )
+        agent.output.audio = transcription_sync.audio_output
+        agent.output.text = transcription_sync.text_output
+        return transcription_sync
 
     @property
-    def audio(self) -> "TranscriptionSyncAudioSink":
+    def audio_output(self) -> "_AudioSync":
         """Get the audio sink wrapper"""
         return self._audio_sink
 
     @property
-    def text(self) -> "TranscriptionSyncTextSink":
+    def text_output(self) -> "_TextSink":
         """Get the text sink wrapper"""
         return self._text_sink
+
+    def _segment_playout_started(self) -> None:
+        self._transcription_sync.segment_playout_started()
+        self.emit("segment_playout_started")
+
+    def _flush(self) -> None:
+        """Close the old transcription segment and create a new one"""
+        asyncio.create_task(self._transcription_sync.aclose())
+        self._transcription_sync = self._create_transcription_sync()
+
+    def _create_transcription_sync(self) -> _TranscriptionSynchronizer:
+        def _on_segment(segment: rtc.TranscriptionSegment) -> None:
+            self.emit("transcription_segment", segment)
+
+        synchronizer = _TranscriptionSynchronizer(options=self._sync_options)
+        synchronizer.on("transcription_segment", _on_segment)
+        return synchronizer
 
     async def aclose(self) -> None:
         """Close the forwarder and cleanup resources"""
         await self._transcription_sync.aclose()
 
 
-class TranscriptionSyncAudioSink(AudioSink):
+class _AudioSync(AudioSink):
     def __init__(self, base_sink: AudioSink, parent: TranscriptionSyncIO) -> None:
         super().__init__(sample_rate=base_sink.sample_rate)
         self._base_sink = base_sink
@@ -377,7 +387,7 @@ class TranscriptionSyncAudioSink(AudioSink):
         await self._base_sink.capture_frame(frame)
 
         if not self._capturing:
-            self._parent.segment_playout_started()
+            self._parent._segment_playout_started()
             self._capturing = True
             self._interrupted = False
 
@@ -405,11 +415,11 @@ class TranscriptionSyncAudioSink(AudioSink):
         if not interrupted and not self._parent._transcription_sync._closed:
             self._parent._transcription_sync.segment_playout_finished()
             logger.info("Marked audio playout end")
-        self._parent.flush()
+        self._parent._flush()
         logger.info("Reset transcription sync")
 
 
-class TranscriptionSyncTextSink(TextSink):
+class _TextSink(TextSink):
     def __init__(
         self, base_sink: Optional[TextSink], parent: TranscriptionSyncIO
     ) -> None:

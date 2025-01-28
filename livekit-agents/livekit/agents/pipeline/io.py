@@ -51,10 +51,7 @@ class PlaybackFinishedEvent:
     """interrupted is True if playback was interrupted (clear_buffer() was called)"""
 
 
-class AudioSink(
-    ABC,
-    rtc.EventEmitter[Literal["playback_finished"]],
-):
+class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     def __init__(self, *, sample_rate: int | None = None) -> None:
         """
         Args:
@@ -132,17 +129,16 @@ class AudioSink(
         """Clear the buffer, stopping playback immediately"""
 
 
-class TextSink:
-    def __init__(self) -> None:
-        super().__init__()
-
+class TextSink(ABC):
     @abstractmethod
     async def capture_text(self, text: str) -> None:
         """Capture a text segment (Used by the output of LLM nodes)"""
+        ...
 
     @abstractmethod
     def flush(self) -> None:
         """Mark the current text segment as complete (e.g LLM generation is complete)"""
+        ...
 
 
 # TODO(theomonnom): Add documentation to VideoSink
