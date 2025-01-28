@@ -3,103 +3,38 @@ from __future__ import annotations
 import abc
 import asyncio
 import sys
+import time
 from typing import Optional
 
 from livekit import rtc
 
 from ..log import logger
-from ..pipeline.io import AudioSink, PlaybackFinishedEvent, TextSink
+from ..pipeline.io import AudioSink, TextSink
 from ..utils import log_exceptions
 from . import _utils
-from .tts_segments_sync import TTSSegmentsSync, TTSSegmentsSyncOptions
+from .transcription_sync import TranscriptionSyncIO, TranscriptionSyncOptions
 
 
-class TTSSegmentsForwarder(TTSSegmentsSync, abc.ABC):
+class TTSSegmentsForwarder(TranscriptionSyncIO, abc.ABC):
     """Base class for forwarding TTS segments with synchronized timing."""
 
     def __init__(
         self,
-        sync_options: TTSSegmentsSyncOptions | None = None,
-        loop: asyncio.AbstractEventLoop | None = None,
+        audio_sink: AudioSink,
+        text_sink: Optional[TextSink] = None,
+        sync_options: TranscriptionSyncOptions | None = None,
     ):
-        super().__init__(sync_options or TTSSegmentsSyncOptions(), loop=loop)
-        self._forward_task: Optional[asyncio.Task] = None
-
-    def segment_playout_started(self) -> None:
-        """Override to start forwarding when playout starts."""
-        super().segment_playout_started()
-        if self._forward_task is None:
-            self._forward_task = asyncio.create_task(self._forward_segment_stream())
+        super().__init__(
+            audio_sink=audio_sink,
+            text_sink=text_sink,
+            sync_options=sync_options,
+        )
+        self.on("transcription_segment", self._forward_segments)
 
     @abc.abstractmethod
-    async def _forward_segments(self, segment: rtc.TranscriptionSegment) -> None:
+    def _forward_segments(self, segment: rtc.TranscriptionSegment) -> None:
         """Forward a single segment to the target destination."""
         pass
-
-    async def _forward_segment_stream(self) -> None:
-        """Process segments from the stream."""
-        try:
-            async for segment in self.segment_stream:
-                await self._forward_segments(segment)
-        except Exception:
-            logger.exception("Error processing segment stream")
-
-    async def run(self, audio_sink: AudioSink, text_sink: TextSink) -> None:
-        """Run the forwarder, forwarding segments from the audio and text sinks."""
-
-        if self._forward_task is None:
-            self._forward_task = asyncio.create_task(self._forward_segment_stream())
-
-        # Set up audio sink event handlers
-        def on_audio_frame(frame: rtc.AudioFrame, capturing: bool) -> None:
-            if not capturing:
-                self.segment_playout_started()
-            self.push_audio(frame)
-
-        def on_audio_flush() -> None:
-            self.mark_audio_segment_end()
-
-        def on_audio_clear_buffer() -> None:
-            self.mark_audio_segment_end()
-
-        def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
-            self.segment_playout_finished()
-
-        # Set up text sink event handlers
-        def on_text(text: str) -> None:
-            self.push_text(text)
-
-        def on_text_flush() -> None:
-            self.mark_text_segment_end()
-
-        try:
-            audio_sink.on("capture_frame", on_audio_frame)
-            audio_sink.on("flush", on_audio_flush)
-            audio_sink.on("clear_buffer", on_audio_clear_buffer)
-            audio_sink.on("playback_finished", on_playback_finished)
-
-            text_sink.on("capture_text", on_text)
-            text_sink.on("flush", on_text_flush)
-
-            # Wait for segment stream to complete
-            if self._forward_task:
-                await self._forward_task
-
-        finally:
-            # Clean up event handlers
-            audio_sink.off("capture_frame", on_audio_frame)
-            audio_sink.off("flush", on_audio_flush)
-            audio_sink.off("clear_buffer", on_audio_clear_buffer)
-            audio_sink.off("playback_finished", on_playback_finished)
-
-            text_sink.off("capture_text", on_text)
-            text_sink.off("flush", on_text_flush)
-
-    async def aclose(self) -> None:
-        """Close both syncer and forwarder."""
-        await super().aclose()
-        if self._forward_task:
-            await self._forward_task
 
 
 class TTSRoomForwarder(TTSSegmentsForwarder):
@@ -107,13 +42,15 @@ class TTSRoomForwarder(TTSSegmentsForwarder):
 
     def __init__(
         self,
+        *,
         room: rtc.Room,
         participant: rtc.Participant | str,
+        audio_sink: AudioSink,
+        text_sink: Optional[TextSink] = None,
+        sync_options: TranscriptionSyncOptions | None = None,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
-        sync_options: TTSSegmentsSyncOptions | None = None,
-        loop: asyncio.AbstractEventLoop | None = None,
     ):
-        super().__init__(sync_options, loop=loop)
+        super().__init__(audio_sink, text_sink, sync_options=sync_options)
         identity = participant if isinstance(participant, str) else participant.identity
         if track is None:
             track = _utils.find_micro_track_id(room, identity)
@@ -125,7 +62,7 @@ class TTSRoomForwarder(TTSSegmentsForwarder):
         self._track_id = track
 
     @log_exceptions(logger=logger)
-    async def _forward_segments(self, segment: rtc.TranscriptionSegment) -> None:
+    def _forward_segments(self, segment: rtc.TranscriptionSegment) -> None:
         """Forward transcription segment to LiveKit room."""
         if not self._room.isconnected():
             return
@@ -135,11 +72,9 @@ class TTSRoomForwarder(TTSSegmentsForwarder):
             track_sid=self._track_id,
             segments=[segment],
         )
-
-        try:
-            await self._room.local_participant.publish_transcription(transcription)
-        except Exception:
-            logger.exception("Failed to publish transcription")
+        asyncio.create_task(
+            self._room.local_participant.publish_transcription(transcription)
+        )
 
 
 class TTSStdoutForwarder(TTSSegmentsForwarder):
@@ -147,23 +82,24 @@ class TTSStdoutForwarder(TTSSegmentsForwarder):
 
     def __init__(
         self,
-        sync_options: TTSSegmentsSyncOptions | None = None,
-        *,
+        audio_sink: AudioSink,
+        text_sink: Optional[TextSink] = None,
+        sync_options: TranscriptionSyncOptions | None = None,
         show_timing: bool = False,
-        loop: asyncio.AbstractEventLoop | None = None,
     ):
-        super().__init__(sync_options, loop=loop)
+        super().__init__(audio_sink, text_sink, sync_options=sync_options)
         self._show_timing = show_timing
         self._start_time: Optional[float] = None
         self._last_text = ""
 
-    def segment_playout_started(self) -> None:
-        if self._show_timing:
-            self._start_time = asyncio.get_running_loop().time()
-        return super().segment_playout_started()
+        self.on("segment_playout_started", self._reset)
+
+    def _reset(self) -> None:
+        self._start_time = None
+        self._last_text = ""
 
     @log_exceptions(logger=logger)
-    async def _forward_segments(self, segment: rtc.TranscriptionSegment) -> None:
+    def _forward_segments(self, segment: rtc.TranscriptionSegment) -> None:
         """Forward transcription segment to console with real-time display."""
         text = segment.text
         if text == self._last_text:
@@ -172,8 +108,11 @@ class TTSStdoutForwarder(TTSSegmentsForwarder):
         # Clear the line and write the new text
         sys.stdout.write("\r" + " " * len(self._last_text) + "\r")
 
-        if self._show_timing and self._start_time is not None:
-            elapsed = asyncio.get_running_loop().time() - self._start_time
+        if self._show_timing and self._start_time is None:
+            self._start_time = time.time()
+
+        if self._show_timing:
+            elapsed = time.time() - self._start_time
             timing = f"[{elapsed:.2f}s] "
             sys.stdout.write(timing)
 
@@ -182,6 +121,9 @@ class TTSStdoutForwarder(TTSSegmentsForwarder):
         self._last_text = text
 
         if segment.final:
+            if self._show_timing:
+                sys.stdout.write(" [END]")
             sys.stdout.write("\n")
             sys.stdout.flush()
             self._last_text = ""
+            # self._start_time = None

@@ -94,6 +94,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             return
 
         if room is not None:
+            # TODO(long): expose the participant and output options
             # configure room I/O if not already set
             if self.input.audio is None:
                 room_input = RoomInput(room=room, options=room_input_options)

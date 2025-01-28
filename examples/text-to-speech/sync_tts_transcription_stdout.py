@@ -1,10 +1,13 @@
 import asyncio
+import logging
 
 from livekit import rtc
 from livekit.agents.pipeline.io import AudioSink, TextSink
+from livekit.agents.transcription.transcription_sync import TranscriptionSyncOptions
 from livekit.agents.transcription.tts_forwarder import TTSStdoutForwarder
-from livekit.agents.transcription.tts_segments_sync import TTSSegmentsSyncOptions
 
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.WARNING)
 
 class MockAudioSink(AudioSink):
     """Mock audio sink that drops frames."""
@@ -27,7 +30,7 @@ class MockTextSink(TextSink):
 
     def flush(self) -> None:
         super().flush()  # Emit event
-
+   
 
 async def push_text(text_sink: TextSink, text: str):
     """Simulate text being generated faster than audio."""
@@ -48,7 +51,7 @@ async def push_audio(
     audio_data: bytes,
     sample_rate: int,
     num_channels: int,
-    frame_duration: float = 0.01,  # 10ms frames
+    frame_duration: float = 1,  # 10ms frames
     realtime_factor: float = 0.3,  # Push audio faster than real-time
 ):
     """Push audio frames at simulated real-time rate."""
@@ -107,27 +110,26 @@ async def main():
 
     # Create sinks and forwarder
     audio_sink = MockAudioSink(sample_rate=sample_rate)
-    text_sink = MockTextSink()
 
-    opts = TTSSegmentsSyncOptions(
+    opts = TranscriptionSyncOptions(
         language="en",
         speed=1.0,
     )
-    tts_forwarder = TTSStdoutForwarder(opts, show_timing=True)
-    forwarder_task = asyncio.create_task(tts_forwarder.run(audio_sink, text_sink))
+    tts_forwarder = TTSStdoutForwarder(
+        audio_sink, text_sink=None, sync_options=opts, show_timing=True
+    )
 
     try:
         # Run forwarder and push data concurrently
         for transcript, audio_duration in transcripts:
             audio_data = b"\x00\x00" * (sample_rate * num_channels * audio_duration)
             await asyncio.gather(
-                push_text(text_sink, transcript),
-                push_audio(audio_sink, audio_data, sample_rate, num_channels),
+                push_text(tts_forwarder.text, transcript),
+                push_audio(tts_forwarder.audio, audio_data, sample_rate, num_channels),
             )
 
     finally:
         await tts_forwarder.aclose()
-        await forwarder_task
 
 
 if __name__ == "__main__":

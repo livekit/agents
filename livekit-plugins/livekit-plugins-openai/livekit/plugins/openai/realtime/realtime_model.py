@@ -154,8 +154,8 @@ class RealtimeSession(multimodal.RealtimeSession):
                 elif event.type == "error":
                     self._handle_error(event)
 
-                if event.type != "response.audio.delta":
-                    print(event)
+                # if event.type != "response.audio.delta":
+                #     print(event)
 
         @utils.log_exceptions(logger=logger)
         async def _forward_input() -> None:

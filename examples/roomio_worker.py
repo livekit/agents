@@ -36,41 +36,48 @@ async def entrypoint(ctx: JobContext):
         )
     )
 
-    # default use RoomIO if room is provided
-    await agent.start(
-        room=ctx.room,
-        room_input_options=RoomInputOptions(
-            audio_enabled=True,
-            video_enabled=False,
-            audio_sample_rate=24000,
-            audio_num_channels=1,
-        ),
-    )
-
-    # # Or use RoomInput and RoomOutput explicitly
-    # room_input = RoomInput(
-    #     ctx.room,
-    #     options=RoomInputOptions(
+    # # default use RoomIO if room is provided
+    # await agent.start(
+    #     room=ctx.room,
+    #     room_input_options=RoomInputOptions(
     #         audio_enabled=True,
     #         video_enabled=False,
     #         audio_sample_rate=24000,
     #         audio_num_channels=1,
     #     ),
     # )
-    # room_output = RoomOutput(ctx.room, sample_rate=24000, num_channels=1)
 
-    # agent.input.audio = room_input.audio
+    # Or use RoomInput and RoomOutput explicitly
+    room_input = RoomInput(
+        ctx.room,
+        options=RoomInputOptions(
+            audio_enabled=True,
+            video_enabled=False,
+            audio_sample_rate=24000,
+            audio_num_channels=1,
+        ),
+    )
+    room_output = RoomOutput(ctx.room, sample_rate=24000, num_channels=1)
+
+    agent.input.audio = room_input.audio
     # agent.output.audio = room_output.audio
-
-    # await room_input.wait_for_participant()
-    # await room_output.start()
+    await room_input.wait_for_participant()
+    await room_output.start()
 
     # TTS transcription forward
-    agent.output.text = MockTextSink()
-    tts_forwarder = TTSRoomForwarder(ctx.room, participant=ctx.room.local_participant)
-    asyncio.create_task(
-        tts_forwarder.run(audio_sink=agent.output.audio, text_sink=agent.output.text)
+    tts_forwarder = TTSRoomForwarder(
+        audio_sink=room_output.audio,
+        text_sink=None,
+        room=ctx.room,
+        participant=ctx.room.local_participant,
     )
+    agent.output.audio = tts_forwarder.audio
+    agent.output.text = tts_forwarder.text
+    await agent.start()
+
+    # asyncio.create_task(
+    #     tts_forwarder.run(audio_sink=agent.output.audio, text_sink=agent.output.text)
+    # )
 
     # TODO: the interrupted flag is not set correctly
     @agent.output.audio.on("playback_finished")

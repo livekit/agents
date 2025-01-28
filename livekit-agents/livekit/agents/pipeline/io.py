@@ -53,9 +53,7 @@ class PlaybackFinishedEvent:
 
 class AudioSink(
     ABC,
-    rtc.EventEmitter[
-        Literal["capture_frame", "flush", "clear_buffer", "playback_finished"]
-    ],
+    rtc.EventEmitter[Literal["playback_finished"]],
 ):
     def __init__(self, *, sample_rate: int | None = None) -> None:
         """
@@ -120,7 +118,6 @@ class AudioSink(
     @abstractmethod
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture an audio frame for playback, frames can be pushed faster than real-time"""
-        self.emit("capture_frame", frame, self.__capturing)
         if not self.__capturing:
             self.__capturing = True
             self.__playback_segments_count += 1
@@ -128,29 +125,24 @@ class AudioSink(
     @abstractmethod
     def flush(self) -> None:
         """Flush any buffered audio, marking the current playback/segment as complete"""
-        self.emit("flush")
         self.__capturing = False
 
     @abstractmethod
     def clear_buffer(self) -> None:
         """Clear the buffer, stopping playback immediately"""
-        self.emit("clear_buffer")
-        self.__capturing = False
 
 
-class TextSink(ABC, rtc.EventEmitter[Literal["capture_text", "flush"]]):
+class TextSink:
     def __init__(self) -> None:
         super().__init__()
 
     @abstractmethod
     async def capture_text(self, text: str) -> None:
         """Capture a text segment (Used by the output of LLM nodes)"""
-        self.emit("capture_text", text)
 
     @abstractmethod
     def flush(self) -> None:
         """Mark the current text segment as complete (e.g LLM generation is complete)"""
-        self.emit("flush")
 
 
 # TODO(theomonnom): Add documentation to VideoSink
