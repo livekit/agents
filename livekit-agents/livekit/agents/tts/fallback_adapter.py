@@ -141,7 +141,7 @@ class FallbackAdapter(
     async def aclose(self) -> None:
         for tts_status in self._status:
             if tts_status.recovering_task is not None:
-                await aio.gracefully_cancel(tts_status.recovering_task)
+                await aio.cancel_and_wait(tts_status.recovering_task)
 
 
 class FallbackChunkedStream(ChunkedStream):
@@ -449,9 +449,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
             raise
         finally:
             if next_audio_task is not None:
-                await utils.aio.gracefully_cancel(next_audio_task)
+                await utils.aio.cancel_and_wait(next_audio_task)
 
-            await utils.aio.gracefully_cancel(input_task)
+            await utils.aio.cancel_and_wait(input_task)
 
     async def _run(self) -> None:
         start_time = time.time()
@@ -589,7 +589,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                 )
             )
         finally:
-            await utils.aio.gracefully_cancel(input_task)
+            await utils.aio.cancel_and_wait(input_task)
 
     def _try_recovery(self, tts: TTS) -> None:
         assert isinstance(self._tts, FallbackAdapter)

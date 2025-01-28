@@ -1,28 +1,43 @@
 from __future__ import annotations
 
-import time
 import asyncio
+import contextlib
 import heapq
+import inspect
+import time
+from dataclasses import dataclass
 from typing import (
+    Any,
     AsyncIterable,
     Optional,
     Union,
+    TYPE_CHECKING,
 )
 
 from livekit import rtc
+from pydantic import ValidationError
 
 from .. import debug, llm, multimodal, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, FunctionContext, find_ai_functions
+from ..llm import (
+    ChatContext,
+    FunctionContext,
+    AIError,
+    find_ai_functions,
+    utils as llm_utils,
+)
 from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
+from ..utils import is_given
+from . import io
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
 from .generation import (
     _TTSGenerationData,
     do_llm_inference,
     do_tts_inference,
 )
-from typing import TYPE_CHECKING
-
 from .speech_handle import SpeechHandle
+from .context import AgentContext
+
 
 if TYPE_CHECKING:
     from .pipeline_agent import PipelineAgent
@@ -33,13 +48,13 @@ class AgentTask:
         self,
         *,
         instructions: str,
-        chat_ctx: llm.ChatContext | None = None,
-        fnc_ctx: llm.FunctionContext | None = None,
-        turn_detector: _TurnDetector | None = None,
-        stt: stt.STT | None = None,
-        vad: vad.VAD | None = None,
-        llm: llm.LLM | multimodal.RealtimeModel | None = None,
-        tts: tts.TTS | None = None,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        fnc_ctx: NotGivenOr[llm.FunctionContext] = NOT_GIVEN,
+        turn_detector: NotGivenOr[_TurnDetector] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | multimodal.RealtimeModel] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
     ) -> None:
         if tts and not tts.capabilities.streaming:
             from .. import tts as text_to_speech
@@ -51,7 +66,7 @@ class AgentTask:
         if stt and not stt.capabilities.streaming:
             from .. import stt as speech_to_text
 
-            if vad is None:
+            if not is_given(vad):
                 raise ValueError(
                     "VAD is required when streaming is not supported by the STT"
                 )
@@ -65,11 +80,13 @@ class AgentTask:
         self._chat_ctx = chat_ctx or ChatContext.empty()
         self._fnc_ctx = fnc_ctx or FunctionContext.empty()
         self._fnc_ctx.update_ai_functions(
-            list(self._fnc_ctx.ai_functions.values())
-            + find_ai_functions(self.__class__)
+            list(self._fnc_ctx.ai_functions.values()) + find_ai_functions(self)
         )
-        self._turn_detector = turn_detector
-        self._stt, self._llm, self._tts, self._vad = stt, llm, tts, vad
+        self._turn_detector = turn_detector or None
+        self._stt = stt or None
+        self._llm = llm or None
+        self._tts = tts or None
+        self._vad = vad or None
 
     @property
     def instructions(self) -> str:
@@ -119,7 +136,7 @@ class AgentTask:
                 async for event in stream:
                     yield event
             finally:
-                await utils.aio.gracefully_cancel(forward_task)
+                await utils.aio.cancel_and_wait(forward_task)
 
     async def llm_node(
         self, chat_ctx: llm.ChatContext, fnc_ctx: llm.FunctionContext | None
@@ -155,13 +172,13 @@ class AgentTask:
                 async for ev in stream:
                     yield ev.frame
             finally:
-                await utils.aio.gracefully_cancel(forward_task)
+                await utils.aio.cancel_and_wait(forward_task)
 
-    def _create_activity(self, agent: PipelineAgent) -> ActiveTask:
-        return ActiveTask(task=self, agent=agent)
+    def _create_activity(self, agent: PipelineAgent) -> TaskActivity:
+        return TaskActivity(task=self, agent=agent)
 
 
-class ActiveTask(RecognitionHooks):
+class TaskActivity(RecognitionHooks):
     def __init__(self, task: AgentTask, agent: PipelineAgent) -> None:
         self._task, self._agent = task, agent
         self._rt_session: multimodal.RealtimeSession | None = None
@@ -184,7 +201,7 @@ class ActiveTask(RecognitionHooks):
         return self._draining
 
     async def drain(self) -> None:
-        self._speech_q_changed.set()  # TODO(theomonnom): refactor so we don't need this here
+        self._speech_q_changed.set()  # TODO(theomonnom): we shouldn't need this here
         self._draining = True
 
         if self._main_atask is not None:
@@ -212,8 +229,9 @@ class ActiveTask(RecognitionHooks):
                 self._rt_session.on(
                     "input_speech_stopped", self._on_input_speech_stopped
                 )
-                await self._rt_session.update_chat_ctx(self._task.chat_ctx)
                 await self._rt_session.update_instructions(self._task.instructions)
+                await self._rt_session.update_chat_ctx(self._task.chat_ctx)
+                await self._rt_session.update_fnc_ctx(self._task.fnc_ctx)
 
             self._started = True
 
@@ -226,7 +244,7 @@ class ActiveTask(RecognitionHooks):
                 await self._audio_recognition.aclose()
 
             if self._main_atask is not None:
-                await utils.aio.gracefully_cancel(self._main_atask)
+                await utils.aio.cancel_and_wait(self._main_atask)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._started:
@@ -409,88 +427,6 @@ class ActiveTask(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
     ) -> None:
-        @utils.log_exceptions(logger=logger)
-        async def _forward_llm_text(llm_output: AsyncIterable[str]) -> None:
-            """collect and forward the generated text to the current agent output"""
-            try:
-                async for delta in llm_output:
-                    if agent.output.text is None:
-                        break
-
-                    await agent.output.text.capture_text(delta)
-            finally:
-                if agent.output.text is not None:
-                    agent.output.text.flush()
-
-        @utils.log_exceptions(logger=logger)
-        async def _forward_tts_audio(tts_output: AsyncIterable[rtc.AudioFrame]) -> None:
-            """collect and forward the generated audio to the current agent output (generally playout)"""
-            try:
-                async for frame in tts_output:
-                    if agent.output.audio is None:
-                        break
-                    await agent.output.audio.capture_frame(frame)
-            finally:
-                if agent.output.audio is not None:
-                    agent.output.audio.flush()  # always flush (even if the task is interrupted)
-
-        @utils.log_exceptions(logger=logger)
-        async def _execute_tools(
-            tools_ch: utils.aio.Chan[llm.FunctionCallInfo],
-            called_functions: set[llm.CalledFunction],
-        ) -> None:
-            """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
-            try:
-                async for tool in tools_ch:
-                    logger.debug(
-                        "executing tool",
-                        extra={
-                            "function": tool.function_info.name,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
-                    debug.Tracing.log_event(
-                        "executing tool",
-                        {
-                            "function": tool.function_info.name,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
-                    cfnc = tool.execute()
-                    called_functions.add(cfnc)
-            except asyncio.CancelledError:
-                # don't allow to cancel running function calla if they're still running
-                pending_tools = [cfn for cfn in called_functions if not cfn.task.done()]
-
-                if pending_tools:
-                    names = [cfn.call_info.function_info.name for cfn in pending_tools]
-
-                    logger.debug(
-                        "waiting for function call to finish before cancelling",
-                        extra={
-                            "functions": names,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
-                    debug.Tracing.log_event(
-                        "waiting for function call to finish before cancelling",
-                        {
-                            "functions": names,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
-                    await asyncio.gather(*[cfn.task for cfn in pending_tools])
-            finally:
-                if len(called_functions) > 0:
-                    logger.debug(
-                        "tools execution completed",
-                        extra={"speech_id": speech_handle.id},
-                    )
-                    debug.Tracing.log_event(
-                        "tools execution completed",
-                        {"speech_id": speech_handle.id},
-                    )
-
         debug.Tracing.log_event(
             "generation started",
             {"speech_id": speech_handle.id, "step_index": speech_handle.step_index},
@@ -533,7 +469,7 @@ class ActiveTask(RecognitionHooks):
         )
 
         if speech_handle.interrupted:
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)
             speech_handle._mark_done()
             return  # return directly (the generated output wasn't used)
 
@@ -587,7 +523,7 @@ class ActiveTask(RecognitionHooks):
             )
 
         if speech_handle.interrupted:
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)
 
             if len(called_functions) > 0:
                 functions = [
@@ -665,47 +601,69 @@ class ActiveTask(RecognitionHooks):
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
 
+        debug.Tracing.log_event(
+            "realtime generation started",
+            {"speech_id": speech_handle.id, "step_index": speech_handle.step_index},
+        )
+
         audio_output = self._agent.output.audio
         text_output = self._agent.output.text
-
-        @utils.log_exceptions(logger=logger)
-        async def _forward_text(llm_output: AsyncIterable[str]) -> None:
-            assert text_output is not None, "text_output is not available"
-            try:
-                async for delta in llm_output:
-                    await text_output.capture_text(delta)
-            finally:
-                text_output.flush()
-
-        @utils.log_exceptions(logger=logger)
-        async def _forward_audio(tts_output: AsyncIterable[rtc.AudioFrame]) -> None:
-            assert audio_output is not None, "audio_output is not available"
-            try:
-                async for frame in tts_output:
-                    await audio_output.capture_frame(frame)
-            finally:
-                audio_output.flush()
 
         await speech_handle.wait_until_interrupted(
             [speech_handle._wait_for_authorization()]
         )
 
         if speech_handle.interrupted:
-            speech_handle._mark_playout_done() # TODO(theomonnom): remove the message from the serverside history
+            speech_handle._mark_playout_done()
+            # TODO(theomonnom): remove the message from the serverside history
             return
 
-        ts = utils.aio.TaskSet()
-        if text_output is not None:
-            ts.create_task(
-                _forward_text(generation_ev.text_stream),
-                name="_realtime_reply_task.forward_text",
-            )
+        @utils.log_exceptions(logger=logger)
+        async def _read_messages(message_outputs: list[_MessageOutput]) -> None:
+            ts2 = utils.aio.TaskSet()
+            async for msg in generation_ev.message_stream:
+                if ts2.tasks:
+                    logger.warning(
+                        "expected to receive only one message generation from the realtime API"
+                    )
+                    break
 
-        if audio_output is not None:
-            ts.create_task(
-                _forward_audio(generation_ev.audio_stream),
-                name="_realtime_reply_task.forward_audio",
-            )
+                out = _MessageOutput(text="", audio=[])
+                message_outputs.append(out)
+
+                if text_output is not None:
+                    ts2.create_task(
+                        _forward_text(text_output, msg.text_stream, out),
+                        name="_realtime_reply_task.forward_text",
+                    )
+
+                if audio_output is not None:
+                    ts2.create_task(
+                        _forward_audio(audio_output, msg.audio_stream, out),
+                        name="_realtime_reply_task.forward_audio",
+                    )
+
+            try:
+                await asyncio.gather(*ts2.tasks)
+            finally:
+                await utils.aio.cancel_and_wait(*ts2.tasks)
+
+        function_outputs: list[_FunctionCallOutput] = []
+        message_outputs: list[_MessageOutput] = []
+        ts = utils.aio.TaskSet()
+        ts.create_task(
+            _read_messages(message_outputs), name="_realtime_reply_task.read_messages"
+        )
+        ts.create_task(
+            _execute_tools(
+                agent_ctx=AgentContext(self._agent),
+                fnc_ctx=self._task.fnc_ctx,
+                speech_handle=speech_handle,
+                function_stream=generation_ev.function_stream,
+                out=function_outputs,
+            ),
+            name="_realtime_reply_task.execute_tools",
+        )
 
         await speech_handle.wait_until_interrupted([*ts.tasks])
 
@@ -715,7 +673,7 @@ class ActiveTask(RecognitionHooks):
             )
 
         if speech_handle.interrupted:
-            await utils.aio.gracefully_cancel(*ts.tasks)
+            await utils.aio.cancel_and_wait(*ts.tasks)
 
             if audio_output is not None:
                 audio_output.clear_buffer()
@@ -729,11 +687,323 @@ class ActiveTask(RecognitionHooks):
                     },
                 )
 
-            # TODO(theomonnom): truncate serverside message
             speech_handle._mark_playout_done()
+            # TODO(theomonnom): truncate message (+ OAI serverside mesage)
             return
 
-        # TODO(theomonnom): tools
+        
+        new_agent_task: AgentTask | None = None
+        new_items: list[llm.ChatItem] = []
+        if len(function_outputs) > 0:
+            for out in function_outputs:
+                if isinstance(out.exception, AIError):
+                    new_items.append(
+                        llm.FunctionCallOutput(
+                            call_id=out.call_id,
+                            output=out.exception.message,
+                            is_error=True,
+                        )
+                    )
+                    continue
+                elif out.exception is not None:
+                    logger.error(
+                        "exception occurred while executing tool",
+                        extra={
+                            "function": out.name,
+                            "speech_id": speech_handle.id,
+                        },
+                        exc_info=out.exception,
+                    )
+                    continue
+
+                if out.output is not None:
+                    if isinstance(out.output, tuple):
+                        agent_tasks = [
+                            item for item in out.output if isinstance(item, AgentTask)
+                        ]
+                        if len(agent_tasks) > 1:
+                            logger.error(
+                                "Multiple AgentTask instances found in tuple output",
+                                extra={
+                                    "call_id": out.call_id,
+                                    "function": out.name,
+                                    "output": out.output,
+                                },
+                            )
+                            continue
+
+                        new_agent_task = agent_tasks[0] if agent_tasks else None
+                        out.output = tuple(
+                            item
+                            for item in out.output
+                            if not isinstance(item, AgentTask)
+                        )
+                        if len(out.output) == 1:
+                            out.output = out.output[0]
+                    elif isinstance(out.output, AgentTask):
+                        new_agent_task = out.output
+                        out.output = None
+
+                    if not _is_valid_function_output_type(out.output):
+                        logger.error(
+                            "invalid function output type",
+                            extra={
+                                "call_id": out.call_id,
+                                "function": out.name,
+                                "output": out.output,
+                            },
+                        )
+                        continue
+
+                    new_items.append(
+                        llm.FunctionCallOutput(
+                            call_id=out.call_id,
+                            output=str(out.output),
+                            is_error=False,
+                        )
+                    )
+
+            if new_items:
+                chat_ctx = self._rt_session.chat_ctx.copy()
+                chat_ctx.items.extend(new_items)
+                await self._rt_session.update_chat_ctx(chat_ctx)
+                self._rt_session.interrupt()
+                self._rt_session.generate_reply()
+
+
+        if new_agent_task is not None:
+            if new_items:
+                await asyncio.sleep(1.0)
+            self._agent.update_task(new_agent_task)
 
         debug.Tracing.log_event("playout completed", {"speech_id": speech_handle.id})
         speech_handle._mark_playout_done()
+
+
+def _is_valid_function_output_type(value: Any) -> bool:
+    VALID_TYPES = (str, int, float, bool, complex, type(None))
+
+    if isinstance(value, VALID_TYPES):
+        return True
+    elif (
+        isinstance(value, list)
+        or isinstance(value, set)
+        or isinstance(value, frozenset)
+        or isinstance(value, tuple)
+    ):
+        return all(_is_valid_function_output_type(item) for item in value)
+    elif isinstance(value, dict):
+        return all(
+            isinstance(key, VALID_TYPES) and _is_valid_function_output_type(val)
+            for key, val in value.items()
+        )
+    return False
+
+
+@dataclass
+class _MessageOutput:
+    text: str
+    audio: list[rtc.AudioFrame]
+
+
+@dataclass
+class _FunctionCallOutput:
+    call_id: str
+    name: str
+    arguments: str
+    output: Any
+    exception: BaseException | None
+
+
+@utils.log_exceptions(logger=logger)
+async def _forward_text(
+    text_output: io.TextSink, llm_output: AsyncIterable[str], out: _MessageOutput
+) -> None:
+    try:
+        async for delta in llm_output:
+            out.text += delta
+            await text_output.capture_text(delta)
+    finally:
+        text_output.flush()
+
+
+@utils.log_exceptions(logger=logger)
+async def _forward_audio(
+    audio_output: io.AudioSink,
+    tts_output: AsyncIterable[rtc.AudioFrame],
+    out: _MessageOutput,
+) -> None:
+    try:
+        async for frame in tts_output:
+            out.audio.append(frame)
+            await audio_output.capture_frame(frame)
+    finally:
+        audio_output.flush()
+
+
+@utils.log_exceptions(logger=logger)
+async def _execute_tools(
+    *,
+    agent_ctx: AgentContext,
+    fnc_ctx: FunctionContext,
+    speech_handle: SpeechHandle,
+    function_stream: utils.aio.Chan[llm.FunctionCall],
+    out: list[_FunctionCallOutput] = [],
+) -> None:
+    """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
+    tasks: list[tuple[str, asyncio.Task]] = []
+    try:
+        async for fnc_call in function_stream:
+            ai_function = fnc_ctx.ai_functions.get(fnc_call.name, None)
+            if ai_function is None:
+                logger.warning(
+                    f"LLM called function `{fnc_call.name}` but it was not found in the current task",
+                    extra={
+                        "function": fnc_call.name,
+                        "speech_id": speech_handle.id,
+                    },
+                )
+                continue
+
+            try:
+                function_model = llm_utils.function_arguments_to_pydantic_model(
+                    ai_function
+                )
+                parsed_args = function_model.model_validate_json(fnc_call.arguments)
+            except ValidationError:
+                logger.exception(
+                    "LLM called function `{fnc.name}` with invalid arguments",
+                    extra={
+                        "function": fnc_call.name,
+                        "arguments": fnc_call.arguments,
+                        "speech_id": speech_handle.id,
+                    },
+                )
+                continue
+
+            logger.debug(
+                "executing tool",
+                extra={
+                    "function": fnc_call.name,
+                    "speech_id": speech_handle.id,
+                },
+            )
+            debug.Tracing.log_event(
+                "executing tool",
+                {
+                    "function": fnc_call.name,
+                    "speech_id": speech_handle.id,
+                },
+            )
+
+            fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
+                ai_function=ai_function,
+                model=parsed_args,
+                agent_ctx=agent_ctx,
+                speech_handle=speech_handle,
+            )
+
+            if inspect.iscoroutinefunction(ai_function):
+                task = asyncio.create_task(
+                    ai_function(*fnc_args, **fnc_kwargs),
+                    name=f"ai_function_{fnc_call.name}",
+                )
+                tasks.append((fnc_call.name, task))
+
+                def _log_exceptions(task: asyncio.Task) -> None:
+                    if task.exception() is not None:
+                        logger.error(
+                            "exception occurred while executing tool",
+                            extra={
+                                "function": fnc_call.name,
+                                "speech_id": speech_handle.id,
+                            },
+                            exc_info=task.exception(),
+                        )
+                        out.append(
+                            _FunctionCallOutput(
+                                name=fnc_call.name,
+                                arguments=fnc_call.arguments,
+                                call_id=fnc_call.call_id,
+                                output=None,
+                                exception=task.exception(),
+                            )
+                        )
+                        return
+
+                    out.append(
+                        _FunctionCallOutput(
+                            name=fnc_call.name,
+                            arguments=fnc_call.arguments,
+                            call_id=fnc_call.call_id,
+                            output=task.result(),
+                            exception=None,
+                        )
+                    )
+
+                    tasks.remove((fnc_call.name, task))
+
+                task.add_done_callback(_log_exceptions)
+            else:
+                start_time = time.monotonic()
+                try:
+                    output = ai_function(*fnc_args, **fnc_kwargs)
+                    out.append(
+                        _FunctionCallOutput(
+                            name=fnc_call.name,
+                            arguments=fnc_call.arguments,
+                            call_id=fnc_call.call_id,
+                            output=output,
+                            exception=None,
+                        )
+                    )
+                except Exception as e:
+                    out.append(
+                        _FunctionCallOutput(
+                            name=fnc_call.name,
+                            arguments=fnc_call.arguments,
+                            call_id=fnc_call.call_id,
+                            output=None,
+                            exception=e,
+                        )
+                    )
+
+                elapsed = time.monotonic() - start_time
+                if elapsed >= 1.5:
+                    logger.warning(
+                        f"function execution took too long ({elapsed:.2f}s), is `{fnc_call.name}` blocking?",
+                        extra={
+                            "function": fnc_call.name,
+                            "speech_id": speech_handle.id,
+                            "elapsed": elapsed,
+                        },
+                    )
+
+    except asyncio.CancelledError:
+        if len(tasks) > 0:
+            names = [name for name, _ in tasks]
+            logger.debug(
+                "waiting for function call to finish before fully cancelling",
+                extra={
+                    "functions": names,
+                    "speech_id": speech_handle.id,
+                },
+            )
+            debug.Tracing.log_event(
+                "waiting for function call to finish before fully cancelling",
+                {
+                    "functions": names,
+                    "speech_id": speech_handle.id,
+                },
+            )
+            await asyncio.gather(*[task for _, task in tasks])
+    finally:
+        if len(out) > 0:
+            logger.debug(
+                "tools execution completed",
+                extra={"speech_id": speech_handle.id},
+            )
+            debug.Tracing.log_event(
+                "tools execution completed",
+                {"speech_id": speech_handle.id},
+            )

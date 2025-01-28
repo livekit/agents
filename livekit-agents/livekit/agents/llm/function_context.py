@@ -15,37 +15,60 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import dataclass
 from typing import (
-    Annotated,
     Any,
     Callable,
-    List,
     Protocol,
-    Type,
-    get_args,
-    get_origin,
-    get_type_hints,
     runtime_checkable,
 )
 
-from pydantic import BaseModel, create_model
-from pydantic.fields import FieldInfo
 from typing_extensions import TypeGuard
+
+
+class AIError(Exception):
+    def __init__(self, message: str) -> None:
+        """
+        Exception raised within AI functions.
+
+        This exception should be raised by users when an error occurs
+        in the context of AI operations. The provided message will be
+        visible to the LLM, allowing it to understand the context of
+        the error during FunctionOutput generation.
+        """
+        super().__init__(message)
+        self._message = message
+
+    @property
+    def message(self) -> str:
+        return self._message
+
+
+@dataclass
+class _AIFunctionInfo:
+    name: str
+    description: str | None
 
 
 @runtime_checkable
 class AIFunction(Protocol):
-    __livekit_agents_ai_callable: bool
-    __name__: str
-    __doc__: str | None
+    __livekit_agents_ai_callable: _AIFunctionInfo
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
-def ai_function(f: Callable | None = None) -> Callable[[Callable], AIFunction]:
-    def deco(f) -> AIFunction:
-        setattr(f, "__livekit_agents_ai_callable", True)
-        return f
+def ai_function(
+    f: Callable | None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> Callable[[Callable], AIFunction]:
+    def deco(func) -> AIFunction:
+        info = _AIFunctionInfo(
+            name=name or func.__name__, description=description or func.__doc__
+        )
+        setattr(func, "__livekit_agents_ai_callable", info)
+        return func
 
     if callable(f):
         return deco(f)
@@ -54,14 +77,18 @@ def ai_function(f: Callable | None = None) -> Callable[[Callable], AIFunction]:
 
 
 def is_ai_function(f: Callable) -> TypeGuard[AIFunction]:
-    return getattr(f, "__livekit_agents_ai_callable", False)
+    return hasattr(f, "__livekit_agents_ai_callable")
 
 
-def find_ai_functions(cls: Type) -> List[AIFunction]:
+def get_function_info(f: AIFunction) -> _AIFunctionInfo:
+    return getattr(f, "__livekit_agents_ai_callable")
+
+
+def find_ai_functions(cls_or_obj: Any) -> list[AIFunction]:
     methods: list[AIFunction] = []
-    for _, method in inspect.getmembers(cls, predicate=inspect.isfunction):
-        if is_ai_function(method):
-            methods.append(method)
+    for _, member in inspect.getmembers(cls_or_obj):
+        if is_ai_function(member):
+            methods.append(member)
     return methods
 
 
@@ -82,85 +109,16 @@ class FunctionContext:
     def update_ai_functions(self, ai_functions: list[AIFunction]) -> None:
         self._ai_functions = ai_functions
 
-        for method in find_ai_functions(self.__class__):
+        for method in find_ai_functions(self):
             ai_functions.append(method)
 
         self._ai_functions_map = {}
         for fnc in ai_functions:
-            if fnc.__name__ in self._ai_functions_map:
-                raise ValueError(f"duplicate function name: {fnc.__name__}")
+            info = get_function_info(fnc)
+            if info.name in self._ai_functions_map:
+                raise ValueError(f"duplicate function name: {info.name}")
 
-            self._ai_functions_map[fnc.__name__] = fnc
+            self._ai_functions_map[info.name] = fnc
 
     def copy(self) -> FunctionContext:
         return FunctionContext(self._ai_functions.copy())
-
-
-def build_legacy_openai_schema(
-    ai_function: AIFunction, *, internally_tagged: bool = False
-) -> dict[str, Any]:
-    """non-strict mode tool description
-    see https://serde.rs/enum-representations.html for the internally tagged representation"""
-    model = build_pydantic_model_from_function(ai_function)
-    schema = model.model_json_schema()
-
-    fnc_name = ai_function.__name__
-    fnc_description = ai_function.__doc__
-
-    if internally_tagged:
-        return {
-            "name": fnc_name,
-            "description": fnc_description or "",
-            "parameters": schema,
-            "type": "function",
-        }
-    else:
-        return {
-            "type": "function",
-            "function": {
-                "name": fnc_name,
-                "description": fnc_description or "",
-                "parameters": schema,
-            },
-        }
-
-
-def build_pydantic_model_from_function(
-    func: Callable,
-) -> type[BaseModel]:
-    fnc_name = func.__name__.split("_")
-    fnc_name = "".join(x.capitalize() for x in fnc_name)
-    model_name = fnc_name + "Args"
-
-    signature = inspect.signature(func)
-    type_hints = get_type_hints(func, include_extras=True)
-
-    # field_name -> (type, FieldInfo or default)
-    fields: dict[str, Any] = {}
-
-    for param_name, param in signature.parameters.items():
-        annotation = type_hints[param_name]
-        default_value = param.default if param.default is not param.empty else ...
-
-        # Annotated[str, Field(description="...")]
-        if get_origin(annotation) is Annotated:
-            annotated_args = get_args(annotation)
-            actual_type = annotated_args[0]
-            field_info = None
-
-            for extra in annotated_args[1:]:
-                if isinstance(extra, FieldInfo):
-                    field_info = extra  # get the first FieldInfo
-                    break
-
-            if field_info:
-                if default_value is not ... and field_info.default is None:
-                    field_info.default = default_value
-                fields[param_name] = (actual_type, field_info)
-            else:
-                fields[param_name] = (actual_type, default_value)
-
-        else:
-            fields[param_name] = (annotation, default_value)
-
-    return create_model(model_name, **fields)

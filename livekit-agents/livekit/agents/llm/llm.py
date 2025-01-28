@@ -226,8 +226,8 @@ class LLMStream(ABC):
         return called_functions
 
     async def aclose(self) -> None:
-        await aio.gracefully_cancel(self._task)
-        await utils.aio.gracefully_cancel(*self._function_tasks)
+        await aio.cancel_and_wait(self._task)
+        await utils.aio.cancel_and_wait(*self._function_tasks)
         await self._metrics_task
 
     async def __anext__(self) -> ChatChunk:

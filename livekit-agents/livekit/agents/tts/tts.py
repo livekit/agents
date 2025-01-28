@@ -199,7 +199,7 @@ class ChunkedStream(ABC):
 
     async def aclose(self) -> None:
         """Close is automatically called if the stream is completely collected"""
-        await aio.gracefully_cancel(self._synthesize_task)
+        await aio.cancel_and_wait(self._synthesize_task)
         self._event_ch.close()
         await self._metrics_task
 
@@ -360,7 +360,7 @@ class SynthesizeStream(ABC):
     async def aclose(self) -> None:
         """Close ths stream immediately"""
         self._input_ch.close()
-        await aio.gracefully_cancel(self._task)
+        await aio.cancel_and_wait(self._task)
 
         if self._metrics_task is not None:
             await self._metrics_task
