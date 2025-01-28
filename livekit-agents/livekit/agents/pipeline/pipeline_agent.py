@@ -753,6 +753,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 llm_stream = await llm_stream
 
             if llm_stream is False:
+                self._transcribed_text = ""
                 handle.cancel()
                 return
 
