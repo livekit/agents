@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Awaitable, Callable
+from typing import Callable
 
 from .. import utils
 
@@ -78,18 +78,7 @@ class SpeechHandle:
             # will raise InvalidStateError if the future is already done (interrupted)
             self._playout_done_fut.set_result(None)
 
-    async def wait_until_interrupted(self, aw: list[Awaitable]) -> None:
-        temp_tasks = []
-        tasks = []
-        for task in aw:
-            if not isinstance(task, asyncio.Task):
-                task = asyncio.create_task(task)
-                temp_tasks.append(task)
-            tasks.append(task)
-
+    async def wait_if_not_interrupted(self, aw: list[asyncio.futures.Future]) -> None:
         await asyncio.wait(
-            [*tasks, self._interrupt_fut], return_when=asyncio.FIRST_COMPLETED
+            [*aw, self._interrupt_fut], return_when=asyncio.FIRST_COMPLETED
         )
-        for task in temp_tasks:
-            if not task.done():
-                task.cancel()

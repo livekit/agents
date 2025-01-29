@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from .chat_context import ChatItem, ChatContext
+
+from .chat_context import ChatContext, ChatItem
 
 __all__ = ["RemoteChatContext"]
 
