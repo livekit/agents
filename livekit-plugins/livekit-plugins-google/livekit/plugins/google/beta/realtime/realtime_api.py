@@ -113,32 +113,35 @@ class RealtimeModel(multimodal.RealtimeModel):
 
         Environment Requirements:
         - For VertexAI: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the service account key file.
-        The Google Cloud project and location can be set via `project` and `location` arguments or the environment variables
-        `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. By default, the project is inferred from the service account key file,
-        and the location defaults to "us-central1".
+          The Google Cloud project and location can be set via `project` and `location` arguments or
+          the environment variables `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`.
+          By default, the project is inferred from the service account key file, and
+          the location defaults to "us-central1".
+
         - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
 
         Args:
-            instructions (str, optional): Initial system instructions for the model. Defaults to "".
-            api_key (str or None, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
-            modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
-            model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
-            voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
-            enable_user_audio_transcription (bool, optional): Whether to enable user audio transcription. Defaults to True
-            enable_agent_audio_transcription (bool, optional): Whether to enable agent audio transcription. Defaults to True
-            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
-            vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
-                project (str or None, optional): The project id to use for the API. Defaults to None. (for vertexai)
-                location (str or None, optional): The location to use for the API. Defaults to None. (for vertexai)
-            candidate_count (int, optional): The number of candidate responses to generate. Defaults to 1.
-            top_p (float, optional): The top-p value for response generation
-            top_k (int, optional): The top-k value for response generation
-            presence_penalty (float, optional): The presence penalty for response generation
-            frequency_penalty (float, optional): The frequency penalty for response generation
-            loop (asyncio.AbstractEventLoop or None, optional): Event loop to use for async operations. If None, the current event loop is used.
+            instructions (str, optional): Initial system instructions for the model. Defaults to None.
+            model (LiveAPIModels | str): Name of the model to use. Defaults to "gemini-2.0-flash-exp".
+            api_key (str or None, optional): Google Gemini API key. If None, reads from env GOOGLE_API_KEY.
+            voice (Voice | str, optional): Voice setting for audio outputs. Defaults to "Puck".
+            modalities (list[Modality], optional): Modalities to use, e.g. ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
+            enable_user_audio_transcription (bool, optional): Enable user audio transcription. Defaults True.
+            enable_agent_audio_transcription (bool, optional): Enable agent audio transcription. Defaults True.
+            vertexai (bool, optional): Use VertexAI. Defaults False.
+            project (str | None, optional): GCP project for VertexAI. Defaults None.
+            location (str | None, optional): GCP location for VertexAI. Defaults None.
+            candidate_count (int, optional): Number of candidate responses. Defaults 1.
+            temperature (float, optional): Sampling temperature. Defaults None.
+            max_output_tokens (int, optional): Maximum output tokens. Defaults None.
+            top_p (float, optional): Top-p sampling. Defaults None.
+            top_k (int, optional): Top-k sampling. Defaults None.
+            presence_penalty (float, optional): Presence penalty. Defaults None.
+            frequency_penalty (float, optional): Frequency penalty. Defaults None.
+            loop (asyncio.AbstractEventLoop | None, optional): Event loop. Defaults None.
 
         Raises:
-            ValueError: If the API key is not provided and cannot be found in environment variables.
+            ValueError: If the API key is required but not found.
         """
         capabilities = Capabilities(
             message_truncation=False,
@@ -149,19 +152,21 @@ class RealtimeModel(multimodal.RealtimeModel):
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
         self._project = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
         self._location = location or os.environ.get("GOOGLE_CLOUD_LOCATION")
+
+        # VertexAI configuration
         if vertexai:
             if not self._project or not self._location:
                 raise ValueError(
-                    "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"
+                    "Project and location are required for VertexAI either via arguments "
+                    "or GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION env variables"
                 )
-            self._api_key = None  # VertexAI does not require an API key
-
+            self._api_key = None  # VertexAI does not use an API key
         else:
             self._project = None
             self._location = None
             if not self._api_key:
                 raise ValueError(
-                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
+                    "API key is required for Google API either via api_key or GOOGLE_API_KEY env variable"
                 )
 
         self._opts = _ModelOptions(
@@ -244,12 +249,14 @@ class GeminiRealtimeSession(multimodal.RealtimeSession):
 
         self._is_interrupted = False
         self._active_response_id = None
+        self._session = None
 
         if self._opts.enable_user_audio_transcription:
             self._transcriber = TranscriberSession(
                 client=self._client, model=self._opts.model
             )
             self._transcriber.on("input_speech_done", self._on_input_speech_done)
+
         if self._opts.enable_agent_audio_transcription:
             self._agent_transcriber = TranscriberSession(
                 client=self._client, model=self._opts.model
@@ -298,7 +305,7 @@ class GeminiRealtimeSession(multimodal.RealtimeSession):
 
         if not ctx:
             logger.warning(
-                "gemini-realtime-session: No chat context to send, sending dummy content."
+                "gemini-realtime-session: No chat context, sending dummy content."
             )
             ctx = [Content(parts=[Part(text=".")])]
 
@@ -321,120 +328,141 @@ class GeminiRealtimeSession(multimodal.RealtimeSession):
             await self._transcriber.aclose()
         if self._agent_transcriber:
             await self._agent_transcriber.aclose()
-        await utils.aio.cancel_and_wait(self._main_atask)
+        if self._main_atask:
+            await utils.aio.cancel_and_wait(self._main_atask)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
-        @utils.log_exceptions(logger=logger)
-        async def _send_task():
-            async for msg in self._msg_ch:
-                await self._session.send(input=msg)
+        async with self._client.aio.live.connect(
+            model=self._opts.model, config=self._config
+        ) as session:
+            self._session = session
 
-            await self._session.send(input=".", end_of_turn=True)
+            @utils.log_exceptions(logger=logger)
+            async def _send_task():
+                async for msg in self._msg_ch:
+                    await session.send(input=msg)
 
-        @utils.log_exceptions(logger=logger)
-        async def _recv_task():
-            while True:
-                async for response in self._session.receive():
+                await session.send(input=".", end_of_turn=True)
+
+            @utils.log_exceptions(logger=logger)
+            async def _recv_task():
+                async for response in session.receive():
                     if self._active_response_id is None:
-                        self._is_interrupted = False
-                        self._active_response_id = utils.shortuuid("gemini-turn-")
-                        self._current_generation = _ResponseGeneration(
-                            message_ch=utils.aio.Chan[multimodal.MessageGeneration](),
-                            function_ch=utils.aio.Chan[llm.FunctionCall](),
-                            messages={},
-                        )
+                        self._start_new_generation()
 
-                        generation_ev = multimodal.GenerationCreatedEvent(
-                            message_stream=self._current_generation.message_ch,
-                            function_stream=self._current_generation.function_ch,
-                        )
-
-                        # We'll assume each chunk belongs to a single message ID self._active_response_id
-                        item_generation = _MessageGeneration(
-                            message_id=self._active_response_id,
-                            text_ch=utils.aio.Chan(str),
-                            audio_ch=utils.aio.Chan(rtc.AudioFrame),
-                        )
-
-                        self._current_generation.message_ch.send_nowait(
-                            multimodal.MessageGeneration(
-                                message_id=self._active_response_id,
-                                text_stream=item_generation.text_ch,
-                                audio_stream=item_generation.audio_ch,
-                            )
-                        )
-                        self.emit("generation_created", generation_ev)
-
-                    server_content = response.server_content
-                    if server_content:
-                        model_turn = server_content.model_turn
-                        if model_turn:
-                            assert item_generation is not None
-                            for part in model_turn.parts:
-                                if part.text:
-                                    item_generation.text_ch.send_nowait(part.text)
-                                if part.inline_data:
-                                    data = part.inline_data.data
-                                    frame = rtc.AudioFrame(
-                                        data=data,
-                                        sample_rate=OUTPUT_AUDIO_SAMPLE_RATE,
-                                        num_channels=NUM_CHANNELS,
-                                        samples_per_channel=len(data) // 2,
-                                    )
-                                    if self._opts.enable_agent_audio_transcription:
-                                        self._agent_transcriber._push_audio(frame)
-                                    item_generation.audio_ch.send_nowait(frame)
-
-                        if server_content.interrupted or server_content.turn_complete:
-                            item_generation.text_ch.close()
-                            item_generation.audio_ch.close()
-                            self._current_generation.message_ch.close()
-                            self._current_generation.function_ch.close()
-                            self._current_generation = None
-
-                            self.emit("agent_speech_stopped")
-                            self._is_interrupted = True
-                            self._active_response_id = None
+                    if response.server_content:
+                        self._handle_server_content(response.server_content)
 
                     if response.tool_call:
-                        for fnc_call in response.tool_call.function_calls:
-                            self._current_generation.function_ch.send_nowait(
-                                llm.FunctionCall(
-                                    call_id=fnc_call.call_id,
-                                    name=fnc_call.name,
-                                    arguments=json.dumps(fnc_call.args),
-                                )
-                            )
+                        self._handle_tool_calls(response.tool_call)
 
-                    # Handle function call cancellations
                     if response.tool_call_cancellation:
-                        logger.warning(
-                            "function call cancelled",
-                            extra={
-                                "function_call_ids": response.tool_call_cancellation.function_call_ids,
-                            },
-                        )
-                        self.emit(
-                            "function_calls_cancelled",
-                            response.tool_call_cancellation.function_call_ids,
+                        self._handle_tool_call_cancellation(
+                            response.tool_call_cancellation
                         )
 
-        try:
-            async with self._client.aio.live.connect(
-                model=self._opts.model, config=self._config
-            ) as session:
-                self._session = session
-                tasks = [
-                    asyncio.create_task(_send_task(), name="gemini-realtime-send"),
-                    asyncio.create_task(_recv_task(), name="gemini-realtime-recv"),
-                ]
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    await utils.aio.cancel_and_wait(*tasks)
-        finally:
-            await self.aclose()
+            send_task = asyncio.create_task(_send_task(), name="gemini-realtime-send")
+            recv_task = asyncio.create_task(_recv_task(), name="gemini-realtime-recv")
+            try:
+                await asyncio.gather(send_task, recv_task)
+            finally:
+                await utils.aio.cancel_and_wait(send_task, recv_task)
+
+    def _start_new_generation(self):
+        self._is_interrupted = False
+        self._active_response_id = utils.shortuuid("gemini-turn-")
+        self._current_generation = _ResponseGeneration(
+            message_ch=utils.aio.Chan[multimodal.MessageGeneration](),
+            function_ch=utils.aio.Chan[llm.FunctionCall](),
+            messages={},
+        )
+
+        # We'll assume each chunk belongs to a single message ID self._active_response_id
+        item_generation = _MessageGeneration(
+            message_id=self._active_response_id,
+            text_ch=utils.aio.Chan(str),
+            audio_ch=utils.aio.Chan(rtc.AudioFrame),
+        )
+
+        self._current_generation.message_ch.send_nowait(
+            multimodal.MessageGeneration(
+                message_id=self._active_response_id,
+                text_stream=item_generation.text_ch,
+                audio_stream=item_generation.audio_ch,
+            )
+        )
+
+        generation_event = multimodal.GenerationCreatedEvent(
+            message_stream=self._current_generation.message_ch,
+            function_stream=self._current_generation.function_ch,
+        )
+        self.emit("generation_created", generation_event)
+
+        self._current_generation.messages[self._active_response_id] = item_generation
+
+    def _handle_server_content(self, server_content):
+        if not self._current_generation or not self._active_response_id:
+            logger.warning(
+                "gemini-realtime-session: No active response ID, skipping server content"
+            )
+            return
+
+        item_generation = self._current_generation.messages[self._active_response_id]
+
+        model_turn = server_content.model_turn
+        if model_turn:
+            for part in model_turn.parts:
+                if part.text:
+                    item_generation.text_ch.send_nowait(part.text)
+                if part.inline_data:
+                    frame_data = part.inline_data.data
+                    frame = rtc.AudioFrame(
+                        data=frame_data,
+                        sample_rate=OUTPUT_AUDIO_SAMPLE_RATE,
+                        num_channels=NUM_CHANNELS,
+                        samples_per_channel=len(frame_data) // 2,
+                    )
+                    if self._opts.enable_agent_audio_transcription:
+                        self._agent_transcriber._push_audio(frame)
+                    item_generation.audio_ch.send_nowait(frame)
+
+        if server_content.interrupted or server_content.turn_complete:
+            self._finalize_response(item_generation)
+
+    def _finalize_response(self, item_generation: _MessageGeneration):
+        item_generation.text_ch.close()
+        item_generation.audio_ch.close()
+
+        if self._current_generation:
+            self._current_generation.message_ch.close()
+            self._current_generation.function_ch.close()
+            self._current_generation = None
+
+        self._is_interrupted = True
+        self._active_response_id = None
+        self.emit("agent_speech_stopped")
+
+    def _handle_tool_calls(self, tool_call):
+        if not self._current_generation:
+            return
+        for fnc_call in tool_call.function_calls:
+            self._current_generation.function_ch.send_nowait(
+                llm.FunctionCall(
+                    call_id=fnc_call.call_id,
+                    name=fnc_call.name,
+                    arguments=json.dumps(fnc_call.args),
+                )
+            )
+
+    def _handle_tool_call_cancellation(self, tool_call_cancellation):
+        logger.warning(
+            "function call cancelled",
+            extra={
+                "function_call_ids": tool_call_cancellation.function_call_ids,
+            },
+        )
+        self.emit("function_calls_cancelled", tool_call_cancellation.function_call_ids)
 
     def _on_input_speech_done(self, content: TranscriptionContent) -> None:
         if content.response_id and content.text:
