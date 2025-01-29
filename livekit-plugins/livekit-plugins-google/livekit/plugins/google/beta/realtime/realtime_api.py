@@ -445,10 +445,8 @@ class GeminiRealtimeSession(multimodal.RealtimeSession):
                     transcript=content.text,
                 ),
             )
-            user_msg = llm.ChatMessage.create_user(
-                text=content.text, id=content.response_id
-            )
-            self._remote_chat_ctx.insert(None, user_msg)
+            # self._chat_ctx.append(text=content.text, role="user")
+            # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech
 
     def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
         if not self._is_interrupted and content.response_id and content.text:
@@ -459,7 +457,4 @@ class GeminiRealtimeSession(multimodal.RealtimeSession):
                     transcript=content.text,
                 ),
             )
-            agent_msg = llm.ChatMessage.create_assistant(
-                text=content.text, id=content.response_id
-            )
-            self._remote_chat_ctx.insert(None, agent_msg)
+            # self._chat_ctx.append(text=content.text, role="assistant")
