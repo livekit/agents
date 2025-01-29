@@ -6,8 +6,7 @@ from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent, TextSink
 from livekit.agents.pipeline.room_io import RoomInputOptions
-from livekit.agents.transcription.transcription_sync import TranscriptionSyncIO
-from livekit.agents.transcription.tts_forwarder import TTSRoomForwarder
+from livekit.agents.transcription import TranscriptionSyncIO, TTSRoomForwarder
 from livekit.plugins import openai
 
 logger = logging.getLogger("my-worker")

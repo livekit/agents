@@ -4,11 +4,11 @@ import sys
 
 from livekit import rtc
 from livekit.agents.pipeline.io import AudioSink, TextSink
-from livekit.agents.transcription.transcription_sync import (
+from livekit.agents.transcription import (
     TranscriptionSyncIO,
     TranscriptionSyncOptions,
+    TTSStreamForwarder,
 )
-from livekit.agents.transcription.tts_forwarder import TTSStreamForwarder
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.WARNING)
