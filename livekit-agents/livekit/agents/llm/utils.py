@@ -3,22 +3,20 @@ from __future__ import annotations
 import inspect
 from dataclasses import dataclass
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Any,
     Callable,
     get_args,
     get_origin,
     get_type_hints,
-    TYPE_CHECKING,
 )
 
 from pydantic import BaseModel, create_model
 from pydantic.fields import FieldInfo
 
-
 from .chat_context import ChatContext
 from .function_context import AIFunction, get_function_info
-
 
 if TYPE_CHECKING:
     from ..pipeline.context import AgentContext

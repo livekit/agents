@@ -1,4 +1,4 @@
-from . import utils
+from . import remote_chat_context, utils
 from .chat_context import (
     AudioContent,
     ChatContent,
@@ -11,9 +11,10 @@ from .chat_context import (
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .function_context import (
+    AIError,
     AIFunction,
     FunctionContext,
-    AIError,
+    StopResponse,
     ai_function,
     find_ai_functions,
     is_ai_function,
@@ -28,7 +29,6 @@ from .llm import (
     LLMStream,
     ToolChoice,
 )
-from . import remote_chat_context
 
 __all__ = [
     "LLM",
@@ -56,6 +56,7 @@ __all__ = [
     "AIFunction",
     "FunctionContext",
     "AIError",
+    "StopResponse",
     "utils",
     "remote_chat_context",
 ]
