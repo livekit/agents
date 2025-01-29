@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import AsyncIterable, Generic, Literal, TypeVar, Union
@@ -43,6 +42,7 @@ class ErrorEvent:
 @dataclass
 class RealtimeCapabilities:
     message_truncation: bool
+    input_audio_sample_rate: int
 
 
 class RealtimeError(Exception):
