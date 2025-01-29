@@ -1,16 +1,14 @@
 from .forwarder import (
-    STTRoomForwarder,
-    STTStreamForwarder,
-    TTSRoomForwarder,
-    TTSStreamForwarder,
+    TranscriptionForwarder,
+    TranscriptionRoomForwarder,
+    TranscriptionStreamForwarder,
 )
 from .synchronizer import TranscriptionSyncIO, TranscriptionSyncOptions
 
 __all__ = [
     "TranscriptionSyncIO",
     "TranscriptionSyncOptions",
-    "TTSRoomForwarder",
-    "TTSStreamForwarder",
-    "STTRoomForwarder",
-    "STTStreamForwarder",
+    "TranscriptionForwarder",
+    "TranscriptionRoomForwarder",
+    "TranscriptionStreamForwarder",
 ]

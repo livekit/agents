@@ -10,12 +10,13 @@ from ..utils import aio, log_exceptions
 from ._utils import find_micro_track_id, segment_uuid
 
 
-class TranscriptionForwarderBase(ABC):
+class TranscriptionForwarder(ABC):
     """Base class for all transcription forwarders."""
 
     def __init__(self):
         self._event_ch = aio.Chan[rtc.TranscriptionSegment]()
         self._main_task = asyncio.create_task(self._main_task())
+        self._current_id = segment_uuid()
 
     @abstractmethod
     async def _forward_segment(self, segment: rtc.TranscriptionSegment) -> None:
@@ -30,35 +31,16 @@ class TranscriptionForwarderBase(ABC):
         except Exception:
             logger.exception("Error processing segment stream")
 
-    async def aclose(self) -> None:
-        """Close the forwarder and cleanup resources."""
-        self._event_ch.close()
-        await aio.cancel_and_wait(self._main_task)
-
-
-class TTSSegmentsForwarder(TranscriptionForwarderBase):
-    """Base class for forwarding TTS segments."""
-
-    def __call__(self, segment: rtc.TranscriptionSegment) -> None:
-        """Forward TTS transcription segment."""
-        self._event_ch.send_nowait(segment)
-
-
-class STTSegmentsForwarder(TranscriptionForwarderBase):
-    """Base class for forwarding STT segments from speech recognition."""
-
-    def __init__(self):
-        super().__init__()
-        self._current_id = segment_uuid()
-
-    def __call__(self, ev: stt.SpeechEvent) -> None:
-        """Process and forward speech recognition event."""
-        if not ev.alternatives:
+    def __call__(self, ev: rtc.TranscriptionSegment | stt.SpeechEvent) -> None:
+        if isinstance(ev, rtc.TranscriptionSegment):
+            self._event_ch.send_nowait(ev)
             return
 
+        # SpeechEvent to TranscriptionSegment
+        if not ev.alternatives:
+            return
         text = ev.alternatives[0].text
         is_final = ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
-
         segment = rtc.TranscriptionSegment(
             id=self._current_id,
             text=text,
@@ -67,14 +49,17 @@ class STTSegmentsForwarder(TranscriptionForwarderBase):
             final=is_final,
             language="",  # TODO: Add language support
         )
-
         if is_final:
             self._current_id = segment_uuid()
-
         self._event_ch.send_nowait(segment)
 
+    async def aclose(self) -> None:
+        """Close the forwarder and cleanup resources."""
+        self._event_ch.close()
+        await aio.cancel_and_wait(self._main_task)
 
-class RoomForwarderMixin:
+
+class TranscriptionRoomForwarder(TranscriptionForwarder):
     """Mixin for forwarding transcriptions to LiveKit rooms."""
 
     def __init__(
@@ -112,7 +97,7 @@ class RoomForwarderMixin:
             logger.exception("Failed to publish transcription")
 
 
-class StreamForwarderMixin:
+class TranscriptionStreamForwarder(TranscriptionForwarder):
     """Mixin for forwarding transcriptions to text streams."""
 
     def __init__(self, stream=sys.stdout):
@@ -145,27 +130,3 @@ class StreamForwarderMixin:
             self._stream.write("\n")
             self._stream.flush()
             self._last_text = ""
-
-
-class STTRoomForwarder(RoomForwarderMixin, STTSegmentsForwarder):
-    """Forwards STT segments to a LiveKit room."""
-
-    pass
-
-
-class STTStreamForwarder(StreamForwarderMixin, STTSegmentsForwarder):
-    """Forwards STT segments to a text IO stream with real-time display."""
-
-    pass
-
-
-class TTSRoomForwarder(RoomForwarderMixin, TTSSegmentsForwarder):
-    """Forwards synchronized TTS segments to a LiveKit room."""
-
-    pass
-
-
-class TTSStreamForwarder(StreamForwarderMixin, TTSSegmentsForwarder):
-    """Forwards synchronized TTS segments to a text IO stream with real-time display."""
-
-    pass

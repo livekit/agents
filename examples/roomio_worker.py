@@ -6,7 +6,7 @@ from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent, TextSink
 from livekit.agents.pipeline.room_io import RoomInputOptions
-from livekit.agents.transcription import TranscriptionSyncIO, TTSRoomForwarder
+from livekit.agents.transcription import TranscriptionRoomForwarder, TranscriptionSyncIO
 from livekit.plugins import openai
 
 logger = logging.getLogger("my-worker")
@@ -57,7 +57,8 @@ async def entrypoint(ctx: JobContext):
     # TTS transcription forward
     transcription_sync = TranscriptionSyncIO.from_agent(agent)
     transcription_sync.on(
-        "transcription_segment", TTSRoomForwarder(ctx.room, ctx.room.local_participant)
+        "transcription_segment",
+        TranscriptionRoomForwarder(ctx.room, ctx.room.local_participant),
     )
 
     # TODO: the interrupted flag is not set correctly

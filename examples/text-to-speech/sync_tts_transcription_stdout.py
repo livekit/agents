@@ -5,9 +5,9 @@ import sys
 from livekit import rtc
 from livekit.agents.pipeline.io import AudioSink, TextSink
 from livekit.agents.transcription import (
+    TranscriptionStreamForwarder,
     TranscriptionSyncIO,
     TranscriptionSyncOptions,
-    TTSStreamForwarder,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ async def main():
 
     opts = TranscriptionSyncOptions(language="en", speed=1.0)
     transcript_sync = TranscriptionSyncIO(audio_sink, sync_options=opts)
-    tts_forwarder = TTSStreamForwarder(stream=sys.stdout)
+    tts_forwarder = TranscriptionStreamForwarder(stream=sys.stdout)
     transcript_sync.on("transcription_segment", tts_forwarder)
 
     # Run forwarder and push data concurrently
