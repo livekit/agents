@@ -4,7 +4,6 @@ import asyncio
 import json
 import time
 
-import numpy as np
 from livekit.agents import llm
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
@@ -24,11 +23,6 @@ def _download_from_hf_hub(repo_id, filename, **kwargs):
 
     local_path = hf_hub_download(repo_id=repo_id, filename=filename, **kwargs)
     return local_path
-
-
-def _softmax(logits: np.ndarray) -> np.ndarray:
-    exp_logits = np.exp(logits - np.max(logits))
-    return exp_logits / np.sum(exp_logits)
 
 
 class _EUORunner(_InferenceRunner):
