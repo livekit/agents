@@ -24,6 +24,7 @@ from google.genai.types import (
     Part,
     PrebuiltVoiceConfig,
     SpeechConfig,
+    Tool,
     VoiceConfig,
 )
 
@@ -251,7 +252,7 @@ class RealtimeSession(llm.RealtimeSession):
                 retained_functions.append(ai_fnc)
 
             self._fnc_ctx = llm.FunctionContext(retained_functions)
-            self._tools = tools
+            self._tools = [Tool(function_declarations=tools)]
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -300,6 +301,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
+        print("self tools", self._tools)
         config = LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             generation_config=GenerationConfig(
@@ -433,9 +435,10 @@ class RealtimeSession(llm.RealtimeSession):
         if not self._current_generation:
             return
         for fnc_call in tool_call.function_calls:
+            print("fnc_call", fnc_call)
             self._current_generation.function_ch.send_nowait(
                 llm.FunctionCall(
-                    call_id=fnc_call.call_id,
+                    call_id=fnc_call.id,
                     name=fnc_call.name,
                     arguments=json.dumps(fnc_call.args),
                 )
@@ -445,10 +448,10 @@ class RealtimeSession(llm.RealtimeSession):
         logger.warning(
             "function call cancelled",
             extra={
-                "function_call_ids": tool_call_cancellation.function_call_ids,
+                "function_call_ids": tool_call_cancellation.ids,
             },
         )
-        self.emit("function_calls_cancelled", tool_call_cancellation.function_call_ids)
+        self.emit("function_calls_cancelled", tool_call_cancellation.ids)
 
     def commit_audio_buffer(self) -> None:
         raise NotImplementedError("commit_audio_buffer is not supported yet")
