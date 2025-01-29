@@ -79,7 +79,6 @@ class _EUORunner(_InferenceRunner):
                 local_files_only=True,
                 truncation_side="left",
             )
-            self._eou_index = self._tokenizer.encode("<|im_end|>")[-1]
         except (errors.LocalEntryNotFoundError, OSError):
             logger.error(
                 (
@@ -109,9 +108,8 @@ class _EUORunner(_InferenceRunner):
             truncation=True,
         )
         # Run inference
-        eou_probability = self._session.run(None, {"input_ids": inputs["input_ids"]})[
-            0
-        ][0]
+        outputs = self._session.run(None, {"input_ids": inputs["input_ids"]})
+        eou_probability = outputs[0][0]
         end_time = time.perf_counter()
 
         logger.debug(
