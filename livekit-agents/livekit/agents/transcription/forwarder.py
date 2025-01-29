@@ -1,6 +1,7 @@
 import asyncio
 import sys
 from abc import ABC, abstractmethod
+from typing import TextIO
 
 from livekit import rtc
 
@@ -60,7 +61,7 @@ class TranscriptionForwarder(ABC):
 
 
 class TranscriptionRoomForwarder(TranscriptionForwarder):
-    """Mixin for forwarding transcriptions to LiveKit rooms."""
+    """Forwards transcriptions to LiveKit rooms."""
 
     def __init__(
         self,
@@ -98,9 +99,9 @@ class TranscriptionRoomForwarder(TranscriptionForwarder):
 
 
 class TranscriptionStreamForwarder(TranscriptionForwarder):
-    """Mixin for forwarding transcriptions to text streams."""
+    """Forwards transcriptions to text streams."""
 
-    def __init__(self, stream=sys.stdout):
+    def __init__(self, stream: TextIO = sys.stdout):
         super().__init__()
         self._stream = stream
         self._last_text = ""
