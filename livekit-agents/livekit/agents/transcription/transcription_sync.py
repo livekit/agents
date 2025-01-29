@@ -18,6 +18,20 @@ STANDARD_SPEECH_RATE = 3.83
 
 
 @dataclass
+class TranscriptionSyncOptions:
+    """Options for synchronizing TTS segments with audio playback."""
+
+    language: str = ""
+    speed: float = 1.0  # Multiplier of STANDARD_SPEECH_RATE
+    new_sentence_delay: float = 0.4
+    word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
+        ignore_punctuation=False
+    )
+    sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
+    hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
+
+
+@dataclass
 class _AudioData:
     pushed_duration: float = 0.0
     done: bool = False
@@ -30,20 +44,6 @@ class _TextData:
     done: bool = False
     forwarded_hyphens: int = 0
     forwarded_sentences: int = 0
-
-
-@dataclass
-class TranscriptionSyncOptions:
-    """Options for synchronizing TTS segments with audio playback."""
-
-    language: str = ""
-    speed: float = 1.0  # Multiplier of STANDARD_SPEECH_RATE
-    new_sentence_delay: float = 0.4
-    word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
-        ignore_punctuation=False
-    )
-    sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
-    hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
 
 
 class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment"]]):
@@ -392,7 +392,6 @@ class _AudioSync(AudioSink):
             self._interrupted = False
 
         self._parent._transcription_sync.push_audio(frame)
-        logger.info(f"Pushed audio frame: {frame.duration}s")
 
     def flush(self) -> None:
         super().flush()
@@ -400,7 +399,6 @@ class _AudioSync(AudioSink):
         self._capturing = False
         if not self._interrupted and not self._parent._transcription_sync._closed:
             self._parent._transcription_sync.mark_audio_segment_end()
-            logger.info("Marked audio segment end")
 
     def clear_buffer(self) -> None:
         self._interrupted = True
@@ -414,9 +412,7 @@ class _AudioSync(AudioSink):
         )
         if not interrupted and not self._parent._transcription_sync._closed:
             self._parent._transcription_sync.segment_playout_finished()
-            logger.info("Marked audio playout end")
         self._parent._flush()
-        logger.info("Reset transcription sync")
 
 
 class _TextSink(TextSink):

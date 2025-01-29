@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sys
 
 from livekit import rtc
 from livekit.agents.pipeline.io import AudioSink, TextSink
@@ -7,7 +8,7 @@ from livekit.agents.transcription.transcription_sync import (
     TranscriptionSyncIO,
     TranscriptionSyncOptions,
 )
-from livekit.agents.transcription.tts_forwarder import TTSStdoutForwarder
+from livekit.agents.transcription.tts_forwarder import TTSStreamForwarder
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.WARNING)
@@ -53,7 +54,7 @@ async def push_audio(
     bytes_per_sample = 2
     total_bytes = len(audio_data)
     audio_duration = total_bytes / (sample_rate * 2 * num_channels)
-    print(f"\nAudio duration: {audio_duration:.2f} seconds")
+    print(f"\n[START] Audio duration: {audio_duration:.2f} seconds")
 
     start_time = asyncio.get_running_loop().time()
     for offset in range(0, total_bytes, frame_size * bytes_per_sample * num_channels):
@@ -79,8 +80,8 @@ async def push_audio(
     await asyncio.sleep(wait_time)
     audio_sink.on_playback_finished(playback_position=audio_duration, interrupted=False)
 
-    await asyncio.sleep(1)
-    print("Playout finished")
+    await asyncio.sleep(0.5)
+    print("[END] Playout finished")
 
 
 async def main():
@@ -107,9 +108,8 @@ async def main():
 
     opts = TranscriptionSyncOptions(language="en", speed=1.0)
     transcript_sync = TranscriptionSyncIO(audio_sink, sync_options=opts)
-    tts_forwarder = TTSStdoutForwarder(show_timing=True)
+    tts_forwarder = TTSStreamForwarder(stream=sys.stdout)
     transcript_sync.on("transcription_segment", tts_forwarder)
-    transcript_sync.on("segment_playout_started", tts_forwarder.reset)
 
     # Run forwarder and push data concurrently
     for transcript, audio_duration in transcripts:
