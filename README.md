@@ -8,13 +8,32 @@
 
 <!--END_BANNER_IMAGE-->
 
+<br /><br />
+Looking for the JS/TS library? Check out [AgentsJS](https://github.com/livekit/agents-js)
+
+## ✨ NEW ✨
+
+### In-house phrase endpointing model
+
+We’ve trained a new, open weights phrase endpointing model that significantly improves end-of-turn detection and conversational flow between voice agents and users by reducing agent interruptions. Optimized to run on CPUs, it’s available via [livekit-plugins-turn-detector](https://pypi.org/project/livekit-plugins-turn-detector/) package.
+
+## What is Agents?
+
 <!--BEGIN_DESCRIPTION-->
 
-The Agent Framework is designed for building realtime, programmable participants
-that run on servers. Use it to create conversational, multi-modal voice
-agents that can see, hear, and understand.
+The **Agents framework** enables you to build AI-driven server programs that can see, hear, and speak in realtime. It offers a fully open-source platform for creating realtime, agentic applications.
 
 <!--END_DESCRIPTION-->
+
+## Features
+
+- **Flexible integrations**: A comprehensive ecosystem to mix and match the right models for each use case.
+- **AI voice agents**: `VoicePipelineAgent` and `MultimodalAgent` help orchestrate the conversation flow using LLMs and other AI models.
+- **Integrated job scheduling**: Built-in task scheduling and distribution with [dispatch APIs](https://docs.livekit.io/agents/build/dispatch/) to connect end users to agents.
+- **Realtime media transport**: Stream audio, video, and data over WebRTC and SIP with client SDKs for most platforms.
+- **Telephony integration**: Works seamlessly with LiveKit's [telephony stack](https://docs.livekit.io/sip/), allowing your agent to make calls to or receive calls from phones.
+- **Exchange data with clients**: Use [RPCs](https://docs.livekit.io/home/client/data/rpc/) and other [Data APIs](https://docs.livekit.io/home/client/data/) to seamlessly exchange data with clients.
+- **Open-source**: Fully open-source, allowing you to run the entire stack on your own servers, including [LiveKit server](https://github.com/livekit/livekit), one of the most widely used WebRTC media servers.
 
 ## Installation
 
@@ -48,6 +67,7 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Anthropic       | livekit-plugins-anthropic | [anthropic.LLM()](https://docs.livekit.io/python/livekit/plugins/anthropic/index.html#livekit.plugins.anthropic.LLM)              |
 | Google (Gemini) | livekit-plugins-openai    | [openai.LLM.with_vertex()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_vertex)         |
 | Cerebras        | livekit-plugins-openai    | [openai.LLM.with_cerebras()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_cerebras)     |
+| DeepSeek        | livekit-plugins-openai    | [openai.LLM.with_deepseek()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_deepseek)     |
 | Groq            | livekit-plugins-openai    | [openai.LLM.with_groq()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_groq)             |
 | Ollama          | livekit-plugins-openai    | [openai.LLM.with_ollama()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_ollama)         |
 | Perplexity      | livekit-plugins-openai    | [openai.LLM.with_perplexity()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_perplexity) |
@@ -76,6 +96,8 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Azure OpenAI | livekit-plugins-openai     |           |               | [openai.TTS.with_azure()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.TTS.with_azure) |
 | Google       | livekit-plugins-google     | ✅        | ✅            | [google.TTS()](https://docs.livekit.io/python/livekit/plugins/google/index.html#livekit.plugins.google.TTS)             |
 | Deepgram     | livekit-plugins-deepgram   | ✅        |               | [deepgram.TTS()](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.TTS)       |
+| Play.ai      | livekit-plugins-playai     | ✅        | ✅            | [playai.TTS()](https://docs.livekit.io/python/livekit/plugins/playai/index.html#livekit.plugins.playai.TTS)             |
+| Rime         | livekit-plugins-rime       | ✅        |               | [rime.TTS()](https://docs.livekit.io/python/livekit/plugins/rime/index.html#livekit.plugins.rime.TTS)                   |
 
 ### Other plugins
 
@@ -115,7 +137,9 @@ Documentation on the framework and how to use it can be found [here](https://doc
 The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in LiveKit's [Slack community](https://livekit.io/join-slack).
 
 <!--BEGIN_REPO_NAV-->
+
 <br/><table>
+
 <thead><tr><th colspan="2">LiveKit Ecosystem</th></tr></thead>
 <tbody>
 <tr><td>LiveKit SDKs</td><td><a href="https://github.com/livekit/client-sdk-js">Browser</a> · <a href="https://github.com/livekit/client-sdk-swift">iOS/macOS/visionOS</a> · <a href="https://github.com/livekit/client-sdk-android">Android</a> · <a href="https://github.com/livekit/client-sdk-flutter">Flutter</a> · <a href="https://github.com/livekit/client-sdk-react-native">React Native</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/client-sdk-unity">Unity</a> · <a href="https://github.com/livekit/client-sdk-unity-web">Unity (WebGL)</a></td></tr><tr></tr>
