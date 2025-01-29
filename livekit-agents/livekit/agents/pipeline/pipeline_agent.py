@@ -6,7 +6,7 @@ from typing import AsyncIterable, Literal, Optional
 
 from livekit import rtc
 
-from .. import debug, llm, utils
+from .. import NOT_GIVEN, NotGivenOr, debug, llm, utils
 from ..log import logger
 from . import io
 from .agent_task import AgentTask, TaskActivity
@@ -74,6 +74,9 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         self._current_task: AgentTask = task
         self._active_task: TaskActivity | None = None
 
+        # room I/O
+        self._room_input: RoomInput | None = None
+
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
     # constructor of the PipelineAgent
@@ -82,6 +85,10 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         self,
         room: Optional[rtc.Room] = None,
         room_input_options: Optional[RoomInputOptions] = None,
+        subscribe_to_participant: NotGivenOr[
+            rtc.RemoteParticipant | str | None
+        ] = NOT_GIVEN,
+        room_audio_publish_options: Optional[rtc.TrackPublishOptions] = None,
     ) -> None:
         """Start the pipeline agent.
 
@@ -93,18 +100,30 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         if self._started:
             return
 
+        if room_input_options or subscribe_to_participant or room_audio_publish_options:
+            if room is None:
+                raise ValueError("room is required when configuring room I/O")
+
         if room is not None:
-            # TODO(long): expose the participant and output options
             # configure room I/O if not already set
             if self.input.audio is None:
-                room_input = RoomInput(room=room, options=room_input_options)
-                self._input.audio = room_input.audio
-                await room_input.wait_for_participant()
+                if isinstance(subscribe_to_participant, rtc.Participant):
+                    subscribe_to_participant = subscribe_to_participant.identity
+
+                self._room_input = RoomInput(
+                    room=room,
+                    options=room_input_options,
+                    participant_identity=subscribe_to_participant,
+                )
+                self._input.audio = self._room_input.audio
+                await self._room_input.wait_for_participant()
 
             if self.output.audio is None:
                 room_output = RoomOutput(room=room)
                 self._output.audio = room_output.audio
-                await room_output.start()
+                await room_output.start(
+                    audio_publish_options=room_audio_publish_options
+                )
 
         if self.input.audio is not None:
             self._forward_audio_atask = asyncio.create_task(

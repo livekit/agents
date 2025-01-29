@@ -4,6 +4,7 @@ from typing import AsyncIterator, Optional
 
 from livekit import rtc
 
+from .. import NOT_GIVEN, NotGivenOr
 from .io import AudioSink
 from .log import logger
 
@@ -33,19 +34,22 @@ class RoomInput:
     def __init__(
         self,
         room: rtc.Room,
-        participant_identity: Optional[str] = None,
+        participant_identity: NotGivenOr[str | None] = NOT_GIVEN,
         options: RoomInputOptions = DEFAULT_ROOM_INPUT_OPTIONS,
     ) -> None:
         """
         Args:
             room: The LiveKit room to get streams from
             participant_identity: Optional identity of the participant to get streams from.
-                                If None, will use the first participant that joins.
+                If NOT_GIVEN, will use the first participant that joins.
+                If None, will disable the automatic participant lookup.
             options: RoomInputOptions
         """
         self._options = options
         self._room = room
-        self._expected_identity = participant_identity
+        self._expected_identity = participant_identity or None
+        self._auto_find_participant = participant_identity is not None
+
         self._participant: rtc.RemoteParticipant | None = None
         self._closed = False
 
@@ -54,16 +58,17 @@ class RoomInput:
         self._video_stream: Optional[rtc.VideoStream] = None
 
         self._participant_ready = asyncio.Event()
-        self._room.on("participant_connected", self._on_participant_connected)
+        if self._auto_find_participant:
+            self._room.on("participant_connected", self._on_participant_connected)
 
         # try to find participant
         if self._expected_identity is not None:
             participant = self._room.remote_participants.get(self._expected_identity)
             if participant is not None:
-                self._link_participant(participant)
-        else:
+                self.link_participant(participant)
+        elif self._auto_find_participant:
             for participant in self._room.remote_participants.values():
-                self._link_participant(participant)
+                self.link_participant(participant)
                 if self._participant:
                     break
 
@@ -94,7 +99,7 @@ class RoomInput:
 
         return _read_stream()
 
-    def _link_participant(self, participant: rtc.RemoteParticipant) -> None:
+    def link_participant(self, participant: rtc.RemoteParticipant) -> None:
         if (
             self._expected_identity is not None
             and participant.identity != self._expected_identity
@@ -124,14 +129,15 @@ class RoomInput:
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant is not None:
             return
-        self._link_participant(participant)
+        self.link_participant(participant)
 
     async def aclose(self) -> None:
         if self._closed:
             raise RuntimeError("RoomInput already closed")
 
         self._closed = True
-        self._room.off("participant_connected", self._on_participant_connected)
+        if self._auto_find_participant:
+            self._room.off("participant_connected", self._on_participant_connected)
         self._participant = None
 
         if self._audio_stream is not None:
@@ -159,8 +165,10 @@ class RoomOutput:
             room=room, sample_rate=sample_rate, num_channels=num_channels
         )
 
-    async def start(self) -> None:
-        await self._audio_sink.start()
+    async def start(
+        self, audio_publish_options: Optional[rtc.TrackPublishOptions] = None
+    ) -> None:
+        await self._audio_sink.start(audio_publish_options)
 
     @property
     def audio(self) -> "RoomAudioSink":
@@ -208,7 +216,9 @@ class RoomAudioSink(AudioSink):
 
         self._room.on("reconnected", _on_reconnected)
 
-    async def start(self) -> None:
+    async def start(
+        self, publish_options: Optional[rtc.TrackPublishOptions] = None
+    ) -> None:
         """Start publishing the audio track to the room"""
         if self._publication:
             return
@@ -216,9 +226,11 @@ class RoomAudioSink(AudioSink):
         track = rtc.LocalAudioTrack.create_audio_track(
             "assistant_voice", self._audio_source
         )
+        publish_options = publish_options or rtc.TrackPublishOptions(
+            source=rtc.TrackSource.SOURCE_MICROPHONE
+        )
         self._publication = await self._room.local_participant.publish_track(
-            track=track,
-            options=rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+            track=track, options=publish_options
         )
         await self._publication.wait_for_subscription()
 
