@@ -123,4 +123,4 @@ class StreamAdapterWrapper(RecognizeStream):
         try:
             await asyncio.gather(*tasks)
         finally:
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)

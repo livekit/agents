@@ -1,8 +1,28 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    get_args,
+    get_origin,
+    get_type_hints,
+    TYPE_CHECKING,
+)
+
+from pydantic import BaseModel, create_model
+from pydantic.fields import FieldInfo
+
 
 from .chat_context import ChatContext
+from .function_context import AIFunction, get_function_info
+
+
+if TYPE_CHECKING:
+    from ..pipeline.context import AgentContext
+    from ..pipeline.speech_handle import SpeechHandle
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -70,3 +90,120 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
             last_id_in_sequence = new_msg.id
 
     return DiffOps(to_remove=to_remove, to_create=to_create)
+
+
+# Convert FunctionContext to LLM API format
+
+
+def is_context_type(ty: type) -> bool:
+    from ..pipeline.context import AgentContext
+    from ..pipeline.speech_handle import SpeechHandle
+
+    return ty is AgentContext or ty is SpeechHandle
+
+
+def build_legacy_openai_schema(
+    ai_function: AIFunction, *, internally_tagged: bool = False
+) -> dict[str, Any]:
+    """non-strict mode tool description
+    see https://serde.rs/enum-representations.html for the internally tagged representation"""
+    model = function_arguments_to_pydantic_model(ai_function)
+    schema = model.model_json_schema()
+
+    info = get_function_info(ai_function)
+
+    if internally_tagged:
+        return {
+            "name": info.name,
+            "description": info.description or "",
+            "parameters": schema,
+            "type": "function",
+        }
+    else:
+        return {
+            "type": "function",
+            "function": {
+                "name": info.name,
+                "description": info.description or "",
+                "parameters": schema,
+            },
+        }
+
+
+def function_arguments_to_pydantic_model(
+    func: Callable,
+) -> type[BaseModel]:
+    """
+    Create a Pydantic model from a function’s signature. (excluding context types)
+    """
+    fnc_name = func.__name__.split("_")
+    fnc_name = "".join(x.capitalize() for x in fnc_name)
+    model_name = fnc_name + "Args"
+
+    signature = inspect.signature(func)
+    type_hints = get_type_hints(func, include_extras=True)
+
+    # field_name -> (type, FieldInfo or default)
+    fields: dict[str, Any] = {}
+
+    for param_name, param in signature.parameters.items():
+        type_hint = type_hints[param_name]
+
+        if is_context_type(type_hint):
+            continue
+
+        default_value = param.default if param.default is not param.empty else ...
+
+        # Annotated[str, Field(description="...")]
+        if get_origin(type_hint) is Annotated:
+            annotated_args = get_args(type_hint)
+            actual_type = annotated_args[0]
+            field_info = None
+
+            for extra in annotated_args[1:]:
+                if isinstance(extra, FieldInfo):
+                    field_info = extra  # get the first FieldInfo
+                    break
+
+            if field_info:
+                if default_value is not ... and field_info.default is None:
+                    field_info.default = default_value
+                fields[param_name] = (actual_type, field_info)
+            else:
+                fields[param_name] = (actual_type, default_value)
+
+        else:
+            fields[param_name] = (type_hint, default_value)
+
+    return create_model(model_name, **fields)
+
+
+def pydantic_model_to_function_arguments(
+    *,
+    ai_function: Callable,
+    model: BaseModel,
+    agent_ctx: AgentContext | None = None,
+    speech_handle: SpeechHandle | None = None,
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """
+    Convert a model’s fields into function args/kwargs.
+    Raises TypeError if required params are missing
+    """
+
+    from ..pipeline.context import AgentContext
+    from ..pipeline.speech_handle import SpeechHandle
+
+    signature = inspect.signature(ai_function)
+    type_hints = get_type_hints(ai_function, include_extras=True)
+
+    context_dict = {}
+    for param_name, _ in signature.parameters.items():
+        type_hint = type_hints[param_name]
+        if type_hint is AgentContext and agent_ctx is not None:
+            context_dict[param_name] = agent_ctx
+        elif type_hint is SpeechHandle and speech_handle is not None:
+            context_dict[param_name] = speech_handle
+
+    bound = signature.bind(**{**model.model_dump(), **context_dict})
+    bound.apply_defaults()
+    return bound.args, bound.kwargs

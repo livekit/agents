@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import threading
 import sys
 import termios
+import threading
 import time
 import tty
 from typing import Literal
@@ -86,7 +86,6 @@ class _AudioSink(io.AudioSink):
             self._capture_start = time.monotonic()
 
         self._pushed_duration += frame.duration
-        print(f"Pushed audio frame, duration: {self._pushed_duration:.2f}s")
         with self._output_lock:
             self._output_buf += frame.data
 
@@ -98,7 +97,6 @@ class _AudioSink(io.AudioSink):
             to_wait = max(
                 0.0, self._pushed_duration - (time.monotonic() - self._capture_start)
             )
-            print(f"Flushing audio buffer, waiting for {to_wait:.2f}s")
             self._dispatch_handle = self._cli._loop.call_later(
                 to_wait, self._dispatch_playback_finished
             )
@@ -124,7 +122,6 @@ class _AudioSink(io.AudioSink):
             )
 
     def _dispatch_playback_finished(self) -> None:
-        print("sending playback finished event")
         self.on_playback_finished(
             playback_position=self._pushed_duration, interrupted=False
         )
@@ -188,7 +185,7 @@ class ChatCLI:
             render_cli_task = asyncio.create_task(self._render_cli_task())
 
             await self._done_fut
-            await aio.gracefully_cancel(render_cli_task)
+            await aio.cancel_and_wait(render_cli_task)
 
             self._update_microphone(enable=False)
             self._update_speaker(enable=False)

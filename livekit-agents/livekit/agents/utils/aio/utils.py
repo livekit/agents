@@ -2,7 +2,7 @@ import asyncio
 import functools
 
 
-async def gracefully_cancel(*futures: asyncio.Future):
+async def cancel_and_wait(*futures: asyncio.Future):
     loop = asyncio.get_running_loop()
     waiters = []
 
