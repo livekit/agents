@@ -125,6 +125,7 @@ class FallbackLLMStream(LLMStream):
         return self._current_stream.fnc_ctx
 
     def execute_functions(self) -> list[CalledFunction]:
+        # this function is unused, but putting it in place for completeness
         if self._current_stream is None:
             return []
         return self._current_stream.execute_functions()
@@ -147,8 +148,11 @@ class FallbackLLMStream(LLMStream):
                     retry_interval=self._fallback_adapter._retry_interval,
                 ),
             ) as stream:
-                self._current_stream = stream
+                first_chunk = True
                 async for chunk in stream:
+                    if first_chunk:
+                        first_chunk = False
+                        self._current_stream = stream
                     yield chunk
 
         except asyncio.TimeoutError:
