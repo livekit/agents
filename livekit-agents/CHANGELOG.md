@@ -1,5 +1,17 @@
 # livekit-agents
 
+## 0.12.11
+
+### Patch Changes
+
+- gemini-realtime: fix input audio sample rate - [#1411](https://github.com/livekit/agents/pull/1411) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fix(pipeline_agent): clear user transcript when before_llm_cb returns false - [#1423](https://github.com/livekit/agents/pull/1423) ([@s-hamdananwar](https://github.com/s-hamdananwar))
+
+- fix: fallbackadapter to correctly handle function calls - [#1429](https://github.com/livekit/agents/pull/1429) ([@davidzhao](https://github.com/davidzhao))
+
+- improved TTFB metrics for streaming TTS - [#1431](https://github.com/livekit/agents/pull/1431) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.12.10
 
 ### Patch Changes

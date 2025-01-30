@@ -1,6 +1,6 @@
-livekit-agents>=0.12.10
-livekit-plugins-deepgram>=0.6.16
-livekit-plugins-google>=0.10.1
+livekit-agents>=0.12.11
+livekit-plugins-deepgram>=0.6.17
+livekit-plugins-google>=0.10.2
 livekit-plugins-openai[vertex]>=0.10.10
 livekit-plugins-silero>=0.7.4
 livekit-plugins-rag>=0.2.3
