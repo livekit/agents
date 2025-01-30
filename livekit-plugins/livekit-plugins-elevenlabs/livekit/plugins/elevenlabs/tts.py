@@ -431,6 +431,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     text=f"{text} ",  # must always end with a space
                     try_trigger_generation=False,
                 )
+                self._mark_started()
                 await ws_conn.send_str(json.dumps(data_pkt))
 
             if xml_content:

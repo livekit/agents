@@ -277,6 +277,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def text_stream():
             async for word_stream in self._segments_ch:
                 async for word in word_stream:
+                    self._mark_started()
                     yield word.token
 
         return text_stream()

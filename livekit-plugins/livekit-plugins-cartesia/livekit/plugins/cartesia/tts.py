@@ -48,7 +48,7 @@ API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2024-06-10"
 
 NUM_CHANNELS = 1
-BUFFERED_WORDS_COUNT = 8
+BUFFERED_WORDS_COUNT = 3
 
 
 @dataclass
@@ -267,6 +267,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["context_id"] = request_id
                 token_pkt["transcript"] = ev.token + " "
                 token_pkt["continue"] = True
+                self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
 
             end_pkt = base_pkt.copy()
