@@ -246,7 +246,7 @@ class SynthesizeStream(ABC):
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._metrics_task: asyncio.Task | None = None  # started on first push
-        self._started_time = 0
+        self._started_time: float = 0
 
         # used to track metrics
         self._mtc_pending_texts: list[str] = []
