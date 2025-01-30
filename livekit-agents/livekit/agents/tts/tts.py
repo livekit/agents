@@ -308,7 +308,6 @@ class SynthesizeStream(ABC):
             if not text:
                 return
 
-
             metrics = TTSMetrics(
                 timestamp=time.time(),
                 request_id=request_id,
