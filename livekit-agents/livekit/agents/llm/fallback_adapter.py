@@ -131,8 +131,17 @@ class FallbackLLMStream(LLMStream):
         return self._current_stream.execute_functions()
 
     async def _try_generate(
-        self, *, llm: LLM, recovering: bool = False
+        self, *, llm: LLM, check_recovery: bool = False
     ) -> AsyncIterable[ChatChunk]:
+        """
+        Try to generate with the given LLM.
+
+        Args:
+            llm: The LLM instance to generate with
+            check_recovery: When True, indicates this is a background recovery check and the
+                          result will not be used. Recovery checks verify if a previously
+                          failed LLM has become available again.
+        """
         try:
             async with llm.chat(
                 chat_ctx=self._chat_ctx,
@@ -148,15 +157,15 @@ class FallbackLLMStream(LLMStream):
                     retry_interval=self._fallback_adapter._retry_interval,
                 ),
             ) as stream:
-                first_chunk = True
+                should_set_current = not check_recovery
                 async for chunk in stream:
-                    if first_chunk:
-                        first_chunk = False
+                    if should_set_current:
+                        should_set_current = False
                         self._current_stream = stream
                     yield chunk
 
         except asyncio.TimeoutError:
-            if recovering:
+            if check_recovery:
                 logger.warning(f"{llm.label} recovery timed out")
                 raise
 
@@ -166,7 +175,7 @@ class FallbackLLMStream(LLMStream):
 
             raise
         except APIError as e:
-            if recovering:
+            if check_recovery:
                 logger.warning(
                     f"{llm.label} recovery failed",
                     exc_info=e,
@@ -179,7 +188,7 @@ class FallbackLLMStream(LLMStream):
             )
             raise
         except Exception:
-            if recovering:
+            if check_recovery:
                 logger.exception(
                     f"{llm.label} recovery unexpected error",
                 )
@@ -198,7 +207,7 @@ class FallbackLLMStream(LLMStream):
 
             async def _recover_llm_task(llm: LLM) -> None:
                 try:
-                    async for _ in self._try_generate(llm=llm, recovering=True):
+                    async for _ in self._try_generate(llm=llm, check_recovery=True):
                         pass
 
                     llm_status.available = True
@@ -226,7 +235,9 @@ class FallbackLLMStream(LLMStream):
             if llm_status.available or all_failed:
                 chunk_sent = False
                 try:
-                    async for result in self._try_generate(llm=llm, recovering=False):
+                    async for result in self._try_generate(
+                        llm=llm, check_recovery=False
+                    ):
                         chunk_sent = True
                         self._event_ch.send_nowait(result)
 
