@@ -5,7 +5,7 @@ from typing import AsyncIterator, Literal, Optional, Union
 
 import httpx
 from livekit import api, rtc
-from livekit.agents import JobContext
+from livekit.agents import JobContext, utils
 from livekit.agents.pipeline import io as agent_io
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from pydantic import BaseModel
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_AVATAR_IDENTITY = "lk.avatar_worker"
 RPC_INTERRUPT_PLAYBACK = "lk.interrupt_playback"
 RPC_PLAYBACK_FINISHED = "lk.playback_finished"
-AUDIO_STREAM_NAME = "lk.audio_stream"
+AUDIO_STREAM_TOPIC = "lk.audio_stream"
 
 
 class AvatarConnectionInfo(BaseModel):
@@ -42,7 +42,7 @@ class AudioSink(agent_io.AudioSink):
         self._avatar_dispatcher_url = avatar_dispatcher_url
         self._remote_participant: Optional[rtc.RemoteParticipant] = None
 
-        self._stream_writer: Optional[rtc.FileStreamWriter] = None
+        self._stream_writer: Optional[rtc.ByteStreamWriter] = None
 
     async def start(self) -> None:
         """Wait for worker participant to join and start streaming"""
@@ -83,43 +83,44 @@ class AudioSink(agent_io.AudioSink):
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture and stream audio frame to remote worker"""
+        await super().capture_frame(frame)
+
         if not self._remote_participant:
             raise RuntimeError("Worker participant not found")
 
         if not self._stream_writer:
-            # start new stream
-            self._stream_writer = await self._room.local_participant.stream_file(
-                file_name=AUDIO_STREAM_NAME,
+            self._stream_writer = await self._room.local_participant.stream_bytes(
+                name=utils.shortuuid("AUDIO_"),
+                topic=AUDIO_STREAM_TOPIC,
                 destination_identities=[self._remote_participant.identity],
-                extensions={
-                    "sample_rate": frame.sample_rate,
-                    "num_channels": frame.num_channels,
+                attributes={
+                    "sample_rate": str(frame.sample_rate),
+                    "num_channels": str(frame.num_channels),
                 },
             )
 
         await self._stream_writer.write(frame.data)
 
-        await super().capture_frame(frame)
-
-    async def flush(self) -> None:
+    def flush(self) -> None:
         """Mark end of current audio segment"""
-        super().flush()  # TODO: should the flush and clear_buffer async?
-
+        super().flush()
         if self._stream_writer is None:
             return
 
         # close the stream marking the end of the segment
-        await self._stream_writer.aclose()
+        asyncio.create_task(self._stream_writer.aclose())
         self._stream_writer = None
 
-    async def clear_buffer(self) -> None:
+    def clear_buffer(self) -> None:
         """Stop current stream immediately"""
         assert self._remote_participant is not None
 
-        await self._room.local_participant.perform_rpc(
-            destination_identity=self._remote_participant.identity,
-            method=RPC_INTERRUPT_PLAYBACK,
-            payload="",
+        asyncio.create_task(
+            self._room.local_participant.perform_rpc(
+                destination_identity=self._remote_participant.identity,
+                method=RPC_INTERRUPT_PLAYBACK,
+                payload="",
+            )
         )
 
     async def _handshake(self, connection_info: AvatarConnectionInfo) -> None:
@@ -145,7 +146,7 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
         self._room = room
         self._remote_participant: Optional[rtc.RemoteParticipant] = None
 
-        self._stream_readers: list[rtc.FileStreamReader] = []
+        self._stream_readers: list[rtc.ByteStreamReader] = []
         self._stream_reader_changed: asyncio.Event = asyncio.Event()
 
     async def start(self) -> None:
@@ -173,17 +174,15 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
         )
 
         def _handle_stream_received(
-            reader: rtc.FileStreamReader, remote_participant_id: str
+            reader: rtc.ByteStreamReader, remote_participant_id: str
         ) -> None:
             if remote_participant_id != self._remote_participant.identity:
                 return
 
-            if reader.info.file_name != AUDIO_STREAM_NAME:
-                return
             self._stream_readers.append(reader)
             self._stream_reader_changed.set()
 
-        self._room.on("file_stream_received", _handle_stream_received)
+        self._room.set_byte_stream_handler(_handle_stream_received, AUDIO_STREAM_TOPIC)
 
     async def notify_playback_finished(
         self, playback_position: int, interrupted: bool
@@ -205,9 +204,9 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
 
             while self._stream_readers:
                 reader = self._stream_readers.pop(0)
-                sample_rate = reader.info.extensions["sample_rate"]
-                num_channels = reader.info.extensions["num_channels"]
-                async for data in reader.stream_reader:
+                sample_rate = int(reader.info.attributes["sample_rate"])
+                num_channels = int(reader.info.attributes["num_channels"])
+                async for data in reader:
                     yield rtc.AudioFrame(
                         data=data, sample_rate=sample_rate, num_channels=num_channels
                     )

@@ -119,6 +119,7 @@ class AvatarWorker:
         video_stream = await self._video_generator.stream()
         async for frame in video_stream:
             if isinstance(frame, AudioFlushSentinel):
+                # TODO(long): handle the interruption, this may be called twice
                 # notify the agent that the audio has finished playing
                 self._audio_receiver.notify_playback_finished(
                     playback_position=self._playback_position,
