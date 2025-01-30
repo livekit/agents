@@ -16,9 +16,9 @@ def test_func_basic():
             pass
 
     fnc_ctx = TestFunctionContext()
-    assert "test_function" in fnc_ctx.ai_functions, (
-        "Function should be registered in ai_functions"
-    )
+    assert (
+        "test_function" in fnc_ctx.ai_functions
+    ), "Function should be registered in ai_functions"
 
     fnc_info = fnc_ctx.ai_functions["test_function"]
     build_info = _oai_api.build_oai_function_description(fnc_info)
@@ -69,9 +69,9 @@ def test_func_with_docstring():
             pass
 
     fnc_ctx = TestFunctionContext()
-    assert "test_fn" in fnc_ctx.ai_functions, (
-        "Function should be registered in ai_functions"
-    )
+    assert (
+        "test_fn" in fnc_ctx.ai_functions
+    ), "Function should be registered in ai_functions"
 
     assert fnc_ctx.ai_functions["test_fn"].description == "A simple test function"
 
@@ -92,9 +92,9 @@ def test_func_with_optional_parameter():
             pass
 
     fnc_ctx = TestFunctionContext()
-    assert "optional_function" in fnc_ctx.ai_functions, (
-        "Function should be registered in ai_functions"
-    )
+    assert (
+        "optional_function" in fnc_ctx.ai_functions
+    ), "Function should be registered in ai_functions"
 
     fnc_info = fnc_ctx.ai_functions["optional_function"]
     build_info = _oai_api.build_oai_function_description(fnc_info)
@@ -159,9 +159,9 @@ def test_func_with_list_parameter():
             pass
 
     fnc_ctx = TestFunctionContext()
-    assert "list_function" in fnc_ctx.ai_functions, (
-        "Function should be registered in ai_functions"
-    )
+    assert (
+        "list_function" in fnc_ctx.ai_functions
+    ), "Function should be registered in ai_functions"
 
     fnc_info = fnc_ctx.ai_functions["list_function"]
     build_info = _oai_api.build_oai_function_description(fnc_info)
@@ -202,9 +202,9 @@ def test_func_with_enum_parameter():
             pass
 
     fnc_ctx = TestFunctionContext()
-    assert "enum_function" in fnc_ctx.ai_functions, (
-        "Function should be registered in ai_functions"
-    )
+    assert (
+        "enum_function" in fnc_ctx.ai_functions
+    ), "Function should be registered in ai_functions"
 
     fnc_info = fnc_ctx.ai_functions["enum_function"]
     build_info = _oai_api.build_oai_function_description(fnc_info)

@@ -74,9 +74,9 @@ class LLMStream(llm.LLMStream):
                 "The last message in the chat context must be from the user"
             )
 
-        assert isinstance(user_msg.content, str), (
-            "user message content must be a string"
-        )
+        assert isinstance(
+            user_msg.content, str
+        ), "user message content must be a string"
 
         try:
             if not self._stream:

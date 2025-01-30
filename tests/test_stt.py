@@ -99,9 +99,9 @@ async def test_stream(stt_factory, sample_rate):
 
         async for event in stream:
             if event.type == agents.stt.SpeechEventType.START_OF_SPEECH:
-                assert recv_end, (
-                    "START_OF_SPEECH recv but no END_OF_SPEECH has been sent before"
-                )
+                assert (
+                    recv_end
+                ), "START_OF_SPEECH recv but no END_OF_SPEECH has been sent before"
                 assert not recv_start
                 recv_end = False
                 recv_start = True

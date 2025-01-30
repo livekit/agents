@@ -140,9 +140,9 @@ class ThreadJobExecutor:
                 channel.arecv_message(self._pch, proto.IPC_MESSAGES),
                 timeout=self._opts.initialize_timeout,
             )
-            assert isinstance(init_res, proto.InitializeResponse), (
-                "first message must be InitializeResponse"
-            )
+            assert isinstance(
+                init_res, proto.InitializeResponse
+            ), "first message must be InitializeResponse"
         except asyncio.TimeoutError:
             self._initialize_fut.set_exception(
                 asyncio.TimeoutError("runner initialization timed out")
