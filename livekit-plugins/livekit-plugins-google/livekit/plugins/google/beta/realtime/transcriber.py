@@ -56,6 +56,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         super().__init__()
         self._client = client
         self._model = model
+        self._needed_sr = 16000
         self._closed = False
         system_instructions = types.Content(
             parts=[types.Part(text=SYSTEM_INSTRUCTIONS)]
@@ -72,18 +73,37 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
             self._main_task(), name="gemini-realtime-transcriber"
         )
         self._send_ch = utils.aio.Chan[ClientEvents]()
+        self._resampler: rtc.AudioResampler | None = None
         self._active_response_id = None
 
     def _push_audio(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
             return
-        self._queue_msg(
-            types.LiveClientRealtimeInput(
-                media_chunks=[
-                    types.Blob(data=frame.data.tobytes(), mime_type="audio/pcm")
-                ]
+        if frame.sample_rate != self._needed_sr:
+            if not self._resampler:
+                self._resampler = rtc.AudioResampler(
+                    frame.sample_rate,
+                    self._needed_sr,
+                    quality=rtc.AudioResamplerQuality.HIGH,
+                )
+
+        if self._resampler:
+            for f in self._resampler.push(frame):
+                self._queue_msg(
+                    types.LiveClientRealtimeInput(
+                        media_chunks=[
+                            types.Blob(data=f.data.tobytes(), mime_type="audio/pcm")
+                        ]
+                    )
+                )
+        else:
+            self._queue_msg(
+                types.LiveClientRealtimeInput(
+                    media_chunks=[
+                        types.Blob(data=frame.data.tobytes(), mime_type="audio/pcm")
+                    ]
+                )
             )
-        )
 
     def _queue_msg(self, msg: ClientEvents) -> None:
         if not self._closed:
