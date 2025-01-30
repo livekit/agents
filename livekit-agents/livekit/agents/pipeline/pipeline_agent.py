@@ -753,6 +753,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 llm_stream = await llm_stream
 
             if llm_stream is False:
+                # user chose not to synthesize an answer, so we do not want to
+                # leave the same question in chat context. otherwise it would be
+                # unintentionally committed when the next set of speech comes in.
+                if len(self._transcribed_text) >= len(handle.user_question):
+                    self._transcribed_text = self._transcribed_text[
+                        len(handle.user_question) :
+                    ]
                 handle.cancel()
                 return
 
