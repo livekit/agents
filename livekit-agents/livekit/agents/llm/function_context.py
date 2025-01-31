@@ -44,6 +44,18 @@ class AIError(Exception):
         return self._message
 
 
+class StopResponse(Exception):
+    def __init__(self) -> None:
+        """
+        Exception raised within AI functions.
+
+        This exception can be raised by the user to indicate that
+        the agent should not generate a response for the current
+        function call.
+        """
+        super().__init__()
+
+
 @dataclass
 class _AIFunctionInfo:
     name: str

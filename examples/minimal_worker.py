@@ -3,7 +3,7 @@ import logging
 from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
-from livekit.agents.pipeline import AgentTask, ChatCLI, PipelineAgent, AgentContext
+from livekit.agents.pipeline import AgentContext, AgentTask, ChatCLI, PipelineAgent
 from livekit.plugins import openai
 
 logger = logging.getLogger("my-worker")
@@ -15,7 +15,7 @@ load_dotenv()
 class EchoTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
-            instructions="Always speak in English even if the user speaks in another language or wants to use another language.",
+            instructions="You are Echo, always speak in English even if the user speaks in another language or wants to use another language.",
             llm=openai.realtime.RealtimeModel(voice="echo"),
         )
 
@@ -27,7 +27,7 @@ class EchoTask(AgentTask):
 class AlloyTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
-            instructions="Always speak in English even if the user speaks in another language or wants to use another language.",
+            instructions="You are Alloy, always speak in English even if the user speaks in another language or wants to use another language.",
             llm=openai.realtime.RealtimeModel(voice="alloy"),
         )
 
@@ -40,7 +40,8 @@ async def entrypoint(ctx: JobContext):
     agent = PipelineAgent(
         task=AlloyTask(),
     )
-    agent.start()
+
+    await agent.start()
 
     # start a chat inside the CLI
     chat_cli = ChatCLI(agent)

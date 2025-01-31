@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import AsyncIterable, Protocol, Tuple, runtime_checkable
+from typing import (
+    AsyncIterable,
+    Protocol,
+    Tuple,
+    runtime_checkable,
+)
 
 from livekit import rtc
 
-from ..llm import ChatChunk, ChatContext, FunctionContext
+from .. import utils
+from ..llm import (
+    ChatChunk,
+    ChatContext,
+    FunctionContext,
+)
+from ..log import logger
 from ..utils import aio
 from . import io
 
@@ -24,7 +35,7 @@ class _LLMGenerationData:
     generated_tools: list[FunctionCallInfo] = field(default_factory=list)
 
 
-def do_llm_inference(
+def perform_llm_inference(
     *, node: io.LLMNode, chat_ctx: ChatContext, fnc_ctx: FunctionContext | None
 ) -> Tuple[asyncio.Task, _LLMGenerationData]:
     text_ch = aio.Chan()
@@ -85,7 +96,7 @@ class _TTSGenerationData:
     audio_ch: aio.Chan[rtc.AudioFrame]
 
 
-def do_tts_inference(
+def perform_tts_inference(
     *, node: io.TTSNode, input: AsyncIterable[str]
 ) -> Tuple[asyncio.Task, _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
@@ -107,3 +118,57 @@ def do_tts_inference(
     tts_task.add_done_callback(lambda _: audio_ch.close())
 
     return tts_task, _TTSGenerationData(audio_ch=audio_ch)
+
+
+@dataclass
+class _TextOutput:
+    text: str
+
+
+def perform_text_forwarding(
+    *, text_output: io.TextSink, llm_output: AsyncIterable[str]
+) -> tuple[asyncio.Task, _TextOutput]:
+    out = _TextOutput(text="")
+    task = asyncio.create_task(_text_forwarding_task(text_output, llm_output, out))
+    return task, out
+
+
+@utils.log_exceptions(logger=logger)
+async def _text_forwarding_task(
+    text_output: io.TextSink, llm_output: AsyncIterable[str], out: _TextOutput
+) -> None:
+    try:
+        async for delta in llm_output:
+            out.text += delta
+            await text_output.capture_text(delta)
+    finally:
+        text_output.flush()
+
+
+@dataclass
+class _AudioOutput:
+    audio: list[rtc.AudioFrame]
+
+
+def perform_audio_forwarding(
+    *,
+    audio_output: io.AudioSink,
+    tts_output: AsyncIterable[rtc.AudioFrame],
+) -> tuple[asyncio.Task, _AudioOutput]:
+    out = _AudioOutput(audio=[])
+    task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
+    return task, out
+
+
+@utils.log_exceptions(logger=logger)
+async def _audio_forwarding_task(
+    audio_output: io.AudioSink,
+    tts_output: AsyncIterable[rtc.AudioFrame],
+    out: _AudioOutput,
+) -> None:
+    try:
+        async for frame in tts_output:
+            out.audio.append(frame)
+            await audio_output.capture_frame(frame)
+    finally:
+        audio_output.flush()

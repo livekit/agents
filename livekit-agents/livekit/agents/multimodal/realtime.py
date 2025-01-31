@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import AsyncIterable, Generic, Literal, TypeVar, Union
@@ -100,7 +99,9 @@ class RealtimeSession(
     async def update_instructions(self, instructions: str) -> None: ...
 
     @abstractmethod
-    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None: ...
+    async def update_chat_ctx(
+        self, chat_ctx: llm.ChatContext
+    ) -> None: ...  # can raise RealtimeError on Timeout
 
     @abstractmethod
     async def update_fnc_ctx(
@@ -113,7 +114,9 @@ class RealtimeSession(
     @abstractmethod
     def generate_reply(
         self,
-    ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError
+    ) -> asyncio.Future[
+        GenerationCreatedEvent
+    ]: ...  # can raise RealtimeError on Timeout
 
     # cancel the current generation (do nothing if no generation is in progress)
     @abstractmethod
