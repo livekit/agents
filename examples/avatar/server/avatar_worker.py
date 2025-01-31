@@ -32,6 +32,10 @@ class VideoGenerator:
         self._audio_samples_per_frame = int(
             self.media_options.audio_sample_rate / self.media_options.video_fps
         )
+        self._av_sync: Optional[rtc.AVSynchronizer] = None
+
+    def set_av_sync(self, av_sync: rtc.AVSynchronizer | None) -> None:
+        self._av_sync = av_sync
 
     async def push_audio(self, frame: rtc.AudioFrame | AudioFlushSentinel) -> None:
         # resample audio frame if necessary
@@ -66,7 +70,7 @@ class VideoGenerator:
         self._reset_audio_buffer()
 
     async def stream(
-        self, av_sync: Optional[rtc.AVSynchronizer] = None
+        self,
     ) -> AsyncIterator[
         tuple[rtc.VideoFrame, Optional[rtc.AudioFrame]] | AudioFlushSentinel
     ]:
@@ -81,7 +85,7 @@ class VideoGenerator:
 
         def _generate_idle_frame() -> rtc.VideoFrame:
             idle_frame = background.copy()
-            fps = av_sync.actual_fps if av_sync else None
+            fps = self._av_sync.actual_fps if self._av_sync else None
             wave_visualizer.draw(
                 idle_frame,
                 audio_samples=np.zeros((1, self.media_options.audio_channels)),
@@ -106,7 +110,7 @@ class VideoGenerator:
                 self._audio_buffer = self._audio_buffer[samples_per_frame:]
 
                 canvas = background.copy()
-                fps = av_sync.actual_fps if av_sync else None
+                fps = self._av_sync.actual_fps if self._av_sync else None
                 wave_visualizer.draw(canvas, sub_samples, fps=fps)
                 video_frame = self._np_to_video_frame(canvas)
                 sub_audio_frame = rtc.AudioFrame(
@@ -213,7 +217,7 @@ class WaveformVisualizer:
         )
 
         volume_x = np.linspace(0, width, len(self.volume_history), dtype=int)
-        volume_y = center_y - 250 + (np.array(self.volume_history) * 200)
+        volume_y = center_y - 250 + (np.array(self.volume_history) * 400)
         points = np.column_stack((volume_x, volume_y.astype(int)))
         for i in range(len(points) - 1):
             cv2.line(canvas, tuple(points[i]), tuple(points[i + 1]), (255, 0, 0), 2)
@@ -250,6 +254,7 @@ async def entrypoint(room: rtc.Room, url: str, token: str):
     worker = AvatarWorker(
         room, video_generator=video_generator, media_options=media_options
     )
+    video_generator.set_av_sync(worker.av_sync)
     await worker.start()
 
 

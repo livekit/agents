@@ -73,6 +73,10 @@ class AvatarWorker:
         )
         self._video_gen_atask: Optional[asyncio.Task[None]] = None
 
+    @property
+    def av_sync(self) -> rtc.AVSynchronizer:
+        return self._av_sync
+
     async def start(self) -> None:
         """Start the worker"""
 

@@ -48,11 +48,13 @@ class AudioSink(agent_io.AudioSink):
     async def start(self) -> None:
         """Wait for worker participant to join and start streaming"""
         # create a token for the avatar worker
+        # TODO(long): do we need to set agent=True here?
+        # in playground if not the video track is not automatically displayed
         token = (
             api.AccessToken()
             .with_identity(self._avatar_identity)
             .with_name("Avatar Worker")
-            .with_grants(api.VideoGrants(room_join=True, room=self._room.name))
+            .with_grants(api.VideoGrants(room_join=True, room=self._room.name, agent=True))
             .to_jwt()
         )
 
