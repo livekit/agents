@@ -13,10 +13,10 @@ from openai.resources.beta.realtime.realtime import AsyncRealtimeConnection
 from openai.types.beta.realtime import (
     ConversationItem,
     ConversationItemContent,
-    ConversationItemCreateEvent,
     ConversationItemCreatedEvent,
-    ConversationItemDeleteEvent,
+    ConversationItemCreateEvent,
     ConversationItemDeletedEvent,
+    ConversationItemDeleteEvent,
     ConversationItemTruncateEvent,
     ErrorEvent,
     InputAudioBufferAppendEvent,
@@ -36,6 +36,7 @@ from openai.types.beta.realtime import (
     SessionUpdateEvent,
     session_update_event,
 )
+from openai.types.beta.realtime.response_create_event import Response
 
 from .log import logger
 
@@ -111,6 +112,12 @@ class RealtimeSession(multimodal.RealtimeSession):
             self._main_task(), name="RealtimeSession._main_task"
         )
 
+        self._response_created_futures: dict[
+            str, asyncio.Future[multimodal.GenerationCreatedEvent]
+        ] = {}
+        self._item_delete_future: dict[str, asyncio.Future] = {}
+        self._item_create_future: dict[str, asyncio.Future] = {}
+
         self._current_generation: _ResponseGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
 
@@ -153,9 +160,6 @@ class RealtimeSession(multimodal.RealtimeSession):
                     self._handle_response_done(event)
                 elif event.type == "error":
                     self._handle_error(event)
-
-                # if event.type != "response.audio.delta":
-                #     print(event)
 
         @utils.log_exceptions(logger=logger)
         async def _forward_input() -> None:
@@ -200,7 +204,7 @@ class RealtimeSession(multimodal.RealtimeSession):
                 self._remote_chat_ctx.to_chat_ctx(), chat_ctx
             )
 
-            # futs = []
+            futs = []
 
             for msg_id in diff_ops.to_remove:
                 event_id = utils.shortuuid("chat_ctx_delete_")
@@ -211,8 +215,8 @@ class RealtimeSession(multimodal.RealtimeSession):
                         event_id=event_id,
                     )
                 )
-                # futs.append(f := asyncio.Future())
-                # self._response_futures[event_id] = f
+                futs.append(f := asyncio.Future())
+                self._item_delete_future[msg_id] = f
 
             for previous_msg_id, msg_id in diff_ops.to_create:
                 event_id = utils.shortuuid("chat_ctx_create_")
@@ -229,10 +233,15 @@ class RealtimeSession(multimodal.RealtimeSession):
                         event_id=event_id,
                     )
                 )
-                # futs.append(f := asyncio.Future())
-                # self._response_futures[event_id] = f
+                futs.append(f := asyncio.Future())
+                self._item_create_future[msg_id] = f
 
-            # await asyncio.gather(*futs, return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*futs, return_exceptions=True), timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                raise multimodal.RealtimeError("update_chat_ctx timed out.") from None
 
     async def update_fnc_ctx(
         self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]
@@ -301,13 +310,24 @@ class RealtimeSession(multimodal.RealtimeSession):
         )
 
     def generate_reply(self) -> asyncio.Future[multimodal.GenerationCreatedEvent]:
-        f = asyncio.Future()
         event_id = utils.shortuuid("response_create_")
+        fut = asyncio.Future()
+        self._response_created_futures[event_id] = fut
         self._msg_ch.send_nowait(
-            ResponseCreateEvent(type="response.create", event_id=event_id)
+            ResponseCreateEvent(
+                type="response.create",
+                event_id=event_id,
+                response=Response(metadata={"client_event_id": event_id}),
+            )
         )
-        # self._response_futures[event_id] = f
-        return f
+
+        def _on_timeout() -> None:
+            if fut and not fut.done():
+                fut.set_exception(multimodal.RealtimeError("generate_reply timed out."))
+
+        handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+        fut.add_done_callback(lambda _: handle.cancel())
+        return fut
 
     def interrupt(self) -> None:
         self._msg_ch.send_nowait(ResponseCancelEvent(type="response.cancel"))
@@ -352,9 +372,11 @@ class RealtimeSession(multimodal.RealtimeSession):
 
         self.emit("generation_created", generation_ev)
 
-        # fut = self._response_futures.pop(event.event_id, None)
-        # if fut is not None and not fut.done():
-        #    fut.set_result(generation_ev)
+        if isinstance(event.response.metadata, dict) and (
+            client_event_id := event.response.metadata.get("client_event_id")
+        ):
+            if fut := self._response_created_futures.pop(client_event_id, None):
+                fut.set_result(generation_ev)
 
     def _handle_response_output_item_added(
         self, event: ResponseOutputItemAddedEvent
@@ -381,14 +403,23 @@ class RealtimeSession(multimodal.RealtimeSession):
     def _handle_conversion_item_created(
         self, event: ConversationItemCreatedEvent
     ) -> None:
+        assert event.item.id is not None, "item.id is None"
+
         self._remote_chat_ctx.insert(
             event.previous_item_id, _openai_item_to_livekit_item(event.item)
         )
+        if fut := self._item_create_future.pop(event.item.id, None):
+            fut.set_result(None)
 
     def _handle_conversion_item_deleted(
         self, event: ConversationItemDeletedEvent
     ) -> None:
+        assert event.item_id is not None, "item_id is None"
+
         self._remote_chat_ctx.delete(event.item_id)
+
+        if fut := self._item_delete_future.pop(event.item_id, None):
+            fut.set_result(None)
 
     def _handle_response_audio_transcript_delta(
         self, event: ResponseAudioTranscriptDeltaEvent
@@ -447,6 +478,7 @@ class RealtimeSession(multimodal.RealtimeSession):
     def _handle_response_done(self, _: ResponseDoneEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
         self._current_generation.function_ch.close()
+        self._current_generation.message_ch.close()
         self._current_generation = None
 
     def _handle_error(self, event: ErrorEvent) -> None:

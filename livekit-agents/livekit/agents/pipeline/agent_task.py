@@ -3,41 +3,37 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import heapq
-import inspect
 import time
-from dataclasses import dataclass
 from typing import (
-    Any,
+    TYPE_CHECKING,
     AsyncIterable,
     Optional,
     Union,
-    TYPE_CHECKING,
 )
 
 from livekit import rtc
-from pydantic import ValidationError
 
 from .. import debug, llm, multimodal, stt, tokenize, tts, utils, vad
+from .._exceptions import APITimeoutError
 from ..llm import (
     ChatContext,
     FunctionContext,
-    AIError,
     find_ai_functions,
-    utils as llm_utils,
 )
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-from . import io
+from . import tools
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
+from .context import AgentContext
 from .generation import (
+    _AudioOutput,
+    _TextOutput,
     _TTSGenerationData,
-    do_llm_inference,
-    do_tts_inference,
+    perform_audio_forwarding,
+    perform_text_forwarding,
 )
 from .speech_handle import SpeechHandle
-from .context import AgentContext
-
 
 if TYPE_CHECKING:
     from .pipeline_agent import PipelineAgent
@@ -609,71 +605,74 @@ class TaskActivity(RecognitionHooks):
         audio_output = self._agent.output.audio
         text_output = self._agent.output.text
 
-        await speech_handle.wait_until_interrupted(
-            [speech_handle._wait_for_authorization()]
+        await speech_handle.wait_if_not_interrupted(
+            [asyncio.ensure_future(speech_handle._wait_for_authorization())]
         )
 
         if speech_handle.interrupted:
-            speech_handle._mark_playout_done()
             # TODO(theomonnom): remove the message from the serverside history
+            speech_handle._mark_playout_done()
             return
 
         @utils.log_exceptions(logger=logger)
-        async def _read_messages(message_outputs: list[_MessageOutput]) -> None:
-            ts2 = utils.aio.TaskSet()
+        async def _read_messages(
+            outputs: list[tuple[_TextOutput | None, _AudioOutput | None]],
+        ) -> None:
+            forward_tasks: list[asyncio.Task] = []
             async for msg in generation_ev.message_stream:
-                if ts2.tasks:
+                if len(forward_tasks) > 0:
                     logger.warning(
                         "expected to receive only one message generation from the realtime API"
                     )
                     break
 
-                out = _MessageOutput(text="", audio=[])
-                message_outputs.append(out)
+                text_out = None
+                audio_out = None
 
                 if text_output is not None:
-                    ts2.create_task(
-                        _forward_text(text_output, msg.text_stream, out),
-                        name="_realtime_reply_task.forward_text",
+                    forward_task, text_out = perform_text_forwarding(
+                        text_output=text_output, llm_output=msg.text_stream
                     )
+                    forward_tasks.append(forward_task)
 
                 if audio_output is not None:
-                    ts2.create_task(
-                        _forward_audio(audio_output, msg.audio_stream, out),
-                        name="_realtime_reply_task.forward_audio",
+                    forward_task, audio_out = perform_audio_forwarding(
+                        audio_output=audio_output, tts_output=msg.audio_stream
                     )
+                    forward_tasks.append(forward_task)
+
+                outputs.append((text_out, audio_out))
 
             try:
-                await asyncio.gather(*ts2.tasks)
+                await asyncio.gather(*forward_tasks)
             finally:
-                await utils.aio.cancel_and_wait(*ts2.tasks)
+                await utils.aio.cancel_and_wait(*forward_tasks)
 
-        function_outputs: list[_FunctionCallOutput] = []
-        message_outputs: list[_MessageOutput] = []
-        ts = utils.aio.TaskSet()
-        ts.create_task(
-            _read_messages(message_outputs), name="_realtime_reply_task.read_messages"
-        )
-        ts.create_task(
-            _execute_tools(
-                agent_ctx=AgentContext(self._agent),
-                fnc_ctx=self._task.fnc_ctx,
-                speech_handle=speech_handle,
-                function_stream=generation_ev.function_stream,
-                out=function_outputs,
-            ),
-            name="_realtime_reply_task.execute_tools",
-        )
+        message_outputs: list[tuple[_TextOutput | None, _AudioOutput | None]] = []
+        tasks = [
+            asyncio.create_task(
+                _read_messages(message_outputs),
+                name="_realtime_reply_task.read_messages",
+            )
+        ]
 
-        await speech_handle.wait_until_interrupted([*ts.tasks])
+        exe_task, fnc_outputs = tools.perform_tool_executions(
+            agent_ctx=AgentContext(self._agent),
+            fnc_ctx=self._task.fnc_ctx,
+            speech_handle=speech_handle,
+            function_stream=generation_ev.function_stream,
+        )
+        tasks.append(exe_task)
+
+        await speech_handle.wait_if_not_interrupted([*tasks])
 
         if audio_output is not None:
-            await speech_handle.wait_until_interrupted(
-                [audio_output.wait_for_playout()]
+            await speech_handle.wait_if_not_interrupted(
+                [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*ts.tasks)
+            await utils.aio.cancel_and_wait(*tasks)
 
             if audio_output is not None:
                 audio_output.clear_buffer()
@@ -691,319 +690,44 @@ class TaskActivity(RecognitionHooks):
             # TODO(theomonnom): truncate message (+ OAI serverside mesage)
             return
 
-        
-        new_agent_task: AgentTask | None = None
-        new_items: list[llm.ChatItem] = []
-        if len(function_outputs) > 0:
-            for out in function_outputs:
-                if isinstance(out.exception, AIError):
-                    new_items.append(
-                        llm.FunctionCallOutput(
-                            call_id=out.call_id,
-                            output=out.exception.message,
-                            is_error=True,
-                        )
-                    )
-                    continue
-                elif out.exception is not None:
+        if len(fnc_outputs) > 0:
+            new_fnc_outputs: list[llm.FunctionCallOutput] = []
+            new_agent_task: AgentTask | None = None
+            ignore_task_switch = False
+            for fnc_output, agent_task in fnc_outputs:
+                if fnc_output is not None:
+                    new_fnc_outputs.append(fnc_output)
+
+                if new_agent_task is not None and agent_task is not None:
                     logger.error(
-                        "exception occurred while executing tool",
-                        extra={
-                            "function": out.name,
-                            "speech_id": speech_handle.id,
-                        },
-                        exc_info=out.exception,
+                        "expected to receive only one new task from the tool executions",
                     )
-                    continue
+                    ignore_task_switch = True
 
-                if out.output is not None:
-                    if isinstance(out.output, tuple):
-                        agent_tasks = [
-                            item for item in out.output if isinstance(item, AgentTask)
-                        ]
-                        if len(agent_tasks) > 1:
-                            logger.error(
-                                "Multiple AgentTask instances found in tuple output",
-                                extra={
-                                    "call_id": out.call_id,
-                                    "function": out.name,
-                                    "output": out.output,
-                                },
-                            )
-                            continue
+                new_agent_task = agent_task
 
-                        new_agent_task = agent_tasks[0] if agent_tasks else None
-                        out.output = tuple(
-                            item
-                            for item in out.output
-                            if not isinstance(item, AgentTask)
-                        )
-                        if len(out.output) == 1:
-                            out.output = out.output[0]
-                    elif isinstance(out.output, AgentTask):
-                        new_agent_task = out.output
-                        out.output = None
-
-                    if not _is_valid_function_output_type(out.output):
-                        logger.error(
-                            "invalid function output type",
-                            extra={
-                                "call_id": out.call_id,
-                                "function": out.name,
-                                "output": out.output,
-                            },
-                        )
-                        continue
-
-                    new_items.append(
-                        llm.FunctionCallOutput(
-                            call_id=out.call_id,
-                            output=str(out.output),
-                            is_error=False,
-                        )
-                    )
-
-            if new_items:
+            if len(new_fnc_outputs) > 0:
                 chat_ctx = self._rt_session.chat_ctx.copy()
-                chat_ctx.items.extend(new_items)
-                await self._rt_session.update_chat_ctx(chat_ctx)
+                chat_ctx.items.extend(new_fnc_outputs)
+                try:
+                    await self._rt_session.update_chat_ctx(chat_ctx)
+                except multimodal.RealtimeError as e:
+                    logger.warning(
+                        "failed to update chat context before generating the function calls results",
+                        extra={"error": str(e)},
+                    )
+
                 self._rt_session.interrupt()
-                self._rt_session.generate_reply()
+                try:
+                    await self._rt_session.generate_reply()
+                except multimodal.RealtimeError as e:
+                    logger.warning(
+                        "failed to generate the function calls results",
+                        extra={"error": str(e)},
+                    )
 
-
-        if new_agent_task is not None:
-            if new_items:
-                await asyncio.sleep(1.0)
-            self._agent.update_task(new_agent_task)
+            if not ignore_task_switch and new_agent_task is not None:
+                self._agent.update_task(new_agent_task)
 
         debug.Tracing.log_event("playout completed", {"speech_id": speech_handle.id})
         speech_handle._mark_playout_done()
-
-
-def _is_valid_function_output_type(value: Any) -> bool:
-    VALID_TYPES = (str, int, float, bool, complex, type(None))
-
-    if isinstance(value, VALID_TYPES):
-        return True
-    elif (
-        isinstance(value, list)
-        or isinstance(value, set)
-        or isinstance(value, frozenset)
-        or isinstance(value, tuple)
-    ):
-        return all(_is_valid_function_output_type(item) for item in value)
-    elif isinstance(value, dict):
-        return all(
-            isinstance(key, VALID_TYPES) and _is_valid_function_output_type(val)
-            for key, val in value.items()
-        )
-    return False
-
-
-@dataclass
-class _MessageOutput:
-    text: str
-    audio: list[rtc.AudioFrame]
-
-
-@dataclass
-class _FunctionCallOutput:
-    call_id: str
-    name: str
-    arguments: str
-    output: Any
-    exception: BaseException | None
-
-
-@utils.log_exceptions(logger=logger)
-async def _forward_text(
-    text_output: io.TextSink, llm_output: AsyncIterable[str], out: _MessageOutput
-) -> None:
-    try:
-        async for delta in llm_output:
-            out.text += delta
-            await text_output.capture_text(delta)
-    finally:
-        text_output.flush()
-
-
-@utils.log_exceptions(logger=logger)
-async def _forward_audio(
-    audio_output: io.AudioSink,
-    tts_output: AsyncIterable[rtc.AudioFrame],
-    out: _MessageOutput,
-) -> None:
-    try:
-        async for frame in tts_output:
-            out.audio.append(frame)
-            await audio_output.capture_frame(frame)
-    finally:
-        audio_output.flush()
-
-
-@utils.log_exceptions(logger=logger)
-async def _execute_tools(
-    *,
-    agent_ctx: AgentContext,
-    fnc_ctx: FunctionContext,
-    speech_handle: SpeechHandle,
-    function_stream: utils.aio.Chan[llm.FunctionCall],
-    out: list[_FunctionCallOutput] = [],
-) -> None:
-    """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
-    tasks: list[tuple[str, asyncio.Task]] = []
-    try:
-        async for fnc_call in function_stream:
-            ai_function = fnc_ctx.ai_functions.get(fnc_call.name, None)
-            if ai_function is None:
-                logger.warning(
-                    f"LLM called function `{fnc_call.name}` but it was not found in the current task",
-                    extra={
-                        "function": fnc_call.name,
-                        "speech_id": speech_handle.id,
-                    },
-                )
-                continue
-
-            try:
-                function_model = llm_utils.function_arguments_to_pydantic_model(
-                    ai_function
-                )
-                parsed_args = function_model.model_validate_json(fnc_call.arguments)
-            except ValidationError:
-                logger.exception(
-                    "LLM called function `{fnc.name}` with invalid arguments",
-                    extra={
-                        "function": fnc_call.name,
-                        "arguments": fnc_call.arguments,
-                        "speech_id": speech_handle.id,
-                    },
-                )
-                continue
-
-            logger.debug(
-                "executing tool",
-                extra={
-                    "function": fnc_call.name,
-                    "speech_id": speech_handle.id,
-                },
-            )
-            debug.Tracing.log_event(
-                "executing tool",
-                {
-                    "function": fnc_call.name,
-                    "speech_id": speech_handle.id,
-                },
-            )
-
-            fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
-                ai_function=ai_function,
-                model=parsed_args,
-                agent_ctx=agent_ctx,
-                speech_handle=speech_handle,
-            )
-
-            if inspect.iscoroutinefunction(ai_function):
-                task = asyncio.create_task(
-                    ai_function(*fnc_args, **fnc_kwargs),
-                    name=f"ai_function_{fnc_call.name}",
-                )
-                tasks.append((fnc_call.name, task))
-
-                def _log_exceptions(task: asyncio.Task) -> None:
-                    if task.exception() is not None:
-                        logger.error(
-                            "exception occurred while executing tool",
-                            extra={
-                                "function": fnc_call.name,
-                                "speech_id": speech_handle.id,
-                            },
-                            exc_info=task.exception(),
-                        )
-                        out.append(
-                            _FunctionCallOutput(
-                                name=fnc_call.name,
-                                arguments=fnc_call.arguments,
-                                call_id=fnc_call.call_id,
-                                output=None,
-                                exception=task.exception(),
-                            )
-                        )
-                        return
-
-                    out.append(
-                        _FunctionCallOutput(
-                            name=fnc_call.name,
-                            arguments=fnc_call.arguments,
-                            call_id=fnc_call.call_id,
-                            output=task.result(),
-                            exception=None,
-                        )
-                    )
-
-                    tasks.remove((fnc_call.name, task))
-
-                task.add_done_callback(_log_exceptions)
-            else:
-                start_time = time.monotonic()
-                try:
-                    output = ai_function(*fnc_args, **fnc_kwargs)
-                    out.append(
-                        _FunctionCallOutput(
-                            name=fnc_call.name,
-                            arguments=fnc_call.arguments,
-                            call_id=fnc_call.call_id,
-                            output=output,
-                            exception=None,
-                        )
-                    )
-                except Exception as e:
-                    out.append(
-                        _FunctionCallOutput(
-                            name=fnc_call.name,
-                            arguments=fnc_call.arguments,
-                            call_id=fnc_call.call_id,
-                            output=None,
-                            exception=e,
-                        )
-                    )
-
-                elapsed = time.monotonic() - start_time
-                if elapsed >= 1.5:
-                    logger.warning(
-                        f"function execution took too long ({elapsed:.2f}s), is `{fnc_call.name}` blocking?",
-                        extra={
-                            "function": fnc_call.name,
-                            "speech_id": speech_handle.id,
-                            "elapsed": elapsed,
-                        },
-                    )
-
-    except asyncio.CancelledError:
-        if len(tasks) > 0:
-            names = [name for name, _ in tasks]
-            logger.debug(
-                "waiting for function call to finish before fully cancelling",
-                extra={
-                    "functions": names,
-                    "speech_id": speech_handle.id,
-                },
-            )
-            debug.Tracing.log_event(
-                "waiting for function call to finish before fully cancelling",
-                {
-                    "functions": names,
-                    "speech_id": speech_handle.id,
-                },
-            )
-            await asyncio.gather(*[task for _, task in tasks])
-    finally:
-        if len(out) > 0:
-            logger.debug(
-                "tools execution completed",
-                extra={"speech_id": speech_handle.id},
-            )
-            debug.Tracing.log_event(
-                "tools execution completed",
-                {"speech_id": speech_handle.id},
-            )

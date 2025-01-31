@@ -1,15 +1,14 @@
 import logging
 
 from dotenv import load_dotenv
-from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
-from livekit.agents.pipeline.io import PlaybackFinishedEvent, TextSink
-from livekit.agents.pipeline.room_io import RoomInputOptions
+from livekit.agents.pipeline.io import PlaybackFinishedEvent
+from livekit.agents.pipeline.room_io import RoomInput, RoomInputOptions, RoomOutput
 from livekit.agents.transcription import TranscriptionRoomForwarder, TranscriptionSyncIO
 from livekit.plugins import openai
 
-logger = logging.getLogger("my-worker")
+logger = logging.getLogger("roomio-example")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
@@ -25,34 +24,14 @@ async def entrypoint(ctx: JobContext):
         )
     )
 
-    # default use RoomIO if room is provided
-    await agent.start(
-        room=ctx.room,
-        room_input_options=RoomInputOptions(
-            audio_enabled=True,
-            video_enabled=False,
-            audio_sample_rate=24000,
-            audio_num_channels=1,
-        ),
-    )
+    room_input = RoomInput(ctx.room, options=RoomInputOptions(audio_sample_rate=24000))
+    agent.input.audio = room_input.audio
+    room_output = RoomOutput(room=ctx.room, sample_rate=24000, num_channels=1)
+    agent.output.audio = room_output.audio
+    await room_input.wait_for_participant()
+    await room_output.start()
 
-    # # Or use RoomInput and RoomOutput explicitly
-    # room_input = RoomInput(
-    #     ctx.room,
-    #     options=RoomInputOptions(
-    #         audio_enabled=True,
-    #         video_enabled=False,
-    #         audio_sample_rate=24000,
-    #         audio_num_channels=1,
-    #     ),
-    # )
-    # room_output = RoomOutput(ctx.room, sample_rate=24000, num_channels=1)
-
-    # agent.input.audio = room_input.audio
-    # agent.output.audio = room_output.audio
-
-    # await room_input.wait_for_participant()
-    # await room_output.start()
+    await agent.start()
 
     # TTS transcription forward
     transcription_sync = TranscriptionSyncIO.from_agent(agent)
