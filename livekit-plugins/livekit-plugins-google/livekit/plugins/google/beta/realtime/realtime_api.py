@@ -30,9 +30,9 @@ from .api_proto import (
     ClientEvents,
     LiveAPIModels,
     Voice,
-    _build_gemini_ctx,
 )
-from .transcriber import TranscriberSession, TranscriptionContent
+
+# from .transcriber import TranscriberSession, TranscriptionContent
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
 OUTPUT_AUDIO_SAMPLE_RATE = 24000
@@ -191,14 +191,14 @@ class RealtimeModel(multimodal.RealtimeModel):
             enable_agent_audio_transcription=enable_agent_audio_transcription,
         )
 
-    def session(self) -> "GeminiRealtimeSession":
-        return GeminiRealtimeSession(self)
+    def session(self) -> "RealtimeSession":
+        return RealtimeSession(self)
 
     async def aclose(self) -> None:
         pass
 
 
-class GeminiRealtimeSession(multimodal.RealtimeSession):
+class RealtimeSession(multimodal.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
@@ -244,24 +244,24 @@ class GeminiRealtimeSession(multimodal.RealtimeSession):
         )
 
         self._current_generation: Optional[_ResponseGeneration] = None
-        self._transcriber: Optional[TranscriberSession] = None
-        self._agent_transcriber: Optional[TranscriberSession] = None
+        # self._transcriber: Optional[TranscriberSession] = None
+        # self._agent_transcriber: Optional[TranscriberSession] = None
 
         self._is_interrupted = False
         self._active_response_id = None
         self._session = None
 
-        if self._opts.enable_user_audio_transcription:
-            self._transcriber = TranscriberSession(
-                client=self._client, model=self._opts.model
-            )
-            self._transcriber.on("input_speech_done", self._on_input_speech_done)
+        # if self._opts.enable_user_audio_transcription:
+        #     self._transcriber = TranscriberSession(
+        #         client=self._client, model=self._opts.model
+        #     )
+        #     self._transcriber.on("input_speech_done", self._on_input_speech_done)
 
-        if self._opts.enable_agent_audio_transcription:
-            self._agent_transcriber = TranscriberSession(
-                client=self._client, model=self._opts.model
-            )
-            self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
+        # if self._opts.enable_agent_audio_transcription:
+        #     self._agent_transcriber = TranscriberSession(
+        #         client=self._client, model=self._opts.model
+        #     )
+        #     self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
 
     async def update_instructions(self, instructions: str) -> None:
         # No-op for Gemini
@@ -286,8 +286,8 @@ class GeminiRealtimeSession(multimodal.RealtimeSession):
         return self._fnc_ctx.copy()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._opts.enable_user_audio_transcription and self._transcriber:
-            self._transcriber._push_audio(frame)
+        # if self._opts.enable_user_audio_transcription and self._transcriber:
+        #     self._transcriber._push_audio(frame)
 
         realtime_input = LiveClientRealtimeInput(
             media_chunks=[Blob(data=frame.data.tobytes(), mime_type="audio/pcm")],
@@ -347,20 +347,21 @@ class GeminiRealtimeSession(multimodal.RealtimeSession):
 
             @utils.log_exceptions(logger=logger)
             async def _recv_task():
-                async for response in session.receive():
-                    if self._active_response_id is None:
-                        self._start_new_generation()
+                while True:
+                    async for response in session.receive():
+                        if self._active_response_id is None:
+                            self._start_new_generation()
 
-                    if response.server_content:
-                        self._handle_server_content(response.server_content)
+                        if response.server_content:
+                            self._handle_server_content(response.server_content)
 
-                    if response.tool_call:
-                        self._handle_tool_calls(response.tool_call)
+                        if response.tool_call:
+                            self._handle_tool_calls(response.tool_call)
 
-                    if response.tool_call_cancellation:
-                        self._handle_tool_call_cancellation(
-                            response.tool_call_cancellation
-                        )
+                        if response.tool_call_cancellation:
+                            self._handle_tool_call_cancellation(
+                                response.tool_call_cancellation
+                            )
 
             send_task = asyncio.create_task(_send_task(), name="gemini-realtime-send")
             recv_task = asyncio.create_task(_recv_task(), name="gemini-realtime-recv")
@@ -381,8 +382,8 @@ class GeminiRealtimeSession(multimodal.RealtimeSession):
         # We'll assume each chunk belongs to a single message ID self._active_response_id
         item_generation = _MessageGeneration(
             message_id=self._active_response_id,
-            text_ch=utils.aio.Chan(str),
-            audio_ch=utils.aio.Chan(rtc.AudioFrame),
+            text_ch=utils.aio.Chan[str](),
+            audio_ch=utils.aio.Chan[rtc.AudioFrame](),
         )
 
         self._current_generation.message_ch.send_nowait(
@@ -423,8 +424,8 @@ class GeminiRealtimeSession(multimodal.RealtimeSession):
                         num_channels=NUM_CHANNELS,
                         samples_per_channel=len(frame_data) // 2,
                     )
-                    if self._opts.enable_agent_audio_transcription:
-                        self._agent_transcriber._push_audio(frame)
+                    # if self._opts.enable_agent_audio_transcription:
+                    #     self._agent_transcriber._push_audio(frame)
                     item_generation.audio_ch.send_nowait(frame)
 
         if server_content.interrupted or server_content.turn_complete:
@@ -464,25 +465,25 @@ class GeminiRealtimeSession(multimodal.RealtimeSession):
         )
         self.emit("function_calls_cancelled", tool_call_cancellation.function_call_ids)
 
-    def _on_input_speech_done(self, content: TranscriptionContent) -> None:
-        if content.response_id and content.text:
-            self.emit(
-                "input_speech_transcription_completed",
-                multimodal.InputTranscriptionCompleted(
-                    item_id=content.response_id,
-                    transcript=content.text,
-                ),
-            )
-            # self._chat_ctx.append(text=content.text, role="user")
-            # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech
+    # def _on_input_speech_done(self, content: TranscriptionContent) -> None:
+    #     if content.response_id and content.text:
+    #         self.emit(
+    #             "input_speech_transcription_completed",
+    #             multimodal.InputTranscriptionCompleted(
+    #                 item_id=content.response_id,
+    #                 transcript=content.text,
+    #             ),
+    #         )
+    #         # self._chat_ctx.append(text=content.text, role="user")
+    #         # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech
 
-    def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
-        if not self._is_interrupted and content.response_id and content.text:
-            self.emit(
-                "agent_speech_transcription_completed",
-                multimodal.InputTranscriptionCompleted(
-                    item_id=content.response_id,
-                    transcript=content.text,
-                ),
-            )
-            # self._chat_ctx.append(text=content.text, role="assistant")
+    # def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
+    #     if not self._is_interrupted and content.response_id and content.text:
+    #         self.emit(
+    #             "agent_speech_transcription_completed",
+    #             multimodal.InputTranscriptionCompleted(
+    #                 item_id=content.response_id,
+    #                 transcript=content.text,
+    #             ),
+    #         )
+    #         # self._chat_ctx.append(text=content.text, role="assistant")
