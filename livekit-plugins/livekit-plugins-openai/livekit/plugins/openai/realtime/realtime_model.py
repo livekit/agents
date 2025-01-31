@@ -143,7 +143,7 @@ class ServerVadOptions:
     threshold: float
     prefix_padding_ms: int
     silence_duration_ms: int
-    create_response: bool
+    create_response: bool = True
 
 
 @dataclass
