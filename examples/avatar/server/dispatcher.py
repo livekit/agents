@@ -9,8 +9,7 @@ from typing import Dict, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-
-from ..plugin.io import AvatarConnectionInfo
+from plugin.io import AvatarConnectionInfo
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +139,7 @@ def create_app() -> FastAPI:
     return dispatcher.app
 
 
-def run_server(host: str = "0.0.0.0", port: int = 8080, debug: bool = False):
+def run_server(host: str = "0.0.0.0", port: int = 8890, debug: bool = False):
     uvicorn.run(
         "server.dispatcher:create_app",
         host=host,
@@ -156,7 +155,7 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0", help="Host to run server on")
-    parser.add_argument("--port", default=8080, help="Port to run server on")
+    parser.add_argument("--port", default=8890, help="Port to run server on")
     parser.add_argument("--debug", action="store_true", help="Run in debug mode")
     args = parser.parse_args()
     run_server(args.host, args.port, args.debug)

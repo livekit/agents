@@ -6,6 +6,7 @@ from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.agents.pipeline.room_io import RoomInput, RoomInputOptions, RoomOutput
 from livekit.plugins import openai
+from plugin.io import AudioSink
 
 logger = logging.getLogger("roomio-example")
 logger.setLevel(logging.INFO)
@@ -25,10 +26,14 @@ async def entrypoint(ctx: JobContext):
 
     room_input = RoomInput(ctx.room, options=RoomInputOptions(audio_sample_rate=24000))
     agent.input.audio = room_input.audio
-    room_output = RoomOutput(room=ctx.room, sample_rate=24000, num_channels=1)
-    agent.output.audio = room_output.audio
+    # room_output = RoomOutput(room=ctx.room, sample_rate=24000, num_channels=1)
+    # agent.output.audio = room_output.audio
+
+    avatar_audio_sink = AudioSink(ctx)
+    agent.output.audio = avatar_audio_sink
+
     await room_input.wait_for_participant()
-    await room_output.start()
+    await avatar_audio_sink.start()
 
     await agent.start()
 

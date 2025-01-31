@@ -1,4 +1,5 @@
 import asyncio
+import ctypes
 import json
 import logging
 from typing import AsyncIterator, Literal, Optional, Union
@@ -33,7 +34,7 @@ class AudioSink(agent_io.AudioSink):
         self,
         ctx: JobContext,
         avatar_identity: str = DEFAULT_AVATAR_IDENTITY,
-        avatar_dispatcher_url: str = "http://localhost:8080/launch",
+        avatar_dispatcher_url: str = "http://localhost:8890/launch",
     ):
         super().__init__()
         self._ctx = ctx
@@ -63,6 +64,7 @@ class AudioSink(agent_io.AudioSink):
                 room_name=self._room.name, url=self._ctx._info.url, token=token
             )
         )
+        logger.info("Avatar worker connected")
 
         # playback finished handler
         def _handle_playback_finished(data: rtc.RpcInvocationData) -> None:
@@ -71,6 +73,7 @@ class AudioSink(agent_io.AudioSink):
                 playback_position=event.playback_position,
                 interrupted=event.interrupted,
             )
+            return "ok"
 
         self._room.local_participant.register_rpc_method(
             RPC_PLAYBACK_FINISHED, _handle_playback_finished
@@ -93,13 +96,12 @@ class AudioSink(agent_io.AudioSink):
                 name=utils.shortuuid("AUDIO_"),
                 topic=AUDIO_STREAM_TOPIC,
                 destination_identities=[self._remote_participant.identity],
-                attributes={
+                extensions={  # TODO: use attributes instead
                     "sample_rate": str(frame.sample_rate),
                     "num_channels": str(frame.num_channels),
                 },
             )
-
-        await self._stream_writer.write(frame.data)
+        await self._stream_writer.write(bytes(frame.data))
 
     def flush(self) -> None:
         """Mark end of current audio segment"""
@@ -127,7 +129,7 @@ class AudioSink(agent_io.AudioSink):
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self._avatar_dispatcher_url,
-                json={"connection_info": connection_info.model_dump()},
+                json=connection_info.model_dump(),
             )
             response.raise_for_status()
 
@@ -143,6 +145,7 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
     """
 
     def __init__(self, room: rtc.Room):
+        super().__init__()
         self._room = room
         self._remote_participant: Optional[rtc.RemoteParticipant] = None
 
@@ -168,6 +171,7 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
 
         def _handle_interrupt(data: rtc.RpcInvocationData) -> None:
             self.emit("interrupt_playback")
+            return "ok"
 
         self._room.local_participant.register_rpc_method(
             RPC_INTERRUPT_PLAYBACK, _handle_interrupt
@@ -198,18 +202,27 @@ class AudioReceiver(rtc.EventEmitter[Literal["interrupt_playback"]]):
             ),
         )
 
+    @utils.log_exceptions(logger=logger)
     async def stream(self) -> AsyncIterator[Union[rtc.AudioFrame, AudioFlushSentinel]]:
         while True:
             await self._stream_reader_changed.wait()
 
             while self._stream_readers:
                 reader = self._stream_readers.pop(0)
-                sample_rate = int(reader.info.attributes["sample_rate"])
-                num_channels = int(reader.info.attributes["num_channels"])
+                sample_rate = int(
+                    reader.info["attributes"]["sample_rate"]
+                )  # TODO: use dataclass
+                num_channels = int(reader.info["attributes"]["num_channels"])
                 async for data in reader:
-                    yield rtc.AudioFrame(
-                        data=data, sample_rate=sample_rate, num_channels=num_channels
+                    # TODO: make sure the data is a multiple of num_channels * samples_per_channel
+                    samples_per_channel = len(data) // num_channels // ctypes.sizeof(ctypes.c_int16)
+                    frame = rtc.AudioFrame(
+                        data=data,
+                        sample_rate=sample_rate,
+                        num_channels=num_channels,
+                        samples_per_channel=samples_per_channel,
                     )
+                    yield frame
                 yield AudioFlushSentinel()
 
             self._stream_reader_changed.clear()

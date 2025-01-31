@@ -110,18 +110,17 @@ class AvatarWorker:
 
     async def _read_audio(self) -> None:
         async for frame in self._audio_receiver.stream():
-            self._video_generator.push_audio(frame)
+            await self._video_generator.push_audio(frame)
 
     @utils.log_exceptions(logger=logger)
     async def _stream_video(self) -> None:
         """Process audio frames and generate synchronized video"""
 
-        video_stream = await self._video_generator.stream()
-        async for frame in video_stream:
+        async for frame in self._video_generator.stream():
             if isinstance(frame, AudioFlushSentinel):
                 # TODO(long): handle the interruption, this may be called twice
                 # notify the agent that the audio has finished playing
-                self._audio_receiver.notify_playback_finished(
+                await self._audio_receiver.notify_playback_finished(
                     playback_position=self._playback_position,
                     interrupted=False,
                 )
@@ -129,18 +128,21 @@ class AvatarWorker:
                 continue
 
             video_frame, audio_frame = frame
-            self._av_sync.push(video_frame)
+            await self._av_sync.push(video_frame)
             if audio_frame:
-                self._av_sync.push(audio_frame)
+                await self._av_sync.push(audio_frame)
                 self._playback_position += audio_frame.duration
 
     def _handle_interrupt(self) -> None:
         # clear the audio queue, notify the agent the playback finished
         self._video_generator.clear_buffer()
-        self._audio_receiver.notify_playback_finished(
-            playback_position=self._playback_position,
-            interrupted=True,
-        )
+        if self._playback_position > 0.0:
+            asyncio.create_task(
+                self._audio_receiver.notify_playback_finished(
+                    playback_position=self._playback_position,
+                    interrupted=True,
+                )
+            )
         self._playback_position = 0.0
 
     async def aclose(self) -> None:
