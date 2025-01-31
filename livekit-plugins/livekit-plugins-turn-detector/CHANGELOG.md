@@ -1,5 +1,11 @@
 # livekit-plugins-eou
 
+## 0.4.0
+
+### Minor Changes
+
+- more accurate, smaller, faster model - [#1426](https://github.com/livekit/agents/pull/1426) ([@jeradf](https://github.com/jeradf))
+
 ## 0.3.6
 
 ### Patch Changes
