@@ -1,13 +1,26 @@
 from __future__ import annotations
 
-import abc
 import asyncio
+import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterable, AsyncIterator, Literal, TypedDict
+
+from livekit import rtc
 
 from .. import utils
+from ..utils import aio
 from . import function_context
 from .chat_context import ChatContext, ChatRole
+
+
+class LLMMetrics(TypedDict):
+    request_id: str
+    timestamp: float
+    ttft: float
+    duration: float
+    label: str
+    cancelled: bool
 
 
 @dataclass
@@ -25,11 +38,16 @@ class Choice:
 
 @dataclass
 class ChatChunk:
+    request_id: str
     choices: list[Choice] = field(default_factory=list)
 
 
-class LLM(abc.ABC):
-    @abc.abstractmethod
+class LLM(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
+    def __init__(self) -> None:
+        super().__init__()
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
+
+    @abstractmethod
     def chat(
         self,
         *,
@@ -41,14 +59,55 @@ class LLM(abc.ABC):
     ) -> "LLMStream": ...
 
 
-class LLMStream(abc.ABC):
+class LLMStream(ABC):
     def __init__(
-        self, *, chat_ctx: ChatContext, fnc_ctx: function_context.FunctionContext | None
+        self,
+        llm: LLM,
+        *,
+        chat_ctx: ChatContext,
+        fnc_ctx: function_context.FunctionContext | None,
     ) -> None:
-        self._function_calls_info: list[function_context.FunctionCallInfo] = []
-        self._tasks = set[asyncio.Task[Any]]()
+        self._llm = llm
         self._chat_ctx = chat_ctx
         self._fnc_ctx = fnc_ctx
+
+        self._event_ch = aio.Chan[ChatChunk]()
+        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
+        )
+
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+        self._function_calls_info: list[function_context.FunctionCallInfo] = []
+        self._function_tasks = set[asyncio.Task[Any]]()
+
+    @abstractmethod
+    async def _main_task(self) -> None: ...
+
+    async def _metrics_monitor_task(
+        self, event_aiter: AsyncIterable[ChatChunk]
+    ) -> None:
+        start_time = time.perf_counter()
+        ttft = -1.0
+        request_id = ""
+
+        async for ev in event_aiter:
+            request_id = ev.request_id
+            if ttft == -1.0:
+                ttft = time.perf_counter() - start_time
+
+        duration = time.perf_counter() - start_time
+        metrics: LLMMetrics = {
+            "timestamp": time.time(),
+            "request_id": request_id,
+            "ttft": ttft,
+            "duration": duration,
+            "cancelled": self._task.cancelled(),
+            "label": self._llm._label,
+        }
+        self._llm.emit("metrics_collected", metrics)
 
     @property
     def function_calls(self) -> list[function_context.FunctionCallInfo]:
@@ -70,17 +129,22 @@ class LLMStream(abc.ABC):
         called_functions: list[function_context.CalledFunction] = []
         for fnc_info in self._function_calls_info:
             called_fnc = fnc_info.execute()
-            self._tasks.add(called_fnc.task)
-            called_fnc.task.add_done_callback(self._tasks.remove)
+            self._function_tasks.add(called_fnc.task)
+            called_fnc.task.add_done_callback(self._function_tasks.remove)
             called_functions.append(called_fnc)
 
         return called_functions
 
     async def aclose(self) -> None:
-        await utils.aio.gracefully_cancel(*self._tasks)
+        await aio.gracefully_cancel(self._task)
+        await utils.aio.gracefully_cancel(*self._function_tasks)
+        await self._metrics_task
+
+    async def __anext__(self) -> ChatChunk:
+        if self._task.done() and (exc := self._task.exception()):
+            raise exc
+
+        return await self._event_aiter.__anext__()
 
     def __aiter__(self) -> AsyncIterator[ChatChunk]:
         return self
-
-    @abc.abstractmethod
-    async def __anext__(self) -> ChatChunk: ...

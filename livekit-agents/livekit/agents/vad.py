@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterator, List, Union
+from typing import AsyncIterable, AsyncIterator, List, Literal, TypedDict, Union
 
 from livekit import rtc
 
 from .utils import aio
+
+
+class VADMetrics(TypedDict):
+    timestamp: float
+    inference_duration_total: float
+    inference_count: int
+    label: str
 
 
 @unique
@@ -34,10 +42,10 @@ class VADEvent:
     """Timestamp (in seconds) when the event was fired."""
 
     speech_duration: float
-    """Duration of the detected speech segment in seconds."""
+    """Duration of the speech segment in seconds."""
 
     silence_duration: float
-    """Duration of the silence segment preceding or following the speech, in seconds."""
+    """Duration of the silence segment in seconds."""
 
     frames: List[rtc.AudioFrame] = field(default_factory=list)
     """
@@ -57,37 +65,73 @@ class VADEvent:
     speaking: bool = False
     """Indicates whether speech was detected in the frames."""
 
+    raw_accumulated_silence: float = 0.0
+    """Threshold used to detect silence."""
+
+    raw_accumulated_speech: float = 0.0
+    """Threshold used to detect speech."""
+
 
 @dataclass
 class VADCapabilities:
     update_interval: float
 
 
-class VAD(ABC):
+class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(self, *, capabilities: VADCapabilities) -> None:
+        super().__init__()
         self._capabilities = capabilities
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
     def capabilities(self) -> VADCapabilities:
         return self._capabilities
 
     @abstractmethod
-    def stream(self) -> "VADStream":
-        pass
+    def stream(self) -> "VADStream": ...
 
 
 class VADStream(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self):
+    def __init__(self, vad: VAD) -> None:
+        self._vad = vad
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, VADStream._FlushSentinel]]()
         self._event_ch = aio.Chan[VADEvent]()
+
+        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
+        )
+
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @abstractmethod
     async def _main_task(self) -> None: ...
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[VADEvent]) -> None:
+        """Task used to collect metrics"""
+
+        inference_duration_total = 0.0
+        inference_count = 0
+
+        async for ev in event_aiter:
+            if ev.type == VADEventType.INFERENCE_DONE:
+                inference_duration_total += ev.inference_duration
+                inference_count += 1
+
+                if inference_count >= 1 / self._vad.capabilities.update_interval:
+                    vad_metrics: VADMetrics = {
+                        "timestamp": time.time(),
+                        "inference_duration_total": inference_duration_total,
+                        "inference_count": inference_count,
+                        "label": self._vad._label,
+                    }
+                    self._vad.emit("metrics_collected", vad_metrics)
+                    inference_duration_total = 0.0
+                    inference_count = 0
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push some text to be synthesized"""
@@ -111,9 +155,13 @@ class VADStream(ABC):
         self._input_ch.close()
         await aio.gracefully_cancel(self._task)
         self._event_ch.close()
+        await self._metrics_task
 
     async def __anext__(self) -> VADEvent:
-        return await self._event_ch.__anext__()
+        if self._task.done() and (exc := self._task.exception()):
+            raise exc
+
+        return await self._event_aiter.__anext__()
 
     def __aiter__(self) -> AsyncIterator[VADEvent]:
         return self

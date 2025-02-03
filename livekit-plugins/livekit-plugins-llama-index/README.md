@@ -1,14 +1,36 @@
-# LiveKit Plugins Minimal
+# LiveKit Plugins Llama Index
 
-This is a minimal example of a LiveKit plugin for Agents.
+Agent Framework plugin for using Llama Index. Currently supports [Query Engine](https://docs.llamaindex.ai/en/stable/module_guides/deploying/query_engine/) and [Chat Engine](https://docs.llamaindex.ai/en/stable/module_guides/deploying/chat_engines/).
 
-### Developer note
+## Install
 
-When copying this directory over to create a new `livekit-plugins` package, make sure it's nested within the `livekit-plugins` folder and that the `"name"` field in `package.json` follows the proper naming convention for CI:
-
-```json
-{
-  "name": "livekit-plugins-<name>",
-  "private": true
-}
+```bash
+pip install livekit-plugins-llama-index
 ```
+
+## Query Engine
+
+Query Engine is primarily used for RAG. See [example voice agent](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/llamaindex-rag/query_engine.py)
+
+## Chat Engine
+
+Chat Engine can be used as an LLM within the framework.
+
+```python
+# load the existing index
+storage_context = StorageContext.from_defaults(persist_dir=<mydir>)
+index = load_index_from_storage(storage_context)
+
+async def entrypoint(ctx: JobContext):
+    ...
+    chat_engine = index.as_chat_engine(chat_mode=ChatMode.CONTEXT)
+    assistant = VoicePipelineAgent(
+        vad=silero.VAD.load(),
+        stt=deepgram.STT(),
+        llm=llama_index.LLM(chat_engine=chat_engine),
+        tts=openai.TTS(),
+        chat_ctx=initial_ctx,
+    )
+```
+
+full example [here](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/llamaindex-rag/chat_engine.py)

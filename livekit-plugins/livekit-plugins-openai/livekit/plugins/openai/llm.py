@@ -65,21 +65,18 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
         """
-        # throw an error on our end
-        api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if api_key is None:
-            raise ValueError("OpenAI API key is required")
+        super().__init__()
 
         self._opts = LLMOptions(model=model, user=user, temperature=temperature)
         self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
-                timeout=httpx.Timeout(timeout=30, connect=10, read=5, pool=5),
+                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
                 limits=httpx.Limits(
-                    max_connections=1000,
-                    max_keepalive_connections=100,
+                    max_connections=50,
+                    max_keepalive_connections=50,
                     keepalive_expiry=120,
                 ),
             ),
@@ -478,18 +475,19 @@ class LLM(llm.LLM):
             **opts,
         )
 
-        return LLMStream(oai_stream=cmp, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        return LLMStream(self, oai_stream=cmp, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
 
 
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
+        llm: LLM,
         *,
         oai_stream: Awaitable[openai.AsyncStream[ChatCompletionChunk]],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
     ) -> None:
-        super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._awaitable_oai_stream = oai_stream
         self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
 
@@ -498,25 +496,18 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
 
-    async def aclose(self) -> None:
-        if self._oai_stream:
-            await self._oai_stream.close()
-
-        return await super().aclose()
-
-    async def __anext__(self):
+    async def _main_task(self) -> None:
         if not self._oai_stream:
             self._oai_stream = await self._awaitable_oai_stream
 
-        async for chunk in self._oai_stream:
-            for choice in chunk.choices:
-                chat_chunk = self._parse_choice(choice)
-                if chat_chunk is not None:
-                    return chat_chunk
+        async with self._oai_stream as stream:
+            async for chunk in stream:
+                for choice in chunk.choices:
+                    chat_chunk = self._parse_choice(chunk.id, choice)
+                    if chat_chunk is not None:
+                        self._event_ch.send_nowait(chat_chunk)
 
-        raise StopAsyncIteration
-
-    def _parse_choice(self, choice: Choice) -> llm.ChatChunk | None:
+    def _parse_choice(self, id: str, choice: Choice) -> llm.ChatChunk | None:
         delta = choice.delta
 
         # https://github.com/livekit/agents/issues/688
@@ -532,7 +523,7 @@ class LLMStream(llm.LLMStream):
 
                 call_chunk = None
                 if self._tool_call_id and tool.id and tool.id != self._tool_call_id:
-                    call_chunk = self._try_run_function(choice)
+                    call_chunk = self._try_build_function(id, choice)
 
                 if tool.function.name:
                     self._tool_call_id = tool.id
@@ -546,18 +537,19 @@ class LLMStream(llm.LLMStream):
 
         if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
             # we're done with the tool calls, run the last one
-            return self._try_run_function(choice)
+            return self._try_build_function(id, choice)
 
         return llm.ChatChunk(
+            request_id=id,
             choices=[
                 llm.Choice(
                     delta=llm.ChoiceDelta(content=delta.content, role="assistant"),
                     index=choice.index,
                 )
-            ]
+            ],
         )
 
-    def _try_run_function(self, choice: Choice) -> llm.ChatChunk | None:
+    def _try_build_function(self, id: str, choice: Choice) -> llm.ChatChunk | None:
         if not self._fnc_ctx:
             logger.warning("oai stream tried to run function without function context")
             return None
@@ -582,6 +574,7 @@ class LLMStream(llm.LLMStream):
         self._function_calls_info.append(fnc_info)
 
         return llm.ChatChunk(
+            request_id=id,
             choices=[
                 llm.Choice(
                     delta=llm.ChoiceDelta(
@@ -591,7 +584,7 @@ class LLMStream(llm.LLMStream):
                     ),
                     index=choice.index,
                 )
-            ]
+            ],
         )
 
 

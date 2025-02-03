@@ -18,7 +18,7 @@ import asyncio
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Literal, MutableSet, Union
+from typing import Any, Callable, Dict, Literal, MutableSet
 
 import httpx
 from livekit import rtc
@@ -96,6 +96,8 @@ class AssistantLLM(llm.LLM):
         base_url: str | None = None,
         on_file_uploaded: OnFileUploaded | None = None,
     ) -> None:
+        super().__init__()
+
         test_ctx = llm.ChatContext()
         if not hasattr(test_ctx, "_metadata"):
             raise Exception(
@@ -223,7 +225,7 @@ class AssistantLLMStream(llm.LLMStream):
             self,
             llm: AssistantLLM,
             llm_stream: AssistantLLMStream,
-            output_queue: asyncio.Queue[llm.ChatChunk | Exception | None],
+            event_ch: utils.aio.Chan[llm.ChatChunk],
             chat_ctx: llm.ChatContext,
             fnc_ctx: llm.FunctionContext | None = None,
         ):
@@ -231,17 +233,20 @@ class AssistantLLMStream(llm.LLMStream):
             self._llm = llm
             self._llm_stream = llm_stream
             self._chat_ctx = chat_ctx
-            self._output_queue = output_queue
+            self._event_ch = event_ch
             self._fnc_ctx = fnc_ctx
 
         async def on_text_delta(self, delta: TextDelta, snapshot: Text):
-            self._output_queue.put_nowait(
+            assert self.current_run is not None
+
+            self._event_ch.send_nowait(
                 llm.ChatChunk(
+                    request_id=self.current_run.id,
                     choices=[
                         llm.Choice(
                             delta=llm.ChoiceDelta(role="assistant", content=delta.value)
                         )
-                    ]
+                    ],
                 )
             )
 
@@ -255,6 +260,8 @@ class AssistantLLMStream(llm.LLMStream):
             self,
             tool_call: CodeInterpreterToolCall | FileSearchToolCall | FunctionToolCall,
         ) -> None:
+            assert self.current_run is not None
+
             if tool_call.type == "code_interpreter":
                 logger.warning("code interpreter tool call not yet implemented")
             elif tool_call.type == "file_search":
@@ -273,14 +280,15 @@ class AssistantLLMStream(llm.LLMStream):
 
                 self._llm_stream._function_calls_info.append(fnc)
                 chunk = llm.ChatChunk(
+                    request_id=self.current_run.id,
                     choices=[
                         llm.Choice(
                             delta=llm.ChoiceDelta(role="assistant", tool_calls=[fnc]),
                             index=0,
                         )
-                    ]
+                    ],
                 )
-                self._output_queue.put_nowait(chunk)
+                self._event_ch.send_nowait(chunk)
 
     def __init__(
         self,
@@ -293,8 +301,7 @@ class AssistantLLMStream(llm.LLMStream):
         temperature: float | None,
         on_file_uploaded: OnFileUploaded | None,
     ) -> None:
-        super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
-        self._llm = assistant_llm
+        super().__init__(assistant_llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._client = client
         self._temperature = temperature
         self._on_file_uploaded = on_file_uploaded
@@ -303,14 +310,15 @@ class AssistantLLMStream(llm.LLMStream):
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
-        self._output_queue = asyncio.Queue[Union[llm.ChatChunk, Exception, None]]()
-        self._create_stream_task = asyncio.create_task(self._create_stream())
+        self._create_stream_task = asyncio.create_task(self._main_task())
         self._sync_openai_task = sync_openai_task
 
         # Running stream is used to ensure that we only have one stream running at a time
         self._done_future: asyncio.Future[None] = asyncio.Future()
 
-    async def _create_stream(self) -> None:
+    async def _main_task(self) -> None:
+        assert isinstance(self._llm, AssistantLLM)
+
         # This function's complexity is due to the fact that we need to sync chat_ctx messages with OpenAI.
         # OpenAI also does not allow us to modify messages while a stream is running. So we need to make sure streams run
         # sequentially. The strategy is as follows:
@@ -446,7 +454,7 @@ class AssistantLLMStream(llm.LLMStream):
 
             eh = AssistantLLMStream.EventHandler(
                 llm=self._llm,
-                output_queue=self._output_queue,
+                event_ch=self._event_ch,
                 chat_ctx=self._chat_ctx,
                 fnc_ctx=self._fnc_ctx,
                 llm_stream=self,
@@ -467,8 +475,6 @@ class AssistantLLMStream(llm.LLMStream):
 
             async with self._client.beta.threads.runs.stream(**kwargs) as stream:
                 await stream.until_done()
-
-            await self._output_queue.put(None)
 
             # Populate the openai_message_id for the messages we added to OpenAI. Note, we do this after
             # sending None to close the iterator so that it is done in parellel with any users of
@@ -500,8 +506,6 @@ class AssistantLLMStream(llm.LLMStream):
                     # We don't need the LiveKit message id anymore
                     lk_msg_id_dict.pop(load_options.thread_id)
 
-        except Exception as e:
-            await self._output_queue.put(e)
         finally:
             self._done_future.set_result(None)
 
@@ -528,16 +532,6 @@ class AssistantLLMStream(llm.LLMStream):
         )
 
         return fileObj
-
-    async def __anext__(self):
-        item = await self._output_queue.get()
-        if item is None:
-            raise StopAsyncIteration
-
-        if isinstance(item, Exception):
-            raise item
-
-        return item
 
 
 def build_oai_message(msg: llm.ChatMessage):

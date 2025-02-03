@@ -271,9 +271,7 @@ def run_worker(args: proto.CliArgs) -> None:
     if args.watch:
         from .watcher import WatchClient
 
-        assert args.mp_cch is not None
-
-        watch_client = WatchClient(worker, args.mp_cch, loop=loop)
+        watch_client = WatchClient(worker, args, loop=loop)
         watch_client.start()
 
     try:

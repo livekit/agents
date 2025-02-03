@@ -57,6 +57,8 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
         """
+        super().__init__()
+
         # throw an error on our end
         api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if api_key is None:
@@ -114,12 +116,15 @@ class LLM(llm.LLM):
             **opts,
         )
 
-        return LLMStream(anthropic_stream=stream, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        return LLMStream(
+            self, anthropic_stream=stream, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx
+        )
 
 
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
+        llm: LLM,
         *,
         anthropic_stream: Awaitable[
             anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]
@@ -127,7 +132,7 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
     ) -> None:
-        super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
         self._awaitable_anthropic_stream = anthropic_stream
         self._anthropic_stream: (
             anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent] | None
@@ -138,89 +143,90 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
 
-    async def aclose(self) -> None:
-        if self._anthropic_stream:
-            await self._anthropic_stream.close()
-
-        return await super().aclose()
-
-    async def __anext__(self):
+    async def _main_task(self) -> None:
         if not self._anthropic_stream:
             self._anthropic_stream = await self._awaitable_anthropic_stream
 
         fn_calling_enabled = self._fnc_ctx is not None
         ignore = False
 
-        async for event in self._anthropic_stream:
-            if event.type == "message_start":
-                pass
-            elif event.type == "message_delta":
-                pass
-            elif event.type == "message_stop":
-                pass
-            elif event.type == "content_block_start":
-                if event.content_block.type == "tool_use":
-                    self._tool_call_id = event.content_block.id
-                    self._fnc_raw_arguments = ""
-                    self._fnc_name = event.content_block.name
-            elif event.type == "content_block_delta":
-                delta = event.delta
-                if delta.type == "text_delta":
-                    text = delta.text
+        request_id = ""
 
-                    # Anthropic seems to add a prompt when tool calling is enabled
-                    # where responses always start with a "<thinking>" block containing
-                    # the LLM's chain of thought. It's very verbose and not useful for voice
-                    # applications.
-                    if fn_calling_enabled:
-                        if text.startswith("<thinking>"):
-                            ignore = True
+        async with self._anthropic_stream as stream:
+            async for event in stream:
+                if event.type == "message_start":
+                    request_id = event.message.id
+                elif event.type == "message_delta":
+                    pass
+                elif event.type == "message_stop":
+                    pass
+                elif event.type == "content_block_start":
+                    if event.content_block.type == "tool_use":
+                        self._tool_call_id = event.content_block.id
+                        self._fnc_raw_arguments = ""
+                        self._fnc_name = event.content_block.name
+                elif event.type == "content_block_delta":
+                    delta = event.delta
+                    if delta.type == "text_delta":
+                        text = delta.text
 
-                        if "</thinking>" in text:
-                            text = text.split("</thinking>")[-1]
-                            ignore = False
+                        # Anthropic seems to add a prompt when tool calling is enabled
+                        # where responses always start with a "<thinking>" block containing
+                        # the LLM's chain of thought. It's very verbose and not useful for voice
+                        # applications.
+                        if fn_calling_enabled:
+                            if text.startswith("<thinking>"):
+                                ignore = True
 
-                    if ignore:
-                        continue
+                            if "</thinking>" in text:
+                                text = text.split("</thinking>")[-1]
+                                ignore = False
 
-                    return llm.ChatChunk(
-                        choices=[
-                            llm.Choice(
-                                delta=llm.ChoiceDelta(content=text, role="assistant")
+                        if ignore:
+                            continue
+
+                        self._event_ch.send_nowait(
+                            llm.ChatChunk(
+                                request_id=request_id,
+                                choices=[
+                                    llm.Choice(
+                                        delta=llm.ChoiceDelta(
+                                            content=text, role="assistant"
+                                        )
+                                    )
+                                ],
                             )
-                        ]
-                    )
-                elif delta.type == "input_json_delta":
-                    assert self._fnc_raw_arguments is not None
-                    self._fnc_raw_arguments += delta.partial_json
+                        )
+                    elif delta.type == "input_json_delta":
+                        assert self._fnc_raw_arguments is not None
+                        self._fnc_raw_arguments += delta.partial_json
 
-            elif event.type == "content_block_stop":
-                if self._tool_call_id is not None and self._fnc_ctx:
-                    assert self._fnc_name is not None
-                    assert self._fnc_raw_arguments is not None
-                    fnc_info = _create_ai_function_info(
-                        self._fnc_ctx,
-                        self._tool_call_id,
-                        self._fnc_name,
-                        self._fnc_raw_arguments,
-                    )
-                    self._function_calls_info.append(fnc_info)
-                    chunk = llm.ChatChunk(
-                        choices=[
-                            llm.Choice(
-                                delta=llm.ChoiceDelta(
-                                    role="assistant", tool_calls=[fnc_info]
-                                ),
-                                index=0,
-                            )
-                        ]
-                    )
-                    self._tool_call_id = None
-                    self._fnc_raw_arguments = None
-                    self._fnc_name = None
-                    return chunk
-
-        raise StopAsyncIteration
+                elif event.type == "content_block_stop":
+                    if self._tool_call_id is not None and self._fnc_ctx:
+                        assert self._fnc_name is not None
+                        assert self._fnc_raw_arguments is not None
+                        fnc_info = _create_ai_function_info(
+                            self._fnc_ctx,
+                            self._tool_call_id,
+                            self._fnc_name,
+                            self._fnc_raw_arguments,
+                        )
+                        self._function_calls_info.append(fnc_info)
+                        chunk = llm.ChatChunk(
+                            request_id=request_id,
+                            choices=[
+                                llm.Choice(
+                                    delta=llm.ChoiceDelta(
+                                        role="assistant", tool_calls=[fnc_info]
+                                    ),
+                                    index=0,
+                                )
+                            ],
+                        )
+                        self._tool_call_id = None
+                        self._fnc_raw_arguments = None
+                        self._fnc_name = None
+                        self._event_ch.send_nowait(chunk)
 
 
 def _latest_system_message(chat_ctx: llm.ChatContext) -> str:

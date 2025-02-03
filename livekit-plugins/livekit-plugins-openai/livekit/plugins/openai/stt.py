@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import os
 import wave
 from dataclasses import dataclass
 
@@ -26,14 +27,14 @@ from livekit.agents.utils import AudioBuffer
 
 import openai
 
-from .models import WhisperModels
+from .models import GroqAudioModels, WhisperModels
 
 
 @dataclass
 class _STTOptions:
     language: str
     detect_language: bool
-    model: WhisperModels
+    model: WhisperModels | str
 
 
 class STT(stt.STT):
@@ -42,7 +43,7 @@ class STT(stt.STT):
         *,
         language: str = "en",
         detect_language: bool = False,
-        model: WhisperModels = "whisper-1",
+        model: WhisperModels | str = "whisper-1",
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
@@ -70,14 +71,46 @@ class STT(stt.STT):
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.AsyncClient(
-                timeout=5.0,
+                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
                 limits=httpx.Limits(
-                    max_connections=1000,
-                    max_keepalive_connections=100,
+                    max_connections=50,
+                    max_keepalive_connections=50,
                     keepalive_expiry=120,
                 ),
             ),
+        )
+
+    @staticmethod
+    def with_groq(
+        *,
+        model: GroqAudioModels | str = "whisper-large-v3-turbo",
+        api_key: str | None = None,
+        base_url: str | None = "https://api.groq.com/openai/v1",
+        client: openai.AsyncClient | None = None,
+        language: str = "en",
+        detect_language: bool = False,
+    ) -> STT:
+        """
+        Create a new instance of Groq STT.
+
+        ``api_key`` must be set to your Groq API key, either using the argument or by setting
+        the ``GROQ_API_KEY`` environmental variable.
+        """
+
+        # Use environment variable if API key is not provided
+        api_key = api_key or os.environ.get("GROQ_API_KEY")
+        if api_key is None:
+            raise ValueError("Groq API key is required")
+
+        # Instantiate and return a configured STT instance
+        return STT(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            language=language,
+            detect_language=detect_language,
         )
 
     def _sanitize_options(self, *, language: str | None = None) -> _STTOptions:
@@ -85,7 +118,7 @@ class STT(stt.STT):
         config.language = language or config.language
         return config
 
-    async def recognize(
+    async def _recognize_impl(
         self, buffer: AudioBuffer, *, language: str | None = None
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)

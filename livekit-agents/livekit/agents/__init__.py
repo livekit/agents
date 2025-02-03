@@ -27,7 +27,13 @@ from . import (
     voice_assistant,
 )
 from ._constants import ATTRIBUTE_AGENT_STATE
-from ._exceptions import AssignmentTimeoutError
+from ._exceptions import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    AssignmentTimeoutError,
+)
 from ._types import AgentState
 from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequest
 from .plugin import Plugin
@@ -60,6 +66,10 @@ __all__ = [
     "voice_assistant",
     "cli",
     "AssignmentTimeoutError",
+    "APIConnectionError",
+    "APIError",
+    "APIStatusError",
+    "APITimeoutError",
     "ATTRIBUTE_AGENT_STATE",
     "AgentState",
 ]

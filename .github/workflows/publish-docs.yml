@@ -3,7 +3,7 @@ name: Publish docs
 on:
   workflow_dispatch:
   workflow_call:
-    secrets: 
+    secrets:
       DOCS_DEPLOY_AWS_ACCESS_KEY: {}
       DOCS_DEPLOY_AWS_API_SECRET: {}
 
@@ -19,7 +19,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12'  # Specify the Python version you want to use
+          python-version: "3.12" # Specify the Python version you want to use
 
       - name: Create and activate virtual environment
         run: |
@@ -42,7 +42,10 @@ jobs:
                                 ./livekit-plugins/livekit-plugins-elevenlabs \
                                 ./livekit-plugins/livekit-plugins-google \
                                 ./livekit-plugins/livekit-plugins-nltk \
-                                ./livekit-plugins/livekit-plugins-openai
+                                ./livekit-plugins/livekit-plugins-openai \
+                                ./livekit-plugins/livekit-plugins-rag \
+                                ./livekit-plugins/livekit-plugins-silero \
+                                ./livekit-plugins/livekit-plugins-llama-index
 
       - name: Build Docs
         run: |
