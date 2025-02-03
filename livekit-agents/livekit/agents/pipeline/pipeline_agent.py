@@ -981,6 +981,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 fnc_ctx
                 and new_speech_handle.fnc_nested_depth
                 >= self._opts.max_nested_fnc_calls
+                and self._llm.capabilities.supports_function_history_without_fnc_ctx
             ):
                 if len(fnc_ctx.ai_functions) > 1:
                     logger.info(
@@ -991,6 +992,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         },
                     )
                 fnc_ctx = None
+
             answer_llm_stream = self._llm.chat(
                 chat_ctx=chat_ctx,
                 fnc_ctx=fnc_ctx,

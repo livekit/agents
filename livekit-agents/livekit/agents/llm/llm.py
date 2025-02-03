@@ -50,6 +50,7 @@ class Choice:
 @dataclass
 class LLMCapabilities:
     supports_choices_on_int: bool = True
+    supports_function_history_without_fnc_ctx: bool = True
 
 
 @dataclass
@@ -73,9 +74,9 @@ class LLM(
     rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
     Generic[TEvent],
 ):
-    def __init__(self) -> None:
+    def __init__(self, *, capabilities: LLMCapabilities) -> None:
         super().__init__()
-        self._capabilities = LLMCapabilities()
+        self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property

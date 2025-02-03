@@ -29,7 +29,11 @@ from livekit.agents import (
     APITimeoutError,
     llm,
 )
-from livekit.agents.llm import ToolChoice, _create_ai_function_info
+from livekit.agents.llm import (
+    LLMCapabilities,
+    ToolChoice,
+    _create_ai_function_info,
+)
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import openai
@@ -85,8 +89,7 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
         """
-        super().__init__()
-        self._capabilities = llm.LLMCapabilities(supports_choices_on_int=True)
+        super().__init__(capabilities=LLMCapabilities(supports_choices_on_int=True))
 
         self._opts = LLMOptions(
             model=model,
