@@ -89,7 +89,12 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
         """
-        super().__init__(capabilities=LLMCapabilities(supports_choices_on_int=True))
+        super().__init__(
+            capabilities=LLMCapabilities(
+                supports_choices_on_int=True,
+                supports_function_history_without_fnc_ctx=True,
+            )
+        )
 
         self._opts = LLMOptions(
             model=model,

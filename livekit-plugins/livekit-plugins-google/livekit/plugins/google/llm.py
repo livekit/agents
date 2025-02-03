@@ -99,7 +99,12 @@ class LLM(llm.LLM):
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
         """
-        super().__init__(capabilities=LLMCapabilities(supports_choices_on_int=False))
+        super().__init__(
+            capabilities=LLMCapabilities(
+                supports_choices_on_int=False,
+                supports_function_history_without_fnc_ctx=True,
+            )
+        )
         self._project_id = project or os.environ.get("GOOGLE_CLOUD_PROJECT", None)
         self._location = location or os.environ.get(
             "GOOGLE_CLOUD_LOCATION", "us-central1"
