@@ -12,7 +12,7 @@ from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .chat_context import ChatContext
 from .function_context import CalledFunction, FunctionCallInfo, FunctionContext
-from .llm import LLM, ChatChunk, LLMStream, ToolChoice
+from .llm import LLM, ChatChunk, LLMCapabilities, LLMStream, ToolChoice
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -45,7 +45,17 @@ class FallbackAdapter(
         if len(llm) < 1:
             raise ValueError("at least one LLM instance must be provided.")
 
-        super().__init__()
+        super().__init__(
+            capabilities=LLMCapabilities(
+                supports_choices_on_int=all(
+                    t.capabilities.supports_choices_on_int for t in llm
+                ),
+                supports_function_history_without_fnc_ctx=all(
+                    t.capabilities.supports_function_history_without_fnc_ctx
+                    for t in llm
+                ),
+            )
+        )
 
         self._llm_instances = llm
         self._attempt_timeout = attempt_timeout
