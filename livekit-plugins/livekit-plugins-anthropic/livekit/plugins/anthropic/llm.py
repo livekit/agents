@@ -19,11 +19,32 @@ import inspect
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Awaitable, List, Tuple, get_args, get_origin
+from typing import (
+    Any,
+    Awaitable,
+    List,
+    Literal,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+)
 
 import httpx
 from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    llm,
+    utils,
+)
+from livekit.agents.llm import ToolChoice
+from livekit.agents.llm.function_context import (
+    _create_ai_function_info,
+    _is_optional_type,
+)
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 import anthropic
 
@@ -38,18 +59,22 @@ class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
+    parallel_tool_calls: bool | None
+    tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None
 
 
 class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "claude-3-haiku-20240307",
+        model: str | ChatModels = "claude-3-5-sonnet-20241022",
         api_key: str | None = None,
         base_url: str | None = None,
         user: str | None = None,
         client: anthropic.AsyncClient | None = None,
         temperature: float | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -64,7 +89,13 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError("Anthropic API key is required")
 
-        self._opts = LLMOptions(model=model, user=user, temperature=temperature)
+        self._opts = LLMOptions(
+            model=model,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,
             base_url=base_url,
@@ -83,13 +114,20 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
+        if parallel_tool_calls is None:
+            parallel_tool_calls = self._opts.parallel_tool_calls
+        if tool_choice is None:
+            tool_choice = self._opts.tool_choice
 
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
@@ -98,15 +136,27 @@ class LLM(llm.LLM):
                 fncs_desc.append(_build_function_description(fnc))
 
             opts["tools"] = fncs_desc
-
-            if fnc_ctx and parallel_tool_calls is not None:
-                opts["parallel_tool_calls"] = parallel_tool_calls
+            if tool_choice is not None:
+                anthropic_tool_choice: dict[str, Any] = {"type": "auto"}
+                if isinstance(tool_choice, ToolChoice):
+                    if tool_choice.type == "function":
+                        anthropic_tool_choice = {
+                            "type": "tool",
+                            "name": tool_choice.name,
+                        }
+                elif isinstance(tool_choice, str):
+                    if tool_choice == "required":
+                        anthropic_tool_choice = {"type": "any"}
+            if parallel_tool_calls is not None and parallel_tool_calls is False:
+                anthropic_tool_choice["disable_parallel_tool_use"] = True
+            opts["tool_choice"] = anthropic_tool_choice
 
         latest_system_message = _latest_system_message(chat_ctx)
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
+
         stream = self._client.messages.create(
-            max_tokens=opts.get("max_tokens", 1000),
+            max_tokens=opts.get("max_tokens", 1024),
             system=latest_system_message,
             messages=collaped_anthropic_ctx,
             model=self._opts.model,
@@ -117,7 +167,11 @@ class LLM(llm.LLM):
         )
 
         return LLMStream(
-            self, anthropic_stream=stream, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx
+            self,
+            anthropic_stream=stream,
+            chat_ctx=chat_ctx,
+            fnc_ctx=fnc_ctx,
+            conn_options=conn_options,
         )
 
 
@@ -131,8 +185,11 @@ class LLMStream(llm.LLMStream):
         ],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
+        conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
+        super().__init__(
+            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
+        )
         self._awaitable_anthropic_stream = anthropic_stream
         self._anthropic_stream: (
             anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent] | None
@@ -143,90 +200,115 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
 
-    async def _main_task(self) -> None:
-        if not self._anthropic_stream:
-            self._anthropic_stream = await self._awaitable_anthropic_stream
+        self._request_id: str = ""
+        self._ignoring_cot = False  # ignore chain of thought
+        self._input_tokens = 0
+        self._output_tokens = 0
 
-        fn_calling_enabled = self._fnc_ctx is not None
-        ignore = False
+    async def _run(self) -> None:
+        retryable = True
+        try:
+            if not self._anthropic_stream:
+                self._anthropic_stream = await self._awaitable_anthropic_stream
 
-        request_id = ""
+            async with self._anthropic_stream as stream:
+                async for event in stream:
+                    chat_chunk = self._parse_event(event)
+                    if chat_chunk is not None:
+                        self._event_ch.send_nowait(chat_chunk)
+                        retryable = False
 
-        async with self._anthropic_stream as stream:
-            async for event in stream:
-                if event.type == "message_start":
-                    request_id = event.message.id
-                elif event.type == "message_delta":
-                    pass
-                elif event.type == "message_stop":
-                    pass
-                elif event.type == "content_block_start":
-                    if event.content_block.type == "tool_use":
-                        self._tool_call_id = event.content_block.id
-                        self._fnc_raw_arguments = ""
-                        self._fnc_name = event.content_block.name
-                elif event.type == "content_block_delta":
-                    delta = event.delta
-                    if delta.type == "text_delta":
-                        text = delta.text
+                self._event_ch.send_nowait(
+                    llm.ChatChunk(
+                        request_id=self._request_id,
+                        usage=llm.CompletionUsage(
+                            completion_tokens=self._output_tokens,
+                            prompt_tokens=self._input_tokens,
+                            total_tokens=self._input_tokens + self._output_tokens,
+                        ),
+                    )
+                )
+        except anthropic.APITimeoutError:
+            raise APITimeoutError(retryable=retryable)
+        except anthropic.APIStatusError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.request_id,
+                body=e.body,
+            )
+        except Exception as e:
+            raise APIConnectionError(retryable=retryable) from e
 
-                        # Anthropic seems to add a prompt when tool calling is enabled
-                        # where responses always start with a "<thinking>" block containing
-                        # the LLM's chain of thought. It's very verbose and not useful for voice
-                        # applications.
-                        if fn_calling_enabled:
-                            if text.startswith("<thinking>"):
-                                ignore = True
+    def _parse_event(
+        self, event: anthropic.types.RawMessageStreamEvent
+    ) -> llm.ChatChunk | None:
+        if event.type == "message_start":
+            self._request_id = event.message.id
+            self._input_tokens = event.message.usage.input_tokens
+            self._output_tokens = event.message.usage.output_tokens
+        elif event.type == "message_delta":
+            self._output_tokens += event.usage.output_tokens
+        elif event.type == "content_block_start":
+            if event.content_block.type == "tool_use":
+                self._tool_call_id = event.content_block.id
+                self._fnc_name = event.content_block.name
+                self._fnc_raw_arguments = ""
+        elif event.type == "content_block_delta":
+            delta = event.delta
+            if delta.type == "text_delta":
+                text = delta.text
 
-                            if "</thinking>" in text:
-                                text = text.split("</thinking>")[-1]
-                                ignore = False
+                if self._fnc_ctx is not None:
+                    # anthropic may inject COC when using functions
+                    if text.startswith("<thinking>"):
+                        self._ignoring_cot = True
+                    elif self._ignoring_cot and "</thinking>" in text:
+                        text = text.split("</thinking>")[-1]
+                        self._ignoring_cot = False
 
-                        if ignore:
-                            continue
+                if self._ignoring_cot:
+                    return None
 
-                        self._event_ch.send_nowait(
-                            llm.ChatChunk(
-                                request_id=request_id,
-                                choices=[
-                                    llm.Choice(
-                                        delta=llm.ChoiceDelta(
-                                            content=text, role="assistant"
-                                        )
-                                    )
-                                ],
-                            )
+                return llm.ChatChunk(
+                    request_id=self._request_id,
+                    choices=[
+                        llm.Choice(
+                            delta=llm.ChoiceDelta(content=text, role="assistant")
                         )
-                    elif delta.type == "input_json_delta":
-                        assert self._fnc_raw_arguments is not None
-                        self._fnc_raw_arguments += delta.partial_json
+                    ],
+                )
+            elif delta.type == "input_json_delta":
+                assert self._fnc_raw_arguments is not None
+                self._fnc_raw_arguments += delta.partial_json
 
-                elif event.type == "content_block_stop":
-                    if self._tool_call_id is not None and self._fnc_ctx:
-                        assert self._fnc_name is not None
-                        assert self._fnc_raw_arguments is not None
-                        fnc_info = _create_ai_function_info(
-                            self._fnc_ctx,
-                            self._tool_call_id,
-                            self._fnc_name,
-                            self._fnc_raw_arguments,
+        elif event.type == "content_block_stop":
+            if self._tool_call_id is not None and self._fnc_ctx:
+                assert self._fnc_name is not None
+                assert self._fnc_raw_arguments is not None
+
+                fnc_info = _create_ai_function_info(
+                    self._fnc_ctx,
+                    self._tool_call_id,
+                    self._fnc_name,
+                    self._fnc_raw_arguments,
+                )
+                self._function_calls_info.append(fnc_info)
+
+                chat_chunk = llm.ChatChunk(
+                    request_id=self._request_id,
+                    choices=[
+                        llm.Choice(
+                            delta=llm.ChoiceDelta(
+                                role="assistant", tool_calls=[fnc_info]
+                            ),
                         )
-                        self._function_calls_info.append(fnc_info)
-                        chunk = llm.ChatChunk(
-                            request_id=request_id,
-                            choices=[
-                                llm.Choice(
-                                    delta=llm.ChoiceDelta(
-                                        role="assistant", tool_calls=[fnc_info]
-                                    ),
-                                    index=0,
-                                )
-                            ],
-                        )
-                        self._tool_call_id = None
-                        self._fnc_raw_arguments = None
-                        self._fnc_name = None
-                        self._event_ch.send_nowait(chunk)
+                    ],
+                )
+                self._tool_call_id = self._fnc_raw_arguments = self._fnc_name = None
+                return chat_chunk
+
+        return None
 
 
 def _latest_system_message(chat_ctx: llm.ChatContext) -> str:
@@ -296,7 +378,7 @@ def _build_anthropic_message(
         a_content = a_msg["content"]
 
         # add content if provided
-        if isinstance(msg.content, str):
+        if isinstance(msg.content, str) and msg.content:
             a_msg["content"].append(
                 anthropic.types.TextBlock(
                     text=msg.content,
@@ -305,7 +387,7 @@ def _build_anthropic_message(
             )
         elif isinstance(msg.content, list):
             for cnt in msg.content:
-                if isinstance(cnt, str):
+                if isinstance(cnt, str) and cnt:
                     content: anthropic.types.TextBlock = anthropic.types.TextBlock(
                         text=cnt,
                         type="text",
@@ -326,8 +408,10 @@ def _build_anthropic_message(
 
         return a_msg
     elif msg.role == "tool":
+        if isinstance(msg.content, dict):
+            msg.content = json.dumps(msg.content)
         if not isinstance(msg.content, str):
-            logger.warning("tool message content is not a string")
+            logger.warning("tool message content is not a string or dict")
             return None
         if not msg.tool_call_id:
             return None
@@ -349,11 +433,36 @@ def _build_anthropic_message(
 def _build_anthropic_image_content(
     image: llm.ChatImage, cache_key: Any
 ) -> anthropic.types.ImageBlockParam:
-    if isinstance(image.image, str):  # image url
-        logger.warning(
-            "image url not supported by anthropic, skipping image '%s'", image.image
-        )
-    elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
+    if isinstance(image.image, str):  # image is a URL
+        if not image.image.startswith("data:"):
+            raise ValueError("LiveKit Anthropic Plugin: Image URLs must be data URLs")
+
+        try:
+            header, b64_data = image.image.split(",", 1)
+            media_type = header.split(";")[0].split(":")[1]
+
+            supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+            if media_type not in supported_types:
+                raise ValueError(
+                    f"LiveKit Anthropic Plugin: Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
+                )
+
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "data": b64_data,
+                    "media_type": cast(
+                        Literal["image/jpeg", "image/png", "image/gif", "image/webp"],
+                        media_type,
+                    ),
+                },
+            }
+        except (ValueError, IndexError) as e:
+            raise ValueError(
+                f"LiveKit Anthropic Plugin: Invalid image data URL {str(e)}"
+            )
+    elif isinstance(image.image, rtc.VideoFrame):  # image is a VideoFrame
         if cache_key not in image._cache:
             # inside our internal implementation, we allow to put extra metadata to
             # each ChatImage (avoid to reencode each time we do a chatcompletion request)
@@ -362,7 +471,7 @@ def _build_anthropic_image_content(
                 opts.resize_options = utils.images.ResizeOptions(
                     width=image.inference_width,
                     height=image.inference_height,
-                    strategy="center_aspect_fit",
+                    strategy="scale_aspect_fit",
                 )
 
             encoded_data = utils.images.encode(image.image, opts)
@@ -377,65 +486,8 @@ def _build_anthropic_image_content(
             },
         }
 
-    raise ValueError(f"unknown image type {type(image.image)}")
-
-
-def _create_ai_function_info(
-    fnc_ctx: llm.function_context.FunctionContext,
-    tool_call_id: str,
-    fnc_name: str,
-    raw_arguments: str,  # JSON string
-) -> llm.function_context.FunctionCallInfo:
-    if fnc_name not in fnc_ctx.ai_functions:
-        raise ValueError(f"AI function {fnc_name} not found")
-
-    parsed_arguments: dict[str, Any] = {}
-    try:
-        if raw_arguments:  # ignore empty string
-            parsed_arguments = json.loads(raw_arguments)
-    except json.JSONDecodeError:
-        raise ValueError(
-            f"AI function {fnc_name} received invalid JSON arguments - {raw_arguments}"
-        )
-
-    fnc_info = fnc_ctx.ai_functions[fnc_name]
-
-    # Ensure all necessary arguments are present and of the correct type.
-    sanitized_arguments: dict[str, Any] = {}
-    for arg_info in fnc_info.arguments.values():
-        if arg_info.name not in parsed_arguments:
-            if arg_info.default is inspect.Parameter.empty:
-                raise ValueError(
-                    f"AI function {fnc_name} missing required argument {arg_info.name}"
-                )
-            continue
-
-        arg_value = parsed_arguments[arg_info.name]
-        if get_origin(arg_info.type) is not None:
-            if not isinstance(arg_value, list):
-                raise ValueError(
-                    f"AI function {fnc_name} argument {arg_info.name} should be a list"
-                )
-
-            inner_type = get_args(arg_info.type)[0]
-            sanitized_value = [
-                _sanitize_primitive(
-                    value=v, expected_type=inner_type, choices=arg_info.choices
-                )
-                for v in arg_value
-            ]
-        else:
-            sanitized_value = _sanitize_primitive(
-                value=arg_value, expected_type=arg_info.type, choices=arg_info.choices
-            )
-
-        sanitized_arguments[arg_info.name] = sanitized_value
-
-    return llm.function_context.FunctionCallInfo(
-        tool_call_id=tool_call_id,
-        raw_arguments=raw_arguments,
-        function_info=fnc_info,
-        arguments=sanitized_arguments,
+    raise ValueError(
+        "LiveKit Anthropic Plugin: ChatImage must be an rtc.VideoFrame or a data URL"
     )
 
 
@@ -462,8 +514,10 @@ def _build_function_description(
         if arg_info.description:
             p["description"] = arg_info.description
 
-        if get_origin(arg_info.type) is list:
-            inner_type = get_args(arg_info.type)[0]
+        is_optional, inner_th = _is_optional_type(arg_info.type)
+
+        if get_origin(inner_th) is list:
+            inner_type = get_args(inner_th)[0]
             p["type"] = "array"
             p["items"] = {}
             p["items"]["type"] = type2str(inner_type)
@@ -471,7 +525,7 @@ def _build_function_description(
             if arg_info.choices:
                 p["items"]["enum"] = arg_info.choices
         else:
-            p["type"] = type2str(arg_info.type)
+            p["type"] = type2str(inner_th)
             if arg_info.choices:
                 p["enum"] = arg_info.choices
 
@@ -487,31 +541,3 @@ def _build_function_description(
         "description": fnc_info.description,
         "input_schema": input_schema,
     }
-
-
-def _sanitize_primitive(
-    *, value: Any, expected_type: type, choices: Tuple[Any] | None
-) -> Any:
-    if expected_type is str:
-        if not isinstance(value, str):
-            raise ValueError(f"expected str, got {type(value)}")
-    elif expected_type in (int, float):
-        if not isinstance(value, (int, float)):
-            raise ValueError(f"expected number, got {type(value)}")
-
-        if expected_type is int:
-            if value % 1 != 0:
-                raise ValueError("expected int, got float")
-
-            value = int(value)
-        elif expected_type is float:
-            value = float(value)
-
-    elif expected_type is bool:
-        if not isinstance(value, bool):
-            raise ValueError(f"expected bool, got {type(value)}")
-
-    if choices and value not in choices:
-        raise ValueError(f"invalid value {value}, not in {choices}")
-
-    return value

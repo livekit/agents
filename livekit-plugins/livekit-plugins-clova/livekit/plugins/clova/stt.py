@@ -11,6 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
+
+import asyncio
 import io
 import json
 import os
@@ -19,7 +23,13 @@ import wave
 from typing import Optional, Union
 
 import aiohttp
-from livekit.agents import stt, utils
+from livekit.agents import (
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+    utils,
+)
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE
@@ -59,6 +69,11 @@ class STT(stt.STT):
             )
         self.threshold = threshold
 
+    def update_options(self, *, language: str | None = None) -> None:
+        self._language = (
+            clova_languages_mapping.get(language, language) or self._language
+        )
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -71,9 +86,10 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        *,
         buffer: AudioBuffer,
-        language: Union[ClovaSttLanguages, str, None] = None,
+        *,
+        language: Union[ClovaSttLanguages, str, None],
+        conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
             url = self.url_builder()
@@ -100,7 +116,13 @@ class STT(stt.STT):
             )
             start = time.time()
             async with self._ensure_session().post(
-                url, data=form_data, headers=headers
+                url,
+                data=form_data,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(
+                    total=30,
+                    sock_connect=conn_options.timeout,
+                ),
             ) as response:
                 response_data = await response.json()
                 end = time.time()
@@ -115,16 +137,21 @@ class STT(stt.STT):
                     )
                 logger.info(f"final event: {response_data}")
                 return self._transcription_to_speech_event(text=text)
-        except Exception as ex:
-            logger.error(f"{ex}")
-            return self._transcription_to_speech_event(
-                event_type=stt.SpeechEventType.FINAL_TRANSCRIPT, text=""
-            )
+
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+            ) from e
 
     def _transcription_to_speech_event(
         self,
         event_type: SpeechEventType = stt.SpeechEventType.INTERIM_TRANSCRIPT,
-        text: str = None,
+        text: str | None = None,
     ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=event_type,

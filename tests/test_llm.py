@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from enum import Enum
-from typing import Annotated, Callable, Optional
+from pathlib import Path
+from typing import Annotated, Callable, Literal, Optional, Union
 
 import pytest
-from livekit.agents import llm
+from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
-from livekit.plugins import anthropic, openai
+from livekit.plugins import anthropic, google, openai
+from livekit.rtc import VideoBufferType, VideoFrame
 
 
 class Unit(Enum):
@@ -32,9 +35,7 @@ class FncCtx(FunctionContext):
     @ai_callable(description="Play a music")
     def play_music(
         self,
-        name: Annotated[
-            str, TypeInfo(description="The artist and the name of the song")
-        ],
+        name: Annotated[str, TypeInfo(description="the name of the Artist")],
     ) -> None: ...
 
     # test for cancelled calls
@@ -47,7 +48,7 @@ class FncCtx(FunctionContext):
         await asyncio.sleep(60)
 
     # used to test arrays as arguments
-    @ai_callable(description="Currencies of a specific area")
+    @ai_callable(description="Select currencies of a specific area")
     def select_currencies(
         self,
         currencies: Annotated[
@@ -56,15 +57,6 @@ class FncCtx(FunctionContext):
                 description="The currencies to select",
                 choices=["usd", "eur", "gbp", "jpy", "sek"],
             ),
-        ],
-    ) -> None: ...
-
-    # test choices on int
-    @ai_callable(description="Change the volume")
-    def change_volume(
-        self,
-        volume: Annotated[
-            int, TypeInfo(description="The volume level", choices=[0, 11, 30, 83, 99])
         ],
     ) -> None: ...
 
@@ -88,7 +80,7 @@ def test_hashable_typeinfo():
 
 
 LLMS: list[Callable[[], llm.LLM]] = [
-    lambda: openai.LLM(),
+    pytest.param(lambda: openai.LLM(), id="openai"),
     # lambda: openai.beta.AssistantLLM(
     #     assistant_opts=openai.beta.AssistantOptions(
     #         create_options=openai.beta.AssistantCreateOptions(
@@ -98,7 +90,9 @@ LLMS: list[Callable[[], llm.LLM]] = [
     #         )
     #     )
     # ),
-    # anthropic.LLM(),
+    pytest.param(lambda: anthropic.LLM(), id="anthropic"),
+    pytest.param(lambda: google.LLM(), id="google"),
+    pytest.param(lambda: google.LLM(vertexai=True), id="google-vertexai"),
 ]
 
 
@@ -109,16 +103,18 @@ async def test_chat(llm_factory: Callable[[], llm.LLM]):
         text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.'
     )
 
-    # Anthropics LLM requires at least one message (system messages don't count)
-    if isinstance(input_llm, anthropic.LLM):
-        chat_ctx.append(
-            text="Hello",
-            role="user",
-        )
+    # Anthropic and vertex requires at least one message (system messages don't count)
+    chat_ctx.append(
+        text="Hello",
+        role="user",
+    )
 
     stream = input_llm.chat(chat_ctx=chat_ctx)
     text = ""
     async for chunk in stream:
+        if not chunk.choices:
+            continue
+
         content = chunk.choices[0].delta.content
         if content:
             text += content
@@ -140,6 +136,25 @@ async def test_basic_fnc_calls(llm_factory: Callable[[], llm.LLM]):
     await asyncio.gather(*[f.task for f in calls])
     await stream.aclose()
     assert len(calls) == 2, "get_weather should be called twice"
+
+
+@pytest.mark.parametrize("llm_factory", LLMS)
+async def test_function_call_exception_handling(llm_factory: Callable[[], llm.LLM]):
+    input_llm = llm_factory()
+    fnc_ctx = FncCtx()
+
+    @fnc_ctx.ai_callable(description="Simulate a failure")
+    async def failing_function():
+        raise RuntimeError("Simulated failure")
+
+    stream = await _request_fnc_call(input_llm, "Call the failing function", fnc_ctx)
+    calls = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in calls], return_exceptions=True)
+    await stream.aclose()
+
+    assert len(calls) == 1
+    assert isinstance(calls[0].exception, RuntimeError)
+    assert str(calls[0].exception) == "Simulated failure"
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
@@ -171,7 +186,7 @@ async def test_cancelled_calls(llm_factory: Callable[[], llm.LLM]):
     fnc_ctx = FncCtx()
 
     stream = await _request_fnc_call(
-        input_llm, "Turn off the lights in the Theo's bedroom", fnc_ctx
+        input_llm, "Turn off the lights in the bedroom", fnc_ctx
     )
     calls = stream.execute_functions()
     await asyncio.sleep(0.2)  # wait for the loop executor to start the task
@@ -180,9 +195,9 @@ async def test_cancelled_calls(llm_factory: Callable[[], llm.LLM]):
     await stream.aclose()
 
     assert len(calls) == 1
-    assert isinstance(
-        calls[0].exception, asyncio.CancelledError
-    ), "toggle_light should have been cancelled"
+    assert isinstance(calls[0].exception, asyncio.CancelledError), (
+        "toggle_light should have been cancelled"
+    )
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
@@ -192,7 +207,7 @@ async def test_calls_arrays(llm_factory: Callable[[], llm.LLM]):
 
     stream = await _request_fnc_call(
         input_llm,
-        "Can you select all currencies in Europe at once?",
+        "Can you select all currencies in Europe at once from given choices using function call `select_currencies`?",
         fnc_ctx,
         temperature=0.2,
     )
@@ -205,9 +220,9 @@ async def test_calls_arrays(llm_factory: Callable[[], llm.LLM]):
     call = calls[0]
     currencies = call.call_info.arguments["currencies"]
     assert len(currencies) == 3, "select_currencies should have 3 currencies"
-    assert (
-        "eur" in currencies and "gbp" in currencies and "sek" in currencies
-    ), "select_currencies should have eur, gbp, sek"
+    assert "eur" in currencies and "gbp" in currencies and "sek" in currencies, (
+        "select_currencies should have eur, gbp, sek"
+    )
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
@@ -215,16 +230,28 @@ async def test_calls_choices(llm_factory: Callable[[], llm.LLM]):
     input_llm = llm_factory()
     fnc_ctx = FncCtx()
 
-    stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
-    calls = stream.execute_functions()
-    await asyncio.gather(*[f.task for f in calls])
-    await stream.aclose()
+    # test choices on int
+    @fnc_ctx.ai_callable(description="Change the volume")
+    def change_volume(
+        volume: Annotated[
+            int, TypeInfo(description="The volume level", choices=[0, 11, 30, 83, 99])
+        ],
+    ) -> None: ...
 
-    assert len(calls) == 1, "change_volume should have been called only once"
+    if not input_llm.capabilities.supports_choices_on_int:
+        with pytest.raises(APIConnectionError):
+            stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
+    else:
+        stream = await _request_fnc_call(input_llm, "Set the volume to 30", fnc_ctx)
+        calls = stream.execute_functions()
+        await asyncio.gather(*[f.task for f in calls])
+        await stream.aclose()
 
-    call = calls[0]
-    volume = call.call_info.arguments["volume"]
-    assert volume == 30, "change_volume should have been called with volume 30"
+        assert len(calls) == 1, "change_volume should have been called only once"
+
+        call = calls[0]
+        volume = call.call_info.arguments["volume"]
+        assert volume == 30, "change_volume should have been called with volume 30"
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
@@ -252,19 +279,176 @@ async def test_optional_args(llm_factory: Callable[[], llm.LLM]):
     assert address is None, "update_user_info should have been called with address None"
 
 
+test_tool_choice_cases = [
+    pytest.param(
+        "Default tool_choice (auto)",
+        "Get the weather for New York and play some music from the artist 'The Beatles'.",
+        None,
+        {"get_weather", "play_music"},
+        id="Default tool_choice (auto)",
+    ),
+    pytest.param(
+        "Tool_choice set to 'required'",
+        "Get the weather for Chicago and play some music from the artist 'Eminem'.",
+        "required",
+        {"get_weather", "play_music"},
+        id="Tool_choice set to 'required'",
+    ),
+    pytest.param(
+        "Tool_choice set to a specific tool ('get_weather')",
+        "Get the weather for Miami.",
+        llm.ToolChoice(type="function", name="get_weather"),
+        {"get_weather"},
+        id="Tool_choice set to a specific tool ('get_weather')",
+    ),
+    pytest.param(
+        "Tool_choice set to 'none'",
+        "Get the weather for Seattle and play some music from the artist 'Frank Sinatra'.",
+        "none",
+        set(),  # No tool calls expected
+        id="Tool_choice set to 'none'",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "description, user_request, tool_choice, expected_calls", test_tool_choice_cases
+)
+@pytest.mark.parametrize("llm_factory", LLMS)
+async def test_tool_choice_options(
+    description: str,
+    user_request: str,
+    tool_choice: Union[dict, str, None],
+    expected_calls: set,
+    llm_factory: Callable[[], llm.LLM],
+):
+    input_llm = llm_factory()
+    fnc_ctx = FncCtx()
+
+    stream = await _request_fnc_call(
+        input_llm,
+        user_request,
+        fnc_ctx,
+        tool_choice=tool_choice,
+        parallel_tool_calls=True,
+    )
+
+    calls = stream.execute_functions()
+    await asyncio.gather(*[f.task for f in calls], return_exceptions=True)
+    await stream.aclose()
+    print(calls)
+
+    call_names = {call.call_info.function_info.name for call in calls}
+    if tool_choice == "none" and isinstance(input_llm, anthropic.LLM):
+        assert True
+    else:
+        assert call_names == expected_calls, (
+            f"Test '{description}' failed: Expected calls {expected_calls}, but got {call_names}"
+        )
+
+
 async def _request_fnc_call(
     model: llm.LLM,
     request: str,
     fnc_ctx: FncCtx,
     temperature: float | None = None,
+    parallel_tool_calls: bool | None = None,
+    tool_choice: Union[llm.ToolChoice, Literal["auto", "required", "none"]]
+    | None = None,
 ) -> llm.LLMStream:
     stream = model.chat(
-        chat_ctx=ChatContext().append(text=request, role="user"),
+        chat_ctx=ChatContext()
+        .append(
+            text="You are an helpful assistant. Follow the instructions provided by the user. You can use multiple tool calls at once.",
+            role="system",
+        )
+        .append(text=request, role="user"),
         fnc_ctx=fnc_ctx,
         temperature=temperature,
+        tool_choice=tool_choice,
+        parallel_tool_calls=parallel_tool_calls,
     )
 
     async for _ in stream:
         pass
 
     return stream
+
+
+_HEARTS_RGBA_PATH = Path(__file__).parent / "hearts.rgba"
+with open(_HEARTS_RGBA_PATH, "rb") as f:
+    image_data = f.read()
+
+    _HEARTS_IMAGE_VIDEO_FRAME = VideoFrame(
+        width=512, height=512, type=VideoBufferType.RGBA, data=image_data
+    )
+
+_HEARTS_JPEG_PATH = Path(__file__).parent / "hearts.jpg"
+with open(_HEARTS_JPEG_PATH, "rb") as f:
+    _HEARTS_IMAGE_DATA_URL = (
+        f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode()}"
+    )
+
+
+@pytest.mark.parametrize("llm_factory", LLMS)
+async def test_chat_with_image_data_url(llm_factory: Callable[[], llm.LLM]):
+    input_llm = llm_factory()
+
+    chat_ctx = (
+        ChatContext()
+        .append(
+            text="You are an AI assistant that describes images in detail upon request.",
+            role="system",
+        )
+        .append(
+            text="Describe this image",
+            images=[
+                llm.ChatImage(image=_HEARTS_IMAGE_DATA_URL, inference_detail="low")
+            ],
+            role="user",
+        )
+    )
+
+    stream = input_llm.chat(chat_ctx=chat_ctx)
+    text = ""
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+
+        content = chunk.choices[0].delta.content
+        if content:
+            text += content
+
+    assert "heart" in text.lower()
+
+
+@pytest.mark.parametrize("llm_factory", LLMS)
+async def test_chat_with_image_frame(llm_factory: Callable[[], llm.LLM]):
+    input_llm = llm_factory()
+
+    chat_ctx = (
+        ChatContext()
+        .append(
+            text="You are an AI assistant that describes images in detail upon request.",
+            role="system",
+        )
+        .append(
+            text="Describe this image",
+            images=[
+                llm.ChatImage(image=_HEARTS_IMAGE_VIDEO_FRAME, inference_detail="low")
+            ],
+            role="user",
+        )
+    )
+
+    stream = input_llm.chat(chat_ctx=chat_ctx)
+    text = ""
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+
+        content = chunk.choices[0].delta.content
+        if content:
+            text += content
+
+    assert "heart" in text.lower()

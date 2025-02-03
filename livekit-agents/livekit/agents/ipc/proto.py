@@ -9,17 +9,31 @@ from livekit.protocol import agent
 from ..job import JobAcceptArguments, RunningJobInfo
 from . import channel
 
-PING_INTERVAL = 2.5
-PING_TIMEOUT = 90
-HIGH_PING_THRESHOLD = 0.5
-NO_MESSAGE_TIMEOUT = 15.0
-
 
 @dataclass
 class InitializeRequest:
     """sent by the main process to the subprocess to initialize it. this is going to call initialize_process_fnc"""
 
     MSG_ID: ClassVar[int] = 0
+
+    asyncio_debug: bool = False
+    ping_interval: float = 0
+    ping_timeout: float = 0  # if no response, process is considered dead
+    high_ping_threshold: float = (
+        0  # if ping is higher than this, process is considered unresponsive
+    )
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_bool(b, self.asyncio_debug)
+        channel.write_float(b, self.ping_interval)
+        channel.write_float(b, self.ping_timeout)
+        channel.write_float(b, self.high_ping_threshold)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.asyncio_debug = channel.read_bool(b)
+        self.ping_interval = channel.read_float(b)
+        self.ping_timeout = channel.read_float(b)
+        self.high_ping_threshold = channel.read_float(b)
 
 
 @dataclass
@@ -76,6 +90,7 @@ class StartJobRequest:
         channel.write_string(b, accept_args.metadata)
         channel.write_string(b, self.running_job.url)
         channel.write_string(b, self.running_job.token)
+        channel.write_string(b, self.running_job.worker_id)
 
     def read(self, b: io.BytesIO) -> None:
         job = agent.Job()
@@ -89,6 +104,7 @@ class StartJobRequest:
             job=job,
             url=channel.read_string(b),
             token=channel.read_string(b),
+            worker_id=channel.read_string(b),
         )
 
 
@@ -121,6 +137,50 @@ class Exiting:
         self.reason = channel.read_string(b)
 
 
+@dataclass
+class InferenceRequest:
+    """sent by a subprocess to the main process to request inference"""
+
+    MSG_ID: ClassVar[int] = 7
+    method: str = ""
+    request_id: str = ""
+    data: bytes = b""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.method)
+        channel.write_string(b, self.request_id)
+        channel.write_bytes(b, self.data)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.method = channel.read_string(b)
+        self.request_id = channel.read_string(b)
+        self.data = channel.read_bytes(b)
+
+
+@dataclass
+class InferenceResponse:
+    """response to an InferenceRequest"""
+
+    MSG_ID: ClassVar[int] = 8
+    request_id: str = ""
+    data: bytes | None = None
+    error: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.request_id)
+        channel.write_bool(b, self.data is not None)
+        if self.data is not None:
+            channel.write_bytes(b, self.data)
+        channel.write_string(b, self.error)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.request_id = channel.read_string(b)
+        has_data = channel.read_bool(b)
+        if has_data:
+            self.data = channel.read_bytes(b)
+        self.error = channel.read_string(b)
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -129,4 +189,6 @@ IPC_MESSAGES = {
     StartJobRequest.MSG_ID: StartJobRequest,
     ShutdownRequest.MSG_ID: ShutdownRequest,
     Exiting.MSG_ID: Exiting,
+    InferenceRequest.MSG_ID: InferenceRequest,
+    InferenceResponse.MSG_ID: InferenceResponse,
 }

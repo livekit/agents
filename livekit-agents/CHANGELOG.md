@@ -1,5 +1,235 @@
 # livekit-agents
 
+## 0.12.11
+
+### Patch Changes
+
+- gemini-realtime: fix input audio sample rate - [#1411](https://github.com/livekit/agents/pull/1411) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fix(pipeline_agent): clear user transcript when before_llm_cb returns false - [#1423](https://github.com/livekit/agents/pull/1423) ([@s-hamdananwar](https://github.com/s-hamdananwar))
+
+- fix: fallbackadapter to correctly handle function calls - [#1429](https://github.com/livekit/agents/pull/1429) ([@davidzhao](https://github.com/davidzhao))
+
+- improved TTFB metrics for streaming TTS - [#1431](https://github.com/livekit/agents/pull/1431) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.12.10
+
+### Patch Changes
+
+- fix false positive interruption tripping up certain LLMs - [#1410](https://github.com/livekit/agents/pull/1410) ([@davidzhao](https://github.com/davidzhao))
+
+- fix: ensure llm.FallbackAdapter executes function calls - [#1409](https://github.com/livekit/agents/pull/1409) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.12.9
+
+### Patch Changes
+
+- add generate_reply api for multimodal agent - [#1359](https://github.com/livekit/agents/pull/1359) ([@longcw](https://github.com/longcw))
+
+- remove aiodns from livekit-agents - [#1368](https://github.com/livekit/agents/pull/1368) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.12.8
+
+### Patch Changes
+
+- Fix not awaiting forward task in TTS forwarder, leading to warnings. - [#1339](https://github.com/livekit/agents/pull/1339) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- reduces initial delay before model retries - [#1337](https://github.com/livekit/agents/pull/1337) ([@davidzhao](https://github.com/davidzhao))
+
+- fix the function calls without a text response are not added to chat ctx - [#1349](https://github.com/livekit/agents/pull/1349) ([@longcw](https://github.com/longcw))
+
+- add timeout for EOU inference requests made to the inference process - [#1315](https://github.com/livekit/agents/pull/1315) ([@theomonnom](https://github.com/theomonnom))
+
+- support disabling server VAD for OpenAI realtime model - [#1347](https://github.com/livekit/agents/pull/1347) ([@longcw](https://github.com/longcw))
+
+## 0.12.7
+
+### Patch Changes
+
+- ensure job status updates contain the correct status - [#1319](https://github.com/livekit/agents/pull/1319) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.12.6
+
+### Patch Changes
+
+- expose worker_id in jobcontext - [#1307](https://github.com/livekit/agents/pull/1307) ([@s-hamdananwar](https://github.com/s-hamdananwar))
+
+- improved handling of LLM errors, do not retry if already began - [#1298](https://github.com/livekit/agents/pull/1298) ([@davidzhao](https://github.com/davidzhao))
+
+- Do not pass function context if at max depth - [#1306](https://github.com/livekit/agents/pull/1306) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- avoid warnings when function depth matches limit - [#1316](https://github.com/livekit/agents/pull/1316) ([@davidzhao](https://github.com/davidzhao))
+
+- improve interruption handling, avoid agent from getting stuck - [#1290](https://github.com/livekit/agents/pull/1290) ([@davidzhao](https://github.com/davidzhao))
+
+- add manual interrupt method for pipeline agent - [#1294](https://github.com/livekit/agents/pull/1294) ([@longcw](https://github.com/longcw))
+
+- make multimodal class generic and support gemini live api - [#1240](https://github.com/livekit/agents/pull/1240) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.12.5
+
+### Patch Changes
+
+- make max_endpoint_delay configurable - [#1277](https://github.com/livekit/agents/pull/1277) ([@davidzhao](https://github.com/davidzhao))
+
+- set USE_DOCSTRING as default for ai_callable - [#1266](https://github.com/livekit/agents/pull/1266) ([@longcw](https://github.com/longcw))
+
+- fix: do not log process warning when process not found - [#1281](https://github.com/livekit/agents/pull/1281) ([@davidzhao](https://github.com/davidzhao))
+
+- fix context when functions have been called - [#1279](https://github.com/livekit/agents/pull/1279) ([@jmugicagonz](https://github.com/jmugicagonz))
+
+## 0.12.4
+
+### Patch Changes
+
+- avoid duplicated chat ctx for function calls with messages - [#1254](https://github.com/livekit/agents/pull/1254) ([@longcw](https://github.com/longcw))
+
+## 0.12.3
+
+### Patch Changes
+
+- Moved create_ai_function_info to function_context.py for better reusability and reduce repetation - [#1260](https://github.com/livekit/agents/pull/1260) ([@jayeshp19](https://github.com/jayeshp19))
+
+- added streaming audio decoder for compressed audio. - [#1236](https://github.com/livekit/agents/pull/1236) ([@davidzhao](https://github.com/davidzhao))
+
+- Add JPEG quality param to image encoder - [#1249](https://github.com/livekit/agents/pull/1249) ([@bcherry](https://github.com/bcherry))
+
+- Add support for OpenAI's "detail" parameter to ChatImage - [#1213](https://github.com/livekit/agents/pull/1213) ([@bcherry](https://github.com/bcherry))
+
+  Add support for data URLs on ChatImage in the Anthropic plugin.
+
+- fix: correctly parse function argument types - [#1221](https://github.com/livekit/agents/pull/1221) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Fix center_aspect_fit bug, add scale_aspect_fit and scale_aspect_fill resizing options. - [#1222](https://github.com/livekit/agents/pull/1222) ([@bcherry](https://github.com/bcherry))
+
+  Make scale_aspect_fit the new default resizing option for video frames.
+
+## 0.12.2
+
+### Patch Changes
+
+- improvements to endpointing latency - [#1212](https://github.com/livekit/agents/pull/1212) ([@davidzhao](https://github.com/davidzhao))
+
+- Improvements to end of turn plugin, ensure STT language settings. - [#1195](https://github.com/livekit/agents/pull/1195) ([@davidzhao](https://github.com/davidzhao))
+
+- fix duplicated agent speech commit for message with function call - [#1192](https://github.com/livekit/agents/pull/1192) ([@longcw](https://github.com/longcw))
+
+- fix: Handle optional func args in tool calls when set to `None` - [#1211](https://github.com/livekit/agents/pull/1211) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.12.1
+
+### Patch Changes
+
+- fix release - [#1176](https://github.com/livekit/agents/pull/1176) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.12.0
+
+### Minor Changes
+
+- add nested speech handles, now agent.say works during a function call - [#1130](https://github.com/livekit/agents/pull/1130) ([@longcw](https://github.com/longcw))
+
+### Patch Changes
+
+- feat: stt retry & stt.FallbackAdapter - [#1114](https://github.com/livekit/agents/pull/1114) ([@theomonnom](https://github.com/theomonnom))
+
+- expose LiveKitAPI from the a JobContext - [#1159](https://github.com/livekit/agents/pull/1159) ([@theomonnom](https://github.com/theomonnom))
+
+- add extra chat messages to the end of the function call outputs - [#1165](https://github.com/livekit/agents/pull/1165) ([@longcw](https://github.com/longcw))
+
+- Add retries to recover from text mode to audio model for realtime API - [#1121](https://github.com/livekit/agents/pull/1121) ([@longcw](https://github.com/longcw))
+
+- prepare for release - [#1160](https://github.com/livekit/agents/pull/1160) ([@theomonnom](https://github.com/theomonnom))
+
+- add max_job_memory_usage and will kill the job if it exceeds the limit - [#1136](https://github.com/livekit/agents/pull/1136) ([@longcw](https://github.com/longcw))
+
+- support for custom tool use in LLMs - [#1102](https://github.com/livekit/agents/pull/1102) ([@jayeshp19](https://github.com/jayeshp19))
+
+- feat: tts retry & tts.FallbackAdapter - [#1074](https://github.com/livekit/agents/pull/1074) ([@theomonnom](https://github.com/theomonnom))
+
+- Expose multimodal agent metrics - [#1080](https://github.com/livekit/agents/pull/1080) ([@longcw](https://github.com/longcw))
+
+- preload mp3 decoder for TTS plugins - [#1129](https://github.com/livekit/agents/pull/1129) ([@jayeshp19](https://github.com/jayeshp19))
+
+- feat: llm retry & llm.FallbackAdapter - [#1132](https://github.com/livekit/agents/pull/1132) ([@theomonnom](https://github.com/theomonnom))
+
+- feat: inference process & end of utterance plugin - [#1133](https://github.com/livekit/agents/pull/1133) ([@theomonnom](https://github.com/theomonnom))
+
+- vertex ai support with openai library - [#1084](https://github.com/livekit/agents/pull/1084) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.11.3
+
+### Patch Changes
+
+- add PeriodicCollector utility for metrics - [#1094](https://github.com/livekit/agents/pull/1094) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.11.2
+
+### Patch Changes
+
+- Fix interrupt_min_words handling - [#1062](https://github.com/livekit/agents/pull/1062) ([@davidzhao](https://github.com/davidzhao))
+
+- pipelineagent: fix speech_committed never called - [#1078](https://github.com/livekit/agents/pull/1078) ([@theomonnom](https://github.com/theomonnom))
+
+- Allow setting agent attributes when accepting job - [#1076](https://github.com/livekit/agents/pull/1076) ([@davidzhao](https://github.com/davidzhao))
+
+- handles error in function calls - [#1057](https://github.com/livekit/agents/pull/1057) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Include job count in WorkerStatus and pass in worker for load_fnc - [#1046](https://github.com/livekit/agents/pull/1046) ([@keepingitneil](https://github.com/keepingitneil))
+
+- Fix delay calculation - [#1081](https://github.com/livekit/agents/pull/1081) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- sync the Realtime API converstation items and add set_chat_ctx - [#1015](https://github.com/livekit/agents/pull/1015) ([@longcw](https://github.com/longcw))
+
+- added metrics for idle time - [#1064](https://github.com/livekit/agents/pull/1064) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.11.1
+
+### Patch Changes
+
+- Fix stack dump on closed stream - [#1023](https://github.com/livekit/agents/pull/1023) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- fix: invalid request on anthropic - [#1018](https://github.com/livekit/agents/pull/1018) ([@theomonnom](https://github.com/theomonnom))
+
+- fix: IndexError on tts metrics - [#1028](https://github.com/livekit/agents/pull/1028) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.11.0
+
+### Minor Changes
+
+- prepare for release - [#1007](https://github.com/livekit/agents/pull/1007) ([@theomonnom](https://github.com/theomonnom))
+
+### Patch Changes
+
+- Fix race in load calc initialization - [#969](https://github.com/livekit/agents/pull/969) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Fix incorrect load computation on docker instances - [#972](https://github.com/livekit/agents/pull/972) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- stt: reduce bandwidth usage by reducing sample_rate to 16khz - [#920](https://github.com/livekit/agents/pull/920) ([@theomonnom](https://github.com/theomonnom))
+
+- Reorganized metrics, added create_metrics_logger - [#1009](https://github.com/livekit/agents/pull/1009) ([@davidzhao](https://github.com/davidzhao))
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
+- Allow kind to be list or single value - [#1006](https://github.com/livekit/agents/pull/1006) ([@keepingitneil](https://github.com/keepingitneil))
+
+- fix before_llm_cb not handling coroutines returning False - [#961](https://github.com/livekit/agents/pull/961) ([@Tanesan](https://github.com/Tanesan))
+
+- expose transcriptions for multimodal agents - [#1001](https://github.com/livekit/agents/pull/1001) ([@longcw](https://github.com/longcw))
+
+- Fix stack dump on room shutdown - [#989](https://github.com/livekit/agents/pull/989) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Add exception logging for tool calls - [#923](https://github.com/livekit/agents/pull/923) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Skip egress by default in participant-related utilities on JobContext - [#1005](https://github.com/livekit/agents/pull/1005) ([@keepingitneil](https://github.com/keepingitneil))
+
+- pipeline-agent: avoid nested function calls - [#935](https://github.com/livekit/agents/pull/935) ([@theomonnom](https://github.com/theomonnom))
+
+- expose usage metrics - [#984](https://github.com/livekit/agents/pull/984) ([@theomonnom](https://github.com/theomonnom))
+
+- fix jobs never reloading - [#934](https://github.com/livekit/agents/pull/934) ([@theomonnom](https://github.com/theomonnom))
+
+- voicepipeline: support recursive/chained function calls - [#970](https://github.com/livekit/agents/pull/970) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.10.2
 
 ### Patch Changes

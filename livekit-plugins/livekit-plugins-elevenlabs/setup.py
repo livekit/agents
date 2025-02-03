@@ -49,7 +49,7 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=["livekit-agents[codecs]>=0.8.0.dev0"],
+    install_requires=["livekit-agents[codecs]>=0.12.11"],
     package_data={"livekit.plugins.elevenlabs": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",

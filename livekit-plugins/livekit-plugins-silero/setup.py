@@ -47,7 +47,7 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=["livekit-agents>=0.10", "onnxruntime>=1.18", "numpy>=1.26"],
+    install_requires=["livekit-agents>=0.12.3", "onnxruntime>=1.18", "numpy>=1.26"],
     package_data={
         "livekit.plugins.silero.resources": ["silero_vad.onnx"],
         "livekit.plugins.silero": ["py.typed"],

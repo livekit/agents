@@ -18,9 +18,11 @@ import asyncio
 import enum
 import functools
 import inspect
+import json
+import types
 import typing
 from dataclasses import dataclass
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from ..log import logger
 
@@ -103,7 +105,7 @@ class CalledFunction:
 def ai_callable(
     *,
     name: str | None = None,
-    description: str | _UseDocMarker | None = None,
+    description: str | _UseDocMarker = USE_DOCSTRING,
     auto_retry: bool = False,
 ) -> Callable:
     def deco(f):
@@ -125,7 +127,7 @@ class FunctionContext:
         self,
         *,
         name: str | None = None,
-        description: str | _UseDocMarker | None = None,
+        description: str | _UseDocMarker = USE_DOCSTRING,
         auto_retry: bool = True,
     ) -> Callable:
         def deco(f):
@@ -168,15 +170,13 @@ class FunctionContext:
                 )
 
             desc = type_info.description if type_info else ""
-            choices = type_info.choices if type_info else None
+            choices = type_info.choices if type_info else ()
 
-            is_optional, optional_inner = _is_optional_type(inner_th)
-            if is_optional:
-                # when the type is optional, only the inner type is relevant
-                # the argument info for default would be None
-                inner_th = optional_inner
-
-            if issubclass(inner_th, enum.Enum) and not choices:
+            if (
+                isinstance(inner_th, type)
+                and issubclass(inner_th, enum.Enum)
+                and not choices
+            ):
                 # the enum must be a str or int (and at least one value)
                 # this is verified by is_type_supported
                 choices = tuple([item.value for item in inner_th])
@@ -223,7 +223,8 @@ def _extract_types(annotation: type) -> tuple[type, TypeInfo | None]:
 
         is_optional, optional_inner = _is_optional_type(annotation)
         if is_optional:
-            return _extract_types(optional_inner)
+            inner_type, info = _extract_types(optional_inner)
+            return Optional[inner_type], info  # type: ignore
 
         return annotation, None
 
@@ -242,19 +243,17 @@ def _extract_types(annotation: type) -> tuple[type, TypeInfo | None]:
 def _set_metadata(
     f: Callable,
     name: str | None = None,
-    desc: str | _UseDocMarker | None = None,
+    desc: str | _UseDocMarker = USE_DOCSTRING,
     auto_retry: bool = False,
 ) -> None:
-    if desc is None:
-        desc = ""
-
     if isinstance(desc, _UseDocMarker):
-        desc = inspect.getdoc(f)
-        if desc is None:
+        docstring = inspect.getdoc(f)
+        if docstring is None:
             raise ValueError(
                 f"missing docstring for function {f.__name__}, "
                 "use explicit description or provide docstring"
             )
+        desc = docstring
 
     metadata = _AIFncMetadata(
         name=name or f.__name__, description=desc, auto_retry=auto_retry
@@ -291,17 +290,108 @@ def is_type_supported(t: type) -> bool:
 def _is_optional_type(typ) -> Tuple[bool, Any]:
     """return is_optional, inner_type"""
     origin = typing.get_origin(typ)
+    if origin is None or origin is list:
+        return False, typ
 
-    if origin in {typing.Union, getattr(__builtins__, "UnionType", typing.Union)}:
+    if origin in {typing.Union, getattr(types, "UnionType", typing.Union)}:
         args = typing.get_args(typ)
         is_optional = type(None) in args
-
-        inner_arg = None
-        for arg in args:
-            if arg is not type(None):
-                inner_arg = arg
-                break
-
-        return is_optional, inner_arg
+        non_none_args = [a for a in args if a is not type(None)]
+        if is_optional and len(non_none_args) == 1:
+            # Exactly one non-None type + None means optional
+            return True, non_none_args[0]
 
     return False, None
+
+
+def _create_ai_function_info(
+    fnc_ctx: FunctionContext,
+    tool_call_id: str,
+    fnc_name: str,
+    raw_arguments: str,  # JSON string
+) -> FunctionCallInfo:
+    if fnc_name not in fnc_ctx.ai_functions:
+        raise ValueError(f"AI function {fnc_name} not found")
+
+    parsed_arguments: dict[str, Any] = {}
+    try:
+        if raw_arguments:  # ignore empty string
+            parsed_arguments = json.loads(raw_arguments)
+    except json.JSONDecodeError:
+        raise ValueError(
+            f"AI function {fnc_name} received invalid JSON arguments - {raw_arguments}"
+        )
+
+    fnc_info = fnc_ctx.ai_functions[fnc_name]
+
+    # Ensure all necessary arguments are present and of the correct type.
+    sanitized_arguments: dict[str, Any] = {}
+    for arg_info in fnc_info.arguments.values():
+        if arg_info.name not in parsed_arguments:
+            if arg_info.default is inspect.Parameter.empty:
+                raise ValueError(
+                    f"AI function {fnc_name} missing required argument {arg_info.name}"
+                )
+            continue
+
+        arg_value = parsed_arguments[arg_info.name]
+        is_optional, inner_th = _is_optional_type(arg_info.type)
+
+        if typing.get_origin(inner_th) is not None:
+            if not isinstance(arg_value, list):
+                raise ValueError(
+                    f"AI function {fnc_name} argument {arg_info.name} should be a list"
+                )
+
+            inner_type = typing.get_args(inner_th)[0]
+            sanitized_value = [
+                _sanitize_primitive(
+                    value=v,
+                    expected_type=inner_type,
+                    choices=arg_info.choices,
+                )
+                for v in arg_value
+            ]
+        else:
+            sanitized_value = _sanitize_primitive(
+                value=arg_value,
+                expected_type=inner_th,
+                choices=arg_info.choices,
+            )
+
+        sanitized_arguments[arg_info.name] = sanitized_value
+
+    return FunctionCallInfo(
+        tool_call_id=tool_call_id,
+        raw_arguments=raw_arguments,
+        function_info=fnc_info,
+        arguments=sanitized_arguments,
+    )
+
+
+def _sanitize_primitive(
+    *, value: Any, expected_type: type, choices: tuple | None
+) -> Any:
+    if expected_type is str:
+        if not isinstance(value, str):
+            raise ValueError(f"expected str, got {type(value)}")
+    elif expected_type in (int, float):
+        if not isinstance(value, (int, float)):
+            raise ValueError(f"expected number, got {type(value)}")
+
+        if expected_type is int:
+            if value % 1 != 0:
+                raise ValueError("expected int, got float")
+
+            value = int(value)
+        elif expected_type is float:
+            value = float(value)
+
+    elif expected_type is bool:
+        if not isinstance(value, bool):
+            raise ValueError(f"expected bool, got {type(value)}")
+
+    if choices and value not in choices:
+        raise ValueError(f"invalid value {value}, not in {choices}")
+
+    return value

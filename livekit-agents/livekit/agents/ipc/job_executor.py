@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Protocol
 
 from ..job import RunningJobInfo
@@ -10,13 +11,16 @@ class JobExecutor(Protocol):
     def started(self) -> bool: ...
 
     @property
-    def start_arguments(self) -> Any | None: ...
+    def user_arguments(self) -> Any | None: ...
 
-    @start_arguments.setter
-    def start_arguments(self, value: Any | None) -> None: ...
+    @user_arguments.setter
+    def user_arguments(self, value: Any | None) -> None: ...
 
     @property
     def running_job(self) -> RunningJobInfo | None: ...
+
+    @property
+    def status(self) -> JobStatus: ...
 
     async def start(self) -> None: ...
 
@@ -27,3 +31,9 @@ class JobExecutor(Protocol):
     async def aclose(self) -> None: ...
 
     async def launch_job(self, info: RunningJobInfo) -> None: ...
+
+
+class JobStatus(Enum):
+    RUNNING = "running"
+    FAILED = "failed"
+    SUCCESS = "success"
