@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, Literal, MutableSet, Union
 import httpx
 from livekit import rtc
 from livekit.agents import llm, utils
-from livekit.agents.llm import ToolChoice
+from livekit.agents.llm import LLMCapabilities, ToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from openai import AsyncAssistantEventHandler, AsyncClient
@@ -99,7 +99,12 @@ class AssistantLLM(llm.LLM):
         base_url: str | None = None,
         on_file_uploaded: OnFileUploaded | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            capabilities=LLMCapabilities(
+                supports_choices_on_int=True,
+                supports_function_history_without_fnc_ctx=True,
+            )
+        )
 
         test_ctx = llm.ChatContext()
         if not hasattr(test_ctx, "_metadata"):
