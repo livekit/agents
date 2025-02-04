@@ -43,7 +43,7 @@ class DataStreamAudioSink(AudioSink):
         self._pushed_duration: float = 0.0
 
         # playback finished handler
-        def _handle_playback_finished(data: rtc.RpcInvocationData) -> None:
+        def _handle_playback_finished(data: rtc.RpcInvocationData) -> str:
             event = PlaybackFinishedEvent(**json.loads(data.payload))
             self.on_playback_finished(
                 playback_position=event.playback_position,
@@ -123,7 +123,7 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
             identity=self._sender_identity
         )
 
-        def _handle_clear_buffer(data: rtc.RpcInvocationData) -> None:
+        def _handle_clear_buffer(data: rtc.RpcInvocationData) -> str:
             if self._current_reader:
                 self._current_reader_cleared = True
             self.emit("clear_buffer")
