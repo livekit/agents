@@ -44,6 +44,7 @@ class AvatarOutput(DataStreamOutput):
             .with_grants(
                 api.VideoGrants(room_join=True, room=self._room.name, agent=True)
             )
+            .with_metadata("avatar_worker")
             .to_jwt()
         )
 

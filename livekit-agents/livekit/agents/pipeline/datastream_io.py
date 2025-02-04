@@ -41,6 +41,7 @@ class DataStreamAudioSink(AudioSink):
         self._room = room
         self._destination_identity = destination_identity
         self._stream_writer: Optional[rtc.ByteStreamWriter] = None
+        self._pushed_duration: float = 0.0
 
         # playback finished handler
         def _handle_playback_finished(data: rtc.RpcInvocationData) -> None:
@@ -69,7 +70,9 @@ class DataStreamAudioSink(AudioSink):
                     "num_channels": str(frame.num_channels),
                 },
             )
+            self._pushed_duration = 0.0
         await self._stream_writer.write(bytes(frame.data))
+        self._pushed_duration += frame.duration
 
     def flush(self) -> None:
         """Mark end of current audio segment"""
@@ -80,6 +83,7 @@ class DataStreamAudioSink(AudioSink):
         # close the stream marking the end of the segment
         asyncio.create_task(self._stream_writer.aclose())
         self._stream_writer = None
+        logger.info(f"pushed duration: {self._pushed_duration}")
 
     def clear_buffer(self) -> None:
         asyncio.create_task(
@@ -113,6 +117,8 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
 
         self._data_ch = aio.Chan[rtc.AudioFrame | AudioFlushSentinel]()
         self._read_atask: Optional[asyncio.Task[None]] = None
+        self._current_reader: Optional[rtc.ByteStreamReader] = None
+        self._current_reader_cleared: bool = False
 
     async def start(self) -> None:
         # wait for the first agent participant to join
@@ -121,6 +127,8 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
         )
 
         def _handle_clear_buffer(data: rtc.RpcInvocationData) -> None:
+            if self._current_reader:
+                self._current_reader_cleared = True
             self.emit("clear_buffer")
             return "ok"
 
@@ -148,15 +156,21 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
     ) -> None:
         """Notify the sender that playback has finished"""
         assert self._remote_participant is not None
-
         event = PlaybackFinishedEvent(
             playback_position=playback_position, interrupted=interrupted
         )
-        await self._room.local_participant.perform_rpc(
-            destination_identity=self._remote_participant.identity,
-            method=RPC_PLAYBACK_FINISHED,
-            payload=json.dumps(asdict(event)),
-        )
+        try:
+            logger.info(
+                f"notifying playback finished: {event.playback_position:.3f}s, "
+                f"interrupted: {event.interrupted}"
+            )
+            await self._room.local_participant.perform_rpc(
+                destination_identity=self._remote_participant.identity,
+                method=RPC_PLAYBACK_FINISHED,
+                payload=json.dumps(asdict(event)),
+            )
+        except Exception as e:
+            logger.exception(f"error notifying playback finished: {e}")
 
     @property
     def data_ch(self) -> aio.Chan[rtc.AudioFrame | AudioFlushSentinel]:
@@ -168,12 +182,16 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
             await self._stream_reader_changed.wait()
 
             while self._stream_readers and not self._data_ch.closed:
-                reader = self._stream_readers.pop(0)
-                sample_rate = int(reader.info.attributes["sample_rate"])
-                num_channels = int(reader.info.attributes["num_channels"])
-                async for data in reader:
+                self._current_reader = self._stream_readers.pop(0)
+                sample_rate = int(self._current_reader.info.attributes["sample_rate"])
+                num_channels = int(self._current_reader.info.attributes["num_channels"])
+                async for data in self._current_reader:
                     if self._data_ch.closed:
                         return
+
+                    if self._current_reader_cleared:
+                        # ignore the rest data of the current reader if clear_buffer was called
+                        continue
 
                     samples_per_channel = (
                         len(data) // num_channels // ctypes.sizeof(ctypes.c_int16)
@@ -186,6 +204,8 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
                     )
                     self._data_ch.send_nowait(frame)
                 self._data_ch.send_nowait(AudioFlushSentinel())
+                self._current_reader = None
+                self._current_reader_cleared = False
 
             self._stream_reader_changed.clear()
 

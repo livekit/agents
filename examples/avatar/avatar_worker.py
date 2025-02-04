@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import signal
 import time
 from collections import deque
 from typing import AsyncIterator, Generator, Optional, Union
@@ -11,7 +10,7 @@ from livekit import rtc
 from livekit.agents.avatar import AvatarWorker, MediaOptions
 from livekit.agents.pipeline.datastream_io import AudioFlushSentinel
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("avatar-example")
 
 
 class VideoGenerator:
@@ -93,18 +92,31 @@ class VideoGenerator:
             )
             return self._np_to_video_frame(idle_frame)
 
-        def _generate_non_idle_frame(
-            audio_frame: rtc.AudioFrame,
+        def _generate_active_frames(
+            audio_frame: rtc.AudioFrame | AudioFlushSentinel,
         ) -> Generator[tuple[rtc.VideoFrame, rtc.AudioFrame], None, None]:
-            audio_samples = np.frombuffer(audio_frame.data, dtype=np.int16).reshape(
-                -1, audio_frame.num_channels
-            )  # (n_samples, n_channels)
+            samples_per_frame = self._audio_samples_per_frame
+
+            if isinstance(audio_frame, rtc.AudioFrame):
+                audio_samples = np.frombuffer(audio_frame.data, dtype=np.int16).reshape(
+                    -1, audio_frame.num_channels
+                )  # (n_samples, n_channels)
+            else:
+                # fill the buffer with zeros if the buffer is not multiple of samples_per_frame
+                n_fill_samples = (
+                    (samples_per_frame - len(self._audio_buffer) % samples_per_frame)
+                    if len(self._audio_buffer) > 0
+                    else 0
+                )
+                audio_samples = np.zeros(
+                    [n_fill_samples, self._audio_buffer.shape[1]],
+                    dtype=self._audio_buffer.dtype,
+                )
             self._audio_buffer = np.concatenate(
                 [self._audio_buffer, audio_samples], axis=0
             )
 
             # generate video frames with audio in buffer
-            samples_per_frame = self._audio_samples_per_frame
             while len(self._audio_buffer) >= samples_per_frame:
                 sub_samples = self._audio_buffer[:samples_per_frame]
                 self._audio_buffer = self._audio_buffer[samples_per_frame:]
@@ -115,7 +127,7 @@ class VideoGenerator:
                 video_frame = self._np_to_video_frame(canvas)
                 sub_audio_frame = rtc.AudioFrame(
                     data=sub_samples.tobytes(),
-                    sample_rate=audio_frame.sample_rate,
+                    sample_rate=self.media_options.audio_sample_rate,
                     num_channels=sub_samples.shape[1],
                     samples_per_channel=sub_samples.shape[0],
                 )
@@ -134,15 +146,12 @@ class VideoGenerator:
                 await asyncio.sleep(0)
                 continue
 
-            if isinstance(audio_frame, AudioFlushSentinel):
-                # (optional) generate the last video frame with audio in buffer
-                # reset the audio buffer for the next segment
-                self._reset_audio_buffer()
-                yield AudioFlushSentinel()
-                continue
-
-            for video_frame, audio_frame in _generate_non_idle_frame(audio_frame):
+            for video_frame, audio_frame in _generate_active_frames(audio_frame):
                 yield video_frame, audio_frame
+
+            if isinstance(audio_frame, AudioFlushSentinel):
+                yield audio_frame
+                self._reset_audio_buffer()
 
     def _reset_audio_buffer(self) -> None:
         self._audio_buffer = np.zeros(
@@ -234,67 +243,104 @@ class WaveformVisualizer:
         self.draw_volume_history(canvas, current_volume)
 
 
-async def entrypoint(room: rtc.Room, url: str, token: str):
-    logging.info("connecting to %s", url)
-    try:
-        await room.connect(url, token)
-        logging.info("connected to room %s", room.name)
-    except rtc.ConnectError as e:
-        logging.error("failed to connect to the room: %s", e)
-        return
+async def main(room: rtc.Room):
+    """Main application logic for the avatar worker"""
+    worker = None
+    stop_event = asyncio.Event()
 
-    media_options = MediaOptions(
-        video_width=1280,
-        video_height=720,
-        video_fps=30,
-        audio_sample_rate=16000,
-        audio_channels=1,
-    )
-    video_generator = VideoGenerator(media_options)
-    worker = AvatarWorker(
-        room, video_generator=video_generator, media_options=media_options
-    )
-    video_generator.set_av_sync(worker.av_sync)
-    await worker.start()
+    try:
+        # Initialize and start worker
+        media_options = MediaOptions(
+            video_width=1280,
+            video_height=720,
+            video_fps=30,
+            audio_sample_rate=24000,
+            audio_channels=1,
+        )
+        video_generator = VideoGenerator(media_options)
+        worker = AvatarWorker(
+            room, video_generator=video_generator, media_options=media_options
+        )
+        video_generator.set_av_sync(worker.av_sync)
+        await worker.start()
+
+        # Set up disconnect handler
+        async def handle_disconnect(participant: rtc.RemoteParticipant):
+            if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+                logging.info(
+                    "Agent %s disconnected, stopping worker...", participant.identity
+                )
+                stop_event.set()
+
+        room.on(
+            "participant_disconnected",
+            lambda p: asyncio.create_task(handle_disconnect(p)),
+        )
+        room.on("disconnected", lambda _: stop_event.set())
+
+        # Wait until stopped
+        await stop_event.wait()
+
+    except Exception as e:
+        logging.error("Unexpected error: %s", e)
+        raise
+    finally:
+        if worker:
+            await worker.aclose()
+
+
+async def run_service(url: str, token: str):
+    """Run the avatar worker service"""
+    room = rtc.Room()
+    try:
+        # Connect to LiveKit room
+        logging.info("Connecting to %s", url)
+        await room.connect(url, token)
+        logging.info("Connected to room %s", room.name)
+
+        # Run main application logic
+        await main(room)
+    except rtc.ConnectError as e:
+        logging.error("Failed to connect to room: %s", e)
+        raise
+    finally:
+        await room.disconnect()
 
 
 if __name__ == "__main__":
+    import sys
     from argparse import ArgumentParser
 
-    parser = ArgumentParser()
-    parser.add_argument("--url", required=True, help="LiveKit server URL")
-    parser.add_argument("--token", required=True, help="Token for joining room")
-    parser.add_argument("--room", default=None, help="Room name")
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Log level",
-    )
-    args = parser.parse_args()
-
-    # add room as a prefix to the all logs
-    log_level = getattr(logging, args.log_level.upper())
-    if args.room:
-        logging.basicConfig(
-            level=log_level,
-            format=f"[{args.room}] %(asctime)s - %(levelname)s - %(message)s",
+    def parse_args():
+        """Parse command line arguments"""
+        parser = ArgumentParser()
+        parser.add_argument("--url", required=True, help="LiveKit server URL")
+        parser.add_argument("--token", required=True, help="Token for joining room")
+        parser.add_argument("--room", help="Room name")
+        parser.add_argument(
+            "--log-level",
+            default="INFO",
+            choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+            help="Log level",
         )
-    else:
-        logging.basicConfig(level=log_level)
+        return parser.parse_args()
 
-    loop = asyncio.get_event_loop()
-    room = rtc.Room(loop=loop)
+    def setup_logging(room: Optional[str], level: str):
+        """Set up logging configuration"""
+        log_format = "%(asctime)s - %(levelname)s - %(message)s"
+        if room:
+            log_format = f"[{room}] {log_format}"
 
-    async def cleanup():
-        await room.disconnect()
-        loop.stop()
+        logging.basicConfig(level=getattr(logging, level.upper()), format=log_format)
 
-    asyncio.ensure_future(entrypoint(room, args.url, args.token))
-    for signal in [signal.SIGINT, signal.SIGTERM]:
-        loop.add_signal_handler(signal, lambda: asyncio.ensure_future(cleanup()))
-
+    args = parse_args()
+    setup_logging(args.room, args.log_level)
     try:
-        loop.run_forever()
+        asyncio.run(run_service(args.url, args.token))
+    except KeyboardInterrupt:
+        logging.info("Received interrupt signal, shutting down...")
+    except Exception as e:
+        logging.error("Fatal error: %s", e)
+        sys.exit(1)
     finally:
-        loop.close()
+        logging.info("Shutting down...")

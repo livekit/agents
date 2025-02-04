@@ -103,6 +103,10 @@ class RoomInput:
         ):
             return
 
+        if self._expected_identity is None and participant.metadata == "avatar_worker":
+            # ignore the avatar worker participant
+            return
+
         self._participant = participant
 
         # set up tracks

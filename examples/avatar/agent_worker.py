@@ -8,7 +8,7 @@ from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.agents.pipeline.room_io import RoomInput, RoomInputOptions
 from livekit.plugins import openai
 
-logger = logging.getLogger("roomio-example")
+logger = logging.getLogger("avatar-example")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
@@ -35,7 +35,6 @@ async def entrypoint(ctx: JobContext):
 
     await agent.start()
 
-    # TODO: the interrupted flag is not set correctly
     @agent.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(

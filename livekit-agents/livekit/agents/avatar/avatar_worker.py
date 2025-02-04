@@ -54,7 +54,7 @@ class AvatarWorker:
         self._audio_receiver = DataStreamAudioReceiver(room)
         self._audio_stream_received: asyncio.Event = asyncio.Event()
         self._playback_position = 0.0
-        self._audio_capturing = False
+        self._audio_playing = False
 
         # Audio/video sources
         self._audio_source = rtc.AudioSource(
@@ -115,9 +115,8 @@ class AvatarWorker:
 
     async def _read_audio(self) -> None:
         async for frame in self._audio_receiver:
-            if not self._audio_capturing and isinstance(frame, rtc.AudioFrame):
-                self._audio_capturing = True
-
+            if not self._audio_playing and isinstance(frame, rtc.AudioFrame):
+                self._audio_playing = True
             await self._video_generator.push_audio(frame)
 
     @utils.log_exceptions(logger=logger)
@@ -127,13 +126,13 @@ class AvatarWorker:
         async for frame in self._video_generator.stream():
             if isinstance(frame, AudioFlushSentinel):
                 # notify the agent that the audio has finished playing
-                if self._audio_capturing:
+                if self._audio_playing:
                     await self._audio_receiver.notify_playback_finished(
                         playback_position=self._playback_position,
                         interrupted=False,
                     )
                     self._playback_position = 0.0
-                self._audio_capturing = False
+                self._audio_playing = False
                 continue
 
             video_frame, audio_frame = frame
@@ -144,19 +143,22 @@ class AvatarWorker:
 
     def _handle_clear_buffer(self) -> None:
         # clear the audio queue, notify the agent the playback finished
-        self._audio_capturing = False
         self._video_generator.clear_buffer()
-        asyncio.create_task(
-            self._audio_receiver.notify_playback_finished(
-                playback_position=self._playback_position,
-                interrupted=True,
+        if self._audio_playing:
+            asyncio.create_task(
+                self._audio_receiver.notify_playback_finished(
+                    playback_position=self._playback_position,
+                    interrupted=True,
+                )
             )
-        )
-        self._playback_position = 0.0
+            self._playback_position = 0.0
+        self._audio_playing = False
 
     async def aclose(self) -> None:
-        await utils.aio.gracefully_cancel(self._video_gen_atask)
-        await utils.aio.gracefully_cancel(self._audio_receive_atask)
+        if self._video_gen_atask:
+            await utils.aio.cancel_and_wait(self._video_gen_atask)
+        if self._audio_receive_atask:
+            await utils.aio.cancel_and_wait(self._audio_receive_atask)
         await self._av_sync.aclose()
         await self._audio_source.aclose()
         await self._video_source.aclose()

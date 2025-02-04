@@ -2,51 +2,55 @@ import asyncio
 import logging
 import subprocess
 import sys
-from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from livekit.agents.avatar import AvatarConnectionInfo
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("avatar-dispatcher")
+logging.basicConfig(level=logging.INFO)
 
 THIS_DIR = Path(__file__).parent.absolute()
 
 
-@dataclass
-class WorkerInfo:
-    room_name: str
-    process: Optional[subprocess.Popen] = None  # Only used by local launcher
-
-
-class WorkerLauncher(ABC):
-    """Abstract base class for launching avatar workers"""
-
-    @abstractmethod
-    async def launch_worker(self, connection_info: AvatarConnectionInfo) -> None:
-        """Launch a new avatar worker"""
-        pass
-
-    @abstractmethod
-    async def cleanup_worker(self, room_name: str) -> None:
-        """Cleanup a worker for a given room"""
-        pass
-
-
-class LocalWorkerLauncher(WorkerLauncher):
+class WorkerLauncher:
     """Local implementation that launches workers as subprocesses"""
 
-    def __init__(self, log_level: str = "INFO"):
-        self.workers: Dict[str, WorkerInfo] = {}
-        self.log_level = log_level
+    @dataclass
+    class WorkerInfo:
+        room_name: str
+        process: subprocess.Popen
+
+    def __init__(self):
+        self.workers: dict[str, WorkerLauncher.WorkerInfo] = {}
+        self._monitor_task: Optional[asyncio.Task] = None
+
+    async def start(self) -> None:
+        self._monitor_task = asyncio.create_task(self._monitor())
+
+    def close(self) -> None:
+        if self._monitor_task:
+            self._monitor_task.cancel()
+
+        for worker in self.workers.values():
+            worker.process.terminate()
+            try:
+                worker.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                worker.process.kill()
 
     async def launch_worker(self, connection_info: AvatarConnectionInfo) -> None:
-        # Cleanup existing worker if any
-        await self.cleanup_worker(connection_info.room_name)
+        if connection_info.room_name in self.workers:
+            worker = self.workers[connection_info.room_name]
+            worker.process.terminate()
+            try:
+                worker.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                worker.process.kill()
 
         # Launch new worker process
         cmd = [
@@ -58,65 +62,39 @@ class LocalWorkerLauncher(WorkerLauncher):
             connection_info.token,
             "--room",
             connection_info.room_name,
-            "--log-level",
-            self.log_level,
         ]
 
         try:
             room_name = connection_info.room_name
             process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
-            self.workers[room_name] = WorkerInfo(room_name=room_name, process=process)
+            self.workers[room_name] = WorkerLauncher.WorkerInfo(
+                room_name=room_name, process=process
+            )
             logger.info(f"Launched avatar worker for room: {room_name}")
-
-            # Monitor process in background
-            asyncio.create_task(self._monitor_process(room_name))
-
         except Exception as e:
             logger.error(f"Failed to launch worker: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-    async def cleanup_worker(self, room_name: str) -> None:
-        worker = self.workers.get(room_name)
-        if worker and worker.process:
-            logger.info(f"Cleaning up worker for room: {room_name}")
-            worker.process.terminate()
-            try:
-                worker.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                worker.process.kill()
-            self.workers.pop(room_name)
-
-    async def _monitor_process(self, room_name: str) -> None:
-        """Monitor worker process and cleanup when it exits"""
-        worker = self.workers.get(room_name)
-        if not worker or not worker.process:
-            return
-
-        # Wait for process to exit
+    async def _monitor(self) -> None:
         while True:
-            if worker.process.poll() is not None:
-                # Process exited
-                await self.cleanup_worker(room_name)
-                logger.info(
-                    f"Worker for room {room_name} exited with code {worker.process.returncode}"
-                )
-                break
+            for worker in list(self.workers.values()):
+                if worker.process.poll() is not None:
+                    logger.info(
+                        f"Worker for room {worker.room_name} exited with code {worker.process.returncode}"
+                    )
+                    self.workers.pop(worker.room_name)
             await asyncio.sleep(1)
 
 
 class AvatarDispatcher:
-    def __init__(self, debug: bool = False):
-        self.launcher: WorkerLauncher = LocalWorkerLauncher(
-            log_level="DEBUG" if debug else "INFO"
-        )
+    def __init__(self):
+        self.launcher = WorkerLauncher()
 
         @asynccontextmanager
         async def lifespan(app: FastAPI):
+            await self.launcher.start()
             yield
-            # Cleanup on shutdown
-            if isinstance(self.launcher, LocalWorkerLauncher):
-                for room_name in list(self.launcher.workers.keys()):
-                    await self.launcher.cleanup_worker(room_name)
+            self.launcher.close()
 
         self.app = FastAPI(title="Avatar Dispatcher", lifespan=lifespan)
         self.app.post("/launch")(self.handle_launch)
@@ -136,14 +114,9 @@ class AvatarDispatcher:
             )
 
 
-def create_app() -> FastAPI:
-    dispatcher = AvatarDispatcher()
-    return dispatcher.app
-
-
 def run_server(host: str = "0.0.0.0", port: int = 8089):
-    app = create_app()
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    dispatcher = AvatarDispatcher()
+    uvicorn.run(dispatcher.app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":
