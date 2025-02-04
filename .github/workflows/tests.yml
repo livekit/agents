@@ -1,4 +1,4 @@
-name: Tests
+name: tests
 
 on:
   push:
@@ -13,25 +13,35 @@ on:
 
 jobs:
   tests:
-    # don't run tests for PRs on forks
+    # Don't run tests for PRs on forks
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     strategy:
       fail-fast: false
       matrix:
+        os: [
+            # disabled Intel Macs due to pytorch 2.3+ not supporting it
+            # macos-14-large,
+            macos-14,
+            windows-2019,
+            ubuntu-20.04,
+            namespace-profile-default-arm64,
+          ]
+        python_version: ["3.9", "3.12"]
+        test_group: ["base"]
         include:
-          - os: macos-14-large
-            platform: macos
-          - os: macos-14
-            platform: macos
-          - os: windows-2019
-            platform: windows
+          # Include llm, stt, and tts tests only on Ubuntu 20.04 with Python 3.9
           - os: ubuntu-20.04
-            platform: linux
-          - os: namespace-profile-default-arm64
-            platform: linux
+            python_version: "3.12"
+            test_group: llm
+          - os: ubuntu-20.04
+            python_version: "3.12"
+            test_group: stt
+          - os: ubuntu-20.04
+            python_version: "3.12"
+            test_group: tts
 
     runs-on: ${{ matrix.os }}
-    name: Run tests (${{ matrix.os }})
+    name: ${{ matrix.test_group }} — ${{ matrix.os }}) (py${{ matrix.python_version }})
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,14 +60,12 @@ jobs:
             ${{ runner.os }}-cache
 
       - uses: actions/setup-python@v5
-        # on mac, ffmpeg installs python
-        if: ${{ matrix.os != 'macos' }}
         with:
-          python-version: "3.9"
+          python-version: ${{ matrix.python_version }}
           cache: "pip"
 
       - name: Install ffmpeg (Linux)
-        if: ${{ matrix.platform == 'linux' }}
+        if: ${{ matrix.os == 'ubuntu-20.04' || matrix.os == 'namespace-profile-default-arm64' }}
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
@@ -69,29 +77,21 @@ jobs:
           sudo dpkg -i libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
           sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
 
+
       - name: Install ffmpeg (macOS)
-        if: ${{ matrix.platform == 'macos' }}
+        if: ${{ startsWith(matrix.os, 'macos') }}
         run: brew install ffmpeg
 
       - name: Install ffmpeg (Windows)
-        if: ${{ matrix.platform == 'windows' }}
+        if: ${{ matrix.os == 'windows-2019' }}
         run: choco install ffmpeg
 
       - name: Install packages
         shell: bash
         run: |
-          pip3 install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
-          pip3 install -r ./tests/test-requirements.txt
-          pip3 install ./livekit-agents \
-                      ./livekit-plugins/livekit-plugins-openai \
-                      ./livekit-plugins/livekit-plugins-deepgram \
-                      ./livekit-plugins/livekit-plugins-google \
-                      ./livekit-plugins/livekit-plugins-nltk \
-                      ./livekit-plugins/livekit-plugins-silero \
-                      ./livekit-plugins/livekit-plugins-elevenlabs \
-                      ./livekit-plugins/livekit-plugins-cartesia \
-                      ./livekit-plugins/livekit-plugins-azure \
-                      ./livekit-plugins/livekit-plugins-anthropic
+          pip install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
+          pip install -r ./tests/test-requirements.txt
+          ./livekit-plugins/install_local.sh
 
       - name: Run tests
         shell: bash
@@ -107,7 +107,35 @@ jobs:
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }} # nit: doesn't have to be secret
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          PLAYHT_API_KEY: ${{ secrets.PLAYHT_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
+          RIME_API_KEY: ${{ secrets.RIME_API_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
+          PYTEST_ADDOPTS: "--color=yes"
+        working-directory: tests
         run: |
-          echo $GOOGLE_CREDENTIALS_JSON > google.json
-          pytest --asyncio-mode=auto --timeout=60 .
+          echo "$GOOGLE_CREDENTIALS_JSON" > google.json
+
+          case "${{ matrix.test_group }}" in
+            base)
+              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_tts_fallback.py test_stt_fallback.py test_message_change.py test_build_func_desc.py test_create_func.py"
+              ;;
+            llm)
+              test_files="test_llm.py"
+              ;;
+            stt)
+              test_files="test_stt.py"
+              ;;
+            tts)
+              test_files="test_tts.py"
+              ;;
+            *)
+              echo "Unknown test group: ${{ matrix.test_group }}"
+              exit 1
+              ;;
+          esac
+          pytest $test_files

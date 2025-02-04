@@ -1,5 +1,5 @@
-livekit-agents>=0.10.2
-livekit-plugins-openai>=0.10.4
-livekit-plugins-cartesia>=0.4.2
-livekit-plugins-elevenlabs>=0.7.5
+livekit-agents>=0.12.11
+livekit-plugins-openai>=0.10.17
+livekit-plugins-cartesia>=0.4.7
+livekit-plugins-elevenlabs>=0.7.12
 python-dotenv~=1.0

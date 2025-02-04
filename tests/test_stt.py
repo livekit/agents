@@ -3,93 +3,92 @@ Do speech recognition on a long audio file and compare the result with the expec
 """
 
 import asyncio
-import os
-import pathlib
 import time
+from typing import Callable
 
 import pytest
-from livekit import agents, rtc
-from livekit.plugins import azure, deepgram, google, openai, silero
+from livekit import agents
+from livekit.agents import stt
+from livekit.plugins import assemblyai, azure, deepgram, fal, google, openai, silero
 
-from .utils import wer
+from .utils import make_test_speech, wer
 
-TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "long.mp3")
-TEST_AUDIO_TRANSCRIPT = pathlib.Path(
-    os.path.dirname(__file__), "long_transcript.txt"
-).read_text()
-
-
-def read_mp3_file(filename: str) -> rtc.AudioFrame:
-    mp3 = agents.utils.codecs.Mp3StreamDecoder()
-    frames: list[rtc.AudioFrame] = []
-    with open(filename, "rb") as file:
-        while True:
-            chunk = file.read(4096)
-            if not chunk:
-                break
-            try:
-                frames.extend(mp3.decode_chunk(chunk))
-            except Exception as e:
-                print(f"error decoding mp3 chunk: {e}", chunk)
-
-    return agents.utils.merge_frames(frames)
-
-
-RECOGNIZE_STT = [deepgram.STT(), google.STT(), openai.STT()]
-
-
-@pytest.mark.usefixtures("job_process")
-@pytest.mark.parametrize("stt", RECOGNIZE_STT)
-async def test_recognize(stt: agents.stt.STT):
-    frame = read_mp3_file(TEST_AUDIO_FILEPATH)
-
-    start_time = time.time()
-    event = await stt.recognize(buffer=frame)
-    text = event.alternatives[0].text
-    dt = time.time() - start_time
-
-    print(f"WER: {wer(text, TEST_AUDIO_TRANSCRIPT)} for {stt} in {dt:.2f}s")
-    assert wer(text, TEST_AUDIO_TRANSCRIPT) <= 0.2
-    assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
-
-
-STREAM_VAD = silero.VAD.load(min_silence_duration=0.75)
-STREAM_STT = [
-    deepgram.STT(),
-    google.STT(),
-    agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
-    azure.STT(),
+SAMPLE_RATES = [24000, 44100]  # test multiple input sample rates
+WER_THRESHOLD = 0.2
+RECOGNIZE_STT: list[Callable[[], stt.STT]] = [
+    pytest.param(lambda: deepgram.STT(), id="deepgram"),
+    pytest.param(lambda: google.STT(), id="google"),
+    pytest.param(
+        lambda: google.STT(
+            languages=["en-AU"],
+            model="chirp_2",
+            spoken_punctuation=False,
+            location="us-central1",
+        ),
+        id="google.chirp_2",
+    ),
+    pytest.param(lambda: openai.STT(), id="openai"),
+    pytest.param(lambda: fal.WizperSTT(), id="fal"),
 ]
 
 
 @pytest.mark.usefixtures("job_process")
-@pytest.mark.parametrize("stt", STREAM_STT)
-async def test_stream(stt: agents.stt.STT):
-    # divide data into chunks of 10ms
-    frame = read_mp3_file(TEST_AUDIO_FILEPATH)
-    chunk_size = frame.sample_rate // 100
-    frames = []
-    for i in range(0, len(frame.data), chunk_size):
-        data = frame.data[i : i + chunk_size]
-        frames.append(
-            rtc.AudioFrame(
-                data=data.tobytes() + b"\0\0" * (chunk_size - len(data)),
-                num_channels=frame.num_channels,
-                samples_per_channel=chunk_size,
-                sample_rate=frame.sample_rate,
-            )
-        )
+@pytest.mark.parametrize("stt_factory", RECOGNIZE_STT)
+@pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
+async def test_recognize(stt_factory, sample_rate):
+    async with stt_factory() as stt:
+        frames, transcript = make_test_speech(sample_rate=sample_rate)
 
+        start_time = time.time()
+        event = await stt.recognize(buffer=frames)
+        text = event.alternatives[0].text
+        dt = time.time() - start_time
+
+        print(f"WER: {wer(text, transcript)} for {stt} in {dt:.2f}s")
+        assert wer(text, transcript) <= WER_THRESHOLD
+        assert event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT
+
+
+STREAM_VAD = silero.VAD.load(min_silence_duration=0.75)
+STREAM_STT: list[Callable[[], stt.STT]] = [
+    pytest.param(lambda: assemblyai.STT(), id="assemblyai"),
+    pytest.param(lambda: deepgram.STT(), id="deepgram"),
+    pytest.param(lambda: google.STT(), id="google"),
+    pytest.param(
+        lambda: agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
+        id="openai.stream",
+    ),
+    pytest.param(
+        lambda: agents.stt.StreamAdapter(stt=openai.STT.with_groq(), vad=STREAM_VAD),
+        id="openai.with_groq.stream",
+    ),
+    pytest.param(
+        lambda: google.STT(
+            languages=["en-AU"],
+            model="chirp_2",
+            spoken_punctuation=False,
+            location="us-central1",
+        ),
+        id="google.chirp_2",
+    ),
+    pytest.param(lambda: azure.STT(), id="azure"),
+]
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("stt_factory", STREAM_STT)
+@pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
+async def test_stream(stt_factory, sample_rate):
+    stt = stt_factory()
+
+    frames, transcript = make_test_speech(chunk_duration_ms=10, sample_rate=sample_rate)
     stream = stt.stream()
 
     async def _stream_input():
         for frame in frames:
             stream.push_frame(frame)
-            # audio are split in 10ms chunks but the whole file is 40s,
-            # but we still wait less to make the tests faster
-            await asyncio.sleep(0.001)
+            await asyncio.sleep(0.005)
 
-        print("end input")
         stream.end_input()
 
     async def _stream_output():
@@ -99,28 +98,31 @@ async def test_stream(stt: agents.stt.STT):
         start_time = time.time()
 
         async for event in stream:
-            print(event)
             if event.type == agents.stt.SpeechEventType.START_OF_SPEECH:
-                assert (
-                    recv_end
-                ), "START_OF_SPEECH recv but no END_OF_SPEECH has been sent before"
+                assert recv_end, (
+                    "START_OF_SPEECH recv but no END_OF_SPEECH has been sent before"
+                )
                 assert not recv_start
                 recv_end = False
                 recv_start = True
                 continue
 
             if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
+                if text != "":
+                    text += " "
                 text += event.alternatives[0].text
+                # ensure STT is tagging languages correctly
+                language = event.alternatives[0].language
+                assert language is not None
+                assert language.lower().startswith("en")
 
             if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
                 recv_start = False
                 recv_end = True
 
         dt = time.time() - start_time
-        print(
-            f"WER: {wer(text, TEST_AUDIO_TRANSCRIPT)} for streamed {stt} in {dt:.2f}s"
-        )
-        assert wer(text, TEST_AUDIO_TRANSCRIPT) <= 0.2
+        print(f"WER: {wer(text, transcript)} for streamed {stt} in {dt:.2f}s")
+        assert wer(text, transcript) <= WER_THRESHOLD
 
     await asyncio.wait_for(
         asyncio.gather(_stream_input(), _stream_output()), timeout=60

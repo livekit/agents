@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Ruff
+        run: ruff check --output-format=github .
+
+      - name: Check format
+        run: ruff format --check .
+
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: "pip"
+
+      - name: Install mypy
+        run: python -m pip install --upgrade mypy
+
+      - name: Install all packages
+        run: |
+          pip install ./livekit-agents
+          ./livekit-plugins/install_local.sh
+
+      - name: Install stub packages
+        run: |
+          pip install \
+            pandas-stubs \
+            types-Pygments \
+            types-cachetools \
+            types-cffi \
+            types-psutil \
+            types-pyOpenSSL \
+            types-requests \
+            types-openpyxl
+
+      - name: Check Types
+        run: |
+          mypy --install-types --non-interactive \
+               -p livekit.agents \
+               -p livekit.plugins.openai \
+               -p livekit.plugins.deepgram \
+               -p livekit.plugins.google \
+               -p livekit.plugins.nltk \
+               -p livekit.plugins.silero \
+               -p livekit.plugins.elevenlabs \
+               -p livekit.plugins.cartesia \
+               -p livekit.plugins.rag \
+               -p livekit.plugins.azure \
+               -p livekit.plugins.anthropic \
+               -p livekit.plugins.fal \
+               -p livekit.plugins.playai \
+               -p livekit.plugins.assemblyai \
+               -p livekit.plugins.rime

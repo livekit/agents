@@ -1,5 +1,95 @@
 # livekit-plugins-google
 
+## 0.10.2
+
+### Patch Changes
+
+- gemini-realtime: fix input audio sample rate - [#1411](https://github.com/livekit/agents/pull/1411) ([@jayeshp19](https://github.com/jayeshp19))
+
+- chore: Replace ValueError with logger.warning for missing GOOGLE_APPLICATION_CREDENTIALS environment variable - [#1415](https://github.com/livekit/agents/pull/1415) ([@hironow](https://github.com/hironow))
+
+## 0.10.1
+
+### Patch Changes
+
+- fix: update default model to chirp2 in google stt & update generate_reply method in gemini realtime - [#1401](https://github.com/livekit/agents/pull/1401) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.0
+
+### Minor Changes
+
+- support gemini LLM - [#1382](https://github.com/livekit/agents/pull/1382) ([@jayeshp19](https://github.com/jayeshp19))
+
+### Patch Changes
+
+- fix: address breaking change from google-genai >= 0.3.0 - [#1383](https://github.com/livekit/agents/pull/1383) ([@jayeshp19](https://github.com/jayeshp19))
+
+- gemini improvements: exception handling, transcription & Ensure contents.parts is non-empty in gemini contex - [#1398](https://github.com/livekit/agents/pull/1398) ([@jayeshp19](https://github.com/jayeshp19))
+
+- support transcriber session for user/agent audio - [#1321](https://github.com/livekit/agents/pull/1321) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.9.1
+
+### Patch Changes
+
+- fetch fresh client on update location and small fix for max_session_duration (4 mins) - [#1342](https://github.com/livekit/agents/pull/1342) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fix Google STT handling of session timeouts - [#1337](https://github.com/livekit/agents/pull/1337) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.9.0
+
+### Minor Changes
+
+- make multimodal class generic and support gemini live api - [#1240](https://github.com/livekit/agents/pull/1240) ([@jayeshp19](https://github.com/jayeshp19))
+
+### Patch Changes
+
+- fix: Ensure STT exceptions are being propagated - [#1291](https://github.com/livekit/agents/pull/1291) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.8.1
+
+### Patch Changes
+
+- fix release - [#1176](https://github.com/livekit/agents/pull/1176) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.8.0
+
+### Minor Changes
+
+- Add support for google STT chirp_2 model. - [#1089](https://github.com/livekit/agents/pull/1089) ([@brightsparc](https://github.com/brightsparc))
+
+### Patch Changes
+
+- feat: stt retry & stt.FallbackAdapter - [#1114](https://github.com/livekit/agents/pull/1114) ([@theomonnom](https://github.com/theomonnom))
+
+- fix: add retry logic for google stt abort exception - [#1100](https://github.com/livekit/agents/pull/1100) ([@jayeshp19](https://github.com/jayeshp19))
+
+- feat: tts retry & tts.FallbackAdapter - [#1074](https://github.com/livekit/agents/pull/1074) ([@theomonnom](https://github.com/theomonnom))
+
+- google STT - use the baseclass resampler - [#1106](https://github.com/livekit/agents/pull/1106) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.7.3
+
+### Patch Changes
+
+- added catch for aborted speech - [#1055](https://github.com/livekit/agents/pull/1055) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Make Google STT keywords match Deepgram - [#1067](https://github.com/livekit/agents/pull/1067) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- Add support for boosting phrases in Google STT - [#1066](https://github.com/livekit/agents/pull/1066) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+## 0.7.2
+
+### Patch Changes
+
+- add update_options to TTS - [#922](https://github.com/livekit/agents/pull/922) ([@theomonnom](https://github.com/theomonnom))
+
+- Additional options enabled on Google TTS - [#945](https://github.com/livekit/agents/pull/945) ([@hari-truviz](https://github.com/hari-truviz))
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
+- expose usage metrics - [#984](https://github.com/livekit/agents/pull/984) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.7.1
 
 ### Patch Changes

@@ -8,8 +8,66 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    if: inputs.package != 'livekit-plugins-browser'
+    defaults:
+      run:
+        working-directory: "${{ startsWith(inputs.package, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ inputs.package }}"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Build
-        run: npm install && npm run build
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Build package
+        run: python -m build
+
+      - name: Upload distribution package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: "${{ startsWith(inputs.package, 'livekit-plugin') && 'livekit-plugins/' || '' }}${{ inputs.package }}/dist/"
+
+  build_browser:
+    if: inputs.package == 'livekit-plugins-browser'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-14] # TODO(theomonnom): other platforms
+
+    defaults:
+      run:
+        working-directory: livekit-plugins/livekit-plugins-browser
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install cibuildwheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install cibuildwheel
+
+      - name: Build wheels
+        run: cibuildwheel --output-dir dist
+        env:
+          CIBW_SKIP: pp* cp313-*
+          CIBW_BUILD_VERBOSITY: 3
+
+      - name: Upload distribution package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: livekit-plugins/livekit-plugins-browser/dist/

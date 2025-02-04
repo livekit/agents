@@ -14,6 +14,25 @@ combine_frames = rtc.combine_audio_frames
 merge_frames = rtc.combine_audio_frames
 
 
+def calculate_audio_duration(frames: AudioBuffer) -> float:
+    """
+    Calculate the total duration of audio frames.
+
+    This function computes the total duration of audio frames in seconds.
+    It accepts either a list of `rtc.AudioFrame` objects or a single `rtc.AudioFrame` object.
+
+    Parameters:
+    - frames (AudioBuffer): A list of `rtc.AudioFrame` instances or a single `rtc.AudioFrame` instance.
+
+    Returns:
+    - float: The total duration in seconds of all frames provided.
+    """
+    if isinstance(frames, list):
+        return sum(frame.duration for frame in frames)
+    else:
+        return frames.duration
+
+
 class AudioByteStream:
     """
     Buffer and chunk audio byte data into fixed-size frames.

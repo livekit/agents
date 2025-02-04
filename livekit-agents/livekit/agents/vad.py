@@ -5,18 +5,12 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterable, AsyncIterator, List, Literal, TypedDict, Union
+from typing import AsyncIterable, AsyncIterator, List, Literal, Union
 
 from livekit import rtc
 
+from .metrics import VADMetrics
 from .utils import aio
-
-
-class VADMetrics(TypedDict):
-    timestamp: float
-    inference_duration_total: float
-    inference_count: int
-    label: str
 
 
 @unique
@@ -97,6 +91,7 @@ class VADStream(ABC):
 
     def __init__(self, vad: VAD) -> None:
         self._vad = vad
+        self._last_activity_time = time.perf_counter()
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, VADStream._FlushSentinel]]()
         self._event_ch = aio.Chan[VADEvent]()
 
@@ -123,15 +118,19 @@ class VADStream(ABC):
                 inference_count += 1
 
                 if inference_count >= 1 / self._vad.capabilities.update_interval:
-                    vad_metrics: VADMetrics = {
-                        "timestamp": time.time(),
-                        "inference_duration_total": inference_duration_total,
-                        "inference_count": inference_count,
-                        "label": self._vad._label,
-                    }
+                    vad_metrics = VADMetrics(
+                        timestamp=time.time(),
+                        idle_time=time.perf_counter() - self._last_activity_time,
+                        inference_duration_total=inference_duration_total,
+                        inference_count=inference_count,
+                        label=self._vad._label,
+                    )
                     self._vad.emit("metrics_collected", vad_metrics)
+
                     inference_duration_total = 0.0
                     inference_count = 0
+            elif ev.type in [VADEventType.START_OF_SPEECH, VADEventType.END_OF_SPEECH]:
+                self._last_activity_time = time.perf_counter()
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push some text to be synthesized"""
@@ -158,10 +157,15 @@ class VADStream(ABC):
         await self._metrics_task
 
     async def __anext__(self) -> VADEvent:
-        if self._task.done() and (exc := self._task.exception()):
-            raise exc
+        try:
+            val = await self._event_aiter.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc from None
 
-        return await self._event_aiter.__anext__()
+            raise StopAsyncIteration
+
+        return val
 
     def __aiter__(self) -> AsyncIterator[VADEvent]:
         return self
