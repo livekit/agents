@@ -82,7 +82,10 @@ class DataStreamAudioSink(AudioSink):
         # close the stream marking the end of the segment
         asyncio.create_task(self._stream_writer.aclose())
         self._stream_writer = None
-        logger.info(f"pushed duration: {self._pushed_duration}")
+        logger.debug(
+            "data stream audio sink flushed",
+            extra={"pushed_duration": self._pushed_duration},
+        )
 
     def clear_buffer(self) -> None:
         asyncio.create_task(

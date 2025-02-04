@@ -140,7 +140,7 @@ class VideoGenerator:
         while True:
             try:
                 # timeout has to be shorter than the frame interval to avoid starvation
-                audio_frame = await asyncio.wait_for(
+                ori_audio_frame = await asyncio.wait_for(
                     self._audio_queue.get(), timeout=0.5 / self.media_options.video_fps
                 )
             except asyncio.TimeoutError:
@@ -150,11 +150,11 @@ class VideoGenerator:
                 await asyncio.sleep(0)
                 continue
 
-            for video_frame, audio_frame in _generate_active_frames(audio_frame):
+            for video_frame, audio_frame in _generate_active_frames(ori_audio_frame):
                 yield video_frame, audio_frame
 
-            if isinstance(audio_frame, AudioFlushSentinel):
-                yield audio_frame
+            if isinstance(ori_audio_frame, AudioFlushSentinel):
+                yield ori_audio_frame
                 self._reset_audio_buffer()
 
     def _reset_audio_buffer(self) -> None:
