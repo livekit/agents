@@ -8,8 +8,8 @@ from typing import AsyncIterator, Generator, Optional, Union
 import cv2
 import numpy as np
 from livekit import rtc
-from plugin.io import AudioFlushSentinel
-from plugin.worker import AvatarWorker, MediaOptions
+from livekit.agents.avatar import AvatarWorker, MediaOptions
+from livekit.agents.pipeline.datastream_io import AudioFlushSentinel
 
 logger = logging.getLogger(__name__)
 

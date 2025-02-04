@@ -5,13 +5,16 @@ import sys
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from plugin.io import AvatarConnectionInfo
+from livekit.agents.avatar import AvatarConnectionInfo
 
 logger = logging.getLogger(__name__)
+
+THIS_DIR = Path(__file__).parent.absolute()
 
 
 @dataclass
@@ -48,8 +51,7 @@ class LocalWorkerLauncher(WorkerLauncher):
         # Launch new worker process
         cmd = [
             sys.executable,
-            "-m",
-            "server.avatar_worker",
+            str(THIS_DIR / "avatar_worker.py"),
             "--url",
             connection_info.url,
             "--token",
@@ -139,15 +141,9 @@ def create_app() -> FastAPI:
     return dispatcher.app
 
 
-def run_server(host: str = "0.0.0.0", port: int = 8890, debug: bool = False):
-    uvicorn.run(
-        "server.dispatcher:create_app",
-        host=host,
-        port=port,
-        factory=True,
-        log_level="info",
-        reload=debug,
-    )
+def run_server(host: str = "0.0.0.0", port: int = 8089):
+    app = create_app()
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":
@@ -155,7 +151,6 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0", help="Host to run server on")
-    parser.add_argument("--port", default=8890, help="Port to run server on")
-    parser.add_argument("--debug", action="store_true", help="Run in debug mode")
+    parser.add_argument("--port", default=8089, help="Port to run server on")
     args = parser.parse_args()
-    run_server(args.host, args.port, args.debug)
+    run_server(args.host, args.port)

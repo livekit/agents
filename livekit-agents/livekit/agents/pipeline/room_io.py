@@ -246,11 +246,12 @@ class RoomAudioSink(AudioSink):
             self._flush_task = None
 
         def _playback_finished(task: asyncio.Task[None]) -> None:
-            self.on_playback_finished(
-                playback_position=self._pushed_duration, interrupted=self._interrupted
-            )
+            pushed_duration, interrupted = self._pushed_duration, self._interrupted
             self._pushed_duration = None
             self._interrupted = False
+            self.on_playback_finished(
+                playback_position=pushed_duration, interrupted=interrupted
+            )
 
         self._flush_task = asyncio.create_task(self._audio_source.wait_for_playout())
         self._flush_task.add_done_callback(_playback_finished)

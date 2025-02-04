@@ -6,7 +6,7 @@ from typing import AsyncIterator, Optional, Protocol
 from livekit import rtc
 from livekit.agents import utils
 
-from .io import AudioFlushSentinel, AudioReceiver
+from ..pipeline.datastream_io import AudioFlushSentinel, DataStreamAudioReceiver
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +51,10 @@ class AvatarWorker:
         self._media_options = media_options
         self._queue_size_ms = _queue_size_ms
 
-        self._audio_receiver = AudioReceiver(room)
+        self._audio_receiver = DataStreamAudioReceiver(room)
         self._audio_stream_received: asyncio.Event = asyncio.Event()
         self._playback_position = 0.0
+        self._audio_capturing = False
 
         # Audio/video sources
         self._audio_source = rtc.AudioSource(
@@ -82,7 +83,7 @@ class AvatarWorker:
 
         # Start audio receiver
         await self._audio_receiver.start()
-        self._audio_receiver.on("interrupt_playback", self._handle_interrupt)
+        self._audio_receiver.on("clear_buffer", self._handle_clear_buffer)
 
         # Publish tracks
         audio_track = rtc.LocalAudioTrack.create_audio_track(
@@ -113,7 +114,10 @@ class AvatarWorker:
         )
 
     async def _read_audio(self) -> None:
-        async for frame in self._audio_receiver.stream():
+        async for frame in self._audio_receiver:
+            if not self._audio_capturing and isinstance(frame, rtc.AudioFrame):
+                self._audio_capturing = True
+
             await self._video_generator.push_audio(frame)
 
     @utils.log_exceptions(logger=logger)
@@ -122,13 +126,14 @@ class AvatarWorker:
 
         async for frame in self._video_generator.stream():
             if isinstance(frame, AudioFlushSentinel):
-                # TODO(long): handle the interruption, this may be called twice
                 # notify the agent that the audio has finished playing
-                await self._audio_receiver.notify_playback_finished(
-                    playback_position=self._playback_position,
-                    interrupted=False,
-                )
-                self._playback_position = 0.0
+                if self._audio_capturing:
+                    await self._audio_receiver.notify_playback_finished(
+                        playback_position=self._playback_position,
+                        interrupted=False,
+                    )
+                    self._playback_position = 0.0
+                self._audio_capturing = False
                 continue
 
             video_frame, audio_frame = frame
@@ -137,16 +142,16 @@ class AvatarWorker:
                 await self._av_sync.push(audio_frame)
                 self._playback_position += audio_frame.duration
 
-    def _handle_interrupt(self) -> None:
+    def _handle_clear_buffer(self) -> None:
         # clear the audio queue, notify the agent the playback finished
+        self._audio_capturing = False
         self._video_generator.clear_buffer()
-        if self._playback_position > 0.0:
-            asyncio.create_task(
-                self._audio_receiver.notify_playback_finished(
-                    playback_position=self._playback_position,
-                    interrupted=True,
-                )
+        asyncio.create_task(
+            self._audio_receiver.notify_playback_finished(
+                playback_position=self._playback_position,
+                interrupted=True,
             )
+        )
         self._playback_position = 0.0
 
     async def aclose(self) -> None:
@@ -155,3 +160,4 @@ class AvatarWorker:
         await self._av_sync.aclose()
         await self._audio_source.aclose()
         await self._video_source.aclose()
+        self._audio_receiver.close()
