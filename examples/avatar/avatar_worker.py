@@ -1,14 +1,16 @@
 import asyncio
 import logging
-import time
-from collections import deque
+import sys
+from pathlib import Path
 from typing import AsyncIterator, Generator, Optional, Union
 
-import cv2
 import numpy as np
 from livekit import rtc
 from livekit.agents.avatar import AvatarWorker, MediaOptions
 from livekit.agents.pipeline.datastream_io import AudioFlushSentinel
+
+sys.path.insert(0, str(Path(__file__).parent))
+from wave_viz import WaveformVisualizer
 
 logger = logging.getLogger("avatar-example")
 
@@ -80,7 +82,9 @@ class VideoGenerator:
         )
         background.fill(255)
 
-        wave_visualizer = WaveformVisualizer()
+        wave_visualizer = WaveformVisualizer(
+            sample_rate=self.media_options.audio_sample_rate
+        )
 
         def _generate_idle_frame() -> rtc.VideoFrame:
             idle_frame = background.copy()
@@ -165,82 +169,6 @@ class VideoGenerator:
             type=rtc.VideoBufferType.RGBA,
             data=image.tobytes(),
         )
-
-
-class WaveformVisualizer:
-    def __init__(self, history_length: int = 1000):
-        self.history_length = history_length
-        self.volume_history: deque[float] = deque(maxlen=history_length)
-        self.start_time = time.time()
-
-    def draw_timestamp(self, canvas: np.ndarray, fps: Optional[float] = None):
-        height, width = canvas.shape[:2]
-        text = f"{time.time() - self.start_time:.1f}s"
-        if fps is not None:
-            text = f"{text} @ {fps:.1f}fps"
-        font_face = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 2.0
-        thickness = 2
-
-        (text_width, text_height), baseline = cv2.getTextSize(
-            text, font_face, font_scale, thickness
-        )
-        x = (width - text_width) // 2
-        y = int((height - text_height) * 0.4 + baseline)
-        cv2.putText(canvas, text, (x, y), font_face, font_scale, (0, 0, 0), thickness)
-
-    def draw_current_wave(
-        self, canvas: np.ndarray, audio_samples: np.ndarray
-    ) -> np.ndarray:
-        """Draw the current waveform and return the current values"""
-        height, width = canvas.shape[:2]
-        center_y = height // 2 + 100
-
-        normalized_samples = audio_samples.astype(np.float32) / 32767.0
-        normalized_samples = normalized_samples.mean(axis=1)  # (samples,)
-        num_points = min(width, len(normalized_samples))
-
-        if len(normalized_samples) > num_points:
-            indices = np.linspace(0, len(normalized_samples) - 1, num_points, dtype=int)
-            plot_data = normalized_samples[indices]
-        else:
-            plot_data = normalized_samples
-
-        x_coords = np.linspace(0, width, num_points, dtype=int)
-        y_coords = (plot_data * 200) + center_y
-
-        cv2.line(canvas, (0, center_y), (width, center_y), (200, 200, 200), 1)
-        points = np.column_stack((x_coords, y_coords.astype(int)))
-        for i in range(len(points) - 1):
-            cv2.line(canvas, tuple(points[i]), tuple(points[i + 1]), (0, 255, 0), 2)
-
-        return plot_data
-
-    def draw_volume_history(self, canvas: np.ndarray, current_volume: float):
-        height, width = canvas.shape[:2]
-        center_y = height // 2
-
-        self.volume_history.append(current_volume)
-        cv2.line(
-            canvas, (0, center_y - 250), (width, center_y - 250), (200, 200, 200), 1
-        )
-
-        volume_x = np.linspace(0, width, len(self.volume_history), dtype=int)
-        volume_y = center_y - 250 + (np.array(self.volume_history) * 400)
-        points = np.column_stack((volume_x, volume_y.astype(int)))
-        for i in range(len(points) - 1):
-            cv2.line(canvas, tuple(points[i]), tuple(points[i + 1]), (255, 0, 0), 2)
-
-    def draw(
-        self,
-        canvas: np.ndarray,
-        audio_samples: np.ndarray,
-        fps: Optional[float] = None,
-    ):
-        self.draw_timestamp(canvas, fps)
-        plot_data = self.draw_current_wave(canvas, audio_samples)
-        current_volume = np.abs(plot_data).mean()
-        self.draw_volume_history(canvas, current_volume)
 
 
 async def main(room: rtc.Room):
