@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import re
+import wave
 from dataclasses import dataclass
 from typing import Literal
 
@@ -75,9 +77,20 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         self._send_ch = utils.aio.Chan[ClientEvents]()
         self._resampler: rtc.AudioResampler | None = None
         self._active_response_id = None
+        self._list_of_frames = []
 
-    def _push_audio(self, frame: rtc.AudioFrame) -> None:
+    def _push_audio(self, frame: rtc.AudioFrame | str) -> None:
         if self._closed:
+            return
+        if frame == "Flush":
+            print("Flushing")
+            print(len(self._list_of_frames))
+            if self._list_of_frames:
+                with open(f"./audio_{utils.shortuuid()}.wav", "wb") as f:
+                    f.write(make_wav_file(self._list_of_frames))
+                self._list_of_frames = []
+
+            self._queue_msg(frame)
             return
         if frame.sample_rate != self._needed_sr:
             if not self._resampler:
@@ -96,6 +109,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
                         ]
                     )
                 )
+                self._list_of_frames.append(f)
         else:
             self._queue_msg(
                 types.LiveClientRealtimeInput(
@@ -137,6 +151,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
             try:
                 while not self._closed:
                     async for response in self._session.receive():
+                        print(f"Received response: {response}")
                         if self._closed:
                             break
                         if self._active_response_id is None:
@@ -156,6 +171,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
                                         content.text += part.text
 
                             if server_content.turn_complete:
+                                print(f"Turn complete: {content.text}")
                                 content.text = clean_transcription(content.text)
                                 self.emit("input_speech_done", content)
                                 self._active_response_id = None
@@ -191,3 +207,15 @@ def clean_transcription(text: str) -> str:
     text = text.replace("\n", " ")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def make_wav_file(frames: list[rtc.AudioFrame]) -> bytes:
+    buffer = utils.merge_frames(frames)
+    io_buffer = io.BytesIO()
+    with wave.open(io_buffer, "wb") as wav:
+        wav.setnchannels(buffer.num_channels)
+        wav.setsampwidth(2)  # 16-bit
+        wav.setframerate(buffer.sample_rate)
+        wav.writeframes(buffer.data)
+
+    return io_buffer.getvalue()
