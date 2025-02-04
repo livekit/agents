@@ -1,32 +1,27 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import re
-import wave
 from dataclasses import dataclass
 from typing import Literal
 
 import websockets
 from livekit import rtc
-from livekit.agents import utils
+from livekit.agents import APIConnectionError, APIStatusError, utils
 
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError, ClientError, ServerError
 
 from ...log import logger
 from .api_proto import ClientEvents, LiveAPIModels
 
-EventTypes = Literal[
-    "input_speech_started",
-    "input_speech_done",
-]
+EventTypes = Literal["input_speech_started", "input_speech_done"]
 
 DEFAULT_LANGUAGE = "English"
 
 SYSTEM_INSTRUCTIONS = f"""
 You are an **Audio Transcriber**. Your task is to convert audio content into accurate and precise text.
-
 - Transcribe verbatim; exclude non-speech sounds.
 - Provide only transcription; no extra text or explanations.
 - If audio is unclear, respond with: `...`
@@ -34,7 +29,6 @@ You are an **Audio Transcriber**. Your task is to convert audio content into acc
 - Use proper punctuation and formatting.
 - Do not add explanations, comments, or extra information.
 - Do not include timestamps, speaker labels, or annotations unless specified.
-
 - Audio Language: {DEFAULT_LANGUAGE}
 """
 
@@ -46,30 +40,24 @@ class TranscriptionContent:
 
 
 class TranscriberSession(utils.EventEmitter[EventTypes]):
-    def __init__(
-        self,
-        *,
-        client: genai.Client,
-        model: LiveAPIModels | str,
-    ):
-        """
-        Initializes a TranscriberSession instance for interacting with Google's Realtime API.
-        """
+    """
+    Handles live audio transcription using the realtime API.
+    """
+
+    def __init__(self, *, client: genai.Client, model: LiveAPIModels | str):
         super().__init__()
         self._client = client
         self._model = model
         self._needed_sr = 16000
         self._closed = False
+
         system_instructions = types.Content(
             parts=[types.Part(text=SYSTEM_INSTRUCTIONS)]
         )
-
         self._config = types.LiveConnectConfig(
             response_modalities=["TEXT"],
             system_instruction=system_instructions,
-            generation_config=types.GenerationConfig(
-                temperature=0.0,
-            ),
+            generation_config=types.GenerationConfig(temperature=0.0),
         )
         self._main_atask = asyncio.create_task(
             self._main_task(), name="gemini-realtime-transcriber"
@@ -77,20 +65,9 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         self._send_ch = utils.aio.Chan[ClientEvents]()
         self._resampler: rtc.AudioResampler | None = None
         self._active_response_id = None
-        self._list_of_frames = []
 
     def _push_audio(self, frame: rtc.AudioFrame | str) -> None:
         if self._closed:
-            return
-        if frame == "Flush":
-            print("Flushing")
-            print(len(self._list_of_frames))
-            if self._list_of_frames:
-                with open(f"./audio_{utils.shortuuid()}.wav", "wb") as f:
-                    f.write(make_wav_file(self._list_of_frames))
-                self._list_of_frames = []
-
-            self._queue_msg(frame)
             return
         if frame.sample_rate != self._needed_sr:
             if not self._resampler:
@@ -203,19 +180,95 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
                 await self._session.close()
 
 
+class ModelTranscriber(utils.EventEmitter[EventTypes]):
+    """
+    Transcribes agent audio using model generation.
+    """
+
+    def __init__(self, *, client: genai.Client, model: LiveAPIModels | str):
+        super().__init__()
+        self._client = client
+        self._model = model
+        self._needed_sr = 16000
+        self._system_instructions = types.Content(
+            parts=[types.Part(text=SYSTEM_INSTRUCTIONS)]
+        )
+        self._config = types.GenerateContentConfig(
+            temperature=0.0,
+            system_instruction=self._system_instructions,
+            # TODO: add response_schem
+        )
+        self._resampler: rtc.AudioResampler | None = None
+        self._buffer: rtc.AudioFrame | None = None
+        self._audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        self._main_atask = asyncio.create_task(
+            self._main_task(), name="gemini-model-transcriber"
+        )
+
+    async def aclose(self) -> None:
+        if self._audio_ch.closed:
+            return
+        self._audio_ch.close()
+        await self._main_atask
+
+    def _push_audio(self, frames: list[rtc.AudioFrame]) -> None:
+        if not frames:
+            return
+
+        buffer = utils.merge_frames(frames)
+
+        if buffer.sample_rate != self._needed_sr:
+            if self._resampler is None:
+                self._resampler = rtc.AudioResampler(
+                    input_rate=buffer.sample_rate,
+                    output_rate=self._needed_sr,
+                    quality=rtc.AudioResamplerQuality.HIGH,
+                )
+
+            buffer = utils.merge_frames(self._resampler.push(buffer))
+
+        self._audio_ch.send_nowait(buffer)
+
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self):
+        request_id = utils.shortuuid()
+        try:
+            async for buffer in self._audio_ch:
+                response = await self._client.aio.models.generate_content(
+                    model=self._model,
+                    contents=[
+                        types.Content(
+                            parts=[
+                                types.Part(
+                                    text="""Transcribe the audio exactly as spoken, without adding any extra words. Ignore any non-speech sounds. Provide the transcription exactly as heard, or return '...' if the audio is unclear."""
+                                ),
+                                types.Part.from_bytes(
+                                    data=buffer.to_wav_bytes(),
+                                    mime_type="audio/wav",
+                                ),
+                            ],
+                            role="user",
+                        )
+                    ],
+                    config=self._config,
+                )
+                content = TranscriptionContent(
+                    response_id=request_id, text=clean_transcription(response.text)
+                )
+                self.emit("input_speech_done", content)
+
+        except (ClientError, ServerError, APIError) as e:
+            raise APIStatusError(
+                f"model transcriber error: {e}",
+                status_code=e.code,
+                body=e.message,
+                request_id=request_id,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError("Error generating transcription") from e
+
+
 def clean_transcription(text: str) -> str:
     text = text.replace("\n", " ")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
-
-
-def make_wav_file(frames: list[rtc.AudioFrame]) -> bytes:
-    buffer = utils.merge_frames(frames)
-    io_buffer = io.BytesIO()
-    with wave.open(io_buffer, "wb") as wav:
-        wav.setnchannels(buffer.num_channels)
-        wav.setsampwidth(2)  # 16-bit
-        wav.setframerate(buffer.sample_rate)
-        wav.writeframes(buffer.data)
-
-    return io_buffer.getvalue()

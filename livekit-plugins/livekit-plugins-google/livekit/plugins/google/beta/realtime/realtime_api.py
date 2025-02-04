@@ -39,7 +39,7 @@ from .api_proto import (
     _build_gemini_ctx,
     _build_tools,
 )
-from .transcriber import TranscriberSession, TranscriptionContent
+from .transcriber import ModelTranscriber, TranscriberSession, TranscriptionContent
 
 EventTypes = Literal[
     "start_session",
@@ -260,7 +260,6 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._fnc_ctx = fnc_ctx
         self._fnc_tasks = utils.aio.TaskSet()
         self._is_interrupted = False
-        self._list_of_frames = []
 
         tools = []
         if self._fnc_ctx is not None:
@@ -304,7 +303,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             )
             self._transcriber.on("input_speech_done", self._on_input_speech_done)
         if self._opts.enable_agent_audio_transcription:
-            self._agent_transcriber = TranscriberSession(
+            self._agent_transcriber = ModelTranscriber(
                 client=self._client, model=self._opts.model
             )
             self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
@@ -385,7 +384,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech
 
     def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
-        if not self._is_interrupted and content.response_id and content.text:
+        if content.response_id and content.text:
             self.emit(
                 "agent_speech_transcription_completed",
                 InputTranscription(
@@ -443,12 +442,12 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                                     )
                                     # self._list_of_frames.append(frame)
                                     if self._opts.enable_agent_audio_transcription:
-                                        self._agent_transcriber._push_audio(frame)
+                                        content.audio.append(frame)
                                     content.audio_stream.send_nowait(frame)
 
                         if server_content.interrupted or server_content.turn_complete:
                             if self._opts.enable_agent_audio_transcription:
-                                self._agent_transcriber._push_audio("Flush")
+                                self._agent_transcriber._push_audio(content.audio)
                             for stream in (content.text_stream, content.audio_stream):
                                 if isinstance(stream, utils.aio.Chan):
                                     stream.close()
