@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import os
-import wave
 from dataclasses import dataclass
 from typing import AsyncIterable, Literal
 
@@ -440,7 +438,6 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                                         samples_per_channel=len(part.inline_data.data)
                                         // 2,
                                     )
-                                    # self._list_of_frames.append(frame)
                                     if self._opts.enable_agent_audio_transcription:
                                         content.audio.append(frame)
                                     content.audio_stream.send_nowait(frame)
@@ -451,10 +448,6 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                             for stream in (content.text_stream, content.audio_stream):
                                 if isinstance(stream, utils.aio.Chan):
                                     stream.close()
-
-                            # with open(f"./audio_{utils.shortuuid()}.wav", "wb") as f:
-                            #     f.write(make_wav_file(self._list_of_frames))
-                            # self._list_of_frames = []
 
                             self.emit("agent_speech_stopped")
                             self._is_interrupted = True
@@ -547,15 +540,3 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             await self._session.send(input=tool_response)
 
             self.emit("function_calls_finished", [called_fnc])
-
-
-def make_wav_file(frames: list[rtc.AudioFrame]) -> bytes:
-    buffer = utils.merge_frames(frames)
-    io_buffer = io.BytesIO()
-    with wave.open(io_buffer, "wb") as wav:
-        wav.setnchannels(buffer.num_channels)
-        wav.setsampwidth(2)  # 16-bit
-        wav.setframerate(buffer.sample_rate)
-        wav.writeframes(buffer.data)
-
-    return io_buffer.getvalue()
