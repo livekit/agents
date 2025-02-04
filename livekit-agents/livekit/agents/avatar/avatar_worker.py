@@ -114,7 +114,7 @@ class AvatarWorker:
         )
 
     async def _read_audio(self) -> None:
-        async for frame in self._audio_receiver:
+        async for frame in self._audio_receiver.stream():
             if not self._audio_playing and isinstance(frame, rtc.AudioFrame):
                 self._audio_playing = True
             await self._video_generator.push_audio(frame)
@@ -162,4 +162,3 @@ class AvatarWorker:
         await self._av_sync.aclose()
         await self._audio_source.aclose()
         await self._video_source.aclose()
-        self._audio_receiver.close()

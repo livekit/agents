@@ -8,7 +8,6 @@ from typing import AsyncIterator, Literal, Optional
 from livekit import rtc
 
 from .. import utils
-from ..utils import aio
 from .io import AudioSink, PlaybackFinishedEvent
 
 logger = logging.getLogger(__name__)
@@ -115,8 +114,6 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
         self._stream_readers: list[rtc.ByteStreamReader] = []
         self._stream_reader_changed: asyncio.Event = asyncio.Event()
 
-        self._data_ch = aio.Chan[rtc.AudioFrame | AudioFlushSentinel]()
-        self._read_atask: Optional[asyncio.Task[None]] = None
         self._current_reader: Optional[rtc.ByteStreamReader] = None
         self._current_reader_cleared: bool = False
 
@@ -149,8 +146,6 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
             AUDIO_STREAM_TOPIC, _handle_stream_received
         )
 
-        self._read_atask = asyncio.create_task(self._read_stream())
-
     async def notify_playback_finished(
         self, playback_position: int, interrupted: bool
     ) -> None:
@@ -172,23 +167,16 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
         except Exception as e:
             logger.exception(f"error notifying playback finished: {e}")
 
-    @property
-    def data_ch(self) -> aio.Chan[rtc.AudioFrame | AudioFlushSentinel]:
-        return self._data_ch
-
     @utils.log_exceptions(logger=logger)
-    async def _read_stream(self) -> None:
-        while not self._data_ch.closed:
+    async def stream(self) -> AsyncIterator[rtc.AudioFrame | AudioFlushSentinel]:
+        while True:
             await self._stream_reader_changed.wait()
 
-            while self._stream_readers and not self._data_ch.closed:
+            while self._stream_readers:
                 self._current_reader = self._stream_readers.pop(0)
                 sample_rate = int(self._current_reader.info.attributes["sample_rate"])
                 num_channels = int(self._current_reader.info.attributes["num_channels"])
                 async for data in self._current_reader:
-                    if self._data_ch.closed:
-                        return
-
                     if self._current_reader_cleared:
                         # ignore the rest data of the current reader if clear_buffer was called
                         continue
@@ -202,10 +190,10 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
                         num_channels=num_channels,
                         samples_per_channel=samples_per_channel,
                     )
-                    self._data_ch.send_nowait(frame)
-                self._data_ch.send_nowait(AudioFlushSentinel())
+                    yield frame
                 self._current_reader = None
                 self._current_reader_cleared = False
+                yield AudioFlushSentinel()
 
             self._stream_reader_changed.clear()
 
@@ -234,12 +222,3 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
             return await fut
         finally:
             self._room.off("participant_joined", _handle_participant_joined)
-
-    async def __anext__(self) -> rtc.AudioFrame | AudioFlushSentinel:
-        return await self._data_ch.recv()
-
-    def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioFlushSentinel]:
-        return self
-
-    def close(self) -> None:
-        self._data_ch.close()
