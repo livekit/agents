@@ -231,6 +231,7 @@ class ModelTranscriber(utils.EventEmitter[EventTypes]):
         request_id = utils.shortuuid()
         try:
             async for buffer in self._audio_ch:
+                # TODO: stream content for better latency
                 response = await self._client.aio.models.generate_content(
                     model=self._model,
                     contents=[
