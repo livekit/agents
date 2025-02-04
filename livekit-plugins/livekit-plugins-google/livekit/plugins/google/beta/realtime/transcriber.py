@@ -66,7 +66,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         self._resampler: rtc.AudioResampler | None = None
         self._active_response_id = None
 
-    def _push_audio(self, frame: rtc.AudioFrame | str) -> None:
+    def _push_audio(self, frame: rtc.AudioFrame) -> None:
         if self._closed:
             return
         if frame.sample_rate != self._needed_sr:
@@ -86,7 +86,6 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
                         ]
                     )
                 )
-                self._list_of_frames.append(f)
         else:
             self._queue_msg(
                 types.LiveClientRealtimeInput(
@@ -128,7 +127,6 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
             try:
                 while not self._closed:
                     async for response in self._session.receive():
-                        print(f"Received response: {response}")
                         if self._closed:
                             break
                         if self._active_response_id is None:
@@ -148,7 +146,6 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
                                         content.text += part.text
 
                             if server_content.turn_complete:
-                                print(f"Turn complete: {content.text}")
                                 content.text = clean_transcription(content.text)
                                 self.emit("input_speech_done", content)
                                 self._active_response_id = None
@@ -239,9 +236,7 @@ class ModelTranscriber(utils.EventEmitter[EventTypes]):
                     contents=[
                         types.Content(
                             parts=[
-                                types.Part(
-                                    text="""Transcribe the audio exactly as spoken, without adding any extra words. Ignore any non-speech sounds. Provide the transcription exactly as heard, or return '...' if the audio is unclear."""
-                                ),
+                                types.Part(text=SYSTEM_INSTRUCTIONS),
                                 types.Part.from_bytes(
                                     data=buffer.to_wav_bytes(),
                                     mime_type="audio/wav",
