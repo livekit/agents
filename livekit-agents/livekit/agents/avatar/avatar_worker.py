@@ -104,8 +104,8 @@ class AvatarWorker:
         )
 
         # Start processing
-        self._audio_receive_atask = asyncio.create_task(self._read_audio())
-        self._video_gen_atask = asyncio.create_task(self._stream_video())
+        self._audio_receive_atask = asyncio.create_task(self._passthrough_audio())
+        self._video_gen_atask = asyncio.create_task(self._publish_video())
 
     async def wait_for_subscription(self) -> None:
         await asyncio.gather(
@@ -113,14 +113,14 @@ class AvatarWorker:
             self._avatar_video_publication.wait_for_subscription(),
         )
 
-    async def _read_audio(self) -> None:
+    async def _passthrough_audio(self) -> None:
         async for frame in self._audio_receiver.stream():
             if not self._audio_playing and isinstance(frame, rtc.AudioFrame):
                 self._audio_playing = True
             await self._video_generator.push_audio(frame)
 
     @utils.log_exceptions(logger=logger)
-    async def _stream_video(self) -> None:
+    async def _publish_video(self) -> None:
         """Process audio frames and generate synchronized video"""
 
         async for frame in self._video_generator.stream():

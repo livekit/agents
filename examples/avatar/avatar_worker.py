@@ -145,6 +145,9 @@ class VideoGenerator:
                 )
             except asyncio.TimeoutError:
                 # generate frame without audio (e.g. silence state)
+                if self._av_sync and self._av_sync._video_queue.qsize() > 1:
+                    # skip if there are already video frames in the queue
+                    continue
                 video_frame = _generate_idle_frame()
                 yield video_frame, None
                 await asyncio.sleep(0)
