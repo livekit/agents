@@ -4,8 +4,7 @@ from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import RoomInput, RoomInputOptions, RoomOutput
-from livekit.agents.transcription import TranscriptionRoomForwarder, TranscriptionSyncIO
+from livekit.agents.pipeline.room_io import RoomInput, RoomOutput, RoomOutputOptions
 from livekit.plugins import openai
 
 logger = logging.getLogger("roomio-example")
@@ -24,23 +23,18 @@ async def entrypoint(ctx: JobContext):
         )
     )
 
-    room_input = RoomInput(ctx.room, options=RoomInputOptions(audio_sample_rate=24000))
+    room_input = RoomInput(ctx.room)
     agent.input.audio = room_input.audio
-    room_output = RoomOutput(room=ctx.room, sample_rate=24000, num_channels=1)
+    room_output = RoomOutput(
+        room=ctx.room, options=RoomOutputOptions(sync_transcription=True)
+    )
     agent.output.audio = room_output.audio
+    agent.output.text = room_output.text
     await room_input.wait_for_participant()
     await room_output.start()
 
     await agent.start()
 
-    # TTS transcription forward
-    transcription_sync = TranscriptionSyncIO.from_agent(agent)
-    transcription_sync.on(
-        "transcription_segment",
-        TranscriptionRoomForwarder(ctx.room, ctx.room.local_participant),
-    )
-
-    # TODO: the interrupted flag is not set correctly
     @agent.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(

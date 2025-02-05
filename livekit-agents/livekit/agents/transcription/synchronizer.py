@@ -218,6 +218,7 @@ class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment
         processed_words: list[str] = []
 
         og_text = self._played_text
+        sent_text = ""
         for word in words:
             if segment_index <= self._finished_seg_index:
                 break
@@ -254,7 +255,7 @@ class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment
                 "transcription_segment",
                 rtc.TranscriptionSegment(
                     id=seg_id,
-                    text=text,
+                    text=text[len(sent_text) :],
                     start_time=0,
                     end_time=0,
                     final=False,
@@ -262,6 +263,7 @@ class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment
                 ),
             )
             self._played_text = f"{og_text} {text}"
+            sent_text = text
 
             await self._sleep_if_not_closed(delay - first_delay)
             text_data.forwarded_hyphens += word_hyphens
@@ -270,7 +272,7 @@ class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment
             "transcription_segment",
             rtc.TranscriptionSegment(
                 id=seg_id,
-                text=sentence,
+                text=sentence[len(sent_text) :],
                 start_time=0,
                 end_time=0,
                 final=True,
@@ -278,6 +280,7 @@ class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment
             ),
         )
         self._played_text = f"{og_text} {sentence}"
+        sent_text = sentence
 
         await self._sleep_if_not_closed(self._opts.new_sentence_delay)
         text_data.forwarded_sentences += 1

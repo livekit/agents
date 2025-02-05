@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Literal, Optional
 
 from livekit import rtc
 
-from .io import AudioSink
+from .. import utils
+from ..transcription import TranscriptionRoomForwarder, TranscriptionSyncIO
+from .io import AudioSink, TextSink
 from .log import logger
 
 
@@ -16,7 +18,7 @@ class RoomInputOptions:
     """Whether to subscribe to audio"""
     video_enabled: bool = False
     """Whether to subscribe to video"""
-    audio_sample_rate: int = 16000
+    audio_sample_rate: int = 24000
     """Sample rate of the input audio in Hz"""
     audio_num_channels: int = 1
     """Number of audio channels"""
@@ -26,7 +28,18 @@ class RoomInputOptions:
     """Capacity of the internal video queue, 0 means unlimited"""
 
 
+@dataclass
+class RoomOutputOptions:
+    sample_rate: int = 24000
+    num_channels: int = 1
+    forward_transcription: bool = True
+    """Whether to forward transcription segments to the room"""
+    sync_transcription: bool = True
+    """Whether to sync transcription segments with audio playback"""
+
+
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
+DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
 
 
 class RoomInput:
@@ -144,29 +157,56 @@ class RoomInput:
             self._video_stream = None
 
 
-class RoomOutput:
+class RoomOutput(rtc.EventEmitter[Literal["transcription_segment"]]):
     """Manages audio output to a LiveKit room"""
 
     def __init__(
-        self, room: rtc.Room, *, sample_rate: int = 24000, num_channels: int = 1
+        self, room: rtc.Room, options: RoomOutputOptions = DEFAULT_ROOM_OUTPUT_OPTIONS
     ) -> None:
-        """Initialize the RoomOutput
+        super().__init__()
 
-        Args:
-            room: The LiveKit room to publish media to
-            sample_rate: Sample rate of the audio in Hz
-            num_channels: Number of audio channels
-        """
-        self._audio_sink = RoomAudioSink(
-            room=room, sample_rate=sample_rate, num_channels=num_channels
+        self._options = options
+        self._room = room
+        self._room_audio_sink = RoomAudioSink(
+            room=room,
+            sample_rate=self._options.sample_rate,
+            num_channels=self._options.num_channels,
         )
 
+        self._tr_forwarder: Optional[TranscriptionRoomForwarder] = None
+        self._tr_sync: Optional[TranscriptionSyncIO] = None
+        if not self._options.sync_transcription:
+            self._audio_sink = self._room_audio_sink
+            self._text_sink = _TranscriptionTextSink()
+            self._text_sink.on(
+                "transcription_segment",
+                lambda ev: self.emit("transcription_segment", ev),
+            )
+        else:
+            self._tr_sync = TranscriptionSyncIO(self._room_audio_sink)
+            self._audio_sink = self._tr_sync.audio_output
+            self._text_sink = self._tr_sync.text_output
+            self._tr_sync.on(
+                "transcription_segment",
+                lambda ev: self.emit("transcription_segment", ev),
+            )
+
     async def start(self) -> None:
-        await self._audio_sink.start()
+        await self._room_audio_sink.start()
+
+        if self._options.forward_transcription:
+            self._tr_forwarder = TranscriptionRoomForwarder(
+                room=self._room, participant=self._room.local_participant
+            )
+            self.on("transcription_segment", self._tr_forwarder.update)
 
     @property
-    def audio(self) -> "RoomAudioSink":
+    def audio(self) -> AudioSink:
         return self._audio_sink
+
+    @property
+    def text(self) -> TextSink:
+        return self._text_sink
 
 
 class RoomAudioSink(AudioSink):
@@ -265,3 +305,38 @@ class RoomAudioSink(AudioSink):
         self._pushed_duration = max(0, self._pushed_duration - queued_duration)
         self._interrupted = True
         self._audio_source.clear_queue()
+
+
+class _TranscriptionTextSink(
+    TextSink, rtc.EventEmitter[Literal["transcription_segment"]]
+):
+    def __init__(self) -> None:
+        super().__init__()
+        self._current_id = utils.shortuuid("SG_")
+
+    async def capture_text(self, text: str) -> None:
+        self.emit(
+            "transcription_segment",
+            rtc.TranscriptionSegment(
+                id=self._current_id,
+                text=text,
+                start_time=0,
+                end_time=0,
+                language="",
+                final=False,
+            ),
+        )
+
+    def flush(self) -> None:
+        self.emit(
+            "transcription_segment",
+            rtc.TranscriptionSegment(
+                id=self._current_id,
+                text="",
+                start_time=0,
+                end_time=0,
+                language="",
+                final=True,
+            ),
+        )
+        self._current_id = utils.shortuuid("SG_")

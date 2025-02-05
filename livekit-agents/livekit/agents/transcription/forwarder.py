@@ -1,7 +1,8 @@
 import asyncio
 import sys
 from abc import ABC, abstractmethod
-from typing import TextIO
+from dataclasses import asdict
+from typing import Optional, TextIO
 
 from livekit import rtc
 
@@ -32,7 +33,7 @@ class TranscriptionForwarder(ABC):
         except Exception:
             logger.exception("Error processing segment stream")
 
-    def __call__(self, ev: rtc.TranscriptionSegment | stt.SpeechEvent) -> None:
+    def update(self, ev: rtc.TranscriptionSegment | stt.SpeechEvent) -> None:
         if isinstance(ev, rtc.TranscriptionSegment):
             self._event_ch.send_nowait(ev)
             return
@@ -68,6 +69,8 @@ class TranscriptionRoomForwarder(TranscriptionForwarder):
         room: rtc.Room,
         participant: rtc.Participant | str,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
+        *,
+        forward_delta: bool = False,
     ):
         super().__init__()
         identity = participant if isinstance(participant, str) else participant.identity
@@ -80,11 +83,24 @@ class TranscriptionRoomForwarder(TranscriptionForwarder):
         self._participant_identity = identity
         self._track_id = track
 
+        self._forward_delta = forward_delta
+        self._last_segment_id: Optional[str] = None
+        self._played_text = ""
+
     @log_exceptions(logger=logger)
     async def _forward_segment(self, segment: rtc.TranscriptionSegment) -> None:
         """Forward transcription segment to LiveKit room."""
         if not self._room.isconnected():
             return
+
+        if self._last_segment_id != segment.id:
+            self._played_text = ""
+            self._last_segment_id = segment.id
+        self._played_text += segment.text
+
+        if not self._forward_delta:
+            segment = rtc.TranscriptionSegment(**asdict(segment))
+            segment.text = self._played_text
 
         transcription = rtc.Transcription(
             participant_identity=self._participant_identity,
@@ -104,30 +120,13 @@ class TranscriptionStreamForwarder(TranscriptionForwarder):
     def __init__(self, stream: TextIO = sys.stdout):
         super().__init__()
         self._stream = stream
-        self._last_text = ""
 
     @log_exceptions(logger=logger)
     async def _forward_segment(self, segment: rtc.TranscriptionSegment) -> None:
         """Forward transcription segment to the stream with real-time display."""
-        text = segment.text
-        if text == self._last_text and not segment.final:
-            return
-
-        # Find the appended text by comparing with last text
-        if text.startswith(self._last_text):
-            new_text = text[len(self._last_text) :]
-        else:
-            # If the new text doesn't start with the old text,
-            # it's a completely new segment
-            new_text = text
-            if self._last_text:
-                self._stream.write("\n")
-
-        self._stream.write(new_text)
+        self._stream.write(segment.text)
         self._stream.flush()
-        self._last_text = text
 
         if segment.final:
             self._stream.write("\n")
             self._stream.flush()
-            self._last_text = ""
