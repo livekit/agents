@@ -117,7 +117,7 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
         llm=openai.LLM(),
-        tts=deepgram.TTS(),
+        tts=openai.TTS(),
         fnc_ctx=fnc_ctx,
         chat_ctx=initial_chat_ctx,
     )
