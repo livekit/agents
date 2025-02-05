@@ -104,11 +104,11 @@ class RealtimeModel:
         self,
         *,
         instructions: str | None = None,
-        model: LiveAPIModels | str = "gemini-2.0-flash-exp",
+        model: LiveAPIModels | str = "gemini-2.0-flash",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
         modalities: list[Modality] = ["AUDIO"],
-        enable_user_audio_transcription: bool = False,
+        enable_user_audio_transcription: bool = True,
         enable_agent_audio_transcription: bool = True,
         vertexai: bool = False,
         project: str | None = None,
@@ -136,7 +136,7 @@ class RealtimeModel:
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
             api_key (str or None, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
-            model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
+            model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
             enable_user_audio_transcription (bool, optional): Whether to enable user audio transcription. Defaults to True
             enable_agent_audio_transcription (bool, optional): Whether to enable agent audio transcription. Defaults to True
