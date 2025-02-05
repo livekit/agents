@@ -1,4 +1,5 @@
 import logging
+import random
 from typing import Annotated
 
 import aiohttp
@@ -11,7 +12,7 @@ from livekit.agents import (
     cli,
     llm,
 )
-from livekit.agents.pipeline import VoicePipelineAgent
+from livekit.agents.pipeline import AgentCallContext, VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
@@ -45,29 +46,29 @@ class AssistantFnc(llm.FunctionContext):
         """Called when the user asks about the weather. This function will return the weather for the given location.
         When given a location, please estimate the latitude and longitude of the location and do not ask the user for them."""
 
-        # # When a function call is running, there are a couple of options to inform the user
-        # # that it might take awhile:
-        # # Option 1: you can use .say filler message immediately after the call is triggered
-        # # Option 2: you can prompt the agent to return a text response when it's making a function call
-        # agent = AgentCallContext.get_current().agent
+        # When a function call is running, there are a couple of options to inform the user
+        # that it might take awhile:
+        # Option 1: you can use .say filler message immediately after the call is triggered
+        # Option 2: you can prompt the agent to return a text response when it's making a function call
+        agent = AgentCallContext.get_current().agent
 
-        # if (
-        #     not agent.chat_ctx.messages
-        #     or agent.chat_ctx.messages[-1].role != "assistant"
-        # ):
-        #     # skip if assistant already said something
-        #     filler_messages = [
-        #         "Let me check the weather in {location} for you.",
-        #         "Let me see what the weather is like in {location} right now.",
-        #         # LLM will complete this sentence if it is added to the end of the chat context
-        #         "The current weather in {location} is ",
-        #     ]
-        #     message = random.choice(filler_messages).format(location=location)
-        #     logger.info(f"saying filler message: {message}")
+        if (
+            not agent.chat_ctx.messages
+            or agent.chat_ctx.messages[-1].role != "assistant"
+        ):
+            # skip if assistant already said something
+            filler_messages = [
+                "Let me check the weather in {location} for you.",
+                "Let me see what the weather is like in {location} right now.",
+                # LLM will complete this sentence if it is added to the end of the chat context
+                "The current weather in {location} is ",
+            ]
+            message = random.choice(filler_messages).format(location=location)
+            logger.info(f"saying filler message: {message}")
 
-        #     # NOTE: set add_to_chat_ctx=True will add the message to the end
-        #     #   of the chat context of the function call for answer synthesis
-        #     speech_handle = await agent.say(message, add_to_chat_ctx=True)  # noqa: F841
+            # NOTE: set add_to_chat_ctx=True will add the message to the end
+            #   of the chat context of the function call for answer synthesis
+            speech_handle = await agent.say(message, add_to_chat_ctx=True)  # noqa: F841
 
         logger.info(f"getting weather for {latitude}, {longitude}")
         url = f"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m"
