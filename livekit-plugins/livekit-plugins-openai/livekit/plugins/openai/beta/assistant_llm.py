@@ -565,10 +565,12 @@ def build_oai_message(msg: llm.ChatMessage):
                 oai_content.append({"type": "text", "text": cnt})
             elif isinstance(cnt, llm.ChatImage):
                 if cnt._cache[OPENAI_FILE_ID_KEY]:
-                    oai_content.append({
-                        "type": "image_file",
-                        "image_file": {"file_id": cnt._cache[OPENAI_FILE_ID_KEY]},
-                    })
+                    oai_content.append(
+                        {
+                            "type": "image_file",
+                            "image_file": {"file_id": cnt._cache[OPENAI_FILE_ID_KEY]},
+                        }
+                    )
 
         oai_msg["content"] = oai_content
 
@@ -578,14 +580,16 @@ def build_oai_message(msg: llm.ChatMessage):
         tool_calls: list[dict[str, Any]] = []
         oai_msg["tool_calls"] = tool_calls
         for fnc in msg.tool_calls:
-            tool_calls.append({
-                "id": fnc.tool_call_id,
-                "type": "function",
-                "function": {
-                    "name": fnc.function_info.name,
-                    "arguments": fnc.raw_arguments,
-                },
-            })
+            tool_calls.append(
+                {
+                    "id": fnc.tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": fnc.function_info.name,
+                        "arguments": fnc.raw_arguments,
+                    },
+                }
+            )
 
     # tool_call_id is set when the message is a response/result to a function call
     # (content is a string in this case)

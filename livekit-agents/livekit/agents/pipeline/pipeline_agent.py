@@ -522,9 +522,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             await asyncio.sleep(delay)
 
             if self._room.isconnected():
-                await self._room.local_participant.set_attributes({
-                    ATTRIBUTE_AGENT_STATE: state
-                })
+                await self._room.local_participant.set_attributes(
+                    {ATTRIBUTE_AGENT_STATE: state}
+                )
 
         if self._update_state_task is not None:
             self._update_state_task.cancel()
