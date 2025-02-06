@@ -131,12 +131,12 @@ class AgentOutput:
     ) -> SynthesisHandle:
         def _before_forward(
             fwd: agent_transcription.TTSSegmentsForwarder,
-            transcription: rtc.Transcription,
+            rtc_transcription: rtc.Transcription,
         ):
             if not transcription:
-                transcription.segments = []
+                rtc_transcription.segments = []
 
-            return transcription
+            return rtc_transcription
 
         transcription_fwd = agent_transcription.TTSSegmentsForwarder(
             room=self._room,
