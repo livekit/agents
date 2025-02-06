@@ -117,7 +117,7 @@ class AgentOutput:
 
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
-    def synthesize(
+    def create_synthesis_handle(
         self,
         *,
         speech_id: str,
@@ -155,6 +155,30 @@ class AgentOutput:
             tts=self._tts,
             transcription_fwd=transcription_fwd,
             speech_id=speech_id,
+        )
+        return handle
+
+    def synthesize(
+        self,
+        *,
+        speech_id: str,
+        tts_source: SpeechSource,
+        transcript_source: SpeechSource,
+        transcription: bool,
+        transcription_speed: float,
+        sentence_tokenizer: tokenize.SentenceTokenizer,
+        word_tokenizer: tokenize.WordTokenizer,
+        hyphenate_word: Callable[[str], list[str]],
+    ) -> SynthesisHandle:
+        handle = self.create_synthesis_handle(
+            speech_id=speech_id,
+            tts_source=tts_source,
+            transcript_source=transcript_source,
+            transcription=transcription,
+            transcription_speed=transcription_speed,
+            sentence_tokenizer=sentence_tokenizer,
+            word_tokenizer=word_tokenizer,
+            hyphenate_word=hyphenate_word,
         )
 
         task = asyncio.create_task(self._synthesize_task(handle))

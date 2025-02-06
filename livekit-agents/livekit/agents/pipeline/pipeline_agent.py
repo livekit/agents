@@ -21,7 +21,7 @@ from livekit import rtc
 from .. import metrics, stt, tokenize, tts, utils, vad
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
 from ..types import ATTRIBUTE_AGENT_STATE, AgentState
-from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
+from .agent_output import AgentOutput, SpeechSource
 from .agent_playout import AgentPlayout
 from .human_input import HumanInput
 from .log import logger
@@ -310,6 +310,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._last_final_transcript_time: float | None = None
         self._last_speech_time: float | None = None
 
+        self._synth_lock = asyncio.Lock()
+        self._persistent_tts_stream: tts.SynthesizeStream | None = None
+        self._persistent_tts_task: asyncio.Task | None = None
+        self._active_synth_handle: SpeechHandle | None = None
+
     @property
     def fnc_ctx(self) -> FunctionContext | None:
         return self._fnc_ctx
@@ -470,8 +475,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         new_handle = SpeechHandle.create_assistant_speech(
             allow_interruptions=allow_interruptions, add_to_chat_ctx=add_to_chat_ctx
         )
-        synthesis_handle = self._synthesize_agent_speech(new_handle.id, source)
-        new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
+        self._synthesize_agent_speech(new_handle, source)
 
         if self._playing_speech and not self._playing_speech.nested_speech_done:
             self._playing_speech.add_nested_speech(new_handle)
@@ -522,9 +526,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             await asyncio.sleep(delay)
 
             if self._room.isconnected():
-                await self._room.local_participant.set_attributes(
-                    {ATTRIBUTE_AGENT_STATE: state}
-                )
+                await self._room.local_participant.set_attributes({
+                    ATTRIBUTE_AGENT_STATE: state
+                })
 
         if self._update_state_task is not None:
             self._update_state_task.cancel()
@@ -673,6 +677,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._track_published_fut.set_result(None)
 
+        if self._tts.capabilities.streaming:
+            self._persistent_tts_stream = self._tts.stream()
+            self._persistent_tts_task = asyncio.create_task(
+                self._persistent_tts_reader()
+            )
+        else:
+            self._persistent_tts_stream = None
+
         while True:
             await self._speech_q_changed.wait()
 
@@ -770,8 +782,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if handle.interrupted:
                 return
 
-            synthesis_handle = self._synthesize_agent_speech(handle.id, llm_stream)
-            handle.initialize(source=llm_stream, synthesis_handle=synthesis_handle)
+            self._synthesize_agent_speech(handle, llm_stream)
         finally:
             SpeechDataContextVar.reset(tk)
 
@@ -996,12 +1007,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 fnc_ctx=fnc_ctx,
             )
 
-            synthesis_handle = self._synthesize_agent_speech(
-                new_speech_handle.id, answer_llm_stream
-            )
-            new_speech_handle.initialize(
-                source=answer_llm_stream, synthesis_handle=synthesis_handle
-            )
+            self._synthesize_agent_speech(new_speech_handle, answer_llm_stream)
             speech_handle.add_nested_speech(new_speech_handle)
 
             self.emit("function_calls_finished", called_fncs)
@@ -1052,58 +1058,118 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         # mark the speech as done
         speech_handle._set_done()
 
-    def _synthesize_agent_speech(
-        self,
-        speech_id: str,
-        source: str | LLMStream | AsyncIterable[str],
-    ) -> SynthesisHandle:
-        assert self._agent_output is not None, (
-            "agent output should be initialized when ready"
-        )
-
-        tk = SpeechDataContextVar.set(SpeechData(speech_id))
-
-        async def _llm_stream_to_str_generator(
-            stream: LLMStream,
-        ) -> AsyncGenerator[str]:
-            try:
-                async for chunk in stream:
-                    if not chunk.choices:
-                        continue
-
-                    content = chunk.choices[0].delta.content
-                    if content is None:
-                        continue
-
-                    yield content
-            finally:
-                await stream.aclose()
-
-        if isinstance(source, LLMStream):
-            source = _llm_stream_to_str_generator(source)
-
-        og_source = source
-        transcript_source = source
-        if isinstance(og_source, AsyncIterable):
-            og_source, transcript_source = utils.aio.itertools.tee(og_source, 2)
-
-        tts_source = self._opts.before_tts_cb(self, og_source)
-        if tts_source is None:
-            raise ValueError("before_tts_cb must return str or AsyncIterable[str]")
-
+    @utils.log_exceptions(logger=logger)
+    async def _persistent_tts_reader(self) -> None:
+        """
+        Continuously reads from the persistent TTS stream and dispatches audio frames
+        to the active SpeechHandle.
+        """
+        assert self._persistent_tts_stream is not None
         try:
-            return self._agent_output.synthesize(
-                speech_id=speech_id,
-                tts_source=tts_source,
-                transcript_source=transcript_source,
-                transcription=self._opts.transcription.agent_transcription,
-                transcription_speed=self._opts.transcription.agent_transcription_speed,
-                sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
-                word_tokenizer=self._opts.transcription.word_tokenizer,
-                hyphenate_word=self._opts.transcription.hyphenate_word,
-            )
+            async for audio in self._persistent_tts_stream:
+                if self._active_synth_handle is not None:
+                    if self._active_synth_handle.interrupted:
+                        logger.debug(
+                            "synthesis handle interrupted",
+                            extra={"speech_id": self._active_synth_handle.id},
+                        )
+                        self._active_synth_handle = None
+                        continue
+
+                    self._active_synth_handle.synthesis_handle._buf_ch.send_nowait(
+                        audio.frame
+                    )
+                    if not self._active_synth_handle.synthesis_handle.tts_forwarder.closed:
+                        self._active_synth_handle.synthesis_handle.tts_forwarder.push_audio(
+                            audio.frame
+                        )
+
+                if audio.is_final:
+                    if self._active_synth_handle:
+                        self._active_synth_handle.synthesis_handle.tts_forwarder.mark_audio_segment_end()
+                        self._active_synth_handle._set_done()
+                        self._active_synth_handle.synthesis_handle._buf_ch.close()
+                        self._active_synth_handle = None
+        except Exception as e:
+            logger.exception("Error in persistent TTS reader", exc_info=e)
+
+    def _synthesize_agent_speech(
+        self, handle: SpeechHandle, source: str | LLMStream | AsyncIterable[str]
+    ) -> None:
+        """
+        Create a new synthesis for a reply.
+        """
+        tk = SpeechDataContextVar.set(SpeechData(handle.id))
+        try:
+
+            async def _llm_stream_to_str_generator(
+                stream: LLMStream,
+            ) -> AsyncGenerator[str, None]:
+                total_length = 0
+                try:
+                    async for chunk in stream:
+                        if not chunk.choices:
+                            continue
+                        content = chunk.choices[0].delta.content
+                        if content is None:
+                            continue
+                        total_length += len(content)
+                        yield content
+                finally:
+                    if total_length == 0 and self._active_synth_handle:
+                        self._active_synth_handle.synthesis_handle.tts_forwarder.mark_audio_segment_end()
+                        self._active_synth_handle._set_done()
+                        self._active_synth_handle.synthesis_handle._buf_ch.close()
+                        self._active_synth_handle = None
+                    await stream.aclose()
+
+            if isinstance(source, LLMStream):
+                source = _llm_stream_to_str_generator(source)
+
+            og_source = source
+            transcript_source = source
+            if isinstance(og_source, AsyncIterable):
+                og_source, transcript_source = utils.aio.itertools.tee(og_source, 2)
+            tts_source = self._opts.before_tts_cb(self, og_source)
+            if tts_source is None:
+                raise ValueError("before_tts_cb must return str or AsyncIterable[str]")
         finally:
             SpeechDataContextVar.reset(tk)
+
+        synthesis_handle = self._agent_output.create_synthesis_handle(
+            speech_id=handle.id,
+            tts_source=tts_source,
+            transcript_source=transcript_source,
+            transcription=self._opts.transcription.agent_transcription,
+            transcription_speed=self._opts.transcription.agent_transcription_speed,
+            sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
+            word_tokenizer=self._opts.transcription.word_tokenizer,
+            hyphenate_word=self._opts.transcription.hyphenate_word,
+        )
+        handle.initialize(source=tts_source, synthesis_handle=synthesis_handle)
+        asyncio.create_task(self._set_active_and_push(tts_source, handle))
+
+        if isinstance(transcript_source, AsyncIterable):
+            asyncio.create_task(
+                self._agent_output._read_transcript_task(
+                    transcript_source, synthesis_handle
+                )
+            )
+        else:
+            synthesis_handle.tts_forwarder.push_text(transcript_source)
+            synthesis_handle.tts_forwarder.mark_text_segment_end()
+
+    async def _set_active_and_push(
+        self, tts_source: SpeechSource, handle: SpeechHandle
+    ) -> None:
+        async with self._synth_lock:
+            self._active_synth_handle = handle
+            if isinstance(tts_source, str):
+                self._persistent_tts_stream.push_text(tts_source)
+            else:
+                async for token in tts_source:
+                    self._persistent_tts_stream.push_text(token)
+            self._persistent_tts_stream.flush()
 
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
