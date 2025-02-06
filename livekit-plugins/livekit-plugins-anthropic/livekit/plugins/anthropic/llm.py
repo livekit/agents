@@ -85,7 +85,7 @@ class LLM(llm.LLM):
 
         super().__init__(
             capabilities=LLMCapabilities(
-                supports_function_history_without_fnc_ctx=False,
+                requires_persistent_functions=False,
                 supports_choices_on_int=True,
             )
         )
@@ -329,9 +329,9 @@ def _latest_system_message(chat_ctx: llm.ChatContext) -> str:
         if isinstance(latest_system_message.content, str):
             latest_system_str = latest_system_message.content
         elif isinstance(latest_system_message.content, list):
-            latest_system_str = " ".join(
-                [c for c in latest_system_message.content if isinstance(c, str)]
-            )
+            latest_system_str = " ".join([
+                c for c in latest_system_message.content if isinstance(c, str)
+            ])
     return latest_system_str
 
 
