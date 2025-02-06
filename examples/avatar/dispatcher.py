@@ -9,12 +9,18 @@ from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from livekit.agents.avatar import AvatarConnectionInfo
 
 logger = logging.getLogger("avatar-dispatcher")
 logging.basicConfig(level=logging.INFO)
 
 THIS_DIR = Path(__file__).parent.absolute()
+
+
+@dataclass
+class AvatarConnectionInfo:
+    room_name: str
+    url: str  # LiveKit server URL
+    token: str  # Token for avatar worker to join
 
 
 class WorkerLauncher:
