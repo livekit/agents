@@ -37,7 +37,7 @@ from .api_proto import (
     _build_gemini_ctx,
     _build_tools,
 )
-from .transcriber import TranscriberSession, TranscriptionContent
+from .transcriber import ModelTranscriber, TranscriberSession, TranscriptionContent
 
 EventTypes = Literal[
     "start_session",
@@ -104,7 +104,7 @@ class RealtimeModel:
         self,
         *,
         instructions: str | None = None,
-        model: LiveAPIModels | str = "gemini-2.0-flash-exp",
+        model: LiveAPIModels | str = "gemini-2.0-flash-001",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
         modalities: list[Modality] = ["AUDIO"],
@@ -136,7 +136,7 @@ class RealtimeModel:
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
             api_key (str or None, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
-            model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
+            model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-001".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
             enable_user_audio_transcription (bool, optional): Whether to enable user audio transcription. Defaults to True
             enable_agent_audio_transcription (bool, optional): Whether to enable agent audio transcription. Defaults to True
@@ -301,7 +301,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             )
             self._transcriber.on("input_speech_done", self._on_input_speech_done)
         if self._opts.enable_agent_audio_transcription:
-            self._agent_transcriber = TranscriberSession(
+            self._agent_transcriber = ModelTranscriber(
                 client=self._client, model=self._opts.model
             )
             self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
@@ -382,7 +382,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech
 
     def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
-        if not self._is_interrupted and content.response_id and content.text:
+        if content.response_id and content.text:
             self.emit(
                 "agent_speech_transcription_completed",
                 InputTranscription(
@@ -439,10 +439,12 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                                         // 2,
                                     )
                                     if self._opts.enable_agent_audio_transcription:
-                                        self._agent_transcriber._push_audio(frame)
+                                        content.audio.append(frame)
                                     content.audio_stream.send_nowait(frame)
 
                         if server_content.interrupted or server_content.turn_complete:
+                            if self._opts.enable_agent_audio_transcription:
+                                self._agent_transcriber._push_audio(content.audio)
                             for stream in (content.text_stream, content.audio_stream):
                                 if isinstance(stream, utils.aio.Chan):
                                     stream.close()

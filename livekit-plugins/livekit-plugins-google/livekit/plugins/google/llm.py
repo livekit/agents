@@ -60,7 +60,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: ChatModels | str = "gemini-2.0-flash-exp",
+        model: ChatModels | str = "gemini-2.0-flash-001",
         api_key: str | None = None,
         vertexai: bool = False,
         project: str | None = None,
@@ -85,7 +85,7 @@ class LLM(llm.LLM):
         - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
 
         Args:
-            model (ChatModels | str, optional): The model name to use. Defaults to "gemini-2.0-flash-exp".
+            model (ChatModels | str, optional): The model name to use. Defaults to "gemini-2.0-flash-001".
             api_key (str, optional): The API key for Google Gemini. If not provided, it attempts to read from the `GOOGLE_API_KEY` environment variable.
             vertexai (bool, optional): Whether to use VertexAI. Defaults to False.
             project (str, optional): The Google Cloud project to use (only for VertexAI). Defaults to None.
