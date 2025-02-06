@@ -50,9 +50,8 @@ class FallbackAdapter(
                 supports_choices_on_int=all(
                     t.capabilities.supports_choices_on_int for t in llm
                 ),
-                supports_function_history_without_fnc_ctx=all(
-                    t.capabilities.supports_function_history_without_fnc_ctx
-                    for t in llm
+                requires_persistent_functions=all(
+                    t.capabilities.requires_persistent_functions for t in llm
                 ),
             )
         )

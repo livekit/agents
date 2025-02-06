@@ -85,7 +85,7 @@ class LLM(llm.LLM):
 
         super().__init__(
             capabilities=LLMCapabilities(
-                requires_persistent_functions=False,
+                requires_persistent_functions=True,
                 supports_choices_on_int=True,
             )
         )

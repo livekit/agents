@@ -102,7 +102,7 @@ class AssistantLLM(llm.LLM):
         super().__init__(
             capabilities=LLMCapabilities(
                 supports_choices_on_int=True,
-                requires_persistent_functions=True,
+                requires_persistent_functions=False,
             )
         )
 
