@@ -981,7 +981,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 fnc_ctx
                 and new_speech_handle.fnc_nested_depth
                 >= self._opts.max_nested_fnc_calls
-                and self._llm.capabilities.supports_function_history_without_fnc_ctx
+                and self._llm.capabilities.requires_persistent_functions
             ):
                 if len(fnc_ctx.ai_functions) > 1:
                     logger.info(

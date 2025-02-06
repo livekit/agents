@@ -50,7 +50,9 @@ class Choice:
 @dataclass
 class LLMCapabilities:
     supports_choices_on_int: bool = True
-    supports_function_history_without_fnc_ctx: bool = True
+    """check whether the LLM supports integer enums choices as function arguments"""
+    requires_persistent_functions: bool = True
+    """check whether the LLM requires a function definitions for past function calls in chat context"""
 
 
 @dataclass

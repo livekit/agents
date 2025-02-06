@@ -102,7 +102,7 @@ class LLM(llm.LLM):
         super().__init__(
             capabilities=LLMCapabilities(
                 supports_choices_on_int=False,
-                supports_function_history_without_fnc_ctx=True,
+                requires_persistent_functions=True,
             )
         )
         self._project_id = project or os.environ.get("GOOGLE_CLOUD_PROJECT", None)
