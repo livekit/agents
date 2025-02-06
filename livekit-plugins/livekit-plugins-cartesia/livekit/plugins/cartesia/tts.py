@@ -230,7 +230,7 @@ class ChunkedStream(tts.ChunkedStream):
                 resp.raise_for_status()
                 async for data, _ in resp.content.iter_chunks():
                     for frame in bstream.write(data):
-                        logging.info(f"Sending frame to event channel")
+                        # logging.info(f"Sending frame to event channel")
                         self._event_ch.send_nowait(
                             tts.SynthesizedAudio(
                                 request_id=request_id,
