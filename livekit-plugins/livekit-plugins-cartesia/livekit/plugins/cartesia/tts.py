@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -43,12 +44,17 @@ from .models import (
     TTSVoiceSpeed,
 )
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2024-06-10"
 
 NUM_CHANNELS = 1
-BUFFERED_WORDS_COUNT = 3
+BUFFERED_WORDS_COUNT = 8
+from app_config import AppConfig
+from helpers import replace_numbers_with_words_cartesia
 
 
 @dataclass
@@ -157,6 +163,9 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
+        logging.info(f"Synthesize called with text: {text}")
+        text = replace_numbers_with_words_cartesia(text, lang=AppConfig().language)
+        logging.info(f"Processed text: {text}")
         return ChunkedStream(
             tts=self,
             input_text=text,
@@ -192,6 +201,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts, self._session = opts, session
 
     async def _run(self) -> None:
+        logging.info(f"ChunkedStream _run with input text: {self._input_text}")
         request_id = utils.shortuuid()
         bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate, num_channels=NUM_CHANNELS
@@ -204,6 +214,8 @@ class ChunkedStream(tts.ChunkedStream):
             API_AUTH_HEADER: self._opts.api_key,
             API_VERSION_HEADER: API_VERSION,
         }
+
+        logging.info(f"Sending request to Cartesia bytes endpoint with headers: {headers}")
 
         try:
             async with self._session.post(
@@ -218,6 +230,7 @@ class ChunkedStream(tts.ChunkedStream):
                 resp.raise_for_status()
                 async for data, _ in resp.content.iter_chunks():
                     for frame in bstream.write(data):
+                        logging.info(f"Sending frame to event channel")
                         self._event_ch.send_nowait(
                             tts.SynthesizedAudio(
                                 request_id=request_id,
@@ -229,6 +242,7 @@ class ChunkedStream(tts.ChunkedStream):
                     self._event_ch.send_nowait(
                         tts.SynthesizedAudio(request_id=request_id, frame=frame)
                     )
+            logging.info(f"ChunkedStream _run completed")
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
@@ -258,16 +272,17 @@ class SynthesizeStream(tts.SynthesizeStream):
         ).stream()
 
     async def _run(self) -> None:
+        logging.info("SynthesizeStream _run started")
         request_id = utils.shortuuid()
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse):
+            logging.info("Starting sentence stream task")
             base_pkt = _to_cartesia_options(self._opts)
             async for ev in self._sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = request_id
                 token_pkt["transcript"] = ev.token + " "
                 token_pkt["continue"] = True
-                self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
 
             end_pkt = base_pkt.copy()
@@ -277,6 +292,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps(end_pkt))
 
         async def _input_task():
+            logging.info("Starting input task")
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
                     self._sent_tokenizer_stream.flush()
@@ -285,6 +301,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._sent_tokenizer_stream.end_input()
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
+            logging.info("Starting receive task")
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=NUM_CHANNELS,
@@ -349,9 +366,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ws: aiohttp.ClientWebSocketResponse | None = None
 
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(url), self._conn_options.timeout
-            )
+            ws = await asyncio.wait_for(self._session.ws_connect(url), self._conn_options.timeout)
 
             tasks = [
                 asyncio.create_task(_input_task()),
