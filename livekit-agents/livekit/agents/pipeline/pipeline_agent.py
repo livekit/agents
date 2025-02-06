@@ -19,10 +19,18 @@ from typing import (
 from livekit import rtc
 
 from .. import metrics, stt, tokenize, tts, utils, vad
-from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from ..llm import (
+    LLM,
+    CalledFunction,
+    ChatContext,
+    ChatMessage,
+    FunctionContext,
+    LLMStream,
+)
 from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from .agent_output import AgentOutput, SpeechSource, SynthesisHandle
 from .agent_playout import AgentPlayout
+from .agent_task import AgentInlineTask, AgentTask, SilentSentinel
 from .human_input import HumanInput
 from .log import logger
 from .plotter import AssistantPlotter
@@ -65,10 +73,16 @@ _CallContextVar = contextvars.ContextVar["AgentCallContext"](
 
 
 class AgentCallContext:
-    def __init__(self, assistant: "VoicePipelineAgent", llm_stream: LLMStream) -> None:
+    def __init__(
+        self,
+        assistant: "VoicePipelineAgent",
+        llm_stream: LLMStream,
+        speech_handle: SpeechHandle,
+    ) -> None:
         self._assistant = assistant
         self._metadata = dict[str, Any]()
         self._llm_stream = llm_stream
+        self._speech_handle = speech_handle
         self._extra_chat_messages: list[ChatMessage] = []
 
     @staticmethod
@@ -91,6 +105,10 @@ class AgentCallContext:
 
     def llm_stream(self) -> LLMStream:
         return self._llm_stream
+
+    @property
+    def speech_handle(self) -> SpeechHandle:
+        return self._speech_handle
 
     def add_extra_chat_message(self, message: ChatMessage) -> None:
         """Append chat message to the end of function outputs for the answer LLM call"""
@@ -185,8 +203,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         llm: LLM,
         tts: tts.TTS,
         turn_detector: _TurnDetector | None = None,
-        chat_ctx: ChatContext | None = None,
-        fnc_ctx: FunctionContext | None = None,
+        # chat_ctx: ChatContext | None = None,
+        # fnc_ctx: FunctionContext | None = None,
+        initial_task: AgentTask | None = None,
         allow_interruptions: bool = True,
         interrupt_speech_duration: float = 0.5,
         interrupt_min_words: int = 0,
@@ -278,8 +297,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._stt, self._vad, self._llm, self._tts = stt, vad, llm, tts
         self._turn_detector = turn_detector
-        self._chat_ctx = chat_ctx or ChatContext()
-        self._fnc_ctx = fnc_ctx
+        # self._chat_ctx = chat_ctx or ChatContext()
+        # self._fnc_ctx = fnc_ctx
         self._started, self._closed = False, False
 
         self._human_input: HumanInput | None = None
@@ -310,13 +329,29 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._last_final_transcript_time: float | None = None
         self._last_speech_time: float | None = None
 
-    @property
-    def fnc_ctx(self) -> FunctionContext | None:
-        return self._fnc_ctx
+        # agent tasks
+        self._user_data: dict[str, Any] = {}
+        self._current_agent_task = initial_task or AgentTask()
 
-    @fnc_ctx.setter
-    def fnc_ctx(self, fnc_ctx: FunctionContext | None) -> None:
-        self._fnc_ctx = fnc_ctx
+    @property
+    def user_data(self) -> dict[str, Any]:
+        return self._user_data
+
+    @property
+    def current_agent_task(self) -> AgentTask:
+        return self._current_agent_task
+
+    def update_task(self, task: AgentTask) -> None:
+        self._current_agent_task = task
+
+    @property
+    def fnc_ctx(self) -> FunctionContext:
+        return self._current_agent_task.fnc_ctx
+
+    @property
+    def _chat_ctx(self) -> ChatContext:
+        # for compatibility for self._chat_ctx
+        return self._current_agent_task.chat_ctx
 
     @property
     def chat_ctx(self) -> ChatContext:
@@ -324,7 +359,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     @property
     def llm(self) -> LLM:
-        return self._llm
+        return self._current_agent_task.llm or self._llm
 
     @property
     def tts(self) -> tts.TTS:
@@ -386,6 +421,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     sequence_id=speech_data.sequence_id,
                 ),
             )
+
+        # for agent_task in self._agent_tasks:
+        #     if agent_task.llm:
+        #         agent_task.llm.on("metrics_collected", _on_llm_metrics)
 
         @self._vad.on("metrics_collected")
         def _on_vad_metrics(vad_metrics: vad.VADMetrics) -> None:
@@ -652,10 +691,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         agent_playout = AgentPlayout(audio_source=audio_source)
         self._agent_output = AgentOutput(
-            room=self._room,
-            agent_playout=agent_playout,
-            llm=self._llm,
-            tts=self._tts,
+            room=self._room, agent_playout=agent_playout, tts=self._tts
         )
 
         def _on_playout_started() -> None:
@@ -894,16 +930,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if not is_using_tools or interrupted:
                 return
 
-            if speech_handle.fnc_nested_depth >= self._opts.max_nested_fnc_calls:
-                logger.warning(
-                    "max function calls nested depth reached",
-                    extra={
-                        "speech_id": speech_handle.id,
-                        "fnc_nested_depth": speech_handle.fnc_nested_depth,
-                    },
-                )
-                return
-
             assert isinstance(speech_handle.source, LLMStream)
             assert not user_question or speech_handle.user_committed, (
                 "user speech should have been committed before using tools"
@@ -911,15 +937,28 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             llm_stream = speech_handle.source
 
+            if speech_handle.fnc_nested_depth >= self._opts.max_nested_fnc_calls:
+                logger.warning(
+                    "max function calls nested depth reached",
+                    extra={
+                        "speech_id": speech_handle.id,
+                        "fnc_nested_depth": speech_handle.fnc_nested_depth,
+                        "fnc_names": [
+                            fnc.function_info.name for fnc in llm_stream.function_calls
+                        ],
+                    },
+                )
+                return
+
             # execute functions
-            call_ctx = AgentCallContext(self, llm_stream)
+            call_ctx = AgentCallContext(self, llm_stream, speech_handle)
             tk = _CallContextVar.set(call_ctx)
 
             new_function_calls = llm_stream.function_calls
 
             self.emit("function_calls_collected", new_function_calls)
 
-            called_fncs = []
+            called_fncs: list[CalledFunction] = []
             for fnc in new_function_calls:
                 called_fnc = fnc.execute()
                 called_fncs.append(called_fnc)
@@ -943,19 +982,40 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     )
 
             tool_calls_info = []
-            tool_calls_results = []
-
+            tool_calls_results: list[ChatMessage] = []
+            tool_calls_chat_ctx = call_ctx.chat_ctx
+            should_create_response = True
+            original_task = self.current_agent_task
             for called_fnc in called_fncs:
                 # ignore the function calls that returns None
                 if called_fnc.result is None and called_fnc.exception is None:
                     continue
+
+                if isinstance(called_fnc.result, SilentSentinel):
+                    should_create_response = False
+                    continue
+
+                new_task = called_fnc.get_agent_task()
+                if new_task:
+                    logger.debug(
+                        "switching to next agent task",
+                        extra={
+                            "new_task": str(new_task),
+                            "previous_task": str(self.current_agent_task),
+                        },
+                    )
+                    self.update_task(new_task)
+                    # TODO: should we update task after the function call is done?
+                    # use the new chat ctx for the next task
+                    tool_calls_chat_ctx = self._chat_ctx
 
                 tool_calls_info.append(called_fnc.call_info)
                 tool_calls_results.append(
                     ChatMessage.create_tool_from_called_function(called_fnc)
                 )
 
-            if not tool_calls_info:
+            if not tool_calls_info or not should_create_response:
+                self.emit("function_calls_finished", called_fncs)
                 return
 
             # create a nested speech handle
@@ -963,6 +1023,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 ChatMessage.create_tool_calls(tool_calls_info, text=collected_text)
             ]
             extra_tools_messages.extend(tool_calls_results)
+
+            if original_task != self.current_agent_task:
+                # add the function call results to the original task
+                original_task.chat_ctx.messages.extend(extra_tools_messages)
+                extra_tools_messages = []
 
             new_speech_handle = SpeechHandle.create_tool_speech(
                 allow_interruptions=speech_handle.allow_interruptions,
@@ -973,28 +1038,27 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             )
 
             # synthesize the tool speech with the chat ctx from llm_stream
-            chat_ctx = call_ctx.chat_ctx.copy()
+            chat_ctx = tool_calls_chat_ctx.copy()
             chat_ctx.messages.extend(extra_tools_messages)
             chat_ctx.messages.extend(call_ctx.extra_chat_messages)
-            fnc_ctx = self.fnc_ctx
+            fnc_ctx: Optional[FunctionContext] = self.fnc_ctx
             if (
                 fnc_ctx
+                and len(fnc_ctx.ai_functions) > 0
                 and new_speech_handle.fnc_nested_depth
                 >= self._opts.max_nested_fnc_calls
             ):
                 if len(fnc_ctx.ai_functions) > 1:
                     logger.info(
-                        "max function calls nested depth reached, dropping function context. increase max_nested_fnc_calls to enable additional nesting.",
+                        "max function calls nested depth reached, dropping function context. "
+                        "increase max_nested_fnc_calls to enable additional nesting.",
                         extra={
                             "speech_id": speech_handle.id,
                             "fnc_nested_depth": speech_handle.fnc_nested_depth,
                         },
                     )
                 fnc_ctx = None
-            answer_llm_stream = self._llm.chat(
-                chat_ctx=chat_ctx,
-                fnc_ctx=fnc_ctx,
-            )
+            answer_llm_stream = self.llm.chat(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
 
             synthesis_handle = self._synthesize_agent_speech(
                 new_speech_handle.id, answer_llm_stream
@@ -1108,7 +1172,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
 
-        if self._playing_speech and not self._playing_speech.interrupted:
+        if (
+            self._playing_speech
+            and not self._playing_speech.interrupted
+            and not self._inline_task_running()
+        ):
             should_ignore_input = False
             if not self._playing_speech.allow_interruptions:
                 should_ignore_input = True
@@ -1139,14 +1207,15 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         assert self._pending_agent_reply is not None
 
-        # due to timing, we could end up with two pushed agent replies inside the speech queue.
-        # so make sure we directly interrupt every reply when validating a new one
-        for speech in self._speech_q:
-            if not speech.is_reply:
-                continue
+        if not self._inline_task_running():
+            # due to timing, we could end up with two pushed agent replies inside the speech queue.
+            # so make sure we directly interrupt every reply when validating a new one
+            for speech in self._speech_q:
+                if not speech.is_reply:
+                    continue
 
-            if speech.allow_interruptions:
-                speech.interrupt()
+                if speech.allow_interruptions:
+                    speech.interrupt()
 
         logger.debug(
             "validated agent reply",
@@ -1170,7 +1239,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             )
             self.emit("metrics_collected", eou_metrics)
 
-        self._add_speech_for_playout(self._pending_agent_reply)
+        if self._playing_speech and not self._playing_speech.nested_speech_done:
+            self._playing_speech.add_nested_speech(self._pending_agent_reply)
+        else:
+            self._add_speech_for_playout(self._pending_agent_reply)
+
         self._pending_agent_reply = None
         self._transcribed_interim_text = ""
         # self._transcribed_text is reset after MIN_TIME_PLAYED_FOR_COMMIT, see self._play_speech
@@ -1181,7 +1254,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             self._playing_speech.interrupt()
 
     def _should_interrupt(self) -> bool:
-        if self._playing_speech is None:
+        if self._playing_speech is None or self._inline_task_running():
             return False
 
         if (
@@ -1197,6 +1270,15 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return False
 
         return True
+
+    def _inline_task_running(self) -> bool:
+        if (
+            not isinstance(self.current_agent_task, AgentInlineTask)
+            or self._playing_speech is None
+        ):
+            return False
+
+        return self.current_agent_task._parent_speech is self._playing_speech
 
     def _add_speech_for_playout(self, speech_handle: SpeechHandle) -> None:
         self._speech_q.append(speech_handle)

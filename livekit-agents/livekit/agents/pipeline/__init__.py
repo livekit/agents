@@ -1,3 +1,4 @@
+from .agent_task import AgentTask
 from .pipeline_agent import (
     AgentCallContext,
     AgentTranscriptionOptions,
@@ -8,4 +9,5 @@ __all__ = [
     "VoicePipelineAgent",
     "AgentCallContext",
     "AgentTranscriptionOptions",
+    "AgentTask",
 ]
