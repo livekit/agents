@@ -526,9 +526,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             await asyncio.sleep(delay)
 
             if self._room.isconnected():
-                await self._room.local_participant.set_attributes({
-                    ATTRIBUTE_AGENT_STATE: state
-                })
+                await self._room.local_participant.set_attributes(
+                    {ATTRIBUTE_AGENT_STATE: state}
+                )
 
         if self._update_state_task is not None:
             self._update_state_task.cancel()
@@ -852,6 +852,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         collected_text = speech_handle.synthesis_handle.tts_forwarder.played_text
         interrupted = speech_handle.interrupted
+
         is_using_tools = isinstance(speech_handle.source, LLMStream) and len(
             speech_handle.source.function_calls
         )
@@ -1101,6 +1102,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """
         tk = SpeechDataContextVar.set(SpeechData(handle.id))
         try:
+            new_source = source
 
             async def _llm_stream_to_str_generator(
                 stream: LLMStream,
@@ -1124,10 +1126,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     await stream.aclose()
 
             if isinstance(source, LLMStream):
-                source = _llm_stream_to_str_generator(source)
+                new_source = _llm_stream_to_str_generator(source)
 
-            og_source = source
-            transcript_source = source
+            og_source = new_source
+            transcript_source = new_source
             if isinstance(og_source, AsyncIterable):
                 og_source, transcript_source = utils.aio.itertools.tee(og_source, 2)
             tts_source = self._opts.before_tts_cb(self, og_source)
@@ -1146,7 +1148,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             word_tokenizer=self._opts.transcription.word_tokenizer,
             hyphenate_word=self._opts.transcription.hyphenate_word,
         )
-        handle.initialize(source=tts_source, synthesis_handle=synthesis_handle)
+        handle.initialize(source=source, synthesis_handle=synthesis_handle)
         asyncio.create_task(self._set_active_and_push(tts_source, handle))
 
         if isinstance(transcript_source, AsyncIterable):
