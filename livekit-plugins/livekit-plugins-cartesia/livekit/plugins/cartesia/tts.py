@@ -64,12 +64,10 @@ class _TTSOptions:
     base_url: str
 
     def get_http_url(self, path: str) -> str:
-        protocol = "http" if "localhost" in self.base_url else "https"
-        return f"{protocol}://{self.base_url}{path}"
+        return f"{self.base_url}{path}"
 
     def get_ws_url(self, path: str) -> str:
-        protocol = "ws" if "localhost" in self.base_url else "wss"
-        return f"{protocol}://{self.base_url}{path}"
+        return f"{self.base_url.replace('http', 'ws', 1)}{path}"
 
 
 class TTS(tts.TTS):
@@ -85,7 +83,7 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        base_url: str = "api.cartesia.ai",
+        base_url: str = "https://api.cartesia.ai",
     ) -> None:
         """
         Create a new instance of Cartesia TTS.
@@ -102,7 +100,7 @@ class TTS(tts.TTS):
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
-            base_url (str, optional): The base URL for the Cartesia API. Defaults to "api.cartesia.ai".
+            base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
         """
 
         super().__init__(
