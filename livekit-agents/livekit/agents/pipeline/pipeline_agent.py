@@ -679,9 +679,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         if self._tts.capabilities.streaming:
             self._tts_stream = self._tts.stream()
-            self._tts_task = asyncio.create_task(self._persistent_tts_reader())
+            self._tts_task = asyncio.create_task(self._tts_reader())
         else:
-            print("tts is not streaming")
             self._tts_stream = None
 
         while True:
@@ -1059,39 +1058,36 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         speech_handle._set_done()
 
     @utils.log_exceptions(logger=logger)
-    async def _persistent_tts_reader(self) -> None:
+    async def _tts_reader(self) -> None:
         """
         Continuously reads from the persistent TTS stream and dispatches audio frames
         to the active SpeechHandle.
         """
         assert self._tts_stream is not None
-        try:
-            async for audio in self._tts_stream:
-                if self._active_speech_handle is not None:
-                    if self._active_speech_handle.interrupted:
-                        logger.debug(
-                            "synthesis handle interrupted",
-                            extra={"speech_id": self._active_speech_handle.id},
-                        )
-                        self._active_speech_handle = None
-                        continue
+        async for audio in self._tts_stream:
+            if self._active_speech_handle is not None:
+                if self._active_speech_handle.interrupted:
+                    logger.debug(
+                        "synthesis handle interrupted",
+                        extra={"speech_id": self._active_speech_handle.id},
+                    )
+                    self._active_speech_handle = None
+                    continue
 
-                    self._active_speech_handle.synthesis_handle._buf_ch.send_nowait(
+                self._active_speech_handle.synthesis_handle._buf_ch.send_nowait(
+                    audio.frame
+                )
+                if not self._active_speech_handle.synthesis_handle.tts_forwarder.closed:
+                    self._active_speech_handle.synthesis_handle.tts_forwarder.push_audio(
                         audio.frame
                     )
-                    if not self._active_speech_handle.synthesis_handle.tts_forwarder.closed:
-                        self._active_speech_handle.synthesis_handle.tts_forwarder.push_audio(
-                            audio.frame
-                        )
 
-                if audio.is_final:
-                    if self._active_speech_handle:
-                        self._active_speech_handle.synthesis_handle.tts_forwarder.mark_audio_segment_end()
-                        self._active_speech_handle._set_done()
-                        self._active_speech_handle.synthesis_handle._buf_ch.close()
-                        self._active_speech_handle = None
-        except Exception as e:
-            logger.exception("Error in persistent TTS reader", exc_info=e)
+            if audio.is_final:
+                if self._active_speech_handle:
+                    self._active_speech_handle.synthesis_handle.tts_forwarder.mark_audio_segment_end()
+                    self._active_speech_handle._set_done()
+                    self._active_speech_handle.synthesis_handle._buf_ch.close()
+                    self._active_speech_handle = None
 
     def _synthesize_agent_speech(
         self, speech_handle: SpeechHandle, source: str | LLMStream | AsyncIterable[str]
