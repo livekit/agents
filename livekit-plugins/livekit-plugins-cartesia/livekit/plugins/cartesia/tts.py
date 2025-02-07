@@ -356,7 +356,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.error("unexpected Cartesia message %s", data)
 
-        url = self._opts.get_ws_url(f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}")
+        url = self._opts.get_ws_url(
+            f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
+        )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
