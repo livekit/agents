@@ -540,6 +540,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         if not self._started:
             return
 
+        # close tts stream and task
+        await utils.aio.gracefully_cancel(self._tts_task)
+        if self._tts_stream is not None:
+            await self._tts_stream.aclose()
+
         self._room.off("participant_connected", self._on_participant_connected)
         await self._deferred_validation.aclose()
 
