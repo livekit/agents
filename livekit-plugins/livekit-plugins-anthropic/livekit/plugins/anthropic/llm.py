@@ -39,7 +39,7 @@ from livekit.agents import (
     llm,
     utils,
 )
-from livekit.agents.llm import ToolChoice
+from livekit.agents.llm import LLMCapabilities, ToolChoice
 from livekit.agents.llm.function_context import (
     _create_ai_function_info,
     _is_optional_type,
@@ -82,7 +82,13 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
         """
-        super().__init__()
+
+        super().__init__(
+            capabilities=LLMCapabilities(
+                requires_persistent_functions=True,
+                supports_choices_on_int=True,
+            )
+        )
 
         # throw an error on our end
         api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
