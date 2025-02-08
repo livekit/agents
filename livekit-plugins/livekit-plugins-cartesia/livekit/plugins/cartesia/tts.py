@@ -175,6 +175,13 @@ class TTS(tts.TTS):
     ) -> ChunkedStream:
         logging.info(f"Synthesize called with text: {text}")
         text = replace_numbers_with_words_cartesia(text, lang=AppConfig().language)
+        text = text.replace("DETERMINISTIC", "")
+        text = text.replace("past due", "past-due")
+        text = text.replace("processing fees on", "processing-fees-on")
+        text = text.replace("GAP", "gap")
+        text = text.replace("routing", "<<ˈr|aʊ|t|ɪ|ŋ|g|>>")
+        text = text.replace("live agent", "<<'l|aɪ|v|>> agent")
+        text = text.replace("GoFi", "<<ˈɡ|oʊ|f|aɪ|>>")
         logging.info(f"Processed text: {text}")
         return ChunkedStream(
             tts=self,
