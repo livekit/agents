@@ -123,7 +123,7 @@ class EOUModel:
     def __init__(
         self,
         inference_executor: InferenceExecutor | None = None,
-        unlikely_threshold: float = 0.15,
+        unlikely_threshold: float = 0.008,
     ) -> None:
         self._executor = (
             inference_executor or get_current_job_context().inference_executor
