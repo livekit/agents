@@ -1331,7 +1331,7 @@ class _DeferredReplyValidation:
                     if eot_prob < unlikely_threshold:
                         delay = self._max_endpointing_delay
                     delay = max(0, delay - elasped)
-                except TimeoutError:
+                except (TimeoutError, AssertionError):
                     pass  # inference process is unresponsive
 
             await asyncio.sleep(delay)
