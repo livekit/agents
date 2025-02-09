@@ -520,6 +520,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+            if ws_conn is not None:
+                await ws_conn.close()
 
 
 def _dict_to_voices_list(data: dict[str, Any]):
