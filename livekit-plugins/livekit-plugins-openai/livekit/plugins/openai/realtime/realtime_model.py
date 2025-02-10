@@ -6,7 +6,7 @@ import os
 import time
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal, Optional, Union, cast, overload
+from typing import Any, AsyncIterable, Literal, Optional, Union, cast, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -768,7 +768,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 **self._sess.logging_extra(),
             }
 
-            response_request = {"conversation": conversation}
+            response_request: api_proto.ClientEvent.ResponseCreateData = {
+                "conversation": conversation
+            }
             if instructions is not None:
                 response_request["instructions"] = instructions
             if modalities is not None:
