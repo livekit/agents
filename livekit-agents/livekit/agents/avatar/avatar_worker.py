@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import AsyncIterator, Optional, Protocol
+from typing import AsyncIterator, Coroutine, Optional, Protocol
 
 from livekit import rtc
 from livekit.agents import utils
@@ -15,7 +15,7 @@ class VideoGenerator(Protocol):
     async def push_audio(self, frame: rtc.AudioFrame | AudioFlushSentinel) -> None:
         """Push an audio frame to the video generator"""
 
-    def clear_buffer(self) -> None:
+    def clear_buffer(self) -> None | Coroutine[None, None, None]:
         """Clear the audio buffer, stopping audio playback immediately"""
 
     async def stream(
@@ -84,7 +84,9 @@ class AvatarWorker:
 
         # Start audio receiver
         await self._audio_receiver.start()
-        self._audio_receiver.on("clear_buffer", self._handle_clear_buffer)
+        self._audio_receiver.on(
+            "clear_buffer", lambda: asyncio.create_task(self._handle_clear_buffer())
+        )
 
         # Publish tracks
         audio_track = rtc.LocalAudioTrack.create_audio_track(
@@ -142,18 +144,24 @@ class AvatarWorker:
                 await self._av_sync.push(audio_frame)
                 self._playback_position += audio_frame.duration
 
-    def _handle_clear_buffer(self) -> None:
-        # clear the audio queue, notify the agent the playback finished
-        self._video_generator.clear_buffer()
+    async def _handle_clear_buffer(self) -> None:
+        """Handle clearing the buffer and notify about interrupted playback"""
+        tasks = []
+        clear_result = self._video_generator.clear_buffer()
+        if asyncio.iscoroutine(clear_result):
+            tasks.append(clear_result)
+
         if self._audio_playing:
-            asyncio.create_task(
+            tasks.append(
                 self._audio_receiver.notify_playback_finished(
                     playback_position=self._playback_position,
                     interrupted=True,
                 )
             )
             self._playback_position = 0.0
-        self._audio_playing = False
+            self._audio_playing = False
+
+        await asyncio.gather(*tasks)
 
     async def aclose(self) -> None:
         if self._video_gen_atask:

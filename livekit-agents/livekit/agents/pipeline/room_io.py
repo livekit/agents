@@ -82,6 +82,7 @@ class RoomInput:
         async def _read_stream():
             async for event in self._audio_stream:
                 yield event.frame
+                await asyncio.sleep(0)
 
         return _read_stream()
 
@@ -93,6 +94,7 @@ class RoomInput:
         async def _read_stream():
             async for event in self._video_stream:
                 yield event.frame
+                await asyncio.sleep(0)
 
         return _read_stream()
 
