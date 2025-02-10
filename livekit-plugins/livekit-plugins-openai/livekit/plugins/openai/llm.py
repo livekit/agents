@@ -666,25 +666,23 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            fnc_ctx_present = self._fnc_ctx and len(self._fnc_ctx.ai_functions) > 0
+            if self._fnc_ctx and len(self._fnc_ctx.ai_functions) > 0:
+                tools = [
+                    build_oai_function_description(fnc, self._llm._capabilities)
+                    for fnc in self._fnc_ctx.ai_functions.values()
+                ]
+            else:
+                tools = None
+
             opts: dict[str, Any] = {
-                "tools": (
-                    [
-                        build_oai_function_description(fnc, self._llm._capabilities)
-                        for fnc in self._fnc_ctx.ai_functions.values()
-                    ]
-                    if fnc_ctx_present
-                    else None
-                ),
-                "parallel_tool_calls": self._parallel_tool_calls
-                if fnc_ctx_present
-                else None,
+                "tools": tools,
+                "parallel_tool_calls": self._parallel_tool_calls if tools else None,
                 "tool_choice": (
                     {"type": "function", "function": {"name": self._tool_choice.name}}
                     if isinstance(self._tool_choice, ToolChoice)
                     else self._tool_choice
                 )
-                if fnc_ctx_present and self._tool_choice is not None
+                if tools is not None
                 else None,
                 "temperature": self._temperature,
                 "metadata": self._llm._opts.metadata,
