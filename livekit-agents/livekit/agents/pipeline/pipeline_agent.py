@@ -6,10 +6,14 @@ from typing import AsyncIterable, Literal
 
 from livekit import rtc
 
-from .. import debug, llm, utils
+from .. import debug, llm, multimodal, stt, tts, utils, vad
+from ..llm import ChatContext
 from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
 from . import io
-from .agent_task import AgentTask, TaskActivity
+from .task import AgentTask
+from .task_activity import TaskActivity
+from .audio_recognition import _TurnDetector
 from .speech_handle import SpeechHandle
 
 EventTypes = Literal[
@@ -35,7 +39,13 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        task: AgentTask,  # TODO(theomonnom): move this, pretty sure there will be complaints about this lol
+        instructions: str | None = None,
+        task: NotGivenOr[AgentTask] = NOT_GIVEN,
+        turn_detector: NotGivenOr[_TurnDetector] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | multimodal.RealtimeModel] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
         allow_interruptions: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
@@ -46,7 +56,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         self._loop = loop or asyncio.get_event_loop()
 
         # This is the "global" chat_context, it holds the entire conversation history
-        self._chat_ctx = task.chat_ctx.copy()
+        self._chat_ctx = ChatContext.empty()
         self._opts = PipelineOptions(
             allow_interruptions=allow_interruptions,
             min_interruption_duration=min_interruption_duration,
@@ -54,6 +64,12 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             max_fnc_steps=max_fnc_steps,
         )
         self._started = False
+
+        self._turn_detector = turn_detector or None
+        self._stt = stt or None
+        self._vad = vad or None
+        self._llm = llm or None
+        self._tts = tts or None
 
         # configurable IO
         self._input = io.AgentInput(
@@ -70,8 +86,39 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         self._lock = asyncio.Lock()
 
         # agent tasks
-        self._current_task: AgentTask = task
-        self._active_task: TaskActivity | None = None
+        self._agent_task: AgentTask
+
+        if utils.is_given(task):
+            self._agent_task = task
+        else:
+            if instructions is None:
+                raise ValueError(
+                    "instructions must be provided if no agent task is given"
+                )
+
+            self._agent_task = AgentTask(instructions=instructions)
+
+        self._activity: TaskActivity | None = None
+
+    @property
+    def turn_detector(self) -> _TurnDetector | None:
+        return self._turn_detector
+
+    @property
+    def stt(self) -> stt.STT | None:
+        return self._stt
+
+    @property
+    def llm(self) -> llm.LLM | multimodal.RealtimeModel | None:
+        return self._llm
+
+    @property
+    def tts(self) -> tts.TTS | None:
+        return self._tts
+
+    @property
+    def vad(self) -> vad.VAD | None:
+        return self._vad
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -90,7 +137,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             )
 
         self._update_activity_atask = asyncio.create_task(
-            self._update_activity_task(self._current_task), name="_update_activity_task"
+            self._update_activity_task(self._agent_task), name="_update_activity_task"
         )
 
         self._started = True
@@ -124,7 +171,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
     @property
     def current_task(self) -> AgentTask:
-        return self._current_task
+        return self._agent_task
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -140,23 +187,23 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         raise NotImplementedError()
 
     def update_task(self, task: AgentTask) -> None:
-        self._current_task = task
+        self._agent_task = task
 
         if self._started:
             self._update_activity_atask = asyncio.create_task(
-                self._update_activity_task(self._current_task),
+                self._update_activity_task(self._agent_task),
                 name="_update_activity_task",
             )
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: AgentTask) -> None:
         async with self._lock:
-            if self._active_task is not None:
-                await self._active_task.drain()
-                await self._active_task.aclose()
+            if self._activity is not None:
+                await self._activity.drain()
+                await self._activity.aclose()
 
-            self._active_task = task._create_activity(self)
-            await self._active_task.start()
+            self._activity = TaskActivity(task, self)
+            await self._activity.start()
 
     @utils.log_exceptions(logger=logger)
     async def _forward_audio_task(self) -> None:
@@ -165,8 +212,8 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             return
 
         async for frame in audio_input:
-            if self._active_task is not None:
-                self._active_task.push_audio(frame)
+            if self._activity is not None:
+                self._activity.push_audio(frame)
 
     # -- User changed input/output streams/sinks --
 

@@ -22,7 +22,7 @@ STTNode = Callable[
     Union[Awaitable[Optional[AsyncIterable[stt.SpeechEvent]]]],  # TODO: support str
 ]
 LLMNode = Callable[
-    [llm.ChatContext, Optional[llm.FunctionContext]],
+    [llm.ChatContext, list[llm.AIFunction]],
     Union[
         Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]],
         Awaitable[
