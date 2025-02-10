@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from types import TracebackType
 from typing import (
     Any,
@@ -11,58 +10,64 @@ from typing import (
     AsyncIterator,
     Generic,
     Literal,
+    Optional,
+    TypedDict,
     TypeVar,
     Union,
 )
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
+from pydantic import BaseModel, Field
+from typing_extensions import Required
 
 from .. import utils
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from ..utils import aio
-from . import function_context
-from .chat_context import ChatContext
+from .chat_context import ChatContext, ChatRole
+from .function_context import AIFunction
 
 
-@dataclass
-class ChoiceDelta:
-    # role: ChatRole
-    content: str | None = None
-    # tool_calls: list[function_context.FunctionCallInfo] | None = None
-
-
-@dataclass
-class CompletionUsage:
+class CompletionUsage(BaseModel):
     completion_tokens: int
     prompt_tokens: int
     total_tokens: int
 
 
-@dataclass
-class Choice:
-    delta: ChoiceDelta
-    index: int = 0
-
-
-@dataclass
-class LLMCapabilities:
-    supports_choices_on_int: bool = True
-
-
-@dataclass
-class ChatChunk:
-    request_id: str
-    choices: list[Choice] = field(default_factory=list)
-    usage: CompletionUsage | None = None
-
-
-@dataclass
-class ToolChoice:
-    type: Literal["function"]
+class FunctionToolCall(BaseModel):
+    type: Literal["function"] = "function"
     name: str
+    arguments: str
+    call_id: str
+
+
+class ChoiceDelta(BaseModel):
+    role: Optional[ChatRole] = None
+    content: Optional[str] = None
+    tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+
+
+class ChatChunk(BaseModel):
+    id: str
+    delta: Optional[ChoiceDelta] = None
+    usage: Optional[CompletionUsage] = None
+
+
+# Used by ToolChoice
+class Function(TypedDict, total=False):
+    name: Required[str]
+
+
+class ToolChoice(TypedDict, total=False):
+    type: Required[Literal["function"]]
+    function: Required[Function]
 
 
 TEvent = TypeVar("TEvent")
@@ -75,7 +80,6 @@ class LLM(
 ):
     def __init__(self) -> None:
         super().__init__()
-        self._capabilities = LLMCapabilities()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
@@ -87,18 +91,14 @@ class LLM(
         self,
         *,
         chat_ctx: ChatContext,
+        fnc_ctx: list[AIFunction] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        fnc_ctx: function_context.FunctionContext | None = None,
-        temperature: float | None = None,
-        n: int | None = None,
-        parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[
+            Union[ToolChoice, Literal["auto", "required", "none"]]
+        ] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> "LLMStream": ...
-
-    @property
-    def capabilities(self) -> LLMCapabilities:
-        return self._capabilities
 
     async def aclose(self) -> None: ...
 
@@ -120,7 +120,7 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: function_context.FunctionContext | None,
+        fnc_ctx: list[AIFunction],
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
@@ -136,9 +136,6 @@ class LLMStream(ABC):
 
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
-
-        self._function_calls_info: list[function_context.FunctionCallInfo] = []
-        self._function_tasks = set[asyncio.Task[Any]]()
 
     @abstractmethod
     async def _run(self) -> None: ...
@@ -176,7 +173,7 @@ class LLMStream(ABC):
         usage: CompletionUsage | None = None
 
         async for ev in event_aiter:
-            request_id = ev.request_id
+            request_id = ev.id
             if ttft == -1.0:
                 ttft = time.perf_counter() - start_time
 
@@ -200,34 +197,17 @@ class LLMStream(ABC):
         self._llm.emit("metrics_collected", metrics)
 
     @property
-    def function_calls(self) -> list[function_context.FunctionCallInfo]:
-        """List of called functions from this stream."""
-        return self._function_calls_info
-
-    @property
     def chat_ctx(self) -> ChatContext:
-        """The initial chat context of this stream."""
+        """The chat context of this stream."""
         return self._chat_ctx
 
     @property
-    def fnc_ctx(self) -> function_context.FunctionContext | None:
+    def fnc_ctx(self) -> list[AIFunction]:
         """The function context of this stream."""
         return self._fnc_ctx
 
-    def execute_functions(self) -> list[function_context.CalledFunction]:
-        """Execute all functions concurrently of this stream."""
-        called_functions: list[function_context.CalledFunction] = []
-        for fnc_info in self._function_calls_info:
-            called_fnc = fnc_info.execute()
-            self._function_tasks.add(called_fnc.task)
-            called_fnc.task.add_done_callback(self._function_tasks.remove)
-            called_functions.append(called_fnc)
-
-        return called_functions
-
     async def aclose(self) -> None:
         await aio.cancel_and_wait(self._task)
-        await utils.aio.cancel_and_wait(*self._function_tasks)
         await self._metrics_task
 
     async def __anext__(self) -> ChatChunk:

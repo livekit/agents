@@ -2,11 +2,12 @@ import logging
 
 from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
-from livekit.agents.pipeline import AgentTask, PipelineAgent
+from livekit.agents.llm import ai_function
+from livekit.agents.pipeline import AgentContext, AgentTask, ChatCLI, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.agents.pipeline.room_io import RoomInput, RoomOutput, RoomOutputOptions
 from livekit.agents.transcription import TranscriptionDataStreamForwarder
-from livekit.plugins import openai
+from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("roomio-example")
 logger.setLevel(logging.INFO)
@@ -14,14 +15,38 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 
+class EchoTask(AgentTask):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions="You are Echo, always speak in English even if the user speaks in another language or wants to use another language.",
+            llm=openai.realtime.RealtimeModel(voice="echo"),
+        )
+
+    @ai_function
+    async def talk_to_alloy(self, context: AgentContext):
+        return AlloyTask(), "Transfering you to Alloy."
+
+
+class AlloyTask(AgentTask):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions="You are Alloy, always speak in English even if the user speaks in another language or wants to use another language.",
+            llm=openai.realtime.RealtimeModel(voice="alloy"),
+        )
+
+    @ai_function
+    async def talk_to_echo(self, context: AgentContext):
+        return EchoTask(), "Transfering you to Echo."
+
+
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     agent = PipelineAgent(
-        task=AgentTask(
-            instructions="Talk to me!",
-            llm=openai.realtime.RealtimeModel(),
-        )
+        task=AlloyTask(),
+        # stt=deepgram.STT(),
+        # llm=openai.LLM(),
+        # tts=cartesia.TTS(),
     )
 
     room_input = RoomInput(ctx.room)

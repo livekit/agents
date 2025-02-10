@@ -9,7 +9,7 @@ from livekit import rtc
 from .. import utils
 from ..transcription import TranscriptionRoomForwarder, TranscriptionSyncIO
 from .io import AudioSink, TextSink
-from .log import logger
+from ..log import logger
 
 
 @dataclass
