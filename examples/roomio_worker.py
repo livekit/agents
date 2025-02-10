@@ -5,6 +5,7 @@ from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.agents.pipeline.room_io import RoomInput, RoomOutput, RoomOutputOptions
+from livekit.agents.transcription import TranscriptionDataStreamForwarder
 from livekit.plugins import openai
 
 logger = logging.getLogger("roomio-example")
@@ -32,6 +33,13 @@ async def entrypoint(ctx: JobContext):
     agent.output.text = room_output.text
     await room_input.wait_for_participant()
     await room_output.start()
+
+    # (optional) forward transcription using data stream
+    ds_forwarder = TranscriptionDataStreamForwarder(
+        room=ctx.room,
+        attributes={"transcription_track": "agent"},
+    )
+    room_output.on("transcription_segment", ds_forwarder.update)
 
     await agent.start()
 

@@ -1,4 +1,5 @@
 from .forwarder import (
+    TranscriptionDataStreamForwarder,
     TranscriptionForwarder,
     TranscriptionRoomForwarder,
     TranscriptionStreamForwarder,
@@ -11,4 +12,5 @@ __all__ = [
     "TranscriptionForwarder",
     "TranscriptionRoomForwarder",
     "TranscriptionStreamForwarder",
+    "TranscriptionDataStreamForwarder",
 ]
