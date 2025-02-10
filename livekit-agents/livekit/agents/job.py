@@ -156,9 +156,13 @@ class JobContext:
         Optionally the callback can take a single argument, the shutdown reason.
         """
         if callback.__code__.co_argcount > 0:
-            self._shutdown_callbacks.append(callback)
+            self._shutdown_callbacks.append(callback)  # type: ignore
         else:
-            self._shutdown_callbacks.append(lambda _: callback())
+
+            async def wrapper(reason: str) -> None:
+                await callback()
+
+            self._shutdown_callbacks.append(wrapper)
 
     async def wait_for_participant(
         self,
