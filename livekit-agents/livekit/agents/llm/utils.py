@@ -15,11 +15,12 @@ from typing import (
 from pydantic import BaseModel, create_model
 from pydantic.fields import FieldInfo
 
+from . import _strict
 from .chat_context import ChatContext
 from .function_context import AIFunction, get_function_info
 
 if TYPE_CHECKING:
-    from ..pipeline.context import AgentContext
+    from ..pipeline.events import AgentContext
     from ..pipeline.speech_handle import SpeechHandle
 
 
@@ -94,7 +95,7 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
 
 
 def is_context_type(ty: type) -> bool:
-    from ..pipeline.context import AgentContext
+    from ..pipeline.events import AgentContext
     from ..pipeline.speech_handle import SpeechHandle
 
     return ty is AgentContext or ty is SpeechHandle
@@ -106,9 +107,8 @@ def build_legacy_openai_schema(
     """non-strict mode tool description
     see https://serde.rs/enum-representations.html for the internally tagged representation"""
     model = function_arguments_to_pydantic_model(ai_function)
-    schema = model.model_json_schema()
-
     info = get_function_info(ai_function)
+    schema = model.model_json_schema()
 
     if internally_tagged:
         return {
@@ -126,6 +126,25 @@ def build_legacy_openai_schema(
                 "parameters": schema,
             },
         }
+
+
+def build_strict_openai_schema(
+    ai_function: AIFunction,
+) -> dict[str, Any]:
+    """strict mode tool description"""
+    model = function_arguments_to_pydantic_model(ai_function)
+    info = get_function_info(ai_function)
+    schema = _strict.to_strict_json_schema(model)
+
+    return {
+        "type": "function",
+        "function": {
+            "name": info.name,
+            "strict": True,
+            "description": info.description or "",
+            "parameters": schema,
+        },
+    }
 
 
 def function_arguments_to_pydantic_model(
@@ -188,7 +207,7 @@ def pydantic_model_to_function_arguments(
     Raises TypeError if required params are missing
     """
 
-    from ..pipeline.context import AgentContext
+    from ..pipeline.events import AgentContext
     from ..pipeline.speech_handle import SpeechHandle
 
     signature = inspect.signature(ai_function)

@@ -48,7 +48,6 @@ class AudioRecognition:
         self._stt_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
-        self._audio_input: io.AudioStream | None = None
         self._min_endpointing_delay = min_endpointing_delay
         self._turn_detector = turn_detector
         self._stt = stt
@@ -96,7 +95,7 @@ class AudioRecognition:
 
     def update_stt(self, stt: io.STTNode | None) -> None:
         self._stt = stt
-        if self._audio_input and stt:
+        if stt:
             self._stt_ch = aio.Chan[rtc.AudioFrame]()
             self._stt_atask = asyncio.create_task(
                 self._stt_task(stt, self._stt_ch, self._stt_atask)
@@ -108,7 +107,7 @@ class AudioRecognition:
 
     def update_vad(self, vad: vad.VAD | None) -> None:
         self._vad = vad
-        if self._audio_input and vad:
+        if vad:
             self._vad_ch = aio.Chan[rtc.AudioFrame]()
             self._vad_atask = asyncio.create_task(
                 self._vad_task(vad, self._vad_ch, self._vad_atask)
