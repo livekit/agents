@@ -59,6 +59,7 @@ class _ContentProto(Protocol):
 
 class _CapabilitiesProto(Protocol):
     supports_truncate: bool
+    input_audio_sample_rate: int | None
 
 
 class _RealtimeAPI(Protocol):
@@ -489,8 +490,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         self._subscribe_to_microphone()
 
     async def _micro_task(self, track: rtc.LocalAudioTrack) -> None:
-        stream_24khz = rtc.AudioStream(track, sample_rate=24000, num_channels=1)
-        async for ev in stream_24khz:
+        sample_rate = self._model.capabilities.input_audio_sample_rate
+        if sample_rate is None:
+            sample_rate = 24000
+
+        input_stream = rtc.AudioStream(track, sample_rate=sample_rate, num_channels=1)
+        async for ev in input_stream:
             self._input_audio_ch.send_nowait(ev.frame)
 
     def _subscribe_to_microphone(self, *args, **kwargs) -> None:

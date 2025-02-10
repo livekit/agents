@@ -401,7 +401,8 @@ class TTSSegmentsForwarder:
                     language=self._opts.language,
                 )
             )
-            self._played_text = f"{og_text} {text}"
+            # add space if there is text before it
+            self._played_text = f"{og_text}{' ' if og_text else ''}{text}"
 
             await self._sleep_if_not_closed(delay - first_delay)
             text_data.forwarded_hyphens += word_hyphens
@@ -416,7 +417,7 @@ class TTSSegmentsForwarder:
                 language=self._opts.language,
             )
         )
-        self._played_text = f"{og_text} {sentence}"
+        self._played_text = f"{og_text}{' ' if og_text else ''}{sentence}"
 
         await self._sleep_if_not_closed(self._opts.new_sentence_delay)
         text_data.forwarded_sentences += 1

@@ -27,7 +27,7 @@ from livekit.agents import (
     llm,
     utils,
 )
-from livekit.agents.llm import ToolChoice, _create_ai_function_info
+from livekit.agents.llm import LLMCapabilities, ToolChoice, _create_ai_function_info
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from google import genai
@@ -60,7 +60,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: ChatModels | str = "gemini-2.0-flash-exp",
+        model: ChatModels | str = "gemini-2.0-flash-001",
         api_key: str | None = None,
         vertexai: bool = False,
         project: str | None = None,
@@ -85,7 +85,7 @@ class LLM(llm.LLM):
         - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
 
         Args:
-            model (ChatModels | str, optional): The model name to use. Defaults to "gemini-2.0-flash-exp".
+            model (ChatModels | str, optional): The model name to use. Defaults to "gemini-2.0-flash-001".
             api_key (str, optional): The API key for Google Gemini. If not provided, it attempts to read from the `GOOGLE_API_KEY` environment variable.
             vertexai (bool, optional): Whether to use VertexAI. Defaults to False.
             project (str, optional): The Google Cloud project to use (only for VertexAI). Defaults to None.
@@ -99,8 +99,12 @@ class LLM(llm.LLM):
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
         """
-        super().__init__()
-        self._capabilities = llm.LLMCapabilities(supports_choices_on_int=False)
+        super().__init__(
+            capabilities=LLMCapabilities(
+                supports_choices_on_int=False,
+                requires_persistent_functions=False,
+            )
+        )
         self._project_id = project or os.environ.get("GOOGLE_CLOUD_PROJECT", None)
         self._location = location or os.environ.get(
             "GOOGLE_CLOUD_LOCATION", "us-central1"
@@ -108,8 +112,8 @@ class LLM(llm.LLM):
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY", None)
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if _gac is None:
-            raise ValueError(
-                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file."
+            logger.warning(
+                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file. Otherwise, use any of the other Google Cloud auth methods."
             )
 
         if vertexai:

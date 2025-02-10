@@ -246,6 +246,7 @@ class SynthesizeStream(ABC):
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._metrics_task: asyncio.Task | None = None  # started on first push
+        self._started_time: float = 0
 
         # used to track metrics
         self._mtc_pending_texts: list[str] = []
@@ -279,18 +280,26 @@ class SynthesizeStream(ABC):
 
                 await asyncio.sleep(retry_interval)
 
+    def _mark_started(self) -> None:
+        # only set the started time once, it'll get reset after we emit metrics
+        if self._started_time == 0:
+            self._started_time = time.perf_counter()
+
     async def _metrics_monitor_task(
         self, event_aiter: AsyncIterable[SynthesizedAudio]
     ) -> None:
         """Task used to collect metrics"""
-        start_time = time.perf_counter()
         audio_duration = 0.0
         ttfb = -1.0
         request_id = ""
 
         def _emit_metrics():
-            nonlocal start_time, audio_duration, ttfb, request_id
-            duration = time.perf_counter() - start_time
+            nonlocal audio_duration, ttfb, request_id
+
+            if not self._started_time:
+                return
+
+            duration = time.perf_counter() - self._started_time
 
             if not self._mtc_pending_texts:
                 return
@@ -316,11 +325,11 @@ class SynthesizeStream(ABC):
             audio_duration = 0.0
             ttfb = -1.0
             request_id = ""
-            start_time = time.perf_counter()
+            self._started_time = 0
 
         async for ev in event_aiter:
             if ttfb == -1.0:
-                ttfb = time.perf_counter() - start_time
+                ttfb = time.perf_counter() - self._started_time
 
             audio_duration += ev.frame.duration
             request_id = ev.request_id
