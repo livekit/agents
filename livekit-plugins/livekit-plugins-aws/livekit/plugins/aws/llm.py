@@ -24,7 +24,7 @@ from livekit.agents import (
     APIStatusError,
     llm,
 )
-from livekit.agents.llm import ToolChoice, _create_ai_function_info
+from livekit.agents.llm import LLMCapabilities, ToolChoice, _create_ai_function_info
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from ._utils import _build_aws_ctx, _build_tools, _get_aws_credentials
@@ -77,9 +77,12 @@ class LLM(llm.LLM):
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
         """
-        super().__init__()
-        self._capabilities = llm.LLMCapabilities(supports_choices_on_int=True)
-
+        super().__init__(
+            capabilities=LLMCapabilities(
+                supports_choices_on_int=True,
+                requires_persistent_functions=True,
+            )
+        )
         self._api_key, self._api_secret = _get_aws_credentials(
             api_key, api_secret, region
         )
