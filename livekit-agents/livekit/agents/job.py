@@ -160,7 +160,7 @@ class JobContext:
         else:
 
             async def wrapper(_: str) -> None:
-                await callback()
+                await callback()  # type: ignore
 
             self._shutdown_callbacks.append(wrapper)
 
