@@ -188,15 +188,8 @@ class LLM(llm.LLM):
 
         ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
         the ``CEREBRAS_API_KEY`` environmental variable.
-        @integrations:cerebras:llm
         """
-
-        api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "Cerebras API key is required, either as argument or set CEREBAAS_API_KEY environmental variable"
-            )
-
+        api_key = _get_api_key("CEREBRAS_API_KEY", api_key)
         return LLM(
             model=model,
             api_key=api_key,
@@ -313,13 +306,7 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Fireworks API key, either using the argument or by setting
         the ``FIREWORKS_API_KEY`` environmental variable.
         """
-
-        api_key = api_key or os.environ.get("FIREWORKS_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "Fireworks API key is required, either as argument or set FIREWORKS_API_KEY environmental variable"
-            )
-
+        api_key = _get_api_key("FIREWORKS_API_KEY", api_key)
         return LLM(
             model=model,
             api_key=api_key,
@@ -342,19 +329,14 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
-    ):
+    ) -> LLM:
         """
         Create a new instance of XAI LLM.
 
         ``api_key`` must be set to your XAI API key, either using the argument or by setting
         the ``XAI_API_KEY`` environmental variable.
         """
-        api_key = api_key or os.environ.get("XAI_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "XAI API key is required, either as argument or set XAI_API_KEY environmental variable"
-            )
-
+        api_key = _get_api_key("XAI_API_KEY", api_key)
         return LLM(
             model=model,
             api_key=api_key,
@@ -384,13 +366,7 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Groq API key, either using the argument or by setting
         the ``GROQ_API_KEY`` environmental variable.
         """
-
-        api_key = api_key or os.environ.get("GROQ_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "Groq API key is required, either as argument or set GROQ_API_KEY environmental variable"
-            )
-
+        api_key = _get_api_key("GROQ_API_KEY", api_key)
         return LLM(
             model=model,
             api_key=api_key,
@@ -420,13 +396,7 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your DeepSeek API key, either using the argument or by setting
         the ``DEEPSEEK_API_KEY`` environmental variable.
         """
-
-        api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable"
-            )
-
+        api_key = _get_api_key("DEEPSEEK_API_KEY", api_key)
         return LLM(
             model=model,
             api_key=api_key,
@@ -456,13 +426,7 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your OctoAI API key, either using the argument or by setting
         the ``OCTOAI_TOKEN`` environmental variable.
         """
-
-        api_key = api_key or os.environ.get("OCTOAI_TOKEN")
-        if api_key is None:
-            raise ValueError(
-                "OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable"
-            )
-
+        api_key = _get_api_key("OCTOAI_TOKEN", api_key)
         return LLM(
             model=model,
             api_key=api_key,
@@ -513,16 +477,10 @@ class LLM(llm.LLM):
         """
         Create a new instance of PerplexityAI LLM.
 
-        ``api_key`` must be set to your TogetherAI API key, either using the argument or by setting
+        ``api_key`` must be set to your Perplexity API key, either using the argument or by setting
         the ``PERPLEXITY_API_KEY`` environmental variable.
         """
-
-        api_key = api_key or os.environ.get("PERPLEXITY_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "Perplexity AI API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable"
-            )
-
+        api_key = _get_api_key("PERPLEXITY_API_KEY", api_key)
         return LLM(
             model=model,
             api_key=api_key,
@@ -552,13 +510,7 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your TogetherAI API key, either using the argument or by setting
         the ``TOGETHER_API_KEY`` environmental variable.
         """
-
-        api_key = api_key or os.environ.get("TOGETHER_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "Together AI API key is required, either as argument or set TOGETHER_API_KEY environmental variable"
-            )
-
+        api_key = _get_api_key("TOGETHER_API_KEY", api_key)
         return LLM(
             model=model,
             api_key=api_key,
@@ -588,13 +540,7 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Telnyx API key, either using the argument or by setting
         the ``TELNYX_API_KEY`` environmental variable.
         """
-
-        api_key = api_key or os.environ.get("TELNYX_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "Telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable"
-            )
-
+        api_key = _get_api_key("TELNYX_API_KEY", api_key)
         return LLM(
             model=model,
             api_key=api_key,
@@ -720,45 +666,41 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            opts: dict[str, Any] = dict()
-            if self._fnc_ctx and len(self._fnc_ctx.ai_functions) > 0:
-                fncs_desc = []
-                for fnc in self._fnc_ctx.ai_functions.values():
-                    fncs_desc.append(
+            fnc_ctx_present = self._fnc_ctx and len(self._fnc_ctx.ai_functions) > 0
+            opts: dict[str, Any] = {
+                "tools": (
+                    [
                         build_oai_function_description(fnc, self._llm._capabilities)
-                    )
+                        for fnc in self._fnc_ctx.ai_functions.values()
+                    ]
+                    if fnc_ctx_present
+                    else None
+                ),
+                "parallel_tool_calls": self._parallel_tool_calls
+                if fnc_ctx_present
+                else None,
+                "tool_choice": (
+                    {"type": "function", "function": {"name": self._tool_choice.name}}
+                    if isinstance(self._tool_choice, ToolChoice)
+                    else self._tool_choice
+                )
+                if fnc_ctx_present and self._tool_choice is not None
+                else None,
+                "temperature": self._temperature,
+                "metadata": self._llm._opts.metadata,
+                "store": self._llm._opts.store,
+                "n": self._n,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "user": self._user or openai.NOT_GIVEN,
+            }
+            # remove None values from the options
+            opts = _strip_nones(opts)
 
-                opts["tools"] = fncs_desc
-                if self._parallel_tool_calls is not None:
-                    opts["parallel_tool_calls"] = self._parallel_tool_calls
-
-                if self._tool_choice is not None:
-                    if isinstance(self._tool_choice, ToolChoice):
-                        # specific function
-                        opts["tool_choice"] = {
-                            "type": "function",
-                            "function": {"name": self._tool_choice.name},
-                        }
-                    else:
-                        opts["tool_choice"] = self._tool_choice
-
-            if self._llm._opts.metadata is not None:
-                # some OpenAI-like API doesn't support having a `metadata` field. (Even None)
-                opts["metadata"] = self._llm._opts.metadata
-
-            if self._llm._opts.store is not None:
-                opts["store"] = self._llm._opts.store
-
-            user = self._user or openai.NOT_GIVEN
             messages = _build_oai_context(self._chat_ctx, id(self))
             stream = await self._client.chat.completions.create(
                 messages=messages,
                 model=self._model,
-                n=self._n,
-                temperature=self._temperature,
-                stream_options={"include_usage": True},
-                stream=True,
-                user=user,
                 **opts,
             )
 
@@ -881,3 +823,16 @@ def _build_oai_context(
     chat_ctx: llm.ChatContext, cache_key: Any
 ) -> list[ChatCompletionMessageParam]:
     return [build_oai_message(msg, cache_key) for msg in chat_ctx.messages]  # type: ignore
+
+
+def _strip_nones(data: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in data.items() if v is not None}
+
+
+def _get_api_key(env_var: str, key: str | None) -> str:
+    key = key or os.environ.get(env_var)
+    if not key:
+        raise ValueError(
+            f"{env_var} is required, either as argument or set {env_var} environmental variable"
+        )
+    return key
