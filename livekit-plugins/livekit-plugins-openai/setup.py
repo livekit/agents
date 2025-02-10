@@ -49,7 +49,7 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents[codecs, images]>=0.12.3",
-        "openai>=1.50",
+        "openai>=1.60",
     ],
     extras_require={
         "vertex": ["google-auth>=2.0.0"],
