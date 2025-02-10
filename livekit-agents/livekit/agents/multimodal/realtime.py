@@ -42,6 +42,7 @@ class ErrorEvent:
 @dataclass
 class RealtimeCapabilities:
     message_truncation: bool
+    input_audio_sample_rate: int
 
 
 class RealtimeError(Exception):

@@ -5,7 +5,7 @@ from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.agents.pipeline.room_io import RoomInput, RoomOutput
-from livekit.plugins import openai
+from livekit.plugins import google
 
 logger = logging.getLogger("roomio-example")
 logger.setLevel(logging.INFO)
@@ -19,7 +19,7 @@ async def entrypoint(ctx: JobContext):
     agent = PipelineAgent(
         task=AgentTask(
             instructions="Talk to me!",
-            llm=openai.realtime.RealtimeModel(),
+            llm=google.beta.realtime.RealtimeModel(),
         )
     )
 
