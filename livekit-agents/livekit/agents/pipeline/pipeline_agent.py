@@ -20,6 +20,7 @@ from livekit import rtc
 
 from .. import metrics, stt, tokenize, tts, utils, vad
 from ..llm import LLM, ChatContext, ChatMessage, FunctionContext, LLMStream
+from ..tts import SynthesizeStream
 from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from .agent_output import AgentOutput, SpeechSource
 from .agent_playout import AgentPlayout
@@ -311,7 +312,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._last_speech_time: float | None = None
 
         self._speech_lock = asyncio.Lock()
-        self._tts_stream: tts.SynthesizeStream | None = None
+        self._tts_stream: SynthesizeStream | None = None
         self._tts_task: asyncio.Task | None = None
         self._active_speech_handle: SpeechHandle | None = None
 
@@ -541,7 +542,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             return
 
         # close tts stream and task
-        await utils.aio.gracefully_cancel(self._tts_task)
+        if self._tts_task is not None:
+            await utils.aio.gracefully_cancel(self._tts_task)
         if self._tts_stream is not None:
             await self._tts_stream.aclose()
 
@@ -1138,6 +1140,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         finally:
             SpeechDataContextVar.reset(tk)
 
+        assert self._agent_output is not None, (
+            "agent output should be initialized when ready"
+        )
         synthesis_handle = self._agent_output.create_synthesis_handle(
             speech_id=speech_handle.id,
             tts_source=tts_source,
@@ -1149,7 +1154,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             hyphenate_word=self._opts.transcription.hyphenate_word,
         )
         speech_handle.initialize(source=source, synthesis_handle=synthesis_handle)
-        asyncio.create_task(self._set_active_and_push(tts_source, speech_handle))
+
+        asyncio.create_task(self._set_active_speech_handle(speech_handle))
+        asyncio.create_task(self._push_tts_source(synthesis_handle._tts_source))
 
         if isinstance(transcript_source, AsyncIterable):
             asyncio.create_task(
@@ -1161,17 +1168,22 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             synthesis_handle.tts_forwarder.push_text(transcript_source)
             synthesis_handle.tts_forwarder.mark_text_segment_end()
 
-    async def _set_active_and_push(
-        self, tts_source: SpeechSource, speech_handle: SpeechHandle
-    ) -> None:
+    async def _set_active_speech_handle(self, speech_handle: SpeechHandle) -> None:
         async with self._speech_lock:
             self._active_speech_handle = speech_handle
-            if isinstance(tts_source, str):
-                self._tts_stream.push_text(tts_source)
-            else:
-                async for token in tts_source:
-                    self._tts_stream.push_text(token)
-            self._tts_stream.flush()
+
+    async def _push_tts_source(self, tts_source: SpeechSource) -> None:
+        assert self._tts_stream is not None, "TTS stream is not initialized"
+
+        if isinstance(tts_source, Awaitable):
+            tts_source = await tts_source
+
+        if isinstance(tts_source, str):
+            self._tts_stream.push_text(tts_source)
+        else:
+            async for token in tts_source:
+                self._tts_stream.push_text(token)
+        self._tts_stream.flush()
 
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
