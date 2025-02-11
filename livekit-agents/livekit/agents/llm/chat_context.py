@@ -15,13 +15,17 @@
 from __future__ import annotations
 
 from typing import (
+    Any,
+    cast,
     Literal,
     Optional,
     Union,
 )
 
 from livekit import rtc
-from pydantic import BaseModel, Field
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils.misc import is_given
+from pydantic import BaseModel, Field, PrivateAttr
 from typing_extensions import TypeAlias
 
 from .. import utils
@@ -80,6 +84,7 @@ class ImageContent(BaseModel):
     
     Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
     """
+    _cache: dict[int, Any] = PrivateAttr(default_factory=dict)
 
 
 class AudioContent(BaseModel):
@@ -88,10 +93,13 @@ class AudioContent(BaseModel):
     transcript: Optional[str] = None
 
 
+ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
+
+
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["message"] = "message"
-    role: Literal["developer", "system", "user", "assistant"]
+    role: ChatRole
     content: list[ChatContent]
     hash: Optional[bytes] = None
 
@@ -129,6 +137,25 @@ class ChatContext:
     @property
     def items(self) -> list[ChatItem]:
         return self._items
+
+    def add_message(
+        self,
+        *,
+        role: ChatRole,
+        content: list[ChatContent] | str,
+        id: NotGivenOr[str] = NOT_GIVEN,
+    ) -> ChatMessage:
+        kwargs = {}
+        if is_given(id):
+            kwargs["id"] = id
+
+        if isinstance(content, str):
+            message = ChatMessage(role=role, content=[content], **kwargs)
+        else:
+            message = ChatMessage(role=role, content=content, **kwargs)
+
+        self._items.append(message)
+        return message
 
     def get_by_id(self, item_id: str) -> ChatItem | None:
         # ideally, get_by_id should be O(1)

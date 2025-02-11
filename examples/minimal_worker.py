@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentContext, AgentTask, ChatCLI, PipelineAgent
-from livekit.plugins import openai
+from livekit.plugins import openai, deepgram, cartesia
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -16,7 +16,7 @@ class EchoTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Echo, always speak in English even if the user speaks in another language or wants to use another language.",
-            llm=openai.realtime.RealtimeModel(voice="echo"),
+            # llm=openai.realtime.RealtimeModel(voice="echo"),
         )
 
     @ai_function
@@ -28,7 +28,7 @@ class AlloyTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Alloy, always speak in English even if the user speaks in another language or wants to use another language.",
-            llm=openai.realtime.RealtimeModel(voice="alloy"),
+            # llm=openai.realtime.RealtimeModel(voice="alloy"),
         )
 
     @ai_function
@@ -39,13 +39,17 @@ class AlloyTask(AgentTask):
 async def entrypoint(ctx: JobContext):
     agent = PipelineAgent(
         task=AlloyTask(),
+        stt=deepgram.STT(),
+        llm=openai.LLM(),
+        tts=cartesia.TTS(),
     )
 
     await agent.start()
 
-    # start a chat inside the CLI
     chat_cli = ChatCLI(agent)
     await chat_cli.run()
+
+    # start a chat inside the CLI
 
 
 if __name__ == "__main__":
