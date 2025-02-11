@@ -63,12 +63,8 @@ class LLMOptions:
     temperature: float | None
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None
-    cache_system_prompt: bool | None = None
-    """If True, the system prompt will be cached."""
-    cache_tools: bool | None = None
-    """If True, the tools will be cached."""
-    cache_chat_history: bool | None = None
-    """If True, the chat history will be cached."""
+    enable_caching: bool | None = None
+    """If True, the system prompt, tools, and chat history will be cached."""
 
 
 class LLM(llm.LLM):
@@ -83,9 +79,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
-        cache_system_prompt: bool | None = None,
-        cache_tools: bool | None = None,
-        cache_chat_history: bool | None = None,
+        enable_caching: bool | None = None,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -101,9 +95,7 @@ class LLM(llm.LLM):
         temperature(float | None): The temperature for the Anthropic API. defaults to None
         parallel_tool_calls(bool | None): Whether to parallel tool calls. defaults to None
         tool_choice(Union[ToolChoice, Literal["auto", "required", "none"]] | None): The tool choice for the Anthropic API. defaults to "auto"
-        cache_system_prompt(bool | None): Whether to cache the system prompt. defaults to None
-        cache_tools(bool | None): Whether to cache the tools. defaults to None
-        cache_chat_history(bool | None): Whether to cache the chat history. defaults to None
+        enable_caching(bool | None): Whether to cache the system prompt, tools, and chat history. defaults to None
         """
 
         super().__init__(
@@ -124,9 +116,7 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
-            cache_system_prompt=cache_system_prompt,
-            cache_tools=cache_tools,
-            cache_chat_history=cache_chat_history,
+            enable_caching=enable_caching,
         )
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,
@@ -168,7 +158,8 @@ class LLM(llm.LLM):
                 # caching last tool will cache all the tools
                 cache_ctrl = (
                     CACHE_CONTROL_EPHEMERAL
-                    if (i == len(fnc_ctx.ai_functions) - 1) and self._opts.cache_tools
+                    if (i == len(fnc_ctx.ai_functions) - 1)
+                    and self._opts.enable_caching
                     else None
                 )
                 fncs_desc.append(
@@ -195,12 +186,12 @@ class LLM(llm.LLM):
             opts["tool_choice"] = anthropic_tool_choice
 
         latest_system_message: anthropic.types.TextBlockParam = _latest_system_message(
-            chat_ctx, cache_system_prompt=self._opts.cache_system_prompt
+            chat_ctx, enable_caching=self._opts.enable_caching
         )
         anthropic_ctx = _build_anthropic_context(
             chat_ctx.messages,
             id(self),
-            cache_chat_history=self._opts.cache_chat_history,
+            enable_caching=self._opts.enable_caching,
         )
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
 
@@ -374,7 +365,7 @@ class LLMStream(llm.LLMStream):
 
 
 def _latest_system_message(
-    chat_ctx: llm.ChatContext, cache_system_prompt: bool | None = None
+    chat_ctx: llm.ChatContext, enable_caching: bool | None = None
 ) -> anthropic.types.TextBlockParam:
     latest_system_message: llm.ChatMessage | None = None
     for m in chat_ctx.messages:
@@ -393,7 +384,7 @@ def _latest_system_message(
     system_text_block = anthropic.types.TextBlockParam(
         text=latest_system_str,
         type="text",
-        cache_control=CACHE_CONTROL_EPHEMERAL if cache_system_prompt else None,
+        cache_control=CACHE_CONTROL_EPHEMERAL if enable_caching else None,
     )
     return system_text_block
 
@@ -425,14 +416,14 @@ def _merge_messages(
 
 
 def _build_anthropic_context(
-    chat_ctx: List[llm.ChatMessage], cache_key: Any, cache_chat_history: bool | None
+    chat_ctx: List[llm.ChatMessage], cache_key: Any, enable_caching: bool | None
 ) -> List[anthropic.types.MessageParam]:
     result: List[anthropic.types.MessageParam] = []
     for i, msg in enumerate(chat_ctx):
         # caching last message will cache whole chat history
         cache_ctrl = (
             CACHE_CONTROL_EPHEMERAL
-            if ((i == len(chat_ctx) - 1) and cache_chat_history)
+            if ((i == len(chat_ctx) - 1) and enable_caching)
             else None
         )
         a_msg = _build_anthropic_message(msg, cache_key, cache_ctrl=cache_ctrl)
