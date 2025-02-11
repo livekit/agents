@@ -622,10 +622,9 @@ def _build_function_description(
     for arg_info in fnc_info.arguments.values():
         input_schema[arg_info.name] = build_schema_field(arg_info)
 
-    tool_param = anthropic.types.ToolParam(
+    return anthropic.types.ToolParam(
         name=fnc_info.name,
         description=fnc_info.description,
         input_schema=input_schema,
         cache_control=cache_ctrl,
     )
-    return tool_param
