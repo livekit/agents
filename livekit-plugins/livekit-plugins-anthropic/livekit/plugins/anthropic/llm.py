@@ -53,6 +53,8 @@ from .models import (
     ChatModels,
 )
 
+CACHE_CONTROL_EPHEMERAL = anthropic.types.CacheControlEphemeralParam(type="ephemeral")
+
 
 @dataclass
 class LLMOptions:
@@ -62,9 +64,11 @@ class LLMOptions:
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None
     cache_system_prompt: bool | None = None
-    """if True, the system prompt will be cached"""
+    """If True, the system prompt will be cached."""
     cache_tools: bool | None = None
-    """if True, the tools will be cached"""
+    """If True, the tools will be cached."""
+    cache_chat_history: bool | None = None
+    """If True, the chat history will be cached."""
 
 
 class LLM(llm.LLM):
@@ -81,6 +85,7 @@ class LLM(llm.LLM):
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
         cache_system_prompt: bool | None = None,
         cache_tools: bool | None = None,
+        cache_chat_history: bool | None = None,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -98,6 +103,7 @@ class LLM(llm.LLM):
         tool_choice(Union[ToolChoice, Literal["auto", "required", "none"]] | None): The tool choice for the Anthropic API. defaults to "auto"
         cache_system_prompt(bool | None): Whether to cache the system prompt. defaults to None
         cache_tools(bool | None): Whether to cache the tools. defaults to None
+        cache_chat_history(bool | None): Whether to cache the chat history. defaults to None
         """
 
         super().__init__(
@@ -157,9 +163,18 @@ class LLM(llm.LLM):
         opts: dict[str, Any] = dict()
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc: list[anthropic.types.ToolParam] = []
-            for fnc in fnc_ctx.ai_functions.values():
+            for i, fnc in enumerate(fnc_ctx.ai_functions.values()):
+                # caching last tool will cache all the tools
+                cache_ctrl = (
+                    CACHE_CONTROL_EPHEMERAL
+                    if (i == len(fnc_ctx.ai_functions) - 1) and self._opts.cache_tools
+                    else None
+                )
                 fncs_desc.append(
-                    _build_function_description(fnc, cache_tools=self._opts.cache_tools)
+                    _build_function_description(
+                        fnc,
+                        cache_ctrl=cache_ctrl,
+                    )
                 )
 
             opts["tools"] = fncs_desc
@@ -181,7 +196,9 @@ class LLM(llm.LLM):
         latest_system_message: anthropic.types.TextBlockParam = _latest_system_message(
             chat_ctx, cache_system_prompt=self._opts.cache_system_prompt
         )
-        anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
+        anthropic_ctx = _build_anthropic_context(
+            chat_ctx.messages, id(self), cache_tools=self._opts.cache_tools
+        )
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
 
         stream = self._client.messages.create(
@@ -232,6 +249,8 @@ class LLMStream(llm.LLMStream):
         self._request_id: str = ""
         self._ignoring_cot = False  # ignore chain of thought
         self._input_tokens = 0
+        self._cache_creation_tokens = 0
+        self._cache_read_tokens = 0
         self._output_tokens = 0
 
     async def _run(self) -> None:
@@ -254,6 +273,8 @@ class LLMStream(llm.LLMStream):
                             completion_tokens=self._output_tokens,
                             prompt_tokens=self._input_tokens,
                             total_tokens=self._input_tokens + self._output_tokens,
+                            cache_creation_input_tokens=self._cache_creation_tokens,
+                            cache_read_input_tokens=self._cache_read_tokens,
                         ),
                     )
                 )
@@ -276,6 +297,10 @@ class LLMStream(llm.LLMStream):
             self._request_id = event.message.id
             self._input_tokens = event.message.usage.input_tokens
             self._output_tokens = event.message.usage.output_tokens
+            self._cache_creation_tokens = (
+                event.message.usage.cache_creation_input_tokens
+            )
+            self._cache_read_tokens = event.message.usage.cache_read_input_tokens
         elif event.type == "message_delta":
             self._output_tokens += event.usage.output_tokens
         elif event.type == "content_block_start":
@@ -354,9 +379,9 @@ def _latest_system_message(
         if isinstance(latest_system_message.content, str):
             latest_system_str = latest_system_message.content
         elif isinstance(latest_system_message.content, list):
-            latest_system_str = " ".join(
-                [c for c in latest_system_message.content if isinstance(c, str)]
-            )
+            latest_system_str = " ".join([
+                c for c in latest_system_message.content if isinstance(c, str)
+            ])
     system_text_block = anthropic.types.TextBlockParam(
         text=latest_system_str,
         type="text",
@@ -394,20 +419,29 @@ def _merge_messages(
 
 
 def _build_anthropic_context(
-    chat_ctx: List[llm.ChatMessage], cache_key: Any
+    chat_ctx: List[llm.ChatMessage], cache_key: Any, cache_tools: bool
 ) -> List[anthropic.types.MessageParam]:
     result: List[anthropic.types.MessageParam] = []
-    for msg in chat_ctx:
-        a_msg = _build_anthropic_message(msg, cache_key, chat_ctx)
+    for i, msg in enumerate(chat_ctx):
+        # caching last message will cache whole chat history
+        cache_ctrl = (
+            CACHE_CONTROL_EPHEMERAL
+            if ((i == len(chat_ctx) - 1) and cache_tools)
+            else None
+        )
+        a_msg = _build_anthropic_message(msg, cache_key, cache_ctrl=cache_ctrl)
+
         if a_msg:
             result.append(a_msg)
     return result
 
 
 def _build_anthropic_message(
-    msg: llm.ChatMessage, cache_key: Any, chat_ctx: List[llm.ChatMessage]
+    msg: llm.ChatMessage,
+    cache_key: Any,
+    cache_ctrl: anthropic.types.CacheControlEphemeralParam | None,
 ) -> anthropic.types.MessageParam | None:
-    if msg.role == "user" or msg.role == "assistant":
+    if msg.role in ("user", "assistant"):
         a_msg: anthropic.types.MessageParam = {
             "role": msg.role,
             "content": [],
@@ -418,22 +452,27 @@ def _build_anthropic_message(
         # add content if provided
         if isinstance(msg.content, str) and msg.content:
             a_msg["content"].append(
-                anthropic.types.TextBlock(
+                anthropic.types.TextBlockParam(
                     text=msg.content,
                     type="text",
+                    cache_control=cache_ctrl,
                 )
             )
         elif isinstance(msg.content, list):
             for cnt in msg.content:
                 if isinstance(cnt, str) and cnt:
-                    content: anthropic.types.TextBlock = anthropic.types.TextBlock(
-                        text=cnt,
-                        type="text",
+                    content: anthropic.types.TextBlockParam = (
+                        anthropic.types.TextBlockParam(
+                            text=cnt,
+                            type="text",
+                            cache_control=cache_ctrl,
+                        )
                     )
                     a_content.append(content)
                 elif isinstance(cnt, llm.ChatImage):
-                    a_content.append(_build_anthropic_image_content(cnt, cache_key))
-
+                    a_content.append(
+                        _build_anthropic_image_content(cnt, cache_key, cache_ctrl)
+                    )
         if msg.tool_calls is not None:
             for fnc in msg.tool_calls:
                 tool_use = anthropic.types.ToolUseBlockParam(
@@ -441,6 +480,7 @@ def _build_anthropic_message(
                     type="tool_use",
                     name=fnc.function_info.name,
                     input=fnc.arguments,
+                    cache_control=cache_ctrl,
                 )
                 a_content.append(tool_use)
 
@@ -459,6 +499,7 @@ def _build_anthropic_message(
             type="tool_result",
             content=msg.content,
             is_error=msg.tool_exception is not None,
+            cache_control=cache_ctrl,
         )
         return {
             "role": "user",
@@ -469,7 +510,9 @@ def _build_anthropic_message(
 
 
 def _build_anthropic_image_content(
-    image: llm.ChatImage, cache_key: Any
+    image: llm.ChatImage,
+    cache_key: Any,
+    cache_ctrl: anthropic.types.CacheControlEphemeralParam | None,
 ) -> anthropic.types.ImageBlockParam:
     if isinstance(image.image, str):  # image is a URL
         if not image.image.startswith("data:"):
@@ -495,6 +538,7 @@ def _build_anthropic_image_content(
                         media_type,
                     ),
                 },
+                "cache_control": cache_ctrl,
             }
         except (ValueError, IndexError) as e:
             raise ValueError(
@@ -522,6 +566,7 @@ def _build_anthropic_image_content(
                 "data": image._cache[cache_key],
                 "media_type": "image/jpeg",
             },
+            "cache_control": cache_ctrl,
         }
 
     raise ValueError(
@@ -531,7 +576,7 @@ def _build_anthropic_image_content(
 
 def _build_function_description(
     fnc_info: llm.function_context.FunctionInfo,
-    cache_tools: bool | None = None,
+    cache_ctrl: anthropic.types.CacheControlEphemeralParam | None,
 ) -> anthropic.types.ToolParam:
     def build_schema_field(arg_info: llm.function_context.FunctionArgInfo):
         def type2str(t: type) -> str:
@@ -553,7 +598,7 @@ def _build_function_description(
         if arg_info.description:
             p["description"] = arg_info.description
 
-        is_optional, inner_th = _is_optional_type(arg_info.type)
+        _, inner_th = _is_optional_type(arg_info.type)
 
         if get_origin(inner_th) is list:
             inner_type = get_args(inner_th)[0]
@@ -579,8 +624,6 @@ def _build_function_description(
         name=fnc_info.name,
         description=fnc_info.description,
         input_schema=input_schema,
-        cache_control=anthropic.types.CacheControlEphemeralParam(type="ephemeral")
-        if cache_tools
-        else None,
+        cache_control=cache_ctrl,
     )
     return tool_param
