@@ -126,6 +126,7 @@ class LLM(llm.LLM):
             tool_choice=tool_choice,
             cache_system_prompt=cache_system_prompt,
             cache_tools=cache_tools,
+            cache_chat_history=cache_chat_history,
         )
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,
@@ -379,15 +380,13 @@ def _latest_system_message(
         if isinstance(latest_system_message.content, str):
             latest_system_str = latest_system_message.content
         elif isinstance(latest_system_message.content, list):
-            latest_system_str = " ".join([
-                c for c in latest_system_message.content if isinstance(c, str)
-            ])
+            latest_system_str = " ".join(
+                [c for c in latest_system_message.content if isinstance(c, str)]
+            )
     system_text_block = anthropic.types.TextBlockParam(
         text=latest_system_str,
         type="text",
-        cache_control=anthropic.types.CacheControlEphemeralParam(type="ephemeral")
-        if cache_system_prompt
-        else None,
+        cache_control=CACHE_CONTROL_EPHEMERAL if cache_system_prompt else None,
     )
     return system_text_block
 
