@@ -425,7 +425,7 @@ def _merge_messages(
 
 
 def _build_anthropic_context(
-    chat_ctx: List[llm.ChatMessage], cache_key: Any, cache_chat_history: bool
+    chat_ctx: List[llm.ChatMessage], cache_key: Any, cache_chat_history: bool | None
 ) -> List[anthropic.types.MessageParam]:
     result: List[anthropic.types.MessageParam] = []
     for i, msg in enumerate(chat_ctx):
