@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.10.18
+
+### Patch Changes
+
+- Added an additional field in LLM capabilities class to check if model providers support function call history within chat context without needing function definitions. - [#1441](https://github.com/livekit/agents/pull/1441) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.10.17
 
 ### Patch Changes
