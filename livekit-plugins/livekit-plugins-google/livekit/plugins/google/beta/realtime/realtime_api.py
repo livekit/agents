@@ -107,7 +107,7 @@ class RealtimeModel:
         model: LiveAPIModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
-        modalities: list[Modality] = ["AUDIO"],
+        modalities: list[Modality] = [Modality.AUDIO],
         enable_user_audio_transcription: bool = True,
         enable_agent_audio_transcription: bool = True,
         vertexai: bool = False,
