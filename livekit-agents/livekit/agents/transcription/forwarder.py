@@ -1,4 +1,5 @@
 import asyncio
+import enum
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -179,6 +180,11 @@ class TranscriptionStreamForwarder(TranscriptionForwarder):
 DEFAULT_TRANSCRIPTION_TOPIC = "lk.transcription"
 
 
+class TranscriptionMode(str, enum.Enum):
+    DELTA = "delta"
+    FULL = "full"
+
+
 class TranscriptionDataStreamForwarder(TranscriptionForwarder):
     """Forwards transcription data to a stream."""
 
@@ -215,7 +221,9 @@ class TranscriptionDataStreamForwarder(TranscriptionForwarder):
                 **self._attributes,
                 "segment_id": segment.id,
                 "language": segment.language,
-                "mode": "delta" if segment.is_delta else "full",
+                "mode": TranscriptionMode.DELTA
+                if segment.is_delta
+                else TranscriptionMode.FULL,
             }
             self._text_writer = await self._room.local_participant.stream_text(
                 destination_identities=self._destination_identities,
