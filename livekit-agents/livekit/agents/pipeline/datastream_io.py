@@ -44,6 +44,16 @@ class DataStreamAudioSink(AudioSink):
 
         # playback finished handler
         def _handle_playback_finished(data: rtc.RpcInvocationData) -> str:
+            if data.caller_identity != self._destination_identity:
+                logger.warning(
+                    "playback finished event received from unexpected participant",
+                    extra={
+                        "caller_identity": data.caller_identity,
+                        "expected_identity": self._destination_identity,
+                    },
+                )
+                return "reject"
+
             event = PlaybackFinishedEvent(**json.loads(data.payload))
             self.on_playback_finished(
                 playback_position=event.playback_position,
@@ -127,6 +137,17 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
         )
 
         def _handle_clear_buffer(data: rtc.RpcInvocationData) -> str:
+            assert self._remote_participant is not None
+            if data.caller_identity != self._remote_participant.identity:
+                logger.warning(
+                    "clear buffer event received from unexpected participant",
+                    extra={
+                        "caller_identity": data.caller_identity,
+                        "expected_identity": self._remote_participant.identity,
+                    },
+                )
+                return "reject"
+
             if self._current_reader:
                 self._current_reader_cleared = True
             self.emit("clear_buffer")
