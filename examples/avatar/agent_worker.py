@@ -71,13 +71,15 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     )
 
     room_input = RoomInput(ctx.room, options=RoomInputOptions(audio_sample_rate=24000))
-    agent.input.audio = room_input.audio
-
     ds_output = DataStreamOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
-    agent.output.audio = ds_output.audio
 
-    await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
+    # wait for the participant to join the room and the avatar worker to connect
     await room_input.wait_for_participant()
+    await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
+
+    # connect the input and output audio to the agent
+    agent.input.audio = room_input.audio
+    agent.output.audio = ds_output.audio
     await agent.start()
 
     @agent.output.audio.on("playback_finished")
