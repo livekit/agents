@@ -186,7 +186,7 @@ class LLM(llm.LLM):
 
         stream = self._client.messages.create(
             max_tokens=opts.get("max_tokens", 1024),
-            system=latest_system_message,
+            system=[latest_system_message],
             messages=collaped_anthropic_ctx,
             model=self._opts.model,
             temperature=temperature or anthropic.NOT_GIVEN,
@@ -354,9 +354,9 @@ def _latest_system_message(
         if isinstance(latest_system_message.content, str):
             latest_system_str = latest_system_message.content
         elif isinstance(latest_system_message.content, list):
-            latest_system_str = " ".join([
-                c for c in latest_system_message.content if isinstance(c, str)
-            ])
+            latest_system_str = " ".join(
+                [c for c in latest_system_message.content if isinstance(c, str)]
+            )
     system_text_block = anthropic.types.TextBlockParam(
         text=latest_system_str,
         type="text",
