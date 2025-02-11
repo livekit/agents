@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Callable, Literal, Protocol
+from typing import (
+    Any,
+    AsyncIterable,
+    Callable,
+    Literal,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+    overload,
+)
 
 import aiohttp
 from livekit import rtc
@@ -28,6 +38,90 @@ EventTypes = Literal[
 ]
 
 
+class _InputTranscriptionProto(Protocol):
+    item_id: str
+    """id of the item"""
+    transcript: str
+    """transcript of the input audio"""
+
+
+class _ContentProto(Protocol):
+    response_id: str
+    item_id: str
+    output_index: int
+    content_index: int
+    text: str
+    audio: list[rtc.AudioFrame]
+    text_stream: AsyncIterable[str]
+    audio_stream: AsyncIterable[rtc.AudioFrame]
+    content_type: Literal["text", "audio"]
+
+
+class _CapabilitiesProto(Protocol):
+    supports_truncate: bool
+    input_audio_sample_rate: int | None
+
+
+class _RealtimeAPI(Protocol):
+    """Realtime API protocol"""
+
+    @property
+    def capabilities(self) -> _CapabilitiesProto: ...
+    def session(
+        self,
+        *,
+        chat_ctx: llm.ChatContext | None = None,
+        fnc_ctx: llm.FunctionContext | None = None,
+    ) -> _RealtimeAPISession:
+        """
+        Create a new realtime session with the given chat and function contexts.
+        """
+        pass
+
+
+T = TypeVar("T", bound=Callable[..., Any])
+
+
+class _RealtimeAPISession(Protocol):
+    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None: ...
+    @overload
+    def on(self, event: str, callback: None = None) -> Callable[[T], T]: ...
+    @overload
+    def on(self, event: str, callback: T) -> T: ...
+    def on(
+        self, event: str, callback: Optional[T] = None
+    ) -> Union[T, Callable[[T], T]]: ...
+
+    def _push_audio(self, frame: rtc.AudioFrame) -> None: ...
+    @property
+    def fnc_ctx(self) -> llm.FunctionContext | None: ...
+    @fnc_ctx.setter
+    def fnc_ctx(self, value: llm.FunctionContext | None) -> None: ...
+
+    def chat_ctx_copy(self) -> llm.ChatContext: ...
+
+    def cancel_response(self) -> None: ...
+    def create_response(
+        self,
+        on_duplicate: Literal[
+            "cancel_existing", "cancel_new", "keep_both"
+        ] = "keep_both",
+    ) -> None: ...
+    def commit_audio_buffer(self) -> None: ...
+    @property
+    def server_vad_enabled(self) -> bool: ...
+
+    def _recover_from_text_response(self, item_id: str) -> None: ...
+    def _update_conversation_item_content(
+        self,
+        item_id: str,
+        content: llm.ChatContent | list[llm.ChatContent] | None = None,
+    ) -> None: ...
+    def _truncate_conversation_item(
+        self, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None: ...
+
+
 @dataclass(frozen=True)
 class AgentTranscriptionOptions:
     user_transcription: bool = True
@@ -50,9 +144,6 @@ class AgentTranscriptionOptions:
     representing the hyphenated parts of the word."""
 
 
-class S2SModel(Protocol): ...
-
-
 @dataclass(frozen=True)
 class _ImplOptions:
     transcription: AgentTranscriptionOptions
@@ -62,7 +153,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        model: S2SModel,
+        model: _RealtimeAPI,
         vad: vad.VAD | None = None,
         chat_ctx: llm.ChatContext | None = None,
         fnc_ctx: llm.FunctionContext | None = None,
@@ -73,7 +164,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         """Create a new MultimodalAgent.
 
         Args:
-            model: S2SModel instance.
+            model: RealtimeAPI instance.
             vad: Voice Activity Detection (VAD) instance.
             chat_ctx: Chat context for the assistant.
             fnc_ctx: Function context for the assistant.
@@ -88,10 +179,6 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
-
-        from livekit.plugins.openai import realtime
-
-        assert isinstance(model, realtime.RealtimeModel)
 
         self._model = model
         self._vad = vad
@@ -177,13 +264,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         # Schedule the initialization and start task
         asyncio.create_task(_init_and_start())
 
-        from livekit.plugins.openai import realtime
-
         @self._session.on("response_content_added")
-        def _on_content_added(message: realtime.RealtimeContent):
-            if message.content_type == "text":
-                return
-
+        def _on_content_added(message: _ContentProto):
             tr_fwd = transcription.TTSSegmentsForwarder(
                 room=self._room,
                 participant=self._room.local_participant,
@@ -202,7 +284,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("response_content_done")
-        def _response_content_done(message: realtime.RealtimeContent):
+        def _response_content_done(message: _ContentProto):
             if message.content_type == "text":
                 if self._text_response_retries >= self._max_text_response_retries:
                     raise RuntimeError(
@@ -236,40 +318,44 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             )
 
         @self._session.on("input_speech_transcription_completed")
-        def _input_speech_transcription_completed(
-            ev: realtime.InputTranscriptionCompleted,
-        ):
+        def _input_speech_transcription_completed(ev: _InputTranscriptionProto):
             self._stt_forwarder.update(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[stt.SpeechData(language="", text=ev.transcript)],
                 )
             )
-            user_msg = ChatMessage.create(
-                text=ev.transcript, role="user", id=ev.item_id
-            )
-            self._session._update_conversation_item_content(
-                ev.item_id, user_msg.content
-            )
+            if self._model.capabilities.supports_truncate:
+                user_msg = ChatMessage.create(
+                    text=ev.transcript, role="user", id=ev.item_id
+                )
 
-            self.emit("user_speech_committed", user_msg)
-            logger.debug(
-                "committed user speech",
-                extra={"user_transcript": ev.transcript},
+                self._session._update_conversation_item_content(
+                    ev.item_id, user_msg.content
+                )
+
+            self._emit_speech_committed("user", ev.transcript)
+
+        @self._session.on("agent_speech_transcription_completed")
+        def _agent_speech_transcription_completed(ev: _InputTranscriptionProto):
+            self._agent_stt_forwarder.update(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language="", text=ev.transcript)],
+                )
             )
+            self._emit_speech_committed("agent", ev.transcript)
+
+        # Similar to _input_speech_started, this handles updating the state to "listening" when the agent's speech is complete.
+        # However, since Gemini doesn't support VAD events, we are not emitting the `user_started_speaking` event here.
+        @self._session.on("agent_speech_stopped")
+        def _agent_speech_stopped():
+            self.interrupt()
 
         @self._session.on("input_speech_started")
         def _input_speech_started():
             self.emit("user_started_speaking")
-            self._update_state("listening")
-            if self._playing_handle is not None and not self._playing_handle.done():
-                self._playing_handle.interrupt()
-
-                self._session.conversation.item.truncate(
-                    item_id=self._playing_handle.item_id,
-                    content_index=self._playing_handle.content_index,
-                    audio_end_ms=int(self._playing_handle.audio_samples / 24000 * 1000),
-                )
+            self.interrupt()
 
         @self._session.on("input_speech_stopped")
         def _input_speech_stopped():
@@ -286,6 +372,31 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         @self._session.on("metrics_collected")
         def _metrics_collected(metrics: MultimodalLLMMetrics):
             self.emit("metrics_collected", metrics)
+
+    def interrupt(self) -> None:
+        if self._playing_handle is not None and not self._playing_handle.done():
+            self._playing_handle.interrupt()
+
+            if self._model.capabilities.supports_truncate:
+                self._session.cancel_response()  # Only supported by OpenAI
+
+                self._session._truncate_conversation_item(
+                    item_id=self._playing_handle.item_id,
+                    content_index=self._playing_handle.content_index,
+                    audio_end_ms=int(self._playing_handle.audio_samples / 24000 * 1000),
+                )
+        self._update_state("listening")
+
+    def generate_reply(
+        self,
+        on_duplicate: Literal[
+            "cancel_existing", "cancel_new", "keep_both"
+        ] = "cancel_existing",
+    ) -> None:
+        """Generate a reply from the agent"""
+        if not self._session.server_vad_enabled:
+            self._session.commit_audio_buffer()
+        self._session.create_response(on_duplicate=on_duplicate)
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -308,6 +419,17 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     async def _main_task(self) -> None:
         self._update_state("initializing")
         self._audio_source = rtc.AudioSource(24000, 1)
+        track = rtc.LocalAudioTrack.create_audio_track(
+            "assistant_voice", self._audio_source
+        )
+        self._agent_publication = await self._room.local_participant.publish_track(
+            track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        )
+        self._agent_stt_forwarder = transcription.STTSegmentsForwarder(
+            room=self._room,
+            participant=self._room.local_participant,
+            track=track,
+        )
         self._agent_playout = agent_playout.AgentPlayout(
             audio_source=self._audio_source
         )
@@ -325,37 +447,20 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 if interrupted:
                     collected_text += "..."
 
-                msg = ChatMessage.create(
-                    text=collected_text,
-                    role="assistant",
-                    id=self._playing_handle.item_id,
-                )
-                self._session._update_conversation_item_content(
-                    self._playing_handle.item_id, msg.content
-                )
+                if self._model.capabilities.supports_truncate and collected_text:
+                    msg = ChatMessage.create(
+                        text=collected_text,
+                        role="assistant",
+                        id=self._playing_handle.item_id,
+                    )
+                    self._session._update_conversation_item_content(
+                        self._playing_handle.item_id, msg.content
+                    )
 
-                if interrupted:
-                    self.emit("agent_speech_interrupted", msg)
-                else:
-                    self.emit("agent_speech_committed", msg)
-
-                logger.debug(
-                    "committed agent speech",
-                    extra={
-                        "agent_transcript": collected_text,
-                        "interrupted": interrupted,
-                    },
-                )
+                    self._emit_speech_committed("agent", collected_text, interrupted)
 
         self._agent_playout.on("playout_started", _on_playout_started)
         self._agent_playout.on("playout_stopped", _on_playout_stopped)
-
-        track = rtc.LocalAudioTrack.create_audio_track(
-            "assistant_voice", self._audio_source
-        )
-        self._agent_publication = await self._room.local_participant.publish_track(
-            track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-        )
 
         await self._agent_publication.wait_for_subscription()
 
@@ -366,7 +471,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         )
         async for frame in self._input_audio_ch:
             for f in bstream.write(frame.data.tobytes()):
-                self._session.input_audio_buffer.append(f)
+                self._session._push_audio(f)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if self._linked_participant is None:
@@ -385,8 +490,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         self._subscribe_to_microphone()
 
     async def _micro_task(self, track: rtc.LocalAudioTrack) -> None:
-        stream_24khz = rtc.AudioStream(track, sample_rate=24000, num_channels=1)
-        async for ev in stream_24khz:
+        sample_rate = self._model.capabilities.input_audio_sample_rate
+        if sample_rate is None:
+            sample_rate = 24000
+
+        input_stream = rtc.AudioStream(track, sample_rate=sample_rate, num_channels=1)
+        async for ev in input_stream:
             self._input_audio_ch.send_nowait(ev.frame)
 
     def _subscribe_to_microphone(self, *args, **kwargs) -> None:
@@ -426,3 +535,22 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             self._http_session = utils.http_context.http_session()
 
         return self._http_session
+
+    def _emit_speech_committed(
+        self, speaker: Literal["user", "agent"], msg: str, interrupted: bool = False
+    ):
+        if speaker == "user":
+            self.emit("user_speech_committed", msg)
+        else:
+            if interrupted:
+                self.emit("agent_speech_interrupted", msg)
+            else:
+                self.emit("agent_speech_committed", msg)
+
+        logger.debug(
+            f"committed {speaker} speech",
+            extra={
+                f"{speaker}_transcript": msg,
+                "interrupted": interrupted,
+            },
+        )

@@ -19,6 +19,7 @@ from livekit.plugins import (
     openai,
     playai,
     silero,
+    rime,
 )
 
 from .conftest import TEST_CONNECT_OPTIONS
@@ -38,9 +39,9 @@ async def _assert_valid_synthesized_audio(
 
     merged_frame = merge_frames(frames)
     assert merged_frame.sample_rate == tts.sample_rate, "sample rate should be the same"
-    assert (
-        merged_frame.num_channels == tts.num_channels
-    ), "num channels should be the same"
+    assert merged_frame.num_channels == tts.num_channels, (
+        "num channels should be the same"
+    )
 
 
 SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
@@ -55,6 +56,7 @@ SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: deepgram.TTS(), id="deepgram"),
     pytest.param(lambda: playai.TTS(), id="playai"),
     pytest.param(lambda: silero.TTS(), id="silero"),
+    pytest.param(lambda: rime.TTS(), id="rime"),
 ]
 
 

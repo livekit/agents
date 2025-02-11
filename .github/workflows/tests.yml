@@ -111,7 +111,9 @@ jobs:
           ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
           FAL_KEY: ${{ secrets.FAL_KEY }}
           PLAYHT_API_KEY: ${{ secrets.PLAYHT_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
+          RIME_API_KEY: ${{ secrets.RIME_API_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
         working-directory: tests

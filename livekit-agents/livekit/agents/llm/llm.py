@@ -50,6 +50,9 @@ class Choice:
 @dataclass
 class LLMCapabilities:
     supports_choices_on_int: bool = True
+    """check whether the LLM supports integer enums choices as function arguments"""
+    requires_persistent_functions: bool = False
+    """if the LLM requires function definition when previous function calls exist in chat context"""
 
 
 @dataclass
@@ -73,9 +76,11 @@ class LLM(
     rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
     Generic[TEvent],
 ):
-    def __init__(self) -> None:
+    def __init__(self, *, capabilities: LLMCapabilities | None = None) -> None:
         super().__init__()
-        self._capabilities = LLMCapabilities()
+        if capabilities is None:
+            capabilities = LLMCapabilities()
+        self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
@@ -148,6 +153,7 @@ class LLMStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
                 if self._conn_options.max_retry == 0 or not e.retryable:
                     raise
                 elif i == self._conn_options.max_retry:
@@ -156,7 +162,7 @@ class LLMStream(ABC):
                     ) from e
                 else:
                     logger.warning(
-                        f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",
+                        f"failed to generate LLM completion, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={
                             "llm": self._llm._label,
@@ -164,7 +170,7 @@ class LLMStream(ABC):
                         },
                     )
 
-                await asyncio.sleep(self._conn_options.retry_interval)
+                await asyncio.sleep(retry_interval)
 
     @utils.log_exceptions(logger=logger)
     async def _metrics_monitor_task(

@@ -29,10 +29,12 @@ class EOUPlugin(Plugin):
     def download_files(self) -> None:
         from transformers import AutoTokenizer
 
-        from .eou import HG_MODEL, ONNX_FILENAME, _download_from_hf_hub
+        from .eou import HG_MODEL, MODEL_REVISION, ONNX_FILENAME, _download_from_hf_hub
 
-        AutoTokenizer.from_pretrained(HG_MODEL)
-        _download_from_hf_hub(HG_MODEL, ONNX_FILENAME)
+        AutoTokenizer.from_pretrained(HG_MODEL, revision=MODEL_REVISION)
+        _download_from_hf_hub(
+            HG_MODEL, ONNX_FILENAME, subfolder="onnx", revision=MODEL_REVISION
+        )
 
 
 Plugin.register_plugin(EOUPlugin())

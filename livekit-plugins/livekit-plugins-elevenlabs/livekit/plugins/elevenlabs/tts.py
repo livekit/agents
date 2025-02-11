@@ -104,7 +104,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: Voice = DEFAULT_VOICE,
-        model: TTSModels | str = "eleven_turbo_v2_5",
+        model: TTSModels | str = "eleven_flash_v2_5",
         api_key: str | None = None,
         base_url: str | None = None,
         encoding: TTSEncoding = "mp3_22050_32",
@@ -189,14 +189,17 @@ class TTS(tts.TTS):
         *,
         voice: Voice = DEFAULT_VOICE,
         model: TTSModels | str = "eleven_turbo_v2_5",
+        language: str | None = None,
     ) -> None:
         """
         Args:
             voice (Voice): Voice configuration. Defaults to `DEFAULT_VOICE`.
             model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
+            language (str | None): Language code for the TTS model. Optional.
         """
         self._opts.model = model or self._opts.model
         self._opts.voice = voice or self._opts.voice
+        self._opts.language = language or self._opts.language
 
     def synthesize(
         self,
@@ -428,6 +431,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     text=f"{text} ",  # must always end with a space
                     try_trigger_generation=False,
                 )
+                self._mark_started()
                 await ws_conn.send_str(json.dumps(data_pkt))
 
             if xml_content:
@@ -516,6 +520,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+            if ws_conn is not None:
+                await ws_conn.close()
 
 
 def _dict_to_voices_list(data: dict[str, Any]):

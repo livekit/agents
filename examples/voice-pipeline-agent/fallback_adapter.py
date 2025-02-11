@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -12,7 +13,7 @@ from livekit.agents import (
     tts,
 )
 from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import cartesia, deepgram, elevenlabs, openai, silero
+from livekit.plugins import cartesia, deepgram, openai, playai, silero
 
 load_dotenv()
 logger = logging.getLogger("fallback-adapter-example")
@@ -30,6 +31,13 @@ async def entrypoint(ctx: JobContext):
             "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
         ),
     )
+
+    fnc_ctx = llm.FunctionContext()
+
+    @fnc_ctx.ai_callable()
+    def get_time():
+        """called to retrieve the current local time"""
+        return datetime.now().strftime("%H:%M:%S")
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
@@ -60,7 +68,7 @@ async def entrypoint(ctx: JobContext):
     fallback_tts = tts.FallbackAdapter(
         [
             cartesia.TTS(),
-            elevenlabs.TTS(),
+            playai.TTS(),
         ]
     )
 
@@ -70,6 +78,7 @@ async def entrypoint(ctx: JobContext):
         llm=fallback_llm,
         tts=fallback_tts,
         chat_ctx=initial_ctx,
+        fnc_ctx=fnc_ctx,
     )
 
     agent.start(ctx.room, participant)

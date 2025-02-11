@@ -14,6 +14,7 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.metrics import MultimodalLLMError, MultimodalLLMMetrics
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from typing_extensions import TypedDict
 
 from .._oai_api import build_oai_function_description
@@ -75,6 +76,8 @@ class RealtimeResponse:
     """timestamp when the response was created"""
     _first_token_timestamp: float | None = None
     """timestamp when the first token was received"""
+    metadata: map | None = None
+    """developer-provided string key-value pairs"""
 
 
 @dataclass
@@ -105,8 +108,12 @@ class RealtimeToolCall:
     """id of the tool call"""
 
 
-# TODO(theomonnom): add the content type directly inside RealtimeContent?
-# text/audio/transcript?
+@dataclass
+class Capabilities:
+    supports_truncate: bool
+    input_audio_sample_rate: int | None = None
+
+
 @dataclass
 class RealtimeContent:
     response_id: str
@@ -136,6 +143,7 @@ class ServerVadOptions:
     threshold: float
     prefix_padding_ms: int
     silence_duration_ms: int
+    create_response: bool
 
 
 @dataclass
@@ -187,6 +195,7 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
     threshold=0.5,
     prefix_padding_ms=300,
     silence_duration_ms=500,
+    create_response=True,
 )
 
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
@@ -204,7 +213,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -229,7 +238,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -247,7 +256,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -284,6 +293,9 @@ class RealtimeModel:
             ValueError: If the API key is not provided and cannot be found in environment variables.
         """
         super().__init__()
+        self._capabilities = Capabilities(
+            supports_truncate=True,
+        )
         self._base_url = base_url
 
         is_azure = (
@@ -341,7 +353,7 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat = "pcm16",
         output_audio_format: api_proto.AudioFormat = "pcm16",
         input_audio_transcription: InputTranscriptionOptions = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: ServerVadOptions = DEFAULT_SERVER_VAD_OPTIONS,
+        turn_detection: Optional[ServerVadOptions] = DEFAULT_SERVER_VAD_OPTIONS,
         tool_choice: api_proto.ToolChoice = "auto",
         temperature: float = 0.8,
         max_response_output_tokens: int | Literal["inf"] = "inf",
@@ -430,6 +442,10 @@ class RealtimeModel:
     def sessions(self) -> list[RealtimeSession]:
         return self._rt_sessions
 
+    @property
+    def capabilities(self) -> Capabilities:
+        return self._capabilities
+
     def session(
         self,
         *,
@@ -441,8 +457,10 @@ class RealtimeModel:
         input_audio_format: api_proto.AudioFormat | None = None,
         output_audio_format: api_proto.AudioFormat | None = None,
         tool_choice: api_proto.ToolChoice | None = None,
-        input_audio_transcription: InputTranscriptionOptions | None = None,
-        turn_detection: ServerVadOptions | None = None,
+        input_audio_transcription: NotGivenOr[
+            InputTranscriptionOptions | None
+        ] = NOT_GIVEN,
+        turn_detection: NotGivenOr[ServerVadOptions | None] = NOT_GIVEN,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
     ) -> RealtimeSession:
@@ -459,9 +477,9 @@ class RealtimeModel:
             opts.output_audio_format = output_audio_format
         if tool_choice is not None:
             opts.tool_choice = tool_choice
-        if input_audio_transcription is not None:
-            opts.input_audio_transcription
-        if turn_detection is not None:
+        if utils.is_given(input_audio_transcription):
+            opts.input_audio_transcription = input_audio_transcription
+        if utils.is_given(turn_detection):
             opts.turn_detection = turn_detection
         if temperature is not None:
             opts.temperature = temperature
@@ -704,6 +722,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             on_duplicate: Literal[
                 "cancel_existing", "cancel_new", "keep_both"
             ] = "keep_both",
+            instructions: str = "",
+            modalities: list[api_proto.Modality] = ["text", "audio"],
+            conversation: Literal["auto", "none"] = "auto",
+            metadata: map | None = None,
         ) -> asyncio.Future[bool]:
             """Creates a new response.
 
@@ -712,6 +734,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     - "cancel_existing": Cancel the existing response before creating new one
                     - "cancel_new": Skip creating new response if one is in progress
                     - "keep_both": Wait for the existing response to be done and then create a new one
+                instructions: explicit prompt used for out-of-band events
+                modalities: set of modalities that the model can respond in, defaults to audio
+                conversation: specifies whether respones is out-of-band
+                    - "auto": Contents of the response will be added to the default conversation
+                    - "none": Creates an out-of-band response which will not add items to default conversation
+                metadata: set of key-value pairs that can be used for storing additional information
 
             Returns:
                 Future that resolves when the response create request is queued
@@ -745,7 +773,17 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 or self._sess._pending_responses[active_resp_id].done_fut.done()
             ):
                 # no active response in progress, create a new one
-                self._sess._queue_msg({"type": "response.create"})
+                self._sess._queue_msg(
+                    {
+                        "type": "response.create",
+                        "response": {
+                            "instructions": instructions,
+                            "modalities": modalities,
+                            "conversation": conversation,
+                            "metadata": metadata,
+                        },
+                    }
+                )
                 _fut = asyncio.Future[bool]()
                 _fut.set_result(True)
                 return _fut
@@ -782,7 +820,17 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 )
                 new_create_fut = asyncio.Future[None]()
                 self._sess._response_create_fut = new_create_fut
-                self._sess._queue_msg({"type": "response.create"})
+                self._sess._queue_msg(
+                    {
+                        "type": "response.create",
+                        "response": {
+                            "instructions": instructions,
+                            "modalities": modalities,
+                            "conversation": conversation,
+                            "metadata": metadata,
+                        },
+                    }
+                )
                 return True
 
             return asyncio.create_task(wait_and_create())
@@ -854,6 +902,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     def input_audio_buffer(self) -> InputAudioBuffer:
         return RealtimeSession.InputAudioBuffer(self)
 
+    def _push_audio(self, frame: rtc.AudioFrame) -> None:
+        self.input_audio_buffer.append(frame)
+
     @property
     def response(self) -> Response:
         return RealtimeSession.Response(self)
@@ -866,8 +917,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         voice: api_proto.Voice | None = None,
         input_audio_format: api_proto.AudioFormat | None = None,
         output_audio_format: api_proto.AudioFormat | None = None,
-        input_audio_transcription: InputTranscriptionOptions | None = None,
-        turn_detection: ServerVadOptions | None = None,
+        input_audio_transcription: NotGivenOr[
+            InputTranscriptionOptions | None
+        ] = NOT_GIVEN,
+        turn_detection: NotGivenOr[ServerVadOptions | None] = NOT_GIVEN,
         tool_choice: api_proto.ToolChoice | None = None,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
@@ -883,9 +936,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             self._opts.input_audio_format = input_audio_format
         if output_audio_format is not None:
             self._opts.output_audio_format = output_audio_format
-        if input_audio_transcription is not None:
+        if utils.is_given(input_audio_transcription):
             self._opts.input_audio_transcription = input_audio_transcription
-        if turn_detection is not None:
+        if utils.is_given(turn_detection):
             self._opts.turn_detection = turn_detection
         if tool_choice is not None:
             self._opts.tool_choice = tool_choice
@@ -910,6 +963,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 "threshold": self._opts.turn_detection.threshold,
                 "prefix_padding_ms": self._opts.turn_detection.prefix_padding_ms,
                 "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
+                "create_response": self._opts.turn_detection.create_response,
             }
         input_audio_transcription_opts: api_proto.InputAudioTranscription | None = None
         if self._opts.input_audio_transcription is not None:
@@ -959,12 +1013,16 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         """
         original_ctx = self._remote_conversation_items.to_chat_context()
 
-        # filter out messages that are not function calls and content is None
-        filtered_messages = [
-            msg
-            for msg in new_ctx.messages
-            if msg.tool_call_id or msg.content is not None
-        ]
+        def _validate_message(msg: llm.ChatMessage) -> bool:
+            # already exists in the remote conversation items
+            # or is a function call or has content
+            return (
+                self._remote_conversation_items.get(msg.id) is not None
+                or msg.tool_call_id is not None
+                or msg.content is not None
+            )
+
+        filtered_messages = list(filter(_validate_message, new_ctx.messages))
         changes = utils._compute_changes(
             original_ctx.messages, filtered_messages, key_fnc=lambda x: x.id
         )
@@ -995,6 +1053,25 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         # wait for all the futures to complete
         await asyncio.gather(*_futs)
 
+    def cancel_response(self) -> None:
+        if self._active_response_id:
+            self.response.cancel()
+
+    def create_response(
+        self,
+        on_duplicate: Literal[
+            "cancel_existing", "cancel_new", "keep_both"
+        ] = "keep_both",
+    ) -> None:
+        self.response.create(on_duplicate=on_duplicate)
+
+    def commit_audio_buffer(self) -> None:
+        self.input_audio_buffer.commit()
+
+    @property
+    def server_vad_enabled(self) -> bool:
+        return self._opts.turn_detection is not None
+
     def _create_empty_user_audio_message(self, duration: float) -> llm.ChatMessage:
         """Create an empty audio message with the given duration."""
         samples = int(duration * api_proto.SAMPLE_RATE)
@@ -1023,6 +1100,15 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self.conversation.item.create(self._create_empty_user_audio_message(1.0))
         self.response.create(on_duplicate="keep_both")
 
+    def _truncate_conversation_item(
+        self, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None:
+        self.conversation.item.truncate(
+            item_id=item_id,
+            content_index=content_index,
+            audio_end_ms=audio_end_ms,
+        )
+
     def _update_conversation_item_content(
         self, item_id: str, content: llm.ChatContent | list[llm.ChatContent] | None
     ) -> None:
@@ -1030,7 +1116,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         if item is None:
             logger.warning(
                 "conversation item not found, skipping update",
-                extra={"item_id": item_id},
+                extra={"item_id": item_id, "content": str(content)},
             )
             return
         item.content = content
@@ -1197,6 +1283,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 threshold=session["turn_detection"]["threshold"],
                 prefix_padding_ms=session["turn_detection"]["prefix_padding_ms"],
                 silence_duration_ms=session["turn_detection"]["silence_duration_ms"],
+                create_response=True,
             )
         if session["input_audio_transcription"] is None:
             input_audio_transcription = None
@@ -1376,11 +1463,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         response = response_created["response"]
         done_fut = self._loop.create_future()
         status_details = response.get("status_details")
+        metadata = cast(map, response.get("metadata"))
         new_response = RealtimeResponse(
             id=response["id"],
             status=response["status"],
             status_details=status_details,
             output=[],
+            metadata=metadata,
             usage=response.get("usage"),
             done_fut=done_fut,
             _created_timestamp=time.time(),
@@ -1555,6 +1644,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
 
         response.status = response_data["status"]
         response.status_details = response_data.get("status_details")
+        response.metadata = cast(map, response_data.get("metadata"))
+        response.output = cast(list[RealtimeOutput], response_data.get("output"))
         response.usage = response_data.get("usage")
 
         metrics_error = None
@@ -1662,7 +1753,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 "function": fnc_call_info.function_info.name,
             },
         )
-        if called_fnc.result is not None:
+        if tool_call.content is not None:
             create_fut = self.conversation.item.create(
                 tool_call,
                 previous_item_id=item_id,
