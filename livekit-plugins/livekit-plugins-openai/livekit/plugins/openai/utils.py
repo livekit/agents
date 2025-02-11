@@ -63,8 +63,8 @@ def to_chat_item(msg: llm.ChatItem, cache_key: Any) -> ChatCompletionMessagePara
 
     elif msg.type == "function_call_output":
         return {
-            "role": "function",
-            "name": msg.call_id,
+            "role": "tool",
+            "tool_call_id": msg.call_id,
             "content": msg.output,
         }
 

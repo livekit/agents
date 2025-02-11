@@ -212,7 +212,7 @@ class TaskActivity(RecognitionHooks):
 
     def _on_input_speech_started(self, _: multimodal.InputSpeechStartedEvent) -> None:
         debug.Tracing.log_event("input_speech_started")
-        self.interrupt()
+        self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session
 
     def _on_input_speech_stopped(self, _: multimodal.InputSpeechStoppedEvent) -> None:
         debug.Tracing.log_event("input_speech_stopped")
@@ -250,15 +250,15 @@ class TaskActivity(RecognitionHooks):
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if ev.speech_duration > self._agent.options.min_interruption_duration:
             if (
-                self._agent.current_speech is not None
-                and not self._agent.current_speech.interrupted
-                and self._agent.current_speech.allow_interruptions
+                self._current_speech is not None
+                and not self._current_speech.interrupted
+                and self._current_speech.allow_interruptions
             ):
                 debug.Tracing.log_event(
                     "speech interrupted by vad",
-                    {"speech_id": self._agent.current_speech.id},
+                    {"speech_id": self._current_speech.id},
                 )
-                self._agent.current_speech.interrupt()
+                self._current_speech.interrupt()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
         pass
@@ -274,7 +274,7 @@ class TaskActivity(RecognitionHooks):
         #  - generate a reply to the user input
 
         if self._current_speech is not None:
-            if self._current_speech.allow_interruptions:
+            if not self._current_speech.allow_interruptions:
                 logger.warning(
                     "skipping user input, current speech generation cannot be interrupted",
                     extra={"user_input": new_transcript},
@@ -422,7 +422,6 @@ class TaskActivity(RecognitionHooks):
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             new_agent_task: AgentTask | None = None
             ignore_task_switch = False
-            print(fnc_outputs)
             for fnc_call, fnc_output, agent_task in fnc_outputs:
                 if fnc_output is not None:
                     new_calls.append(fnc_call)
@@ -569,7 +568,7 @@ class TaskActivity(RecognitionHooks):
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             new_agent_task: AgentTask | None = None
             ignore_task_switch = False
-            for fnc_output, agent_task in fnc_outputs:
+            for _, fnc_output, agent_task in fnc_outputs:
                 if fnc_output is not None:
                     new_fnc_outputs.append(fnc_output)
 
