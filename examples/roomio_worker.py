@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import RoomInput, RoomOutput
+from livekit.agents.pipeline.room_io import RoomInput, RoomInputOptions, RoomOutput
 from livekit.plugins import openai
 
 logger = logging.getLogger("roomio-example")
@@ -23,13 +23,16 @@ async def entrypoint(ctx: JobContext):
         )
     )
 
-    room_input = RoomInput(ctx.room)
-    agent.input.audio = room_input.audio
+    room_input = RoomInput(ctx.room, options=RoomInputOptions(audio_sample_rate=24000))
     room_output = RoomOutput(room=ctx.room, sample_rate=24000, num_channels=1)
-    agent.output.audio = room_output.audio
+
+    # wait for the participant to join the room and subscribe to the output audio
     await room_input.wait_for_participant()
     await room_output.start()
-
+    
+    # connect the input and output audio to the agent
+    agent.input.audio = room_input.audio
+    agent.output.audio = room_output.audio
     await agent.start()
 
     # TODO: the interrupted flag is not set correctly
