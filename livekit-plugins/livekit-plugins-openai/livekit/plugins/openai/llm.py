@@ -606,10 +606,6 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            print("----")
-            print(self._chat_ctx.items)
-            print(to_chat_ctx(self._chat_ctx, id(self._llm)))
-            print("----")
             stream: openai.AsyncStream[
                 ChatCompletionChunk
             ] = await self._client.chat.completions.create(
