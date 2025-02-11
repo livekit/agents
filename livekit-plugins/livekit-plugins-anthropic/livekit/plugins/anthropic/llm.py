@@ -61,8 +61,10 @@ class LLMOptions:
     temperature: float | None
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None
-    cache_system: bool | None = None
+    cache_system_prompt: bool | None = None
+    """if True, the system prompt will be cached"""
     cache_tools: bool | None = None
+    """if True, the tools will be cached"""
 
 
 class LLM(llm.LLM):
@@ -77,7 +79,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
-        cache_system: bool | None = None,
+        cache_system_prompt: bool | None = None,
         cache_tools: bool | None = None,
     ) -> None:
         """
@@ -85,6 +87,17 @@ class LLM(llm.LLM):
 
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
+
+        model(str | ChatModels): The model to use. defaults to "claude-3-5-sonnet-20241022"
+        api_key(str | None): The Anthropic API key. defaults to ANTHROPIC_API_KEY environment variable
+        base_url(str | None): The base URL for the Anthropic API. defaults to None
+        user(str | None): The user for the Anthropic API. defaults to None
+        client(anthropic.AsyncClient | None): The Anthropic client to use. defaults to None
+        temperature(float | None): The temperature for the Anthropic API. defaults to None
+        parallel_tool_calls(bool | None): Whether to parallel tool calls. defaults to None
+        tool_choice(Union[ToolChoice, Literal["auto", "required", "none"]] | None): The tool choice for the Anthropic API. defaults to "auto"
+        cache_system_prompt(bool | None): Whether to cache the system prompt. defaults to None
+        cache_tools(bool | None): Whether to cache the tools. defaults to None
         """
 
         super().__init__(
@@ -105,7 +118,7 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
-            cache_system=cache_system,
+            cache_system_prompt=cache_system_prompt,
             cache_tools=cache_tools,
         )
         self._client = client or anthropic.AsyncClient(
@@ -166,7 +179,7 @@ class LLM(llm.LLM):
             opts["tool_choice"] = anthropic_tool_choice
 
         latest_system_message: anthropic.types.TextBlockParam = _latest_system_message(
-            chat_ctx, cache_system=self._opts.cache_system
+            chat_ctx, cache_system_prompt=self._opts.cache_system_prompt
         )
         anthropic_ctx = _build_anthropic_context(chat_ctx.messages, id(self))
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
@@ -328,7 +341,7 @@ class LLMStream(llm.LLMStream):
 
 
 def _latest_system_message(
-    chat_ctx: llm.ChatContext, cache_system: bool | None = None
+    chat_ctx: llm.ChatContext, cache_system_prompt: bool | None = None
 ) -> anthropic.types.TextBlockParam:
     latest_system_message: llm.ChatMessage | None = None
     for m in chat_ctx.messages:
@@ -341,15 +354,16 @@ def _latest_system_message(
         if isinstance(latest_system_message.content, str):
             latest_system_str = latest_system_message.content
         elif isinstance(latest_system_message.content, list):
-            latest_system_str = " ".join(
-                [c for c in latest_system_message.content if isinstance(c, str)]
-            )
-    system_text_block: anthropic.types.TextBlockParam = {
-        "text": latest_system_str,
-        "type": "text",
-    }
-    if cache_system:
-        system_text_block["cache_control"] = {"type": "ephemeral"}
+            latest_system_str = " ".join([
+                c for c in latest_system_message.content if isinstance(c, str)
+            ])
+    system_text_block = anthropic.types.TextBlockParam(
+        text=latest_system_str,
+        type="text",
+        cache_control=anthropic.types.CacheControlEphemeralParam(type="ephemeral")
+        if cache_system_prompt
+        else None,
+    )
     return system_text_block
 
 
@@ -561,11 +575,12 @@ def _build_function_description(
     for arg_info in fnc_info.arguments.values():
         input_schema[arg_info.name] = build_schema_field(arg_info)
 
-    tool_param: anthropic.types.ToolParam = {
-        "name": fnc_info.name,
-        "description": fnc_info.description,
-        "input_schema": input_schema,
-    }
-    if cache_tools:
-        tool_param["cache_control"] = {"type": "ephemeral"}
+    tool_param = anthropic.types.ToolParam(
+        name=fnc_info.name,
+        description=fnc_info.description,
+        input_schema=input_schema,
+        cache_control=anthropic.types.CacheControlEphemeralParam(type="ephemeral")
+        if cache_tools
+        else None,
+    )
     return tool_param
