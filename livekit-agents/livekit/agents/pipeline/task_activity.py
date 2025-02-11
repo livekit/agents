@@ -569,7 +569,7 @@ class TaskActivity(RecognitionHooks):
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             new_agent_task: AgentTask | None = None
             ignore_task_switch = False
-            for fnc_output, agent_task in fnc_outputs:
+            for _, fnc_output, agent_task in fnc_outputs:
                 if fnc_output is not None:
                     new_fnc_outputs.append(fnc_output)
 
