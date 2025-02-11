@@ -3,7 +3,7 @@ import logging
 from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
-from livekit.agents.pipeline import AgentContext, AgentTask, ChatCLI, PipelineAgent
+from livekit.agents.pipeline import AgentContext, AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.agents.pipeline.room_io import RoomInput, RoomOutput, RoomOutputOptions
 from livekit.agents.transcription import TranscriptionDataStreamForwarder
@@ -50,14 +50,20 @@ async def entrypoint(ctx: JobContext):
     )
 
     room_input = RoomInput(ctx.room)
-    agent.input.audio = room_input.audio
     room_output = RoomOutput(
         room=ctx.room, options=RoomOutputOptions(sync_transcription=True)
     )
-    agent.output.audio = room_output.audio
-    agent.output.text = room_output.text
+
+    # wait for the participant to join the room and subscribe to the output audio
     await room_input.wait_for_participant()
     await room_output.start()
+
+    # connect the input and output audio to the agent
+    agent.input.audio = room_input.audio
+    agent.output.audio = room_output.audio
+    agent.output.text = room_output.text
+
+    await agent.start()
 
     # (optional) forward transcription using data stream
     ds_forwarder = TranscriptionDataStreamForwarder(
@@ -65,8 +71,6 @@ async def entrypoint(ctx: JobContext):
         attributes={"transcription_track": "agent"},
     )
     room_output.on("transcription_segment", ds_forwarder.update)
-
-    await agent.start()
 
     @agent.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
