@@ -29,7 +29,7 @@ async def entrypoint(ctx: JobContext):
     # wait for the participant to join the room and subscribe to the output audio
     await room_input.wait_for_participant()
     await room_output.start()
-    
+
     # connect the input and output audio to the agent
     agent.input.audio = room_input.audio
     agent.output.audio = room_output.audio

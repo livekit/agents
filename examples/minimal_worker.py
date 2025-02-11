@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentContext, AgentTask, ChatCLI, PipelineAgent
-from livekit.plugins import openai, deepgram, cartesia
+from livekit.plugins import openai, deepgram, cartesia, silero
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -42,6 +42,7 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=cartesia.TTS(),
+        vad=silero.VAD.load()
     )
 
     await agent.start()
