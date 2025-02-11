@@ -198,7 +198,9 @@ class LLM(llm.LLM):
             chat_ctx, cache_system_prompt=self._opts.cache_system_prompt
         )
         anthropic_ctx = _build_anthropic_context(
-            chat_ctx.messages, id(self), cache_tools=self._opts.cache_chat_history
+            chat_ctx.messages,
+            id(self),
+            cache_chat_history=self._opts.cache_chat_history,
         )
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
 
@@ -301,10 +303,12 @@ class LLMStream(llm.LLMStream):
             self._request_id = event.message.id
             self._input_tokens = event.message.usage.input_tokens
             self._output_tokens = event.message.usage.output_tokens
-            self._cache_creation_tokens = (
-                event.message.usage.cache_creation_input_tokens
-            )
-            self._cache_read_tokens = event.message.usage.cache_read_input_tokens
+            if event.message.usage.cache_creation_input_tokens:
+                self._cache_creation_tokens = (
+                    event.message.usage.cache_creation_input_tokens
+                )
+            if event.message.usage.cache_read_input_tokens:
+                self._cache_read_tokens = event.message.usage.cache_read_input_tokens
         elif event.type == "message_delta":
             self._output_tokens += event.usage.output_tokens
         elif event.type == "content_block_start":
@@ -443,7 +447,7 @@ def _build_anthropic_message(
     cache_key: Any,
     cache_ctrl: anthropic.types.CacheControlEphemeralParam | None,
 ) -> anthropic.types.MessageParam | None:
-    if msg.role in ("user", "assistant"):
+    if msg.role == "user" or msg.role == "assistant":
         a_msg: anthropic.types.MessageParam = {
             "role": msg.role,
             "content": [],
