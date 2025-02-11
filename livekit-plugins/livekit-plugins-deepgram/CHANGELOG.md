@@ -1,5 +1,11 @@
 # livekit-plugins-deepgram
 
+## 0.6.18
+
+### Patch Changes
+
+- chore(Deepgram STT): add nova-3 model to type literal - [#1464](https://github.com/livekit/agents/pull/1464) ([@chasemcdo](https://github.com/chasemcdo))
+
 ## 0.6.17
 
 ### Patch Changes

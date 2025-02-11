@@ -1,5 +1,15 @@
 # livekit-plugins-google
 
+## 0.10.3
+
+### Patch Changes
+
+- Gemini Realtime: Transcribe model audio via gemini api & use latest model as default for google plugin - [#1446](https://github.com/livekit/agents/pull/1446) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Update to support passing chirp_2 location for other STT credentials - [#1098](https://github.com/livekit/agents/pull/1098) ([@brightsparc](https://github.com/brightsparc))
+
+- Added an additional field in LLM capabilities class to check if model providers support function call history within chat context without needing function definitions. - [#1441](https://github.com/livekit/agents/pull/1441) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.10.2
 
 ### Patch Changes
