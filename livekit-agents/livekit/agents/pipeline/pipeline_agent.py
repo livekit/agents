@@ -11,10 +11,10 @@ from ..llm import ChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from . import io
-from .task import AgentTask
-from .task_activity import TaskActivity
 from .audio_recognition import _TurnDetector
 from .speech_handle import SpeechHandle
+from .task import AgentTask
+from .task_activity import TaskActivity
 
 EventTypes = Literal[
     "user_started_speaking",

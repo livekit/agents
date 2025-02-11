@@ -30,6 +30,12 @@ if TYPE_CHECKING:
     from .task import AgentTask
 
 
+INSTRUCTIONS_ID = "agent_task_instructions"
+"""
+The ID of the instructions message in the chat context. (only for stateless LLMs)
+"""
+
+
 class TaskActivity(RecognitionHooks):
     def __init__(self, task: AgentTask, agent: PipelineAgent) -> None:
         self._agent_task, self._agent = task, agent
@@ -53,6 +59,10 @@ class TaskActivity(RecognitionHooks):
         return self._draining
 
     @property
+    def agent(self) -> PipelineAgent:
+        return self._agent
+
+    @property
     def turn_detector(self) -> _TurnDetector | None:
         return self._agent_task._eou or self._agent._turn_detector
 
@@ -73,15 +83,19 @@ class TaskActivity(RecognitionHooks):
         return self._agent_task.vad or self._agent.vad
 
     async def drain(self) -> None:
-        self._speech_q_changed.set()  # TODO(theomonnom): we shouldn't need this here
-        self._draining = True
+        async with self._lock:
+            if self._draining:
+                return
 
-        if self._main_atask is not None:
-            await asyncio.shield(self._main_atask)
+            await self._agent_task.on_exit()
+
+            self._speech_q_changed.set()  # TODO(theomonnom): we shouldn't need this here
+            self._draining = True
+            if self._main_atask is not None:
+                await asyncio.shield(self._main_atask)
 
     async def start(self) -> None:
         async with self._lock:
-            print("starting")
             self._agent_task._activity = self
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
             self._audio_recognition = AudioRecognition(
@@ -106,23 +120,46 @@ class TaskActivity(RecognitionHooks):
                     await self._rt_session.update_instructions(
                         self._agent_task.instructions
                     )
+                except multimodal.RealtimeError:
+                    logger.exception("failed to update the instructions")
+
+                try:
                     await self._rt_session.update_chat_ctx(self._agent_task.chat_ctx)
+                except multimodal.RealtimeError:
+                    logger.exception("failed to update the chat_ctx")
+
+                try:
                     await self._rt_session.update_fnc_ctx(self._agent_task.ai_functions)
                 except multimodal.RealtimeError:
-                    logger.exception(
-                        "failed to update the realtime session",
+                    logger.exception("failed to update the fnc_ctx")
+
+            elif isinstance(self.llm, llm.LLM):
+                # update the system prompt inside the chat context
+                if msg := self._agent_task._chat_ctx.get_by_id(INSTRUCTIONS_ID):
+                    if msg.type == "message":
+                        msg.content = [self._agent_task.instructions]
+                    else:
+                        logger.warning(
+                            "expected the instructions inside the chat_ctx to be of type 'message'"
+                        )
+                else:
+                    self._agent_task._chat_ctx.items.insert(
+                        0,
+                        llm.ChatMessage(
+                            id=INSTRUCTIONS_ID,
+                            role="system",
+                            content=[self._agent_task.instructions],
+                        ),
                     )
-            else:
-                self._agent_task._chat_ctx.add_message(
-                    role="system",
-                    content=self._agent_task.instructions,
-                    id="task_instructions",
-                )
 
             self._started = True
+            await self._agent_task.on_enter()
 
     async def aclose(self) -> None:
         async with self._lock:
+            if not self._draining:
+                logger.warning("task closing without draining")
+
             if self._rt_session is not None:
                 await self._rt_session.aclose()
 
@@ -150,7 +187,6 @@ class TaskActivity(RecognitionHooks):
 
         debug.Tracing.log_event("generate_reply", {"user_input": user_input})
 
-        print("generate_reply", user_input)
         # TODO(theomonnom): move user msg
         self._agent_task._chat_ctx.add_message(role="user", content=user_input)
 
