@@ -10,6 +10,7 @@ from .. import utils
 from ..transcription import TranscriptionRoomForwarder, TranscriptionSyncIO
 from .io import AudioSink, TextSink
 from ..log import logger
+from .io import AudioSink
 
 
 @dataclass

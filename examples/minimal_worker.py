@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentContext, AgentTask, ChatCLI, PipelineAgent
-from livekit.plugins import openai, deepgram, cartesia, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -16,8 +16,10 @@ class EchoTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Echo, always speak in English even if the user speaks in another language or wants to use another language.",
-            # llm=openai.realtime.RealtimeModel(voice="echo"),
         )
+
+    async def on_enter(self) -> None:
+        pass
 
     @ai_function
     async def talk_to_alloy(self, context: AgentContext):
@@ -28,8 +30,10 @@ class AlloyTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Alloy, always speak in English even if the user speaks in another language or wants to use another language.",
-            # llm=openai.realtime.RealtimeModel(voice="alloy"),
         )
+
+    async def on_enter(self) -> None:
+        pass
 
     @ai_function
     async def talk_to_echo(self, context: AgentContext):
@@ -42,7 +46,7 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=cartesia.TTS(),
-        vad=silero.VAD.load()
+        vad=silero.VAD.load(),
     )
 
     await agent.start()
