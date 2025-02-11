@@ -198,7 +198,7 @@ class LLM(llm.LLM):
             chat_ctx, cache_system_prompt=self._opts.cache_system_prompt
         )
         anthropic_ctx = _build_anthropic_context(
-            chat_ctx.messages, id(self), cache_tools=self._opts.cache_tools
+            chat_ctx.messages, id(self), cache_tools=self._opts.cache_chat_history
         )
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
 
@@ -273,7 +273,10 @@ class LLMStream(llm.LLMStream):
                         usage=llm.CompletionUsage(
                             completion_tokens=self._output_tokens,
                             prompt_tokens=self._input_tokens,
-                            total_tokens=self._input_tokens + self._output_tokens,
+                            total_tokens=self._input_tokens
+                            + self._output_tokens
+                            + self._cache_creation_tokens
+                            + self._cache_read_tokens,
                             cache_creation_input_tokens=self._cache_creation_tokens,
                             cache_read_input_tokens=self._cache_read_tokens,
                         ),
@@ -418,14 +421,14 @@ def _merge_messages(
 
 
 def _build_anthropic_context(
-    chat_ctx: List[llm.ChatMessage], cache_key: Any, cache_tools: bool
+    chat_ctx: List[llm.ChatMessage], cache_key: Any, cache_chat_history: bool
 ) -> List[anthropic.types.MessageParam]:
     result: List[anthropic.types.MessageParam] = []
     for i, msg in enumerate(chat_ctx):
         # caching last message will cache whole chat history
         cache_ctrl = (
             CACHE_CONTROL_EPHEMERAL
-            if ((i == len(chat_ctx) - 1) and cache_tools)
+            if ((i == len(chat_ctx) - 1) and cache_chat_history)
             else None
         )
         a_msg = _build_anthropic_message(msg, cache_key, cache_ctrl=cache_ctrl)
