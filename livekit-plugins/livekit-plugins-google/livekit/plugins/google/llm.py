@@ -282,7 +282,7 @@ class LLMStream(llm.LLMStream):
                 system_instruction=system_instruction,
                 **opts,
             )
-            async for response in self._client.aio.models.generate_content_stream(
+            async for response in await self._client.aio.models.generate_content_stream(
                 model=self._model,
                 contents=cast(types.ContentListUnion, turns),
                 config=config,
