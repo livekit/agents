@@ -6,8 +6,8 @@ from typing import AsyncIterator, Optional
 
 from livekit import rtc
 
-from .io import AudioSink
 from ..log import logger
+from .io import AudioSink
 
 
 @dataclass

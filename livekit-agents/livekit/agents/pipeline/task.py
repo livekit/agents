@@ -12,15 +12,16 @@ from livekit import rtc
 
 from .. import llm, multimodal, stt, tokenize, tts, utils, vad
 from ..llm import (
+    AIFunction,
     ChatContext,
     FunctionContext,
-    AIFunction,
     find_ai_functions,
 )
 from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import _TurnDetector
 
 if TYPE_CHECKING:
+    from .pipeline_agent import PipelineAgent
     from .task_activity import TaskActivity
 
 
@@ -99,6 +100,22 @@ class AgentTask:
     def vad(self) -> NotGivenOr[vad.VAD | None]:
         return self._vad
 
+    @property
+    def agent(self) -> PipelineAgent:
+        """
+        Retrieve the PipelineAgent associated with the current task;.
+
+        Raises:
+            RuntimeError: If the task is not running
+        """
+        return self.__get_activity_or_raise().agent
+
+    async def on_enter(self) -> None:
+        pass
+
+    async def on_exit(self) -> None:
+        pass
+
     async def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame]
     ) -> Optional[AsyncIterable[stt.SpeechEvent]]:
@@ -159,6 +176,6 @@ class AgentTask:
     def __get_activity_or_raise(self) -> TaskActivity:
         """Get the current activity context for this task (internal)"""
         if self._activity is None:
-            raise RuntimeError("no activity context found")
+            raise RuntimeError("no activity context found, this task is not running")
 
         return self._activity
