@@ -10,14 +10,15 @@ from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _is_optional_type
 
 from google.genai import types
+from google.genai.types import Type as GenaiType
 
-JSON_SCHEMA_TYPE_MAP: dict[type, types.Type] = {
-    str: types.Type.STRING,
-    int: types.Type.INTEGER,
-    float: types.Type.NUMBER,
-    bool: types.Type.BOOLEAN,
-    dict: types.Type.OBJECT,
-    list: types.Type.ARRAY,
+JSON_SCHEMA_TYPE_MAP: dict[type, GenaiType] = {
+    str: GenaiType.STRING,
+    int: GenaiType.INTEGER,
+    float: GenaiType.NUMBER,
+    bool: GenaiType.BOOLEAN,
+    dict: GenaiType.OBJECT,
+    list: GenaiType.ARRAY,
 }
 
 __all__ = ["_build_gemini_ctx", "_build_tools"]
@@ -38,7 +39,7 @@ def _build_parameters(arguments: Dict[str, Any]) -> types.Schema | None:
             item_type = get_args(py_type)[0]
             if item_type not in JSON_SCHEMA_TYPE_MAP:
                 raise ValueError(f"Unsupported type: {item_type}")
-            prop.type = types.Type.ARRAY
+            prop.type = GenaiType.ARRAY
             prop.items = types.Schema(type=JSON_SCHEMA_TYPE_MAP[item_type])
 
             if arg_info.choices:
@@ -62,7 +63,7 @@ def _build_parameters(arguments: Dict[str, Any]) -> types.Schema | None:
             required.append(arg_name)
 
     if properties:
-        parameters = types.Schema(type="OBJECT", properties=properties)
+        parameters = types.Schema(type=GenaiType.OBJECT, properties=properties)
         if required:
             parameters.required = required
 
