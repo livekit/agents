@@ -8,11 +8,10 @@ from typing import (
 )
 
 from livekit import rtc
-from ..types import NOT_GIVEN, NotGiven, NotGivenOr
-from ..utils.misc import is_given
 
 from .. import debug, llm, multimodal, stt, tts, utils, vad
 from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
 from .events import AgentContext
 from .generation import (
@@ -615,7 +614,7 @@ class TaskActivity(RecognitionHooks):
         tasks = [
             asyncio.create_task(
                 _read_messages(message_outputs),
-                name="_realtime_reply_task.read_messages",
+                name="_realtime_generation_task.read_messages",
             )
         ]
 
