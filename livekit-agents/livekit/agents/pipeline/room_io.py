@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterator, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Literal, Optional
 
 from livekit import rtc
 
+from .. import utils
 from ..log import logger
-from .io import AudioSink
+from ..transcription import TranscriptionRoomForwarder, TranscriptSegment
+from .io import AudioSink, TextSink
+
+if TYPE_CHECKING:
+    from ..pipeline import PipelineAgent
 
 
 @dataclass
@@ -16,7 +21,7 @@ class RoomInputOptions:
     """Whether to subscribe to audio"""
     video_enabled: bool = False
     """Whether to subscribe to video"""
-    audio_sample_rate: int = 16000
+    audio_sample_rate: int = 24000
     """Sample rate of the input audio in Hz"""
     audio_num_channels: int = 1
     """Number of audio channels"""
@@ -24,9 +29,22 @@ class RoomInputOptions:
     """Capacity of the internal audio queue, 0 means unlimited"""
     video_queue_capacity: int = 0
     """Capacity of the internal video queue, 0 means unlimited"""
+    forward_user_transcript: bool = True
+    """Whether to forward user transcript segments to the room"""
+
+
+@dataclass
+class RoomOutputOptions:
+    sample_rate: int = 24000
+    num_channels: int = 1
+    forward_agent_transcription: bool = True
+    """Whether to forward transcription segments to the room"""
+    track_source: rtc.TrackSource = rtc.TrackSource.SOURCE_MICROPHONE
+    """Source of the audio track to publish"""
 
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
+DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
 
 
 class RoomInput:
@@ -51,6 +69,9 @@ class RoomInput:
         self._participant: rtc.RemoteParticipant | None = None
         self._closed = False
 
+        # transcription forwarder
+        self._tr_forwarder: Optional[TranscriptionRoomForwarder] = None
+
         # streams
         self._audio_stream: Optional[rtc.AudioStream] = None
         self._video_stream: Optional[rtc.VideoStream] = None
@@ -59,6 +80,7 @@ class RoomInput:
         self._room.on("participant_connected", self._on_participant_connected)
 
         # try to find participant
+        # TODO: support link and unlink participants
         if self._expected_identity is not None:
             participant = self._room.remote_participants.get(self._expected_identity)
             if participant is not None:
@@ -69,10 +91,22 @@ class RoomInput:
                 if self._participant:
                     break
 
-    async def wait_for_participant(self) -> rtc.RemoteParticipant:
-        await self._participant_ready.wait()
-        assert self._participant is not None
-        return self._participant
+    async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
+        participant = await self._wait_for_participant()
+        if not agent:
+            return
+
+        agent.input.audio = self.audio
+        agent.input.video = self.video
+        if self._options.forward_user_transcript:
+            # TODO: support multiple participants
+            self._tr_forwarder = TranscriptionRoomForwarder(
+                room=self._room, participant=participant
+            )
+            agent.on(
+                "user_transcript_updated",
+                lambda ev: self._tr_forwarder.update(ev),
+            )
 
     @property
     def audio(self) -> AsyncIterator[rtc.AudioFrame] | None:
@@ -82,7 +116,6 @@ class RoomInput:
         async def _read_stream():
             async for event in self._audio_stream:
                 yield event.frame
-                await asyncio.sleep(0)
 
         return _read_stream()
 
@@ -94,7 +127,6 @@ class RoomInput:
         async def _read_stream():
             async for event in self._video_stream:
                 yield event.frame
-                await asyncio.sleep(0)
 
         return _read_stream()
 
@@ -134,6 +166,11 @@ class RoomInput:
             return
         self._link_participant(participant)
 
+    async def _wait_for_participant(self) -> rtc.RemoteParticipant:
+        await self._participant_ready.wait()
+        assert self._participant is not None
+        return self._participant
+
     async def aclose(self) -> None:
         if self._closed:
             raise RuntimeError("RoomInput already closed")
@@ -148,30 +185,43 @@ class RoomInput:
         if self._video_stream is not None:
             await self._video_stream.aclose()
             self._video_stream = None
+        if self._tr_forwarder is not None:
+            await self._tr_forwarder.aclose()
+            self._tr_forwarder = None
 
 
 class RoomOutput:
     """Manages audio output to a LiveKit room"""
 
     def __init__(
-        self, room: rtc.Room, *, sample_rate: int = 24000, num_channels: int = 1
+        self, room: rtc.Room, options: RoomOutputOptions = DEFAULT_ROOM_OUTPUT_OPTIONS
     ) -> None:
-        """Initialize the RoomOutput
-
-        Args:
-            room: The LiveKit room to publish media to
-            sample_rate: Sample rate of the audio in Hz
-            num_channels: Number of audio channels
-        """
+        self._options = options
+        self._options = options
+        self._room = room
         self._audio_sink = RoomAudioSink(
-            room=room, sample_rate=sample_rate, num_channels=num_channels
+            room=room,
+            sample_rate=self._options.sample_rate,
+            num_channels=self._options.num_channels,
+            track_source=self._options.track_source,
         )
+        self._tr_forwarder: Optional[TranscriptionRoomForwarder] = None
 
-    async def start(self) -> None:
+    async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
         await self._audio_sink.start()
 
+        if not agent:
+            return
+
+        agent.output.audio = self._audio_sink
+        if self._options.forward_agent_transcription:
+            self._tr_forwarder = TranscriptionRoomForwarder(
+                room=self._room, participant=self._room.local_participant
+            )
+            agent.on("agent_transcript_updated", self._tr_forwarder.update)
+
     @property
-    def audio(self) -> "RoomAudioSink":
+    def audio(self) -> AudioSink:
         return self._audio_sink
 
 
@@ -185,6 +235,7 @@ class RoomAudioSink(AudioSink):
         sample_rate: int = 24000,
         num_channels: int = 1,
         queue_size_ms: int = 100_000,
+        track_source: rtc.TrackSource = rtc.TrackSource.SOURCE_MICROPHONE,
     ) -> None:
         """Initialize the RoomAudioSink
 
@@ -197,7 +248,7 @@ class RoomAudioSink(AudioSink):
         """
         super().__init__(sample_rate=sample_rate)
         self._room = room
-
+        self._track_source = track_source
         # buffer the audio frames as soon as they are captured
         self._audio_source = rtc.AudioSource(
             sample_rate=sample_rate,
@@ -226,7 +277,7 @@ class RoomAudioSink(AudioSink):
         )
         self._publication = await self._room.local_participant.publish_track(
             track=track,
-            options=rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+            options=rtc.TrackPublishOptions(source=self._track_source),
         )
         await self._publication.wait_for_subscription()
 
@@ -272,3 +323,39 @@ class RoomAudioSink(AudioSink):
         self._pushed_duration = max(0, self._pushed_duration - queued_duration)
         self._interrupted = True
         self._audio_source.clear_queue()
+
+
+class _TranscriptionTextSink(
+    TextSink, rtc.EventEmitter[Literal["transcription_updated"]]
+):
+    def __init__(self) -> None:
+        super().__init__()
+        self._current_id = utils.shortuuid("SG_")
+
+    async def capture_text(self, text: str) -> None:
+        self.emit(
+            "transcription_updated",
+            self._create_transcription_segment(text, final=False),
+        )
+
+    def flush(self) -> None:
+        self.emit(
+            "transcription_updated",
+            self._create_transcription_segment("", final=True),
+        )
+
+    def _create_transcription_segment(
+        self, text: str, final: bool
+    ) -> TranscriptSegment:
+        segment = TranscriptSegment(
+            id=self._current_id,
+            text=text,
+            start_time=0,
+            end_time=0,
+            final=final,
+            is_delta=True,
+            language="",
+        )
+        if final:
+            self._current_id = utils.shortuuid("SG_")
+        return segment

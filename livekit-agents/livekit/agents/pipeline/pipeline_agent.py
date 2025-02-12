@@ -2,15 +2,16 @@ from __future__ import annotations, print_function
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal
+from typing import AsyncIterable, Literal, Optional
 
 from livekit import rtc
 
 from .. import debug, llm, multimodal, stt, tts, utils, vad
 from ..llm import ChatContext
 from ..log import logger
+from ..transcription import TranscriptionSyncIO, TranscriptSegment
 from ..types import NOT_GIVEN, NotGivenOr
-from . import io
+from . import io, room_io
 from .audio_recognition import _TurnDetector
 from .speech_handle import SpeechHandle
 from .task import AgentTask
@@ -24,6 +25,8 @@ EventTypes = Literal[
     "user_message_committed",
     "agent_message_committed",
     "agent_message_interrupted",
+    "user_transcript_updated",
+    "agent_transcript_updated",
 ]
 
 
@@ -85,6 +88,12 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         self._update_activity_atask: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
+        # room io and transcription sync
+        self._room_input: Optional[room_io.RoomInput] = None
+        self._room_output: Optional[room_io.RoomOutput] = None
+        self._agent_tr_sync: Optional[TranscriptionSyncIO] = None
+        self._user_transcript_id = utils.shortuuid("SG_")
+
         # agent tasks
         self._agent_task: AgentTask
 
@@ -126,10 +135,56 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
     async def start(
         self,
+        *,
+        room: Optional[rtc.Room] = None,
+        room_input_options: NotGivenOr[room_io.RoomInputOptions | None] = NOT_GIVEN,
+        room_output_options: NotGivenOr[room_io.RoomOutputOptions | None] = NOT_GIVEN,
     ) -> None:
-        """Start the pipeline agent."""
+        """Start the pipeline agent.
+        This will create room input and output if the input or output audio is not already set.
+
+        Args:
+            room_input_options: Options for the room input, set to None to disable
+            room_output_options: Options for the room output, set to None to disable
+        """
         if self._started:
             return
+
+        # sanity check
+        if (room_input_options or room_output_options) and not room:
+            raise ValueError(
+                "room must be provided if room_input_options or room_output_options is given"
+            )
+
+        if room_input_options and self.input.audio is not None:
+            logger.warning(
+                "audio input is already set, ignoring room_input_options",
+                extra={"room_input_options": room_input_options},
+            )
+            room_input_options = None
+
+        if room_output_options and self.output.audio is not None:
+            logger.warning(
+                "audio output is already set, ignoring room_output_options",
+                extra={"room_output_options": room_output_options},
+            )
+            room_output_options = None
+
+        if self.input.audio is None and room and room_input_options is not None:
+            # create room input if not already set
+            self._room_input = room_io.RoomInput(
+                room=room,
+                options=room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS,
+            )
+            await self._room_input.start(self)
+
+        if self.output.audio is None and room and room_output_options is not None:
+            # create room output if not already set
+            self._room_output = room_io.RoomOutput(
+                room=room,
+                options=room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS,
+            )
+            await self._room_output.start(self)
 
         if self.input.audio is not None:
             self._forward_audio_atask = asyncio.create_task(
@@ -148,6 +203,10 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
         if self._forward_audio_atask is not None:
             await utils.aio.cancel_and_wait(self._forward_audio_atask)
+
+        if self._agent_tr_sync:
+            await self._agent_tr_sync.aclose()
+            self._agent_tr_sync = None
 
     @property
     def options(self) -> PipelineOptions:
@@ -215,6 +274,47 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             if self._activity is not None:
                 self._activity.push_audio(frame)
 
+    @utils.log_exceptions(logger=logger)
+    def _on_user_transcript(self, ev: stt.SpeechEvent, final: bool) -> None:
+        if not ev.alternatives:
+            return
+
+        data = ev.alternatives[0]
+        self.emit(
+            "user_transcript_updated",
+            TranscriptSegment(
+                id=self._user_transcript_id,
+                text=data.text,
+                start_time=max(int(data.start_time), 0),
+                end_time=max(int(data.end_time), 0),
+                final=final,
+                is_delta=False,
+                language=data.language,
+            ),
+        )
+        if final:
+            self._user_transcript_id = utils.shortuuid("SG_")
+
+    def _on_agent_transcript(self, segment: TranscriptSegment) -> None:
+        self.emit("agent_transcript_updated", segment)
+
+    @property
+    def _audio_sink_with_transcript(self) -> io.AudioSink:
+        if not self._output.audio:
+            return None
+
+        if self._agent_tr_sync:
+            return self._agent_tr_sync.audio_output
+
+        return self._output.audio
+
+    @property
+    def _text_sink_with_transcript(self) -> io.TextSink:
+        if self._agent_tr_sync:
+            return self._agent_tr_sync.text_output
+
+        return self._output.text
+
     # -- User changed input/output streams/sinks --
 
     def _on_video_input_changed(self) -> None:
@@ -235,9 +335,22 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         pass
 
     def _on_audio_output_changed(self) -> None:
-        pass
+        if self._output.audio is None:
+            if self._agent_tr_sync:
+                asyncio.create_task(self._agent_tr_sync.aclose())
+                self._agent_tr_sync = None
+            return
+
+        if self._agent_tr_sync:
+            self._agent_tr_sync.audio_output.set_base_sink(self.output.audio)
+        else:
+            self._agent_tr_sync = TranscriptionSyncIO(
+                self.output.audio, self.output.text
+            )
+            self._agent_tr_sync.on("transcription_updated", self._on_agent_transcript)
 
     def _on_text_output_changed(self) -> None:
-        pass
+        if self._agent_tr_sync:
+            self._agent_tr_sync.text_output.set_base_sink(self.output.text)
 
     # ---
