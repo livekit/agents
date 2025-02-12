@@ -8,6 +8,8 @@ from typing import (
 )
 
 from livekit import rtc
+from ..types import NOT_GIVEN, NotGiven, NotGivenOr
+from ..utils.misc import is_given
 
 from .. import debug, llm, multimodal, stt, tts, utils, vad
 from ..log import logger
@@ -22,18 +24,13 @@ from .generation import (
     perform_text_forwarding,
     perform_tool_executions,
     perform_tts_inference,
+    update_instructions,
 )
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from .pipeline_agent import PipelineAgent
     from .task import AgentTask
-
-
-INSTRUCTIONS_ID = "agent_task_instructions"
-"""
-The ID of the instructions message in the chat context. (only for stateless LLMs)
-"""
 
 
 class TaskActivity(RecognitionHooks):
@@ -134,23 +131,14 @@ class TaskActivity(RecognitionHooks):
                     logger.exception("failed to update the fnc_ctx")
 
             elif isinstance(self.llm, llm.LLM):
-                # update the system prompt inside the chat context
-                if msg := self._agent_task._chat_ctx.get_by_id(INSTRUCTIONS_ID):
-                    if msg.type == "message":
-                        msg.content = [self._agent_task.instructions]
-                    else:
-                        logger.warning(
-                            "expected the instructions inside the chat_ctx to be of type 'message'"
-                        )
-                else:
-                    self._agent_task._chat_ctx.items.insert(
-                        0,
-                        llm.ChatMessage(
-                            id=INSTRUCTIONS_ID,
-                            role="system",
-                            content=[self._agent_task.instructions],
-                        ),
+                try:
+                    update_instructions(
+                        self._agent_task._chat_ctx,
+                        instructions=self._agent_task.instructions,
+                        add_if_missing=True,
                     )
+                except ValueError:
+                    logger.exception("failed to update the instructions")
 
             self._started = True
             await self._agent_task.on_enter()
@@ -181,29 +169,42 @@ class TaskActivity(RecognitionHooks):
         if self._audio_recognition is not None:
             self._audio_recognition.push_audio(frame)
 
-    def generate_reply(self, user_input: str) -> SpeechHandle:
+    def generate_reply(
+        self,
+        *,
+        user_input: NotGivenOr[str] = NOT_GIVEN,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+    ) -> SpeechHandle:
         if self._current_speech is not None and not self._current_speech.interrupted:
             raise ValueError("another reply is already in progress")
 
-        debug.Tracing.log_event("generate_reply", {"user_input": user_input})
-
-        # TODO(theomonnom): move user msg
-        self._agent_task._chat_ctx.add_message(role="user", content=user_input)
+        debug.Tracing.log_event(
+            "generate_reply",
+            {"user_input": user_input or None, "instructions": instructions or None},
+        )
 
         handle = SpeechHandle.create(
             allow_interruptions=self._agent.options.allow_interruptions
         )
-        task = asyncio.create_task(
-            self._pipeline_reply_task(
-                speech_handle=handle,
-                chat_ctx=self._agent_task._chat_ctx,
-                fnc_ctx=self._agent_task._fnc_ctx,
-            ),
-            name="_pipeline_reply_task",
-        )
-        self._tasks.append(task)
-        task.add_done_callback(lambda _: handle._mark_playout_done())
-        task.add_done_callback(lambda _: self._tasks.remove(task))
+
+        if isinstance(self.llm, multimodal.RealtimeModel):
+            pass
+
+        elif isinstance(self.llm, llm.LLM):
+            task = asyncio.create_task(
+                self._pipeline_reply_task(
+                    speech_handle=handle,
+                    chat_ctx=self._agent_task._chat_ctx,
+                    fnc_ctx=self._agent_task._fnc_ctx,
+                    user_input=user_input or None,
+                    instructions=instructions or None,
+                ),
+                name="_pipeline_reply_task",
+            )
+            self._tasks.append(task)
+            task.add_done_callback(lambda _: handle._mark_playout_done())
+            task.add_done_callback(lambda _: self._tasks.remove(task))
+
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
@@ -239,8 +240,8 @@ class TaskActivity(RecognitionHooks):
 
                 self._speech_q_changed.clear()
         finally:
-            await asyncio.gather(*self._tasks)
             debug.Tracing.log_event(f"task done, waiting for {len(self._tasks)} tasks")
+            await asyncio.gather(*self._tasks)
             debug.Tracing.log_event("marking agent task as done")
             self._done_fut.set_result(None)
 
@@ -259,11 +260,15 @@ class TaskActivity(RecognitionHooks):
             debug.Tracing.log_event("skipping new generation, task is draining")
             return
 
+        if ev.user_initiated:
+            # user_initiated generations are directly handled inside _realtime_reply_task
+            return
+
         handle = SpeechHandle.create(
             allow_interruptions=self._agent.options.allow_interruptions
         )
         task = asyncio.create_task(
-            self._realtime_reply_task(
+            self._realtime_generation_task(
                 speech_handle=handle,
                 generation_ev=ev,
             ),
@@ -348,6 +353,8 @@ class TaskActivity(RecognitionHooks):
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext,
+        user_input: str | None = None,
+        instructions: str | None = None,
     ) -> None:
         debug.Tracing.log_event(
             "generation started",
@@ -358,6 +365,17 @@ class TaskActivity(RecognitionHooks):
         text_output = self._agent.output.text
         chat_ctx = chat_ctx.copy()
         fnc_ctx = fnc_ctx.copy()
+
+        if user_input is not None:
+            chat_ctx.add_message(role="user", content=user_input)
+
+        if instructions is not None:
+            try:
+                update_instructions(
+                    chat_ctx, instructions=instructions, add_if_missing=True
+                )
+            except ValueError:
+                logger.exception("failed to update the instructions")
 
         tasks = []
         llm_task, llm_gen_data = perform_llm_inference(
@@ -499,6 +517,25 @@ class TaskActivity(RecognitionHooks):
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
+        self,
+        *,
+        speech_handle: SpeechHandle,
+        user_input: str | None,
+        instructions: str | None,
+    ) -> None:
+        assert self._rt_session is not None, "rt_session is not available"
+
+        if user_input is not None:
+            chat_ctx = self._rt_session.chat_ctx.copy()
+            chat_ctx.add_message(role="user", content=user_input)
+            await self._rt_session.update_chat_ctx(chat_ctx)
+
+        self._rt_session.generate_reply(
+            instructions=instructions or NOT_GIVEN
+        )
+
+    @utils.log_exceptions(logger=logger)
+    async def _realtime_generation_task(
         self,
         *,
         speech_handle: SpeechHandle,

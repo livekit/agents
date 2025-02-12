@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from livekit import rtc
 from livekit.agents import llm, multimodal, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from pydantic import ValidationError
 
 import openai
@@ -309,7 +310,9 @@ class RealtimeSession(multimodal.RealtimeSession):
             )
         )
 
-    def generate_reply(self) -> asyncio.Future[multimodal.GenerationCreatedEvent]:
+    def generate_reply(
+        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+    ) -> asyncio.Future[multimodal.GenerationCreatedEvent]:
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future()
         self._response_created_futures[event_id] = fut
@@ -317,7 +320,10 @@ class RealtimeSession(multimodal.RealtimeSession):
             ResponseCreateEvent(
                 type="response.create",
                 event_id=event_id,
-                response=Response(metadata={"client_event_id": event_id}),
+                response=Response(
+                    instructions=instructions or None,
+                    metadata={"client_event_id": event_id},
+                ),
             )
         )
 
@@ -368,15 +374,18 @@ class RealtimeSession(multimodal.RealtimeSession):
         generation_ev = multimodal.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
+            user_initiated=False,
         )
 
-        self.emit("generation_created", generation_ev)
-
-        if isinstance(event.response.metadata, dict) and (
-            client_event_id := event.response.metadata.get("client_event_id")
+        if (
+            isinstance(event.response.metadata, dict)
+            and (client_event_id := event.response.metadata.get("client_event_id"))
+            and (fut := self._response_created_futures.pop(client_event_id, None))
         ):
-            if fut := self._response_created_futures.pop(client_event_id, None):
-                fut.set_result(generation_ev)
+            generation_ev.user_initiated = True
+            fut.set_result(generation_ev)
+
+        self.emit("generation_created", generation_ev)
 
     def _handle_response_output_item_added(
         self, event: ResponseOutputItemAddedEvent
