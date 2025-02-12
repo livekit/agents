@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Literal, TypeVar, Union
+from typing_extensions import TypeAlias
 
 AgentState = Union[Literal["initializing", "listening", "thinking", "speaking"], str]
 ATTRIBUTE_AGENT_STATE = "lk.agent.state"
@@ -26,7 +27,7 @@ class NotGiven:
         return "NOT_GIVEN"
 
 
-NotGivenOr = Union[_T, NotGiven]
+NotGivenOr: TypeAlias = Union[_T, NotGiven]
 NOT_GIVEN = NotGiven()
 
 

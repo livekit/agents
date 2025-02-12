@@ -464,12 +464,16 @@ def _sanitize_function_output(
             task = agent_tasks[0]
 
         fnc_out = [item for item in fnc_out if not isinstance(item, AgentTask)]
+        if len(fnc_out) == 1:
+            fnc_out = fnc_out[0]
 
-    if isinstance(fnc_out, AgentTask):
+        if len(fnc_out) == 0:
+            fnc_out = None
+
+    elif isinstance(fnc_out, AgentTask):
         task = fnc_out
         fnc_out = None
 
-    # validate output without the task
     if not _is_valid_function_output(fnc_out):
         logger.error(
             "invalid function output type",
@@ -493,3 +497,39 @@ def _sanitize_function_output(
         ),
         task,
     )
+
+
+INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
+"""
+The ID of the instructions message in the chat context. (only for stateless LLMs)
+"""
+
+
+def update_instructions(
+    chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool
+) -> None:
+    """
+    Update the instruction message in the chat context or insert a new one if missing.
+
+    This function looks for an existing instruction message in the chat context using the identifier
+    'INSTRUCTIONS_MESSAGE_ID'.
+
+    Raises:
+        ValueError: If an existing instruction message is not of type "message".
+    """
+    if msg := chat_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID):
+        if msg.type == "message":
+            msg.content = [instructions]
+        else:
+            raise ValueError(
+                "expected the instructions inside the chat_ctx to be of type 'message'"
+            )
+    elif add_if_missing:
+        chat_ctx.items.insert(
+            0,
+            llm.ChatMessage(
+                id=INSTRUCTIONS_MESSAGE_ID,
+                role="system",
+                content=[instructions],
+            ),
+        )
