@@ -1,14 +1,12 @@
-from __future__ import annotations
-
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, AsyncIterator, Literal, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from livekit import rtc
 
-from .. import utils
+from .. import utils, stt
 from ..log import logger
-from ..transcription import TranscriptionRoomForwarder, TranscriptSegment
+from ..transcription import find_micro_track_id, TextSynchronizer
 from .io import AudioSink, TextSink
 
 if TYPE_CHECKING:
@@ -37,6 +35,8 @@ class RoomInputOptions:
 class RoomOutputOptions:
     sample_rate: int = 24000
     num_channels: int = 1
+    sync_agent_transcription: bool = True
+    """Whether to synchronize agent transcription with audio playback"""
     forward_agent_transcription: bool = True
     """Whether to forward transcription segments to the room"""
     track_source: rtc.TrackSource = rtc.TrackSource.SOURCE_MICROPHONE
@@ -70,7 +70,7 @@ class RoomInput:
         self._closed = False
 
         # transcription forwarder
-        self._tr_forwarder: Optional[TranscriptionRoomForwarder] = None
+        self._text_sink: Optional[RoomTextSink] = None
 
         # streams
         self._audio_stream: Optional[rtc.AudioStream] = None
@@ -92,7 +92,7 @@ class RoomInput:
                     break
 
     async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
-        participant = await self._wait_for_participant()
+        participant = await self.wait_for_participant()
         if not agent:
             return
 
@@ -100,12 +100,10 @@ class RoomInput:
         agent.input.video = self.video
         if self._options.forward_user_transcript:
             # TODO: support multiple participants
-            self._tr_forwarder = TranscriptionRoomForwarder(
-                room=self._room, participant=participant
-            )
+            self._text_sink = RoomTextSink(room=self._room, participant=participant)
             agent.on(
                 "user_transcript_updated",
-                lambda ev: self._tr_forwarder.update(ev),
+                lambda ev: asyncio.create_task(self._on_user_transcript_updated(ev)),
             )
 
     @property
@@ -166,7 +164,18 @@ class RoomInput:
             return
         self._link_participant(participant)
 
-    async def _wait_for_participant(self) -> rtc.RemoteParticipant:
+    async def _on_user_transcript_updated(self, ev: stt.SpeechEvent) -> None:
+        if self._text_sink is None:
+            return
+
+        if ev.alternatives:
+            data = ev.alternatives[0]
+            await self._text_sink.capture_text(data.text, is_delta=False)
+
+        if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+            self._text_sink.flush()
+
+    async def wait_for_participant(self) -> rtc.RemoteParticipant:
         await self._participant_ready.wait()
         assert self._participant is not None
         return self._participant
@@ -205,24 +214,33 @@ class RoomOutput:
             num_channels=self._options.num_channels,
             track_source=self._options.track_source,
         )
-        self._tr_forwarder: Optional[TranscriptionRoomForwarder] = None
+        self._text_sink: Optional[RoomTextSink] = None
+        self._text_synchronizer: Optional[TextSynchronizer] = None
 
-    async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
+    async def start(self) -> None:
         await self._audio_sink.start()
 
-        if not agent:
-            return
-
-        agent.output.audio = self._audio_sink
         if self._options.forward_agent_transcription:
-            self._tr_forwarder = TranscriptionRoomForwarder(
+            self._text_sink = RoomTextSink(
                 room=self._room, participant=self._room.local_participant
             )
-            agent.on("agent_transcript_updated", self._tr_forwarder.update)
+
+        if self._options.sync_agent_transcription and self._text_sink:
+            self._text_synchronizer = TextSynchronizer(
+                audio_sink=self._audio_sink, text_sink=self._text_sink
+            )
 
     @property
     def audio(self) -> AudioSink:
+        if self._text_synchronizer:
+            return self._text_synchronizer.audio_sink
         return self._audio_sink
+
+    @property
+    def text(self) -> TextSink | None:
+        if self._text_synchronizer:
+            return self._text_synchronizer.text_sink
+        return self._text_sink
 
 
 class RoomAudioSink(AudioSink):
@@ -325,37 +343,80 @@ class RoomAudioSink(AudioSink):
         self._audio_source.clear_queue()
 
 
-class _TranscriptionTextSink(
-    TextSink, rtc.EventEmitter[Literal["transcription_updated"]]
-):
-    def __init__(self) -> None:
-        super().__init__()
-        self._current_id = utils.shortuuid("SG_")
+class RoomTextSink(TextSink):
+    """TextSink implementation that publishes transcription segments to a LiveKit room"""
 
-    async def capture_text(self, text: str) -> None:
-        self.emit(
-            "transcription_updated",
-            self._create_transcription_segment(text, final=False),
+    def __init__(
+        self,
+        room: rtc.Room,
+        participant: rtc.Participant | str,
+        track: rtc.Track | rtc.TrackPublication | str | None = None,
+    ):
+        super().__init__()
+        self._room = room
+        self.set_participant(participant, track)
+
+        self._last_segment_id: str = utils.shortuuid("SG_")
+        self._played_text = ""
+
+    def set_participant(
+        self,
+        participant: rtc.Participant | str,
+        track: rtc.Track | rtc.TrackPublication | str | None = None,
+    ) -> None:
+        identity = participant if isinstance(participant, str) else participant.identity
+        if track is None:
+            track = find_micro_track_id(self._room, identity)
+        elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
+            track = track.sid
+
+        self._participant_identity = identity
+        self._track_id = track
+
+        self._pushed_text = ""
+        self._capturing = False
+        self._last_segment_id = utils.shortuuid("SG_")
+
+    async def capture_text(self, text: str, *, is_delta: bool = True) -> None:
+        if not self._capturing:
+            self._capturing = True
+            self._pushed_text = ""
+            self._last_segment_id = utils.shortuuid("SG_")
+
+        if is_delta:
+            self._pushed_text += text
+        else:
+            self._pushed_text = text
+        await self._publish_transcription(
+            self._last_segment_id, self._pushed_text, final=False
         )
 
     def flush(self) -> None:
-        self.emit(
-            "transcription_updated",
-            self._create_transcription_segment("", final=True),
+        if not self._capturing:
+            return
+        self._capturing = False
+        asyncio.create_task(
+            self._publish_transcription(
+                self._last_segment_id, self._pushed_text, final=True
+            )
         )
 
-    def _create_transcription_segment(
-        self, text: str, final: bool
-    ) -> TranscriptSegment:
-        segment = TranscriptSegment(
-            id=self._current_id,
-            text=text,
-            start_time=0,
-            end_time=0,
-            final=final,
-            is_delta=True,
-            language="",
+    async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
+        transcription = rtc.Transcription(
+            participant_identity=self._participant_identity,
+            track_sid=self._track_id,
+            segments=[
+                rtc.TranscriptionSegment(
+                    id=id,
+                    text=text,
+                    start_time=0,
+                    end_time=0,
+                    final=final,
+                    language="",
+                )
+            ],
         )
-        if final:
-            self._current_id = utils.shortuuid("SG_")
-        return segment
+        try:
+            await self._room.local_participant.publish_transcription(transcription)
+        except Exception:
+            logger.exception("Failed to publish transcription")
