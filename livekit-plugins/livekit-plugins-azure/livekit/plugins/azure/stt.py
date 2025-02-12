@@ -61,12 +61,14 @@ class STT(stt.STT):
         languages: list[str] = ["en-US"],
         # for compatibility with other STT plugins
         language: str | None = None,
+        speech_endpoint: str | None = None,
     ):
         """
         Create a new instance of Azure STT.
 
         Either ``speech_host`` or ``speech_key`` and ``speech_region`` or
-        ``speech_auth_token`` and ``speech_region`` must be set using arguments.
+        ``speech_auth_token`` and ``speech_region`` or
+        ``speech_key`` and ``speech_endpoint`` must be set using arguments.
          Alternatively,  set the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
         and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
         ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
@@ -83,9 +85,10 @@ class STT(stt.STT):
             speech_host
             or (speech_key and speech_region)
             or (speech_auth_token and speech_region)
+            or (speech_key and speech_endpoint)
         ):
             raise ValueError(
-                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION or AZURE_SPEECH_KEY and speech_endpoint must be set"
             )
 
         if language:
@@ -102,6 +105,7 @@ class STT(stt.STT):
             segmentation_silence_timeout_ms=segmentation_silence_timeout_ms,
             segmentation_max_time_ms=segmentation_max_time_ms,
             segmentation_strategy=segmentation_strategy,
+            speech_endpoint=speech_endpoint,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
