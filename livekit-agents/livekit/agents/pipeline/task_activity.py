@@ -188,7 +188,17 @@ class TaskActivity(RecognitionHooks):
         )
 
         if isinstance(self.llm, multimodal.RealtimeModel):
-            pass
+            task = asyncio.create_task(
+                self._realtime_reply_task(
+                    speech_handle=handle,
+                    user_input=user_input or None,
+                    instructions=instructions or None,
+                ),
+                name="_realtime_reply_task",
+            )
+            self._tasks.append(task)
+            task.add_done_callback(lambda _: handle._mark_playout_done())
+            task.add_done_callback(lambda _: self._tasks.remove(task))
 
         elif isinstance(self.llm, llm.LLM):
             task = asyncio.create_task(
@@ -530,8 +540,13 @@ class TaskActivity(RecognitionHooks):
             chat_ctx.add_message(role="user", content=user_input)
             await self._rt_session.update_chat_ctx(chat_ctx)
 
-        self._rt_session.generate_reply(
+        generation_ev = await self._rt_session.generate_reply(
             instructions=instructions or NOT_GIVEN
+        )
+
+        await self._realtime_generation_task(
+            speech_handle=speech_handle,
+            generation_ev=generation_ev,
         )
 
     @utils.log_exceptions(logger=logger)
