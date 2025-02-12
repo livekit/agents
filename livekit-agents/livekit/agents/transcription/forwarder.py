@@ -52,18 +52,25 @@ class TranscriptionRoomForwarder(TranscriptionForwarder):
         track: rtc.Track | rtc.TrackPublication | str | None = None,
     ):
         super().__init__()
-        identity = participant if isinstance(participant, str) else participant.identity
-        if track is None:
-            track = find_micro_track_id(room, identity)
-        elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
-            track = track.sid
-
         self._room = room
-        self._participant_identity = identity
-        self._track_id = track
+        self.set_participant(participant, track)
 
         self._last_segment_id: Optional[str] = None
         self._played_text = ""
+
+    def set_participant(
+        self,
+        participant: rtc.Participant | str,
+        track: rtc.Track | rtc.TrackPublication | str | None = None,
+    ) -> None:
+        identity = participant if isinstance(participant, str) else participant.identity
+        if track is None:
+            track = find_micro_track_id(self._room, identity)
+        elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
+            track = track.sid
+
+        self._participant_identity = identity
+        self._track_id = track
 
     @log_exceptions(logger=logger)
     async def _forward_segment(self, segment: TranscriptSegment) -> None:

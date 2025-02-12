@@ -12,6 +12,7 @@ from ..transcription import (
     TranscriptionSyncIO,
     TranscriptSegment,
 )
+from ..pipeline import PipelineAgent
 from .io import AudioSink, TextSink
 from ..log import logger
 
@@ -30,6 +31,8 @@ class RoomInputOptions:
     """Capacity of the internal audio queue, 0 means unlimited"""
     video_queue_capacity: int = 0
     """Capacity of the internal video queue, 0 means unlimited"""
+    forward_user_transcript: bool = True
+    """Whether to forward user transcript segments to the room"""
 
 
 @dataclass
@@ -46,7 +49,7 @@ DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
 DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
 
 
-class RoomInput:
+class RoomInput(rtc.EventEmitter[Literal["user_transcript_updated"]]):
     """Creates video and audio streams from a remote participant in a LiveKit room"""
 
     def __init__(
@@ -62,11 +65,15 @@ class RoomInput:
                                 If None, will use the first participant that joins.
             options: RoomInputOptions
         """
+        super().__init__()
         self._options = options
         self._room = room
         self._expected_identity = participant_identity
         self._participant: rtc.RemoteParticipant | None = None
         self._closed = False
+
+        # transcription forwarder
+        self._tr_forwarder: Optional[TranscriptionRoomForwarder] = None
 
         # streams
         self._audio_stream: Optional[rtc.AudioStream] = None
@@ -76,6 +83,7 @@ class RoomInput:
         self._room.on("participant_connected", self._on_participant_connected)
 
         # try to find participant
+        # TODO: support link and unlink participants
         if self._expected_identity is not None:
             participant = self._room.remote_participants.get(self._expected_identity)
             if participant is not None:
@@ -86,10 +94,26 @@ class RoomInput:
                 if self._participant:
                     break
 
-    async def wait_for_participant(self) -> rtc.RemoteParticipant:
-        await self._participant_ready.wait()
-        assert self._participant is not None
-        return self._participant
+    async def start(self, agent: Optional[PipelineAgent] = None) -> None:
+        participant = await self._wait_for_participant()
+        if not agent:
+            return
+
+        agent.input.audio = self.audio
+        agent.input.video = self.video
+        agent.input.on(
+            "user_transcript_updated",
+            lambda ev: self.emit("user_transcript_updated", ev),
+        )
+
+        if self._options.forward_user_transcript:
+            self._tr_forwarder = TranscriptionRoomForwarder(
+                room=self._room, participant=participant
+            )
+            agent.input.on(
+                "user_transcript_updated",
+                lambda ev: self._tr_forwarder.update(ev),
+            )
 
     @property
     def audio(self) -> AsyncIterator[rtc.AudioFrame] | None:
@@ -149,6 +173,11 @@ class RoomInput:
             return
         self._link_participant(participant)
 
+    async def _wait_for_participant(self) -> rtc.RemoteParticipant:
+        await self._participant_ready.wait()
+        assert self._participant is not None
+        return self._participant
+
     async def aclose(self) -> None:
         if self._closed:
             raise RuntimeError("RoomInput already closed")
@@ -163,6 +192,9 @@ class RoomInput:
         if self._video_stream is not None:
             await self._video_stream.aclose()
             self._video_stream = None
+        if self._tr_forwarder is not None:
+            await self._tr_forwarder.aclose()
+            self._tr_forwarder = None
 
 
 class RoomOutput(rtc.EventEmitter[Literal["agent_transcript_updated"]]):
@@ -199,7 +231,7 @@ class RoomOutput(rtc.EventEmitter[Literal["agent_transcript_updated"]]):
                 lambda ev: self.emit("agent_transcript_updated", ev),
             )
 
-    async def start(self) -> None:
+    async def start(self, agent: Optional[PipelineAgent] = None) -> None:
         await self._room_audio_sink.start()
 
         if self._options.forward_transcription:
@@ -207,6 +239,10 @@ class RoomOutput(rtc.EventEmitter[Literal["agent_transcript_updated"]]):
                 room=self._room, participant=self._room.local_participant
             )
             self.on("agent_transcript_updated", self._tr_forwarder.update)
+
+        if agent:
+            agent.output.text = self._text_sink
+            agent.output.audio = self._audio_sink
 
     @property
     def audio(self) -> AudioSink:

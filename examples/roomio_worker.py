@@ -57,29 +57,24 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room, options=RoomOutputOptions(sync_transcription=True)
     )
 
-    # wait for the participant to join the room and subscribe to the output audio
-    await room_input.wait_for_participant()
-    await room_output.start()
-
-    # connect the input and output audio to the agent
-    agent.input.audio = room_input.audio
-    agent.output.audio = room_output.audio
-    agent.output.text = room_output.text
-
-    # TODO: move this to the agent initialization
-    user_tr_fwd = TranscriptionRoomForwarder(
-        ctx.room, participant=room_input._participant
-    )
-    agent.input.on("user_transcript_updated", user_tr_fwd.update)
+    # set the agent io and wait for the participant to join, subscribe to the output audio
+    await room_input.start(agent)
+    await room_output.start(agent)
 
     await agent.start()
 
-    # (optional) forward transcription using data stream
-    ds_forwarder = TranscriptionDataStreamForwarder(
-        room=ctx.room,
-        attributes={"track": "agent"},
-    )
-    room_output.on("agent_transcript_updated", ds_forwarder.update)
+    # # (optional) forward transcription using data stream
+    # ds_agent_fwd = TranscriptionDataStreamForwarder(
+    #     room=ctx.room,
+    #     attributes={"track": "agent"},
+    # )
+    # room_output.on("agent_transcript_updated", ds_agent_fwd.update)
+
+    # ds_user_fwd = TranscriptionDataStreamForwarder(
+    #     room=ctx.room,
+    #     attributes={"track": "user"},
+    # )
+    # room_input.on("user_transcript_updated", ds_user_fwd.update)
 
     @agent.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
