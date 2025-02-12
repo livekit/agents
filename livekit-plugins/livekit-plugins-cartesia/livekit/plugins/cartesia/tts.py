@@ -19,6 +19,7 @@ import base64
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -174,6 +175,10 @@ class TTS(tts.TTS):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         logging.info(f"Synthesize called with text: {text}")
+        if not AppConfig().get_call_metadata().get("time_of_first_cartesia_synthesis"):
+            AppConfig().get_call_metadata().update(
+                {"time_of_first_cartesia_synthesis": time.time()}
+            )
         text = replace_numbers_with_words_cartesia(text, lang=AppConfig().language)
         text = text.replace("DETERMINISTIC", "")
         text = text.replace("past due", "past-due")
@@ -232,7 +237,9 @@ class ChunkedStream(tts.ChunkedStream):
             API_VERSION_HEADER: API_VERSION,
         }
 
-        logging.info(f"Sending request to Cartesia bytes endpoint with headers: {headers}")
+        logging.info(
+            f"Sending request to Cartesia bytes endpoint with headers: {headers}"
+        )
 
         try:
             async with self._session.post(
@@ -385,7 +392,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         ws: aiohttp.ClientWebSocketResponse | None = None
 
         try:
-            ws = await asyncio.wait_for(self._session.ws_connect(url), self._conn_options.timeout)
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(url), self._conn_options.timeout
+            )
 
             tasks = [
                 asyncio.create_task(_input_task()),
