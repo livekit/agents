@@ -262,14 +262,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         # wrap with StreamAdapter automatically when streaming is not supported on a specific TTS/STT.
         # To override StreamAdapter options, create the adapter manually.
 
-        if tts.capabilities.streaming:
+        if not tts.capabilities.streaming:
             from .. import tts as text_to_speech
 
             tts = text_to_speech.StreamAdapter(
                 tts=tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
             )
 
-        if stt.capabilities.streaming:
+        if not stt.capabilities.streaming:
             from .. import stt as speech_to_text
 
             stt = speech_to_text.StreamAdapter(

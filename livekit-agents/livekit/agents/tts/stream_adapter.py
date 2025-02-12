@@ -87,7 +87,6 @@ class StreamAdapterWrapper(SynthesizeStream):
 
         async def _synthesize():
             async for ev in self._sent_stream:
-                print("ev", ev)
                 last_audio: SynthesizedAudio | None = None
                 async for audio in self._wrapped_tts.synthesize(ev.token):
                     if last_audio is not None:
