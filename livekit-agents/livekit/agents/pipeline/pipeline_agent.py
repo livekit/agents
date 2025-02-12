@@ -1122,36 +1122,34 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """
         tk = SpeechDataContextVar.set(SpeechData(speech_handle.id))
         try:
-            new_source = source
-
-            async def _llm_stream_to_str_generator(
-                stream: LLMStream,
-            ) -> AsyncGenerator[str, None]:
-                has_yielded = False
-                try:
-                    async for chunk in stream:
-                        if not chunk.choices:
-                            continue
-                        content = chunk.choices[0].delta.content
-                        if content is None:
-                            continue
-                        has_yielded = True
-                        yield content
-                finally:
-                    if not has_yielded:
-                        self._mark_active_speech_handle_done()
-                    await stream.aclose()
-
             if isinstance(source, LLMStream):
+
+                async def _llm_stream_to_str_generator(
+                    stream: LLMStream,
+                ) -> AsyncGenerator[str, None]:
+                    has_yielded = False
+                    try:
+                        async for chunk in stream:
+                            if not chunk.choices:
+                                continue
+                            content = chunk.choices[0].delta.content
+                            if content is None:
+                                continue
+                            has_yielded = True
+                            yield content
+                    finally:
+                        if not has_yielded:
+                            self._mark_active_speech_handle_done()
+                        await stream.aclose()
+
                 new_source = _llm_stream_to_str_generator(source)
             else:
                 new_source = source
 
-            og_source = new_source
             transcript_source = new_source
-            if isinstance(og_source, AsyncIterable):
-                og_source, transcript_source = utils.aio.itertools.tee(og_source, 2)
-            tts_source = self._opts.before_tts_cb(self, og_source)
+            if isinstance(new_source, AsyncIterable):
+                new_source, transcript_source = utils.aio.itertools.tee(new_source, 2)
+            tts_source = self._opts.before_tts_cb(self, new_source)
             if tts_source is None:
                 raise ValueError("before_tts_cb must return str or AsyncIterable[str]")
         finally:
