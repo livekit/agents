@@ -6,7 +6,10 @@ from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentContext, AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.agents.pipeline.room_io import RoomInput, RoomOutput, RoomOutputOptions
-from livekit.agents.transcription import TranscriptionDataStreamForwarder
+from livekit.agents.transcription import (
+    TranscriptionDataStreamForwarder,
+    TranscriptionRoomForwarder,
+)
 from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("roomio-example")
@@ -19,7 +22,10 @@ class EchoTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Echo, always speak in English even if the user speaks in another language or wants to use another language.",
-            llm=openai.realtime.RealtimeModel(voice="echo"),
+            # llm=openai.realtime.RealtimeModel(voice="echo"),
+            stt=deepgram.STT(),
+            llm=openai.LLM(model="gpt-4o-mini"),
+            tts=cartesia.TTS(),
         )
 
     @ai_function
@@ -43,10 +49,7 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     agent = PipelineAgent(
-        task=AlloyTask(),
-        # stt=deepgram.STT(),
-        # llm=openai.LLM(),
-        # tts=cartesia.TTS(),
+        task=EchoTask(),
     )
 
     room_input = RoomInput(ctx.room)
@@ -63,14 +66,20 @@ async def entrypoint(ctx: JobContext):
     agent.output.audio = room_output.audio
     agent.output.text = room_output.text
 
+    # TODO: move this to the agent initialization
+    user_tr_fwd = TranscriptionRoomForwarder(
+        ctx.room, participant=room_input._participant
+    )
+    agent.input.on("user_transcript_updated", user_tr_fwd.update)
+
     await agent.start()
 
     # (optional) forward transcription using data stream
     ds_forwarder = TranscriptionDataStreamForwarder(
         room=ctx.room,
-        attributes={"transcription_track": "agent"},
+        attributes={"track": "agent"},
     )
-    room_output.on("transcription_segment", ds_forwarder.update)
+    room_output.on("agent_transcript_updated", ds_forwarder.update)
 
     @agent.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:

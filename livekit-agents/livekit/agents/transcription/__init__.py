@@ -4,7 +4,11 @@ from .forwarder import (
     TranscriptionRoomForwarder,
     TranscriptionStreamForwarder,
 )
-from .synchronizer import TranscriptionSyncIO, TranscriptionSyncOptions
+from .synchronizer import (
+    TranscriptionSyncIO,
+    TranscriptionSyncOptions,
+    TranscriptSegment,
+)
 
 __all__ = [
     "TranscriptionSyncIO",
@@ -13,4 +17,5 @@ __all__ = [
     "TranscriptionRoomForwarder",
     "TranscriptionStreamForwarder",
     "TranscriptionDataStreamForwarder",
+    "TranscriptSegment",
 ]

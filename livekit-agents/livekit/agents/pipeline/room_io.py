@@ -7,10 +7,13 @@ from typing import AsyncIterator, Literal, Optional
 from livekit import rtc
 
 from .. import utils
-from ..transcription import TranscriptionRoomForwarder, TranscriptionSyncIO
+from ..transcription import (
+    TranscriptionRoomForwarder,
+    TranscriptionSyncIO,
+    TranscriptSegment,
+)
 from .io import AudioSink, TextSink
 from ..log import logger
-from .io import AudioSink
 
 
 @dataclass
@@ -96,7 +99,6 @@ class RoomInput:
         async def _read_stream():
             async for event in self._audio_stream:
                 yield event.frame
-                await asyncio.sleep(0)
 
         return _read_stream()
 
@@ -108,7 +110,6 @@ class RoomInput:
         async def _read_stream():
             async for event in self._video_stream:
                 yield event.frame
-                await asyncio.sleep(0)
 
         return _read_stream()
 
@@ -164,7 +165,7 @@ class RoomInput:
             self._video_stream = None
 
 
-class RoomOutput(rtc.EventEmitter[Literal["transcription_segment"]]):
+class RoomOutput(rtc.EventEmitter[Literal["agent_transcript_updated"]]):
     """Manages audio output to a LiveKit room"""
 
     def __init__(
@@ -186,16 +187,16 @@ class RoomOutput(rtc.EventEmitter[Literal["transcription_segment"]]):
             self._audio_sink = self._room_audio_sink
             self._text_sink = _TranscriptionTextSink()
             self._text_sink.on(
-                "transcription_segment",
-                lambda ev: self.emit("transcription_segment", ev),
+                "transcription_updated",
+                lambda ev: self.emit("agent_transcript_updated", ev),
             )
         else:
             self._tr_sync = TranscriptionSyncIO(self._room_audio_sink)
             self._audio_sink = self._tr_sync.audio_output
             self._text_sink = self._tr_sync.text_output
             self._tr_sync.on(
-                "transcription_segment",
-                lambda ev: self.emit("transcription_segment", ev),
+                "transcription_updated",
+                lambda ev: self.emit("agent_transcript_updated", ev),
             )
 
     async def start(self) -> None:
@@ -205,7 +206,7 @@ class RoomOutput(rtc.EventEmitter[Literal["transcription_segment"]]):
             self._tr_forwarder = TranscriptionRoomForwarder(
                 room=self._room, participant=self._room.local_participant
             )
-            self.on("transcription_segment", self._tr_forwarder.update)
+            self.on("agent_transcript_updated", self._tr_forwarder.update)
 
     @property
     def audio(self) -> AudioSink:
@@ -316,7 +317,7 @@ class RoomAudioSink(AudioSink):
 
 
 class _TranscriptionTextSink(
-    TextSink, rtc.EventEmitter[Literal["transcription_segment"]]
+    TextSink, rtc.EventEmitter[Literal["transcription_updated"]]
 ):
     def __init__(self) -> None:
         super().__init__()
@@ -324,27 +325,28 @@ class _TranscriptionTextSink(
 
     async def capture_text(self, text: str) -> None:
         self.emit(
-            "transcription_segment",
-            rtc.TranscriptionSegment(
-                id=self._current_id,
-                text=text,
-                start_time=0,
-                end_time=0,
-                language="",
-                final=False,
-            ),
+            "transcription_updated",
+            self._create_transcription_segment(text, final=False),
         )
 
     def flush(self) -> None:
         self.emit(
-            "transcription_segment",
-            rtc.TranscriptionSegment(
-                id=self._current_id,
-                text="",
-                start_time=0,
-                end_time=0,
-                language="",
-                final=True,
-            ),
+            "transcription_updated",
+            self._create_transcription_segment("", final=True),
         )
-        self._current_id = utils.shortuuid("SG_")
+
+    def _create_transcription_segment(
+        self, text: str, final: bool
+    ) -> TranscriptSegment:
+        segment = TranscriptSegment(
+            id=self._current_id,
+            text=text,
+            start_time=0,
+            end_time=0,
+            final=final,
+            is_delta=True,
+            language="",
+        )
+        if final:
+            self._current_id = utils.shortuuid("SG_")
+        return segment

@@ -14,7 +14,7 @@ from typing import (
 
 from livekit import rtc
 
-from .. import llm, stt
+from .. import llm, stt, utils
 from ..log import logger
 
 STTNode = Callable[
@@ -150,12 +150,14 @@ class VideoSink(ABC):
     def flush(self) -> None: ...
 
 
-class AgentInput:
+class AgentInput(rtc.EventEmitter[Literal["user_transcript_updated"]]):
     def __init__(self, video_changed: Callable, audio_changed: Callable) -> None:
+        super().__init__()
         self._video_stream: VideoStream | None = None
         self._audio_stream: AudioStream | None = None
         self._video_changed = video_changed
         self._audio_changed = audio_changed
+        self._transcript_id = utils.shortuuid("SG_")
 
     @property
     def video(self) -> VideoStream | None:
@@ -174,6 +176,30 @@ class AgentInput:
     def audio(self, stream: AudioStream | None) -> None:
         self._audio_stream = stream
         self._audio_changed()
+
+    @utils.log_exceptions(logger=logger)
+    def _on_transcript_update(self, ev: stt.SpeechEvent) -> None:
+        if not ev.alternatives:
+            return
+
+        from ..transcription import TranscriptSegment
+
+        data = ev.alternatives[0]
+        final = ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        self.emit(
+            "user_transcript_updated",
+            TranscriptSegment(
+                id=self._transcript_id,
+                text=data.text,
+                start_time=int(data.start_time),
+                end_time=int(data.end_time),
+                final=final,
+                is_delta=False,
+                language=data.language,
+            ),
+        )
+        if final:
+            self._transcript_id = utils.shortuuid("SG_")
 
 
 class AgentOutput:

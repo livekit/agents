@@ -297,10 +297,10 @@ class TaskActivity(RecognitionHooks):
                 self._current_speech.interrupt()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
-        pass
+        self._agent._input._on_transcript_update(ev)
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
-        pass
+        self._agent._input._on_transcript_update(ev)
 
     def on_end_of_turn(self, new_transcript: str) -> None:
         # When the audio recognition detects the end of a user turn:

@@ -32,6 +32,12 @@ class TranscriptionSyncOptions:
 
 
 @dataclass
+class TranscriptSegment(rtc.TranscriptionSegment):
+    is_delta: bool
+    """Whether the segment is a delta (i.e. a change to the previous segment)"""
+
+
+@dataclass
 class _AudioData:
     pushed_duration: float = 0.0
     done: bool = False
@@ -46,7 +52,7 @@ class _TextData:
     forwarded_sentences: int = 0
 
 
-class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment"]]):
+class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_updated"]]):
     """Synchronizes TTS segments with audio playback timing."""
 
     def __init__(self, options: TranscriptionSyncOptions):
@@ -197,6 +203,7 @@ class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment
             self._text_q_changed.clear()
             self._audio_q_changed.clear()
 
+    @utils.log_exceptions(logger=logger)
     async def _sync_sentence(
         self,
         segment_index: int,
@@ -252,14 +259,15 @@ class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment
             await self._sleep_if_not_closed(first_delay)
 
             self.emit(
-                "transcription_segment",
-                rtc.TranscriptionSegment(
+                "transcription_updated",
+                TranscriptSegment(
                     id=seg_id,
                     text=text[len(sent_text) :],
                     start_time=0,
                     end_time=0,
                     final=False,
                     language=self._opts.language,
+                    is_delta=True,
                 ),
             )
             self._played_text = f"{og_text} {text}"
@@ -269,14 +277,15 @@ class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment
             text_data.forwarded_hyphens += word_hyphens
 
         self.emit(
-            "transcription_segment",
-            rtc.TranscriptionSegment(
+            "transcription_updated",
+            TranscriptSegment(
                 id=seg_id,
                 text=sentence[len(sent_text) :],
                 start_time=0,
                 end_time=0,
                 final=True,
                 language=self._opts.language,
+                is_delta=True,
             ),
         )
         self._played_text = f"{og_text} {sentence}"
@@ -303,9 +312,7 @@ class _TranscriptionSynchronizer(rtc.EventEmitter[Literal["transcription_segment
             raise RuntimeError("TranscriptionSyncer is closed")
 
 
-class TranscriptionSyncIO(
-    rtc.EventEmitter[Literal["transcription_segment", "segment_playout_started"]]
-):
+class TranscriptionSyncIO(rtc.EventEmitter[Literal["transcription_updated"]]):
     def __init__(
         self,
         audio_sink: AudioSink,
@@ -350,7 +357,6 @@ class TranscriptionSyncIO(
 
     def _segment_playout_started(self) -> None:
         self._transcription_sync.segment_playout_started()
-        self.emit("segment_playout_started")
 
     def _flush(self) -> None:
         """Close the old transcription segment and create a new one"""
@@ -358,11 +364,11 @@ class TranscriptionSyncIO(
         self._transcription_sync = self._create_transcription_sync()
 
     def _create_transcription_sync(self) -> _TranscriptionSynchronizer:
-        def _on_segment(segment: rtc.TranscriptionSegment) -> None:
-            self.emit("transcription_segment", segment)
-
         synchronizer = _TranscriptionSynchronizer(options=self._sync_options)
-        synchronizer.on("transcription_segment", _on_segment)
+        synchronizer.on(
+            "transcription_updated",
+            lambda segment: self.emit("transcription_updated", segment),
+        )
         return synchronizer
 
     async def aclose(self) -> None:
