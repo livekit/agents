@@ -106,10 +106,11 @@ async def main():
     # Create sinks and forwarder
     audio_sink = MockAudioSink(sample_rate=sample_rate)
 
-    opts = TranscriptionSyncOptions(language="en", speed=1.0)
-    transcript_sync = TranscriptionSyncIO(audio_sink, sync_options=opts)
+    transcript_sync = TranscriptionSyncIO(
+        audio_sink, sync_options=TranscriptionSyncOptions(language="en", speed=1.0)
+    )
     tts_forwarder = TranscriptionStreamForwarder(stream=sys.stdout)
-    transcript_sync.on("transcription_segment", tts_forwarder)
+    transcript_sync.on("transcription_updated", tts_forwarder.update)
 
     # Run forwarder and push data concurrently
     for transcript, audio_duration in transcripts:

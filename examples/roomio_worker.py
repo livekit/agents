@@ -6,10 +6,7 @@ from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentContext, AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.agents.pipeline.room_io import RoomInput, RoomOutput, RoomOutputOptions
-from livekit.agents.transcription import (
-    TranscriptionDataStreamForwarder,
-    TranscriptionRoomForwarder,
-)
+from livekit.agents.transcription import TranscriptionDataStreamForwarder
 from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("roomio-example")
