@@ -7,8 +7,8 @@ from typing import AsyncIterable, Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
-from ..types import NOT_GIVEN, NotGivenOr
 from .. import llm
+from ..types import NOT_GIVEN, NotGivenOr
 
 
 @dataclass

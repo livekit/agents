@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Literal, TypeVar, Union
+
 from typing_extensions import TypeAlias
 
 AgentState = Union[Literal["initializing", "listening", "thinking", "speaking"], str]
