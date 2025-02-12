@@ -14,7 +14,7 @@ from typing import (
 
 from livekit import rtc
 
-from .. import llm, stt, utils
+from .. import llm, stt
 from ..log import logger
 
 STTNode = Callable[
