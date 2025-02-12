@@ -2,19 +2,17 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterator, Literal, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Literal, Optional
 
 from livekit import rtc
 
 from .. import utils
-from ..transcription import (
-    TranscriptionRoomForwarder,
-    TranscriptionSyncIO,
-    TranscriptSegment,
-)
-from ..pipeline import PipelineAgent
-from .io import AudioSink, TextSink
 from ..log import logger
+from ..transcription import TranscriptionRoomForwarder, TranscriptSegment
+from .io import AudioSink, TextSink
+
+if TYPE_CHECKING:
+    from ..pipeline import PipelineAgent
 
 
 @dataclass
@@ -39,17 +37,17 @@ class RoomInputOptions:
 class RoomOutputOptions:
     sample_rate: int = 24000
     num_channels: int = 1
-    forward_transcription: bool = True
+    forward_agent_transcription: bool = True
     """Whether to forward transcription segments to the room"""
-    sync_transcription: bool = True
-    """Whether to sync transcription segments with audio playback"""
+    track_source: rtc.TrackSource = rtc.TrackSource.SOURCE_MICROPHONE
+    """Source of the audio track to publish"""
 
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
 DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
 
 
-class RoomInput(rtc.EventEmitter[Literal["user_transcript_updated"]]):
+class RoomInput:
     """Creates video and audio streams from a remote participant in a LiveKit room"""
 
     def __init__(
@@ -65,7 +63,6 @@ class RoomInput(rtc.EventEmitter[Literal["user_transcript_updated"]]):
                                 If None, will use the first participant that joins.
             options: RoomInputOptions
         """
-        super().__init__()
         self._options = options
         self._room = room
         self._expected_identity = participant_identity
@@ -94,23 +91,19 @@ class RoomInput(rtc.EventEmitter[Literal["user_transcript_updated"]]):
                 if self._participant:
                     break
 
-    async def start(self, agent: Optional[PipelineAgent] = None) -> None:
+    async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
         participant = await self._wait_for_participant()
         if not agent:
             return
 
         agent.input.audio = self.audio
         agent.input.video = self.video
-        agent.input.on(
-            "user_transcript_updated",
-            lambda ev: self.emit("user_transcript_updated", ev),
-        )
-
         if self._options.forward_user_transcript:
+            # TODO: support multiple participants
             self._tr_forwarder = TranscriptionRoomForwarder(
                 room=self._room, participant=participant
             )
-            agent.input.on(
+            agent.on(
                 "user_transcript_updated",
                 lambda ev: self._tr_forwarder.update(ev),
             )
@@ -197,60 +190,39 @@ class RoomInput(rtc.EventEmitter[Literal["user_transcript_updated"]]):
             self._tr_forwarder = None
 
 
-class RoomOutput(rtc.EventEmitter[Literal["agent_transcript_updated"]]):
+class RoomOutput:
     """Manages audio output to a LiveKit room"""
 
     def __init__(
         self, room: rtc.Room, options: RoomOutputOptions = DEFAULT_ROOM_OUTPUT_OPTIONS
     ) -> None:
-        super().__init__()
-
+        self._options = options
         self._options = options
         self._room = room
-        self._room_audio_sink = RoomAudioSink(
+        self._audio_sink = RoomAudioSink(
             room=room,
             sample_rate=self._options.sample_rate,
             num_channels=self._options.num_channels,
+            track_source=self._options.track_source,
         )
-
         self._tr_forwarder: Optional[TranscriptionRoomForwarder] = None
-        self._tr_sync: Optional[TranscriptionSyncIO] = None
-        if not self._options.sync_transcription:
-            self._audio_sink = self._room_audio_sink
-            self._text_sink = _TranscriptionTextSink()
-            self._text_sink.on(
-                "transcription_updated",
-                lambda ev: self.emit("agent_transcript_updated", ev),
-            )
-        else:
-            self._tr_sync = TranscriptionSyncIO(self._room_audio_sink)
-            self._audio_sink = self._tr_sync.audio_output
-            self._text_sink = self._tr_sync.text_output
-            self._tr_sync.on(
-                "transcription_updated",
-                lambda ev: self.emit("agent_transcript_updated", ev),
-            )
 
-    async def start(self, agent: Optional[PipelineAgent] = None) -> None:
-        await self._room_audio_sink.start()
+    async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
+        await self._audio_sink.start()
 
-        if self._options.forward_transcription:
+        if not agent:
+            return
+
+        agent.output.audio = self._audio_sink
+        if self._options.forward_agent_transcription:
             self._tr_forwarder = TranscriptionRoomForwarder(
                 room=self._room, participant=self._room.local_participant
             )
-            self.on("agent_transcript_updated", self._tr_forwarder.update)
-
-        if agent:
-            agent.output.text = self._text_sink
-            agent.output.audio = self._audio_sink
+            agent.on("agent_transcript_updated", self._tr_forwarder.update)
 
     @property
     def audio(self) -> AudioSink:
         return self._audio_sink
-
-    @property
-    def text(self) -> TextSink:
-        return self._text_sink
 
 
 class RoomAudioSink(AudioSink):
@@ -263,6 +235,7 @@ class RoomAudioSink(AudioSink):
         sample_rate: int = 24000,
         num_channels: int = 1,
         queue_size_ms: int = 100_000,
+        track_source: rtc.TrackSource = rtc.TrackSource.SOURCE_MICROPHONE,
     ) -> None:
         """Initialize the RoomAudioSink
 
@@ -275,7 +248,7 @@ class RoomAudioSink(AudioSink):
         """
         super().__init__(sample_rate=sample_rate)
         self._room = room
-
+        self._track_source = track_source
         # buffer the audio frames as soon as they are captured
         self._audio_source = rtc.AudioSource(
             sample_rate=sample_rate,
@@ -304,7 +277,7 @@ class RoomAudioSink(AudioSink):
         )
         self._publication = await self._room.local_participant.publish_track(
             track=track,
-            options=rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+            options=rtc.TrackPublishOptions(source=self._track_source),
         )
         await self._publication.wait_for_subscription()
 

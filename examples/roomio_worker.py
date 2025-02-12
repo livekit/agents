@@ -5,7 +5,6 @@ from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentContext, AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import RoomInput, RoomOutput, RoomOutputOptions
 from livekit.agents.transcription import TranscriptionDataStreamForwarder
 from livekit.plugins import cartesia, deepgram, openai
 
@@ -49,31 +48,21 @@ async def entrypoint(ctx: JobContext):
         task=EchoTask(),
     )
 
-    room_input = RoomInput(ctx.room)
-    room_output = RoomOutput(
-        room=ctx.room, options=RoomOutputOptions(sync_transcription=True)
-    )
-
-    # set the agent io and wait for the participant to join, subscribe to the output audio
-    await room_input.start(agent)
-    await room_output.start(agent)
-
-    await agent.start()
+    await agent.start(room=ctx.room)
 
     # # (optional) forward transcription using data stream
     # ds_agent_fwd = TranscriptionDataStreamForwarder(
     #     room=ctx.room,
     #     attributes={"track": "agent"},
     # )
-    # room_output.on("agent_transcript_updated", ds_agent_fwd.update)
+    # agent.on("agent_transcript_updated", ds_agent_fwd.update)
 
     # ds_user_fwd = TranscriptionDataStreamForwarder(
     #     room=ctx.room,
     #     attributes={"track": "user"},
     # )
-    # room_input.on("user_transcript_updated", ds_user_fwd.update)
+    # agent.on("user_transcript_updated", ds_user_fwd.update)
 
-    @agent.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(
             "playback_finished",
@@ -82,6 +71,9 @@ async def entrypoint(ctx: JobContext):
                 "interrupted": ev.interrupted,
             },
         )
+
+    if agent.output.audio is not None:
+        agent.output.audio.on("playback_finished", on_playback_finished)
 
 
 if __name__ == "__main__":

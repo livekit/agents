@@ -311,10 +311,10 @@ class TaskActivity(RecognitionHooks):
                 self._current_speech.interrupt()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
-        self._agent._input._on_transcript_update(ev)
+        self._agent._on_user_transcript(ev, final=False)
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
-        self._agent._input._on_transcript_update(ev)
+        self._agent._on_user_transcript(ev, final=True)
 
     def on_end_of_turn(self, new_transcript: str) -> None:
         # When the audio recognition detects the end of a user turn:
@@ -348,7 +348,7 @@ class TaskActivity(RecognitionHooks):
             )
             return
 
-        self.generate_reply(new_transcript)
+        self.generate_reply(user_input=new_transcript)
 
     def retrieve_chat_ctx(self) -> llm.ChatContext:
         return self._agent_task.chat_ctx
@@ -370,8 +370,8 @@ class TaskActivity(RecognitionHooks):
             {"speech_id": speech_handle.id, "step_index": speech_handle.step_index},
         )
 
-        audio_output = self._agent.output.audio
-        text_output = self._agent.output.text
+        audio_output = self._agent._audio_sink_with_transcript
+        text_output = self._agent._text_sink_with_transcript
         chat_ctx = chat_ctx.copy()
         fnc_ctx = fnc_ctx.copy()
 
@@ -566,8 +566,8 @@ class TaskActivity(RecognitionHooks):
             },
         )
 
-        audio_output = self._agent.output.audio
-        text_output = self._agent.output.text
+        audio_output = self._agent._audio_sink_with_transcript
+        text_output = self._agent._text_sink_with_transcript
 
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]

@@ -6,11 +6,11 @@ from typing import Callable, Literal, Optional
 
 from livekit import rtc
 
-from .. import NOT_GIVEN, NotGivenOr, tokenize, utils
+from .. import tokenize, utils
 from ..log import logger
-from ..pipeline import PipelineAgent
-from ..pipeline.io import AudioSink, TextSink
+from ..pipeline.io import AudioSink, PlaybackFinishedEvent, TextSink
 from ..tokenize.tokenizer import PUNCTUATIONS
+from ..types import NOT_GIVEN, NotGivenOr
 from . import _utils
 
 # Standard speech rate in hyphens per second
@@ -327,24 +327,6 @@ class TranscriptionSyncIO(rtc.EventEmitter[Literal["transcription_updated"]]):
         self._text_sink = _TextSink(text_sink, self)
         self._audio_sink = _AudioSync(audio_sink, self)
 
-    @classmethod
-    def from_agent(
-        cls,
-        agent: PipelineAgent,
-        *,
-        sync_options: NotGivenOr[TranscriptionSyncOptions] = NOT_GIVEN,
-    ) -> "TranscriptionSyncIO":
-        if not agent.output.audio:
-            raise ValueError("audio_output is not set")
-        transcription_sync = cls(
-            audio_sink=agent.output.audio,
-            text_sink=agent.output.text,
-            sync_options=sync_options,
-        )
-        agent.output.audio = transcription_sync.audio_output
-        agent.output.text = transcription_sync.text_output
-        return transcription_sync
-
     @property
     def audio_output(self) -> "_AudioSync":
         """Get the audio sink wrapper"""
@@ -379,17 +361,17 @@ class TranscriptionSyncIO(rtc.EventEmitter[Literal["transcription_updated"]]):
 class _AudioSync(AudioSink):
     def __init__(self, base_sink: AudioSink, parent: TranscriptionSyncIO) -> None:
         super().__init__(sample_rate=base_sink.sample_rate)
-        self._base_sink = base_sink
+        self._base_sink = None
+        self.set_base_sink(base_sink)
         self._parent = parent
         self._capturing = False
         self._interrupted = False
 
-        self._base_sink.on(
-            "playback_finished",
-            lambda ev: self.on_playback_finished(
-                playback_position=ev.playback_position, interrupted=ev.interrupted
-            ),
-        )
+    def set_base_sink(self, base_sink: AudioSink) -> None:
+        if self._base_sink:
+            self._base_sink.off("playback_finished", self.on_playback_finished)
+        self._base_sink = base_sink
+        self._base_sink.on("playback_finished", self._on_playback_finished)
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
@@ -423,6 +405,11 @@ class _AudioSync(AudioSink):
             self._parent._transcription_sync.segment_playout_finished()
         self._parent._flush()
 
+    def _on_playback_finished(self, ev: PlaybackFinishedEvent) -> None:
+        self.on_playback_finished(
+            playback_position=ev.playback_position, interrupted=ev.interrupted
+        )
+
 
 class _TextSink(TextSink):
     def __init__(
@@ -431,6 +418,9 @@ class _TextSink(TextSink):
         super().__init__()
         self._base_sink = base_sink
         self._parent = parent
+
+    def set_base_sink(self, base_sink: Optional[TextSink]) -> None:
+        self._base_sink = base_sink
 
     async def capture_text(self, text: str) -> None:
         if self._base_sink:
