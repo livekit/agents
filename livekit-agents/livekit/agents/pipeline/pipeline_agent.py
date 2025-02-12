@@ -258,21 +258,18 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             before_tts_cb=before_tts_cb,
         )
         self._plotter = AssistantPlotter(self._loop)
-        self._is_tts_stream_adapter = not tts.capabilities.streaming
-        self._is_stt_stream_adapter = not stt.capabilities.streaming
 
         # wrap with StreamAdapter automatically when streaming is not supported on a specific TTS/STT.
         # To override StreamAdapter options, create the adapter manually.
 
-        if self._is_tts_stream_adapter:
+        if tts.capabilities.streaming:
             from .. import tts as text_to_speech
 
-            self._is_tts_stream_adapter = True
             tts = text_to_speech.StreamAdapter(
                 tts=tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
             )
 
-        if self._is_stt_stream_adapter:
+        if stt.capabilities.streaming:
             from .. import stt as speech_to_text
 
             stt = speech_to_text.StreamAdapter(
@@ -688,13 +685,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         agent_playout.on("playout_stopped", _on_playout_stopped)
 
         self._track_published_fut.set_result(None)
-
-        if not self._is_tts_stream_adapter:
-            self._tts_stream = self._tts.stream()
-            self._tts_task = asyncio.create_task(self._tts_reader())
-        else:
-            # fallback to previous approach
-            self._tts_stream = None
+        self._tts_stream = self._tts.stream()
+        self._tts_task = asyncio.create_task(self._tts_reader())
 
         while True:
             await self._speech_q_changed.wait()
@@ -1175,40 +1167,29 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         assert self._agent_output is not None, (
             "agent output should be initialized when ready"
         )
-        if not self._is_tts_stream_adapter:
-            synthesis_handle = self._agent_output.create_synthesis_handle(
-                speech_id=speech_handle.id,
-                tts_source=tts_source,
-                transcript_source=transcript_source,
-                transcription=self._opts.transcription.agent_transcription,
-                transcription_speed=self._opts.transcription.agent_transcription_speed,
-                sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
-                word_tokenizer=self._opts.transcription.word_tokenizer,
-                hyphenate_word=self._opts.transcription.hyphenate_word,
-            )
-            asyncio.create_task(self._set_active_speech_handle(speech_handle))
-            asyncio.create_task(self._push_tts_source(synthesis_handle._tts_source))
+        synthesis_handle = self._agent_output.create_synthesis_handle(
+            speech_id=speech_handle.id,
+            tts_source=tts_source,
+            transcript_source=transcript_source,
+            transcription=self._opts.transcription.agent_transcription,
+            transcription_speed=self._opts.transcription.agent_transcription_speed,
+            sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
+            word_tokenizer=self._opts.transcription.word_tokenizer,
+            hyphenate_word=self._opts.transcription.hyphenate_word,
+        )
+        asyncio.create_task(self._set_active_speech_handle(speech_handle))
+        asyncio.create_task(self._push_tts_source(synthesis_handle._tts_source))
 
-            if isinstance(transcript_source, AsyncIterable):
-                asyncio.create_task(
-                    self._agent_output._read_transcript_task(
-                        transcript_source, synthesis_handle
-                    )
+        if isinstance(transcript_source, AsyncIterable):
+            asyncio.create_task(
+                self._agent_output._read_transcript_task(
+                    transcript_source, synthesis_handle
                 )
-            else:
-                synthesis_handle.tts_forwarder.push_text(transcript_source)
-                synthesis_handle.tts_forwarder.mark_text_segment_end()
-        else:
-            synthesis_handle = self._agent_output.synthesize(
-                speech_id=speech_handle.id,
-                tts_source=tts_source,
-                transcript_source=transcript_source,
-                transcription=self._opts.transcription.agent_transcription,
-                transcription_speed=self._opts.transcription.agent_transcription_speed,
-                sentence_tokenizer=self._opts.transcription.sentence_tokenizer,
-                word_tokenizer=self._opts.transcription.word_tokenizer,
-                hyphenate_word=self._opts.transcription.hyphenate_word,
             )
+        else:
+            synthesis_handle.tts_forwarder.push_text(transcript_source)
+            synthesis_handle.tts_forwarder.mark_text_segment_end()
+
         speech_handle.initialize(source=source, synthesis_handle=synthesis_handle)
 
     async def _set_active_speech_handle(self, speech_handle: SpeechHandle) -> None:
