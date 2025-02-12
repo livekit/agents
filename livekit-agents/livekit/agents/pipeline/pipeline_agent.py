@@ -219,11 +219,32 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     def update_options(self) -> None:
         pass
 
-    def say(self, text: str | AsyncIterable[str]) -> SpeechHandle:
-        raise NotImplementedError()
+    def say(
+        self,
+        source: str | AsyncIterable[rtc.AudioFrame],
+        *,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> SpeechHandle:
+        if self._activity is None:
+            raise ValueError("PipelineAgent isn't running")
 
-    def generate_reply(self, user_input: str) -> SpeechHandle:
-        raise NotImplementedError()
+        return self._activity.say(source, allow_interruptions=allow_interruptions)
+
+    def generate_reply(
+        self,
+        *,
+        user_input: NotGivenOr[str] = NOT_GIVEN,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> SpeechHandle:
+        if self._activity is None:
+            raise ValueError("PipelineAgent isn't running")
+
+        return self._activity.generate_reply(
+            user_input=user_input,
+            instructions=instructions,
+            allow_interruptions=allow_interruptions,
+        )
 
     def update_task(self, task: AgentTask) -> None:
         self._agent_task = task

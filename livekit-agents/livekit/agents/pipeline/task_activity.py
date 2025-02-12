@@ -5,6 +5,7 @@ import heapq
 import time
 from typing import (
     TYPE_CHECKING,
+    AsyncIterable,
 )
 
 from livekit import rtc
@@ -12,6 +13,7 @@ from livekit import rtc
 from .. import debug, llm, multimodal, stt, tts, utils, vad
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
+from ..utils.misc import is_given
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
 from .events import AgentContext
 from .generation import (
@@ -26,6 +28,11 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
+
+
+def log_event(event: str, **kwargs) -> None:
+    debug.Tracing.log_event(event, kwargs)
+
 
 if TYPE_CHECKING:
     from .pipeline_agent import PipelineAgent
@@ -168,22 +175,55 @@ class TaskActivity(RecognitionHooks):
         if self._audio_recognition is not None:
             self._audio_recognition.push_audio(frame)
 
+    def say(
+        self,
+        source: str | AsyncIterable[rtc.AudioFrame],
+        *,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> SpeechHandle:
+        if isinstance(source, str) and self.tts is None:
+            raise ValueError("trying to generate speech from text without a TTS model")
+
+        handle = SpeechHandle.create(
+            allow_interruptions=allow_interruptions
+            if is_given(allow_interruptions)
+            else self._agent.options.allow_interruptions
+        )
+
+        task = asyncio.create_task(
+            self._tts_task(
+                speech_handle=handle,
+                source=source,
+            ),
+            name="_tts_task",
+        )
+        self._tasks.append(task)
+        task.add_done_callback(lambda _: handle._mark_playout_done())
+        task.add_done_callback(lambda _: self._tasks.remove(task))
+
+        self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+        return handle
+
     def generate_reply(
         self,
         *,
         user_input: NotGivenOr[str] = NOT_GIVEN,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
         if self._current_speech is not None and not self._current_speech.interrupted:
             raise ValueError("another reply is already in progress")
 
-        debug.Tracing.log_event(
+        log_event(
             "generate_reply",
-            {"user_input": user_input or None, "instructions": instructions or None},
+            user_input=user_input or None,
+            instructions=instructions or None,
         )
 
         handle = SpeechHandle.create(
-            allow_interruptions=self._agent.options.allow_interruptions
+            allow_interruptions=allow_interruptions
+            if is_given(allow_interruptions)
+            else self._agent.options.allow_interruptions
         )
 
         if isinstance(self.llm, multimodal.RealtimeModel):
@@ -249,24 +289,24 @@ class TaskActivity(RecognitionHooks):
 
                 self._speech_q_changed.clear()
         finally:
-            debug.Tracing.log_event(f"task done, waiting for {len(self._tasks)} tasks")
+            log_event(f"task done, waiting for {len(self._tasks)} tasks")
             await asyncio.gather(*self._tasks)
-            debug.Tracing.log_event("marking agent task as done")
+            log_event("marking agent task as done")
             self._done_fut.set_result(None)
 
     # -- Realtime Session events --
 
     def _on_input_speech_started(self, _: multimodal.InputSpeechStartedEvent) -> None:
-        debug.Tracing.log_event("input_speech_started")
+        log_event("input_speech_started")
         self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session
 
     def _on_input_speech_stopped(self, _: multimodal.InputSpeechStoppedEvent) -> None:
-        debug.Tracing.log_event("input_speech_stopped")
+        log_event("input_speech_stopped")
 
     def _on_generation_created(self, ev: multimodal.GenerationCreatedEvent) -> None:
         if self.draining:
             logger.warning("skipping new generation, task is draining")
-            debug.Tracing.log_event("skipping new generation, task is draining")
+            log_event("skipping new generation, task is draining")
             return
 
         if ev.user_initiated:
@@ -304,9 +344,9 @@ class TaskActivity(RecognitionHooks):
                 and not self._current_speech.interrupted
                 and self._current_speech.allow_interruptions
             ):
-                debug.Tracing.log_event(
+                log_event(
                     "speech interrupted by vad",
-                    {"speech_id": self._current_speech.id},
+                    speech_id=self._current_speech.id,
                 )
                 self._current_speech.interrupt()
 
@@ -331,9 +371,9 @@ class TaskActivity(RecognitionHooks):
                 )
                 return
 
-            debug.Tracing.log_event(
+            log_event(
                 "speech interrupted, new user turn detected",
-                {"speech_id": self._current_speech.id},
+                speech_id=self._current_speech.id,
             )
             self._current_speech.interrupt()
 
@@ -342,9 +382,9 @@ class TaskActivity(RecognitionHooks):
                 "skipping user input, task is draining",
                 extra={"user_input": new_transcript},
             )
-            debug.Tracing.log_event(
+            log_event(
                 "skipping user input, task is draining",
-                {"user_input": new_transcript},
+                user_input=new_transcript,
             )
             return
 
@@ -356,6 +396,62 @@ class TaskActivity(RecognitionHooks):
     # endregion
 
     @utils.log_exceptions(logger=logger)
+    async def _tts_task(
+        self, speech_handle: SpeechHandle, source: str | AsyncIterable[rtc.AudioFrame]
+    ) -> None:
+        text_output = self._agent.output.text
+        audio_output = self._agent.output.audio
+
+        await speech_handle.wait_if_not_interrupted(
+            [asyncio.ensure_future(speech_handle._wait_for_authorization())]
+        )
+
+        if speech_handle.interrupted:
+            return
+
+        tasks = []
+        if isinstance(source, str):
+            if text_output is not None:
+                await text_output.capture_text(source)
+                text_output.flush()
+
+            async def _read_text() -> AsyncIterable[str]:
+                yield source
+
+            tts_task: asyncio.Task | None = None
+            tts_gen_data: _TTSGenerationData | None = None
+            if audio_output is not None:
+                tts_task, tts_gen_data = perform_tts_inference(
+                    node=self._agent_task.tts_node, input=_read_text()
+                )
+                tasks.append(tts_task)
+
+                forward_task, _ = perform_audio_forwarding(
+                    audio_output=audio_output, tts_output=tts_gen_data.audio_ch
+                )
+                tasks.append(forward_task)
+        elif isinstance(source, AsyncIterable):
+            if audio_output is not None:
+                forward_task, _ = perform_audio_forwarding(
+                    audio_output=audio_output, tts_output=source
+                )
+                tasks.append(forward_task)
+
+        await speech_handle.wait_if_not_interrupted([*tasks])
+
+        if audio_output is not None:
+            await speech_handle.wait_if_not_interrupted(
+                [asyncio.ensure_future(audio_output.wait_for_playout())]
+            )
+
+        if speech_handle.interrupted:
+            await utils.aio.cancel_and_wait(*tasks)
+
+            if audio_output is not None:
+                audio_output.clear_buffer()
+                await audio_output.wait_for_playout()
+
+    @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
         self,
         *,
@@ -365,9 +461,10 @@ class TaskActivity(RecognitionHooks):
         user_input: str | None = None,
         instructions: str | None = None,
     ) -> None:
-        debug.Tracing.log_event(
+        log_event(
             "generation started",
-            {"speech_id": speech_handle.id, "step_index": speech_handle.step_index},
+            speech_id=speech_handle.id,
+            step_index=speech_handle.step_index,
         )
 
         audio_output = self._agent.output.audio
@@ -449,12 +546,10 @@ class TaskActivity(RecognitionHooks):
                 audio_output.clear_buffer()
                 playback_ev = await audio_output.wait_for_playout()
 
-                debug.Tracing.log_event(
+                log_event(
                     "playout interrupted",
-                    {
-                        "playback_position": playback_ev.playback_position,
-                        "speech_id": speech_handle.id,
-                    },
+                    playback_position=playback_ev.playback_position,
+                    speech_id=speech_handle.id,
                 )
 
                 # TODO(theomonnom): calculate the played text based on playback_ev.playback_position
@@ -467,7 +562,7 @@ class TaskActivity(RecognitionHooks):
             msg = chat_ctx.add_message(role="assistant", content=text_out.text)
             self._agent_task._chat_ctx.items.append(msg)
 
-        debug.Tracing.log_event("playout completed", {"speech_id": speech_handle.id})
+        log_event("playout completed", speech_id=speech_handle.id)
 
         if len(fnc_outputs) > 0:
             if speech_handle.step_index >= self._agent.options.max_fnc_steps:
@@ -475,9 +570,9 @@ class TaskActivity(RecognitionHooks):
                     "maximum number of function calls steps reached",
                     extra={"speech_id": speech_handle.id},
                 )
-                debug.Tracing.log_event(
+                log_event(
                     "maximum number of function calls steps reached",
-                    {"speech_id": speech_handle.id},
+                    speech_id=speech_handle.id,
                 )
                 return
 
@@ -522,7 +617,7 @@ class TaskActivity(RecognitionHooks):
             if not ignore_task_switch and new_agent_task is not None:
                 self._agent.update_task(new_agent_task)
 
-        debug.Tracing.log_event("playout completed", {"speech_id": speech_handle.id})
+        log_event("playout completed", speech_id=speech_handle.id)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
@@ -557,13 +652,11 @@ class TaskActivity(RecognitionHooks):
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
 
-        debug.Tracing.log_event(
+        log_event(
             "generation started",
-            {
-                "speech_id": speech_handle.id,
-                "step_index": speech_handle.step_index,
-                "realtime": True,
-            },
+            speech_id=speech_handle.id,
+            step_index=speech_handle.step_index,
+            realtime=True,
         )
 
         audio_output = self._agent.output.audio
@@ -640,12 +733,10 @@ class TaskActivity(RecognitionHooks):
                 audio_output.clear_buffer()
                 playback_ev = await audio_output.wait_for_playout()
 
-                debug.Tracing.log_event(
+                log_event(
                     "playout interrupted",
-                    {
-                        "playback_position": playback_ev.playback_position,
-                        "speech_id": speech_handle.id,
-                    },
+                    playback_position=playback_ev.playback_position,
+                    speech_id=speech_handle.id,
                 )
 
             # TODO(theomonnom): truncate message (+ OAI serverside mesage)
@@ -690,4 +781,4 @@ class TaskActivity(RecognitionHooks):
             if not ignore_task_switch and new_agent_task is not None:
                 self._agent.update_task(new_agent_task)
 
-        debug.Tracing.log_event("playout completed", {"speech_id": speech_handle.id})
+        log_event("playout completed", speech_id=speech_handle.id)

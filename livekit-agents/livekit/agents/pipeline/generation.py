@@ -169,6 +169,9 @@ async def _text_forwarding_task(
             if text_output is not None:
                 await text_output.capture_text(delta)
     finally:
+        if isinstance(llm_output, _ACloseable):
+            await llm_output.aclose()
+
         if text_output is not None:
             text_output.flush()
 
@@ -199,6 +202,9 @@ async def _audio_forwarding_task(
             out.audio.append(frame)
             await audio_output.capture_frame(frame)
     finally:
+        if isinstance(tts_output, _ACloseable):
+            await tts_output.aclose()
+
         audio_output.flush()
 
 
