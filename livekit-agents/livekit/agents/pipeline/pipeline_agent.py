@@ -1112,11 +1112,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     )
 
             if audio.is_final:
-                if self._active_speech_handle:
-                    self._active_speech_handle.synthesis_handle.tts_forwarder.mark_audio_segment_end()
-                    self._active_speech_handle._set_done()
-                    self._active_speech_handle.synthesis_handle._buf_ch.close()
-                    self._active_speech_handle = None
+                self._mark_active_speech_handle_done()
 
     def _synthesize_agent_speech(
         self, speech_handle: SpeechHandle, source: str | LLMStream | AsyncIterable[str]
@@ -1131,7 +1127,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             async def _llm_stream_to_str_generator(
                 stream: LLMStream,
             ) -> AsyncGenerator[str, None]:
-                total_length = 0
+                has_yielded = False
                 try:
                     async for chunk in stream:
                         if not chunk.choices:
@@ -1139,14 +1135,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         content = chunk.choices[0].delta.content
                         if content is None:
                             continue
-                        total_length += len(content)
+                        has_yielded = True
                         yield content
                 finally:
-                    if total_length == 0 and self._active_speech_handle:
-                        self._active_speech_handle.synthesis_handle.tts_forwarder.mark_audio_segment_end()
-                        self._active_speech_handle._set_done()
-                        self._active_speech_handle.synthesis_handle._buf_ch.close()
-                        self._active_speech_handle = None
+                    if not has_yielded:
+                        self._mark_active_speech_handle_done()
                     await stream.aclose()
 
             if isinstance(source, LLMStream):
@@ -1191,6 +1184,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             synthesis_handle.tts_forwarder.mark_text_segment_end()
 
         speech_handle.initialize(source=source, synthesis_handle=synthesis_handle)
+
+    def _mark_active_speech_handle_done(self) -> None:
+        if self._active_speech_handle:
+            self._active_speech_handle.synthesis_handle.tts_forwarder.mark_audio_segment_end()
+            self._active_speech_handle._set_done()
+            self._active_speech_handle.synthesis_handle._buf_ch.close()
+            self._active_speech_handle = None
 
     async def _set_active_speech_handle(self, speech_handle: SpeechHandle) -> None:
         async with self._speech_lock:
