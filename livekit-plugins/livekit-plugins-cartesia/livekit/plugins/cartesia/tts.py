@@ -175,10 +175,7 @@ class TTS(tts.TTS):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         logging.info(f"Synthesize called with text: {text}")
-        if not AppConfig().get_call_metadata().get("time_of_first_cartesia_synthesis"):
-            AppConfig().get_call_metadata().update(
-                {"time_of_first_cartesia_synthesis": time.time()}
-            )
+
         text = replace_numbers_with_words_cartesia(text, lang=AppConfig().language)
         text = text.replace("DETERMINISTIC", "")
         text = text.replace("past due", "past-due")
@@ -241,6 +238,10 @@ class ChunkedStream(tts.ChunkedStream):
             f"Sending request to Cartesia bytes endpoint with headers: {headers}"
         )
 
+        if not AppConfig().get_call_metadata().get("time_of_first_cartesia_synthesis"):
+            AppConfig().get_call_metadata().update(
+                {"time_of_first_cartesia_synthesis": time.time()}
+            )
         try:
             async with self._session.post(
                 self._opts.get_http_url("/tts/bytes"),
