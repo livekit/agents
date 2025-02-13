@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, AsyncIterator, Optional
@@ -13,7 +15,7 @@ if TYPE_CHECKING:
     from ..pipeline import PipelineAgent
 
 
-@dataclass
+@dataclass(frozen=True)
 class RoomInputOptions:
     audio_enabled: bool = True
     """Whether to subscribe to audio"""
@@ -31,7 +33,7 @@ class RoomInputOptions:
     """Whether to forward user transcript segments to the room"""
 
 
-@dataclass
+@dataclass(frozen=True)
 class RoomOutputOptions:
     sample_rate: int = 24000
     num_channels: int = 1
@@ -39,7 +41,7 @@ class RoomOutputOptions:
     """Whether to synchronize agent transcription with audio playback"""
     forward_agent_transcription: bool = True
     """Whether to forward transcription segments to the room"""
-    track_source: rtc.TrackSource = rtc.TrackSource.SOURCE_MICROPHONE
+    track_source: rtc.TrackSource.ValueType = rtc.TrackSource.SOURCE_MICROPHONE
     """Source of the audio track to publish"""
 
 
@@ -253,7 +255,7 @@ class RoomAudioSink(AudioSink):
         sample_rate: int = 24000,
         num_channels: int = 1,
         queue_size_ms: int = 100_000,
-        track_source: rtc.TrackSource = rtc.TrackSource.SOURCE_MICROPHONE,
+        track_source: rtc.TrackSource.ValueType = rtc.TrackSource.SOURCE_MICROPHONE,
     ) -> None:
         """Initialize the RoomAudioSink
 

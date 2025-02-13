@@ -298,7 +298,7 @@ class ChatCLI:
                     text = "".join(self._text_input_buf)
                     if text:
                         self._text_input_buf = []
-                        self._agent.generate_reply(text)
+                        self._agent.generate_reply(user_input=text)
                         click.echo("\n", nl=False)
                 elif char == "\x7f":  # Backspace
                     if self._text_input_buf:
