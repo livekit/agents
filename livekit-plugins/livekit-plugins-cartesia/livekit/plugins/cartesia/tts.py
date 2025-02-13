@@ -176,6 +176,11 @@ class TTS(tts.TTS):
     ) -> ChunkedStream:
         logging.info(f"Synthesize called with text: {text}")
 
+        if "Exeter Finance LLC" in text:
+            self.update_options(speed="fast")
+        else:
+            self.update_options(speed="normal")
+
         text = replace_numbers_with_words_cartesia(text, lang=AppConfig().language)
         text = text.replace("DETERMINISTIC", "")
         text = text.replace("past due", "past-due")
