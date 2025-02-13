@@ -6,7 +6,7 @@ from typing import AsyncIterator, Coroutine, Optional, Protocol
 from livekit import rtc
 from livekit.agents import utils
 
-from ..pipeline.datastream_io import AudioFlushSentinel, DataStreamAudioReceiver
+from ..datastream_io import AudioFlushSentinel, DataStreamAudioReceiver
 
 logger = logging.getLogger(__name__)
 

@@ -43,6 +43,7 @@ class DataStreamAudioSink(AudioSink):
         self._destination_identity = destination_identity
         self._stream_writer: Optional[rtc.ByteStreamWriter] = None
         self._pushed_duration: float = 0.0
+        self._tasks: set[asyncio.Task] = set()
 
         # playback finished handler
         def _handle_playback_finished(data: rtc.RpcInvocationData) -> str:
@@ -92,7 +93,10 @@ class DataStreamAudioSink(AudioSink):
             return
 
         # close the stream marking the end of the segment
-        asyncio.create_task(self._stream_writer.aclose())
+        task = asyncio.create_task(self._stream_writer.aclose())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
         self._stream_writer = None
         logger.debug(
             "data stream audio sink flushed",
@@ -100,13 +104,15 @@ class DataStreamAudioSink(AudioSink):
         )
 
     def clear_buffer(self) -> None:
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._room.local_participant.perform_rpc(
                 destination_identity=self._destination_identity,
                 method=RPC_CLEAR_BUFFER,
                 payload="",
             )
         )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
 
 class AudioFlushSentinel:
