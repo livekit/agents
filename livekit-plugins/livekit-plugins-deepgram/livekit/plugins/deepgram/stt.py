@@ -21,7 +21,7 @@ import os
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from urllib.parse import urlencode
 
 import aiohttp
@@ -553,7 +553,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        live_config = {
+        live_config: dict[str, Any] = {
             "model": self._opts.model,
             "punctuate": self._opts.punctuate,
             "smart_format": self._opts.smart_format,
