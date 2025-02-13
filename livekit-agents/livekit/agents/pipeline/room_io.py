@@ -4,9 +4,9 @@ from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from livekit import rtc
 
-from .. import utils, stt
+from .. import stt, utils
 from ..log import logger
-from ..transcription import find_micro_track_id, TextSynchronizer
+from ..transcription import TextSynchronizer, find_micro_track_id
 from .io import AudioSink, TextSink
 
 if TYPE_CHECKING:

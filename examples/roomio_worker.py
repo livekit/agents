@@ -16,7 +16,7 @@ load_dotenv()
 class EchoTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
-            instructions="You are Echo, always speak in English even if the user speaks in another language or wants to use another language.",
+            instructions="You are Echo.",
             # llm=openai.realtime.RealtimeModel(voice="echo"),
             stt=deepgram.STT(),
             llm=openai.LLM(model="gpt-4o-mini"),
@@ -25,19 +25,19 @@ class EchoTask(AgentTask):
 
     @ai_function
     async def talk_to_alloy(self, context: AgentContext):
-        return AlloyTask(), "Transfering you to Alloy."
+        return AlloyTask(), "Transferring you to Alloy."
 
 
 class AlloyTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
-            instructions="You are Alloy, always speak in English even if the user speaks in another language or wants to use another language.",
+            instructions="You are Alloy.",
             llm=openai.realtime.RealtimeModel(voice="alloy"),
         )
 
     @ai_function
     async def talk_to_echo(self, context: AgentContext):
-        return EchoTask(), "Transfering you to Echo."
+        return EchoTask(), "Transferring you to Echo."
 
 
 async def entrypoint(ctx: JobContext):

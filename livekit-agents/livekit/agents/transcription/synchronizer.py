@@ -24,11 +24,11 @@ class TextSyncOptions:
     language: str = ""
     speed: float = 1.0  # Multiplier of STANDARD_SPEECH_RATE
     new_sentence_delay: float = 0.4
-    word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
-        ignore_punctuation=False
-    )
     sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
+    split_words: Callable[[str], list[tuple[str, int, int]]] = (
+        tokenize.basic.split_words
+    )
 
 
 @dataclass
@@ -215,12 +215,12 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
             )
 
         seg_id = _utils.segment_uuid()
-        words = self._opts.word_tokenizer.tokenize(text=sentence)
+        words: list[tuple[str, int, int]] = self._opts.split_words(text=sentence)
         processed_words: list[str] = []
 
         og_text = self._played_text
         sent_text = ""
-        for word in words:
+        for word, start_pos, end_pos in words:
             if segment_index <= self._finished_seg_index:
                 break
 
@@ -231,7 +231,7 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
             processed_words.append(word)
 
             elapsed_time = time.time() - segment_start_time
-            text = self._opts.word_tokenizer.format_words(processed_words)
+            text = sentence[0:end_pos]
             text = text.rstrip("".join(PUNCTUATIONS))
 
             speed = self._speed
@@ -293,8 +293,8 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
     def _calc_hyphens(self, text: str) -> list[str]:
         """Calculate hyphens for text."""
         hyphens: list[str] = []
-        words = self._opts.word_tokenizer.tokenize(text=text)
-        for word in words:
+        words: list[tuple[str, int, int]] = self._opts.split_words(text=text)
+        for word, _, _ in words:
             new = self._opts.hyphenate_word(word)
             hyphens.extend(new)
         return hyphens
@@ -349,7 +349,7 @@ class TextSynchronizer:
 
     async def _on_text_updated(self, segment: rtc.TranscriptionSegment) -> None:
         if not self._base_text_sink:
-            return        
+            return
         if self._current_segment_id != segment.id:
             self._base_text_sink.flush()
 
