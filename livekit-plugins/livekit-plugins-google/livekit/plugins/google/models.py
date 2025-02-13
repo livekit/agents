@@ -94,4 +94,9 @@ Gender = Literal["male", "female", "neutral"]
 
 AudioEncoding = Literal["wav", "mp3", "ogg", "mulaw", "alaw", "linear16"]
 
-ChatModels = Literal["gemini-2.0-flash-exp", "gemini-1.5-pro"]
+ChatModels = Literal[
+    "gemini-2.0-flash-001",
+    "gemini-2.0-flash-lite-preview-02-05",
+    "gemini-2.0-pro-exp-02-05",
+    "gemini-1.5-pro",
+]

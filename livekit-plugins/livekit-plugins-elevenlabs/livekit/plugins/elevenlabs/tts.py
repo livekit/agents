@@ -431,6 +431,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     text=f"{text} ",  # must always end with a space
                     try_trigger_generation=False,
                 )
+                self._mark_started()
                 await ws_conn.send_str(json.dumps(data_pkt))
 
             if xml_content:
@@ -519,6 +520,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+            if ws_conn is not None:
+                await ws_conn.close()
 
 
 def _dict_to_voices_list(data: dict[str, Any]):

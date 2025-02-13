@@ -48,7 +48,7 @@ API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2024-06-10"
 
 NUM_CHANNELS = 1
-BUFFERED_WORDS_COUNT = 8
+BUFFERED_WORDS_COUNT = 3
 
 
 @dataclass
@@ -61,6 +61,13 @@ class _TTSOptions:
     emotion: list[TTSVoiceEmotion | str] | None
     api_key: str
     language: str
+    base_url: str
+
+    def get_http_url(self, path: str) -> str:
+        return f"{self.base_url}{path}"
+
+    def get_ws_url(self, path: str) -> str:
+        return f"{self.base_url.replace('http', 'ws', 1)}{path}"
 
 
 class TTS(tts.TTS):
@@ -76,6 +83,7 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        base_url: str = "https://api.cartesia.ai",
     ) -> None:
         """
         Create a new instance of Cartesia TTS.
@@ -92,6 +100,7 @@ class TTS(tts.TTS):
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
+            base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
         """
 
         super().__init__(
@@ -113,6 +122,7 @@ class TTS(tts.TTS):
             speed=speed,
             emotion=emotion,
             api_key=api_key,
+            base_url=base_url,
         )
         self._session = http_session
 
@@ -207,7 +217,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with self._session.post(
-                "https://api.cartesia.ai/tts/bytes",
+                self._opts.get_http_url("/tts/bytes"),
                 headers=headers,
                 json=json,
                 timeout=aiohttp.ClientTimeout(
@@ -267,6 +277,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["context_id"] = request_id
                 token_pkt["transcript"] = ev.token + " "
                 token_pkt["continue"] = True
+                self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
 
             end_pkt = base_pkt.copy()
@@ -343,7 +354,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.error("unexpected Cartesia message %s", data)
 
-        url = f"wss://api.cartesia.ai/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
+        url = self._opts.get_ws_url(
+            f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
+        )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 

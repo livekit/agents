@@ -1,5 +1,19 @@
 # livekit-plugins-eou
 
+## 0.4.1
+
+### Patch Changes
+
+- fix incorrect dtype on windows - [#1452](https://github.com/livekit/agents/pull/1452) ([@jeradf](https://github.com/jeradf))
+
+- adjust default probability cutoff - [#1465](https://github.com/livekit/agents/pull/1465) ([@jeradf](https://github.com/jeradf))
+
+## 0.4.0
+
+### Minor Changes
+
+- more accurate, smaller, faster model - [#1426](https://github.com/livekit/agents/pull/1426) ([@jeradf](https://github.com/jeradf))
+
 ## 0.3.6
 
 ### Patch Changes

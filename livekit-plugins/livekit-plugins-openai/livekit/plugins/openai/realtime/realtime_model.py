@@ -111,6 +111,7 @@ class RealtimeToolCall:
 @dataclass
 class Capabilities:
     supports_truncate: bool
+    input_audio_sample_rate: int | None = None
 
 
 @dataclass
@@ -142,7 +143,7 @@ class ServerVadOptions:
     threshold: float
     prefix_padding_ms: int
     silence_duration_ms: int
-    create_response: bool
+    create_response: bool = True
 
 
 @dataclass
@@ -721,10 +722,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             on_duplicate: Literal[
                 "cancel_existing", "cancel_new", "keep_both"
             ] = "keep_both",
-            instructions: str = "",
-            modalities: list[api_proto.Modality] = ["text", "audio"],
+            instructions: Optional[str] = None,
+            modalities: Optional[list[api_proto.Modality]] = None,
             conversation: Literal["auto", "none"] = "auto",
-            metadata: map | None = None,
+            metadata: Optional[dict[str, str]] = None,
         ) -> asyncio.Future[bool]:
             """Creates a new response.
 
@@ -735,7 +736,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     - "keep_both": Wait for the existing response to be done and then create a new one
                 instructions: explicit prompt used for out-of-band events
                 modalities: set of modalities that the model can respond in, defaults to audio
-                conversation: specifies whether respones is out-of-band
+                conversation: specifies whether response is out-of-band
                     - "auto": Contents of the response will be added to the default conversation
                     - "none": Creates an out-of-band response which will not add items to default conversation
                 metadata: set of key-value pairs that can be used for storing additional information
@@ -767,6 +768,16 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 **self._sess.logging_extra(),
             }
 
+            response_request: api_proto.ClientEvent.ResponseCreateData = {
+                "conversation": conversation
+            }
+            if instructions is not None:
+                response_request["instructions"] = instructions
+            if modalities is not None:
+                response_request["modalities"] = modalities
+            if metadata is not None:
+                response_request["metadata"] = metadata
+
             if (
                 not active_resp_id
                 or self._sess._pending_responses[active_resp_id].done_fut.done()
@@ -775,12 +786,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 self._sess._queue_msg(
                     {
                         "type": "response.create",
-                        "response": {
-                            "instructions": instructions,
-                            "modalities": modalities,
-                            "conversation": conversation,
-                            "metadata": metadata,
-                        },
+                        "response": response_request,
                     }
                 )
                 _fut = asyncio.Future[bool]()
@@ -822,12 +828,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 self._sess._queue_msg(
                     {
                         "type": "response.create",
-                        "response": {
-                            "instructions": instructions,
-                            "modalities": modalities,
-                            "conversation": conversation,
-                            "metadata": metadata,
-                        },
+                        "response": response_request,
                     }
                 )
                 return True
@@ -1282,7 +1283,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 threshold=session["turn_detection"]["threshold"],
                 prefix_padding_ms=session["turn_detection"]["prefix_padding_ms"],
                 silence_duration_ms=session["turn_detection"]["silence_duration_ms"],
-                create_response=True,
+                create_response=session["turn_detection"]["create_response"],
             )
         if session["input_audio_transcription"] is None:
             input_audio_transcription = None
