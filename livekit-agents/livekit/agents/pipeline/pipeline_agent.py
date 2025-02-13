@@ -158,7 +158,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
                     )
                     await self._room_input.start(agent=self)
 
-                if self.output.audio is not None and not self.output.text is not None:
+                if self.output.audio is None and self.output.text is None:
                     self._room_output = room_io.RoomOutput(
                         room=room,
                         options=room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS,
