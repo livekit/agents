@@ -6,7 +6,7 @@ from typing import AsyncIterator, Generator, Optional, Union
 
 import numpy as np
 from livekit import rtc
-from livekit.agents.avatar import AvatarWorker, MediaOptions
+from livekit.agents.pipeline.avatar import AvatarWorker, MediaOptions
 from livekit.agents.pipeline.datastream_io import AudioFlushSentinel
 
 sys.path.insert(0, str(Path(__file__).parent))
