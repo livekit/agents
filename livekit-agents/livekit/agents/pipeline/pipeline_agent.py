@@ -10,6 +10,7 @@ from .. import debug, llm, multimodal, stt, tts, utils, vad
 from ..llm import ChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
+from ..utils.misc import is_given
 from . import io, room_io
 from .audio_recognition import _TurnDetector
 from .speech_handle import SpeechHandle
@@ -84,6 +85,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
         self._forward_audio_atask: asyncio.Task | None = None
         self._update_activity_atask: asyncio.Task | None = None
+        self._activity_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
 
         # room io and transcription sync
@@ -132,12 +134,12 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     async def start(
         self,
         *,
-        room: rtc.Room | None = None,
-        room_input_options: room_io.RoomInputOptions | None = None,
-        room_output_options: room_io.RoomOutputOptions | None = None,
+        room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
+        room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> None:
         """Start the pipeline agent.
-        Create room io if the input or output audio is not already set.
+        Create a default RoomIO if the input or output audio is not already set.
 
         Args:
             room: The room to use for input and output
@@ -147,37 +149,32 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         if self._started:
             return
 
-        if self.input.audio is None and room:
-            # create room input if not already set
-            self._room_input = room_io.RoomInput(
-                room=room,
-                options=room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS,
+        async with self._lock:
+            if is_given(room):
+                if self.input.audio is None:
+                    self._room_input = room_io.RoomInput(
+                        room=room,
+                        options=room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS,
+                    )
+                    await self._room_input.start(agent=self)
+
+                if self.output.audio is not None and not self.output.text is not None:
+                    self._room_output = room_io.RoomOutput(
+                        room=room,
+                        options=room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS,
+                    )
+                    await self._room_output.start(agent=self)
+                    
+            if self.input.audio is not None:
+                self._forward_audio_atask = asyncio.create_task(
+                    self._forward_audio_task(), name="_forward_audio_task"
+                )
+
+            self._update_activity_atask = asyncio.create_task(
+                self._update_activity_task(self._agent_task), name="_update_activity_task"
             )
-            await self._room_input.start(agent=self)
 
-        if not self.output.audio and not self.output.text and room:
-            # create room output if not already set
-            self._room_output = room_io.RoomOutput(
-                room=room,
-                options=room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS,
-            )
-            await self._room_output.start(agent=self)
-            
-        if not self.input.audio and not self.input.text:
-            logger.warning("Agent starts without audio and text input")
-        if not self.output.audio and not self.output.text:
-            logger.warning("Agent starts without audio and text output")
-
-        if self.input.audio is not None:
-            self._forward_audio_atask = asyncio.create_task(
-                self._forward_audio_task(), name="_forward_audio_task"
-            )
-
-        self._update_activity_atask = asyncio.create_task(
-            self._update_activity_task(self._agent_task), name="_update_activity_task"
-        )
-
-        self._started = True
+            self._started = True
 
     async def aclose(self) -> None:
         if not self._started:
@@ -204,7 +201,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
     @property
     def current_speech(self) -> SpeechHandle | None:
-        raise NotImplementedError()
+        return self._activity.current_speech if self._activity is not None else None
 
     @property
     def current_task(self) -> AgentTask:
@@ -255,7 +252,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: AgentTask) -> None:
-        async with self._lock:
+        async with self._activity_lock:
             if self._activity is not None:
                 await self._activity.drain()
                 await self._activity.aclose()

@@ -85,6 +85,10 @@ class TaskActivity(RecognitionHooks):
     def vad(self) -> vad.VAD | None:
         return self._agent_task.vad or self._agent.vad
 
+    @property
+    def current_speech(self) -> SpeechHandle | None:
+        return self._current_speech
+
     async def drain(self) -> None:
         async with self._lock:
             if self._draining:
