@@ -10,7 +10,7 @@ from typing import (
 
 from livekit import rtc
 
-from .. import debug, llm, multimodal, stt, tts, utils, vad
+from .. import debug, llm, stt, tts, utils, vad
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 class TaskActivity(RecognitionHooks):
     def __init__(self, task: AgentTask, agent: PipelineAgent) -> None:
         self._agent_task, self._agent = task, agent
-        self._rt_session: multimodal.RealtimeSession | None = None
+        self._rt_session: llm.RealtimeSession | None = None
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
 
@@ -74,7 +74,7 @@ class TaskActivity(RecognitionHooks):
         return self._agent_task.stt or self._agent.stt
 
     @property
-    def llm(self) -> llm.LLM | multimodal.RealtimeModel | None:
+    def llm(self) -> llm.LLM | llm.RealtimeModel | None:
         return self._agent_task.llm or self._agent.llm
 
     @property
@@ -114,7 +114,7 @@ class TaskActivity(RecognitionHooks):
             )
             self._audio_recognition.start()
 
-            if isinstance(self.llm, multimodal.RealtimeModel):
+            if isinstance(self.llm, llm.RealtimeModel):
                 self._rt_session = self.llm.session()
                 self._rt_session.on("generation_created", self._on_generation_created)
                 self._rt_session.on(
@@ -127,17 +127,17 @@ class TaskActivity(RecognitionHooks):
                     await self._rt_session.update_instructions(
                         self._agent_task.instructions
                     )
-                except multimodal.RealtimeError:
+                except llm.RealtimeError:
                     logger.exception("failed to update the instructions")
 
                 try:
                     await self._rt_session.update_chat_ctx(self._agent_task.chat_ctx)
-                except multimodal.RealtimeError:
+                except llm.RealtimeError:
                     logger.exception("failed to update the chat_ctx")
 
                 try:
                     await self._rt_session.update_fnc_ctx(self._agent_task.ai_functions)
-                except multimodal.RealtimeError:
+                except llm.RealtimeError:
                     logger.exception("failed to update the fnc_ctx")
 
             elif isinstance(self.llm, llm.LLM):
@@ -230,7 +230,7 @@ class TaskActivity(RecognitionHooks):
             else self._agent.options.allow_interruptions
         )
 
-        if isinstance(self.llm, multimodal.RealtimeModel):
+        if isinstance(self.llm, llm.RealtimeModel):
             task = asyncio.create_task(
                 self._realtime_reply_task(
                     speech_handle=handle,
@@ -300,14 +300,14 @@ class TaskActivity(RecognitionHooks):
 
     # -- Realtime Session events --
 
-    def _on_input_speech_started(self, _: multimodal.InputSpeechStartedEvent) -> None:
+    def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")
         self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session
 
-    def _on_input_speech_stopped(self, _: multimodal.InputSpeechStoppedEvent) -> None:
+    def _on_input_speech_stopped(self, _: llm.InputSpeechStoppedEvent) -> None:
         log_event("input_speech_stopped")
 
-    def _on_generation_created(self, ev: multimodal.GenerationCreatedEvent) -> None:
+    def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
         if self.draining:
             logger.warning("skipping new generation, task is draining")
             log_event("skipping new generation, task is draining")
@@ -652,7 +652,7 @@ class TaskActivity(RecognitionHooks):
         self,
         *,
         speech_handle: SpeechHandle,
-        generation_ev: multimodal.GenerationCreatedEvent,
+        generation_ev: llm.GenerationCreatedEvent,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
 
@@ -767,7 +767,7 @@ class TaskActivity(RecognitionHooks):
                 chat_ctx.items.extend(new_fnc_outputs)
                 try:
                     await self._rt_session.update_chat_ctx(chat_ctx)
-                except multimodal.RealtimeError as e:
+                except llm.RealtimeError as e:
                     logger.warning(
                         "failed to update chat context before generating the function calls results",
                         extra={"error": str(e)},
@@ -776,7 +776,7 @@ class TaskActivity(RecognitionHooks):
                 self._rt_session.interrupt()
                 try:
                     await self._rt_session.generate_reply()
-                except multimodal.RealtimeError as e:
+                except llm.RealtimeError as e:
                     logger.warning(
                         "failed to generate the function calls results",
                         extra={"error": str(e)},

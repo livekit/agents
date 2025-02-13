@@ -8,7 +8,7 @@ from livekit import rtc
 
 from .. import stt, utils
 from ..log import logger
-from ..transcription import TextSynchronizer, find_micro_track_id
+from .transcription import TextSynchronizer, find_micro_track_id
 from .io import AudioSink, TextSink
 
 if TYPE_CHECKING:

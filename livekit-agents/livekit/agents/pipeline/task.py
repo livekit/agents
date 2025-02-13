@@ -10,7 +10,7 @@ from typing import (
 
 from livekit import rtc
 
-from .. import llm, multimodal, stt, tokenize, tts, utils, vad
+from .. import llm, stt, tokenize, tts, utils, vad
 from ..llm import (
     AIFunction,
     ChatContext,
@@ -35,7 +35,7 @@ class AgentTask:
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | multimodal.RealtimeModel | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:
         if tts and not tts.capabilities.streaming:
@@ -89,7 +89,7 @@ class AgentTask:
         return self._stt
 
     @property
-    def llm(self) -> NotGivenOr[llm.LLM | multimodal.RealtimeModel | None]:
+    def llm(self) -> NotGivenOr[llm.LLM | llm.RealtimeModel | None]:
         return self._llm
 
     @property
