@@ -46,7 +46,6 @@ class TaskActivity(RecognitionHooks):
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
 
-        self._done_fut = asyncio.Future()
         self._draining = False
 
         self._current_speech: SpeechHandle | None = None
@@ -204,7 +203,6 @@ class TaskActivity(RecognitionHooks):
         self._tasks.append(task)
         task.add_done_callback(lambda _: handle._mark_playout_done())
         task.add_done_callback(lambda _: self._tasks.remove(task))
-
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
@@ -296,7 +294,6 @@ class TaskActivity(RecognitionHooks):
             log_event(f"task done, waiting for {len(self._tasks)} tasks")
             await asyncio.gather(*self._tasks)
             log_event("marking agent task as done")
-            self._done_fut.set_result(None)
 
     # -- Realtime Session events --
 
