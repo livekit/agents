@@ -1,5 +1,11 @@
 # livekit-plugins-cartesia
 
+## 0.4.7
+
+### Patch Changes
+
+- improved TTFB metrics for streaming TTS - [#1431](https://github.com/livekit/agents/pull/1431) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.4.6
 
 ### Patch Changes

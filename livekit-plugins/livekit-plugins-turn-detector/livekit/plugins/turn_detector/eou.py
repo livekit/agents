@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import string
 import time
 
-import numpy as np
 from livekit.agents import llm
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
@@ -14,8 +12,8 @@ from livekit.agents.job import get_current_job_context
 from .log import logger
 
 HG_MODEL = "livekit/turn-detector"
-ONNX_FILENAME = "model_quantized.onnx"
-PUNCS = string.punctuation.replace("'", "")
+ONNX_FILENAME = "model_q8.onnx"
+MODEL_REVISION = "v1.2.0"
 MAX_HISTORY = 4
 MAX_HISTORY_TOKENS = 512
 
@@ -27,25 +25,13 @@ def _download_from_hf_hub(repo_id, filename, **kwargs):
     return local_path
 
 
-def _softmax(logits: np.ndarray) -> np.ndarray:
-    exp_logits = np.exp(logits - np.max(logits))
-    return exp_logits / np.sum(exp_logits)
-
-
 class _EUORunner(_InferenceRunner):
     INFERENCE_METHOD = "lk_end_of_utterance"
-
-    def _normalize(self, text):
-        def strip_puncs(text):
-            return text.translate(str.maketrans("", "", PUNCS))
-
-        return " ".join(strip_puncs(text).lower().split())
 
     def _format_chat_ctx(self, chat_ctx: dict):
         new_chat_ctx = []
         for msg in chat_ctx:
-            content = self._normalize(msg["content"])
-
+            content = msg["content"]
             if not content:
                 continue
 
@@ -71,16 +57,22 @@ class _EUORunner(_InferenceRunner):
 
         try:
             local_path_onnx = _download_from_hf_hub(
-                HG_MODEL, ONNX_FILENAME, local_files_only=True
+                HG_MODEL,
+                ONNX_FILENAME,
+                subfolder="onnx",
+                revision=MODEL_REVISION,
+                local_files_only=True,
             )
             self._session = ort.InferenceSession(
                 local_path_onnx, providers=["CPUExecutionProvider"]
             )
 
             self._tokenizer = AutoTokenizer.from_pretrained(
-                HG_MODEL, local_files_only=True, truncation_side="left"
+                HG_MODEL,
+                revision=MODEL_REVISION,
+                local_files_only=True,
+                truncation_side="left",
             )
-            self._eou_index = self._tokenizer.encode("<|im_end|>")[-1]
         except (errors.LocalEntryNotFoundError, OSError):
             logger.error(
                 (
@@ -109,16 +101,11 @@ class _EUORunner(_InferenceRunner):
             max_length=MAX_HISTORY_TOKENS,
             truncation=True,
         )
-
-        input_dict = {"input_ids": np.array(inputs["input_ids"], dtype=np.int64)}
-
         # Run inference
-        outputs = self._session.run(["logits"], input_dict)
-
-        logits = outputs[0][0, -1, :]
-        probs = _softmax(logits)
-        eou_probability = probs[self._eou_index]
-
+        outputs = self._session.run(
+            None, {"input_ids": inputs["input_ids"].astype("int64")}
+        )
+        eou_probability = outputs[0][0]
         end_time = time.perf_counter()
 
         logger.debug(
@@ -136,7 +123,7 @@ class EOUModel:
     def __init__(
         self,
         inference_executor: InferenceExecutor | None = None,
-        unlikely_threshold: float = 0.15,
+        unlikely_threshold: float = 0.008,
     ) -> None:
         self._executor = (
             inference_executor or get_current_job_context().inference_executor

@@ -284,6 +284,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                 word_stream = None
         self._segments_ch.close()
 
+    @utils.log_exceptions(logger=logger)
+    async def _create_text_stream(self):
+        async def text_stream():
+            async for word_stream in self._segments_ch:
+                async for word in word_stream:
+                    self._mark_started()
+                    yield word.token
+
+        return text_stream()
+
 
 def _update_options(config: TTSOptions, **kwargs) -> TTSOptions:
     _validate_kwargs(kwargs)

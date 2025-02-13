@@ -89,9 +89,9 @@ class STT(stt.STT):
         detect_language: bool = True,
         interim_results: bool = True,
         punctuate: bool = True,
-        spoken_punctuation: bool = True,
-        model: SpeechModels = "long",
-        location: str = "global",
+        spoken_punctuation: bool = False,
+        model: SpeechModels = "chirp_2",
+        location: str = "us-central1",
         sample_rate: int = 16000,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
@@ -139,23 +139,26 @@ class STT(stt.STT):
         self._streams = weakref.WeakSet[SpeechStream]()
 
     def _ensure_client(self) -> SpeechAsyncClient:
+        # Add support for passing a specific location that matches recognizer
+        # see: https://cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages
+        client_options = None
+        if self._location != "global":
+            client_options = ClientOptions(
+                api_endpoint=f"{self._location}-speech.googleapis.com"
+            )
         if self._credentials_info:
             self._client = SpeechAsyncClient.from_service_account_info(
-                self._credentials_info
+                self._credentials_info,
+                client_options=client_options,
             )
         elif self._credentials_file:
             self._client = SpeechAsyncClient.from_service_account_file(
-                self._credentials_file
+                self._credentials_file,
+                client_options=client_options,
             )
-        elif self._location == "global":
-            self._client = SpeechAsyncClient()
         else:
-            # Add support for passing a specific location that matches recognizer
-            # see: https://cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages
             self._client = SpeechAsyncClient(
-                client_options=ClientOptions(
-                    api_endpoint=f"{self._location}-speech.googleapis.com"
-                )
+                client_options=client_options,
             )
         assert self._client is not None
         return self._client

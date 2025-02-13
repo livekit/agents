@@ -1,5 +1,19 @@
 # livekit-plugins-playht
 
+## 1.0.7
+
+### Patch Changes
+
+- PlayAI plugin: bump Python SDK version (fix websockets interrupt handling) - [#1427](https://github.com/livekit/agents/pull/1427) ([@bryananderson](https://github.com/bryananderson))
+
+- improved TTFB metrics for streaming TTS - [#1431](https://github.com/livekit/agents/pull/1431) ([@davidzhao](https://github.com/davidzhao))
+
+## 1.0.6
+
+### Patch Changes
+
+- fix: Avoid websocket reconnections for each request - [#1387](https://github.com/livekit/agents/pull/1387) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 1.0.5
 
 ### Patch Changes

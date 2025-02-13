@@ -59,6 +59,7 @@ class _ContentProto(Protocol):
 
 class _CapabilitiesProto(Protocol):
     supports_truncate: bool
+    input_audio_sample_rate: int | None
 
 
 class _RealtimeAPI(Protocol):
@@ -324,19 +325,32 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     alternatives=[stt.SpeechData(language="", text=ev.transcript)],
                 )
             )
-            user_msg = ChatMessage.create(
-                text=ev.transcript, role="user", id=ev.item_id
-            )
+            if self._model.capabilities.supports_truncate:
+                user_msg = ChatMessage.create(
+                    text=ev.transcript, role="user", id=ev.item_id
+                )
 
-            self._session._update_conversation_item_content(
-                ev.item_id, user_msg.content
-            )
+                self._session._update_conversation_item_content(
+                    ev.item_id, user_msg.content
+                )
 
-            self.emit("user_speech_committed", user_msg)
-            logger.debug(
-                "committed user speech",
-                extra={"user_transcript": ev.transcript},
+            self._emit_speech_committed("user", ev.transcript)
+
+        @self._session.on("agent_speech_transcription_completed")
+        def _agent_speech_transcription_completed(ev: _InputTranscriptionProto):
+            self._agent_stt_forwarder.update(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language="", text=ev.transcript)],
+                )
             )
+            self._emit_speech_committed("agent", ev.transcript)
+
+        # Similar to _input_speech_started, this handles updating the state to "listening" when the agent's speech is complete.
+        # However, since Gemini doesn't support VAD events, we are not emitting the `user_started_speaking` event here.
+        @self._session.on("agent_speech_stopped")
+        def _agent_speech_stopped():
+            self.interrupt()
 
         @self._session.on("input_speech_started")
         def _input_speech_started():
@@ -360,12 +374,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             self.emit("metrics_collected", metrics)
 
     def interrupt(self) -> None:
-        self._session.cancel_response()
-
         if self._playing_handle is not None and not self._playing_handle.done():
             self._playing_handle.interrupt()
 
             if self._model.capabilities.supports_truncate:
+                self._session.cancel_response()  # Only supported by OpenAI
+
                 self._session._truncate_conversation_item(
                     item_id=self._playing_handle.item_id,
                     content_index=self._playing_handle.content_index,
@@ -405,6 +419,17 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
     async def _main_task(self) -> None:
         self._update_state("initializing")
         self._audio_source = rtc.AudioSource(24000, 1)
+        track = rtc.LocalAudioTrack.create_audio_track(
+            "assistant_voice", self._audio_source
+        )
+        self._agent_publication = await self._room.local_participant.publish_track(
+            track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        )
+        self._agent_stt_forwarder = transcription.STTSegmentsForwarder(
+            room=self._room,
+            participant=self._room.local_participant,
+            track=track,
+        )
         self._agent_playout = agent_playout.AgentPlayout(
             audio_source=self._audio_source
         )
@@ -422,38 +447,20 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 if interrupted:
                     collected_text += "..."
 
-                msg = ChatMessage.create(
-                    text=collected_text,
-                    role="assistant",
-                    id=self._playing_handle.item_id,
-                )
-                if self._model.capabilities.supports_truncate:
+                if self._model.capabilities.supports_truncate and collected_text:
+                    msg = ChatMessage.create(
+                        text=collected_text,
+                        role="assistant",
+                        id=self._playing_handle.item_id,
+                    )
                     self._session._update_conversation_item_content(
                         self._playing_handle.item_id, msg.content
                     )
 
-                if interrupted:
-                    self.emit("agent_speech_interrupted", msg)
-                else:
-                    self.emit("agent_speech_committed", msg)
-
-                logger.debug(
-                    "committed agent speech",
-                    extra={
-                        "agent_transcript": collected_text,
-                        "interrupted": interrupted,
-                    },
-                )
+                    self._emit_speech_committed("agent", collected_text, interrupted)
 
         self._agent_playout.on("playout_started", _on_playout_started)
         self._agent_playout.on("playout_stopped", _on_playout_stopped)
-
-        track = rtc.LocalAudioTrack.create_audio_track(
-            "assistant_voice", self._audio_source
-        )
-        self._agent_publication = await self._room.local_participant.publish_track(
-            track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-        )
 
         await self._agent_publication.wait_for_subscription()
 
@@ -483,8 +490,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         self._subscribe_to_microphone()
 
     async def _micro_task(self, track: rtc.LocalAudioTrack) -> None:
-        stream_24khz = rtc.AudioStream(track, sample_rate=24000, num_channels=1)
-        async for ev in stream_24khz:
+        sample_rate = self._model.capabilities.input_audio_sample_rate
+        if sample_rate is None:
+            sample_rate = 24000
+
+        input_stream = rtc.AudioStream(track, sample_rate=sample_rate, num_channels=1)
+        async for ev in input_stream:
             self._input_audio_ch.send_nowait(ev.frame)
 
     def _subscribe_to_microphone(self, *args, **kwargs) -> None:
@@ -524,3 +535,22 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
             self._http_session = utils.http_context.http_session()
 
         return self._http_session
+
+    def _emit_speech_committed(
+        self, speaker: Literal["user", "agent"], msg: str, interrupted: bool = False
+    ):
+        if speaker == "user":
+            self.emit("user_speech_committed", msg)
+        else:
+            if interrupted:
+                self.emit("agent_speech_interrupted", msg)
+            else:
+                self.emit("agent_speech_committed", msg)
+
+        logger.debug(
+            f"committed {speaker} speech",
+            extra={
+                f"{speaker}_transcript": msg,
+                "interrupted": interrupted,
+            },
+        )
