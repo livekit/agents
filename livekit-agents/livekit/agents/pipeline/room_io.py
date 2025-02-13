@@ -194,9 +194,6 @@ class RoomInput:
         if self._video_stream is not None:
             await self._video_stream.aclose()
             self._video_stream = None
-        if self._tr_forwarder is not None:
-            await self._tr_forwarder.aclose()
-            self._tr_forwarder = None
 
 
 class RoomOutput:
@@ -205,7 +202,6 @@ class RoomOutput:
     def __init__(
         self, room: rtc.Room, options: RoomOutputOptions = DEFAULT_ROOM_OUTPUT_OPTIONS
     ) -> None:
-        self._options = options
         self._options = options
         self._room = room
         self._audio_sink = RoomAudioSink(
@@ -217,7 +213,7 @@ class RoomOutput:
         self._text_sink: Optional[RoomTextSink] = None
         self._text_synchronizer: Optional[TextSynchronizer] = None
 
-    async def start(self) -> None:
+    async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
         await self._audio_sink.start()
 
         if self._options.forward_agent_transcription:
@@ -229,6 +225,10 @@ class RoomOutput:
             self._text_synchronizer = TextSynchronizer(
                 audio_sink=self._audio_sink, text_sink=self._text_sink
             )
+
+        if agent:
+            agent.output.audio = self.audio
+            agent.output.text = self.text
 
     @property
     def audio(self) -> AudioSink:
@@ -356,9 +356,6 @@ class RoomTextSink(TextSink):
         self._room = room
         self.set_participant(participant, track)
 
-        self._last_segment_id: str = utils.shortuuid("SG_")
-        self._played_text = ""
-
     def set_participant(
         self,
         participant: rtc.Participant | str,
@@ -373,22 +370,22 @@ class RoomTextSink(TextSink):
         self._participant_identity = identity
         self._track_id = track
 
-        self._pushed_text = ""
         self._capturing = False
-        self._last_segment_id = utils.shortuuid("SG_")
+        self._pushed_text = ""
+        self._current_id = utils.shortuuid("SG_")
 
     async def capture_text(self, text: str, *, is_delta: bool = True) -> None:
         if not self._capturing:
             self._capturing = True
             self._pushed_text = ""
-            self._last_segment_id = utils.shortuuid("SG_")
+            self._current_id = utils.shortuuid("SG_")
 
         if is_delta:
             self._pushed_text += text
         else:
             self._pushed_text = text
         await self._publish_transcription(
-            self._last_segment_id, self._pushed_text, final=False
+            self._current_id, self._pushed_text, final=False
         )
 
     def flush(self) -> None:
@@ -396,9 +393,7 @@ class RoomTextSink(TextSink):
             return
         self._capturing = False
         asyncio.create_task(
-            self._publish_transcription(
-                self._last_segment_id, self._pushed_text, final=True
-            )
+            self._publish_transcription(self._current_id, self._pushed_text, final=True)
         )
 
     async def _publish_transcription(self, id: str, text: str, final: bool) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations, print_function
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal, Optional
+from typing import AsyncIterable, Literal
 
 from livekit import rtc
 
@@ -87,9 +87,8 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         self._lock = asyncio.Lock()
 
         # room io and transcription sync
-        self._room_input: Optional[room_io.RoomInput] = None
-        self._room_output: Optional[room_io.RoomOutput] = None
-        self._user_transcript_id = utils.shortuuid("SG_")
+        self._room_input: room_io.RoomInput | None = None
+        self._room_output: room_io.RoomOutput | None = None
 
         # agent tasks
         self._agent_task: AgentTask
@@ -133,14 +132,15 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     async def start(
         self,
         *,
-        room: Optional[rtc.Room] = None,
-        room_input_options: Optional[room_io.RoomInputOptions] = None,
-        room_output_options: Optional[room_io.RoomOutputOptions] = None,
+        room: rtc.Room | None = None,
+        room_input_options: room_io.RoomInputOptions | None = None,
+        room_output_options: room_io.RoomOutputOptions | None = None,
     ) -> None:
         """Start the pipeline agent.
-        This will create room input and output if the input or output audio is not already set.
+        Create room io if the input or output audio is not already set.
 
         Args:
+            room: The room to use for input and output
             room_input_options: Options for the room input, set to None to disable
             room_output_options: Options for the room output, set to None to disable
         """
@@ -153,7 +153,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
                 room=room,
                 options=room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS,
             )
-            await self._room_input.start(self)
+            await self._room_input.start(agent=self)
 
         if not self.output.audio and not self.output.text and room:
             # create room output if not already set
@@ -161,9 +161,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
                 room=room,
                 options=room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS,
             )
-            await self._room_output.start()
-            self.output.audio = self._room_output.audio
-            self.output.text = self._room_output.text
+            await self._room_output.start(agent=self)
             
         if not self.input.audio and not self.input.text:
             logger.warning("Agent starts without audio and text input")
