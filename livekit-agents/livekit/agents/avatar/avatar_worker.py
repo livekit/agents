@@ -56,7 +56,7 @@ class AvatarWorker:
         self._audio_stream_received: asyncio.Event = asyncio.Event()
         self._playback_position = 0.0
         self._audio_playing = False
-        self._clear_buffer_tasks: set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task] = set()
 
         # Audio/video sources
         self._audio_source = rtc.AudioSource(
@@ -88,8 +88,8 @@ class AvatarWorker:
 
         def _on_clear_buffer():
             task = asyncio.create_task(self._handle_clear_buffer())
-            self._clear_buffer_tasks.add(task)
-            task.add_done_callback(self._clear_buffer_tasks.discard)
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
         self._audio_receiver.on("clear_buffer", _on_clear_buffer)
 
@@ -173,7 +173,7 @@ class AvatarWorker:
             await utils.aio.cancel_and_wait(self._video_gen_atask)
         if self._audio_receive_atask:
             await utils.aio.cancel_and_wait(self._audio_receive_atask)
-        await utils.aio.cancel_and_wait(*self._clear_buffer_tasks)
+        await utils.aio.cancel_and_wait(*self._tasks)
 
         await self._av_sync.aclose()
         await self._audio_source.aclose()

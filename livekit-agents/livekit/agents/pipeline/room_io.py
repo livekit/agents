@@ -91,7 +91,7 @@ class RoomInput:
                 if self._participant:
                     break
 
-        self._tr_capture_tasks: set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task] = set()
 
     async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
         participant = await self.wait_for_participant()
@@ -176,8 +176,8 @@ class RoomInput:
                 self._text_sink.flush()
 
         task = asyncio.create_task(_capture_text())
-        self._tr_capture_tasks.add(task)
-        task.add_done_callback(self._tr_capture_tasks.discard)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def wait_for_participant(self) -> rtc.RemoteParticipant:
         await self._participant_ready.wait()
@@ -193,8 +193,8 @@ class RoomInput:
         self._participant = None
 
         # cancel and wait for all pending tasks
-        await utils.aio.cancel_and_wait(*self._tr_capture_tasks)
-        self._tr_capture_tasks.clear()
+        await utils.aio.cancel_and_wait(*self._tasks)
+        self._tasks.clear()
 
         if self._audio_stream is not None:
             await self._audio_stream.aclose()
