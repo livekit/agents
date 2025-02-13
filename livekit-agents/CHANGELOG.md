@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.12.13
+
+### Patch Changes
+
+- Allow shutdown callbacks to take reason - [#1475](https://github.com/livekit/agents/pull/1475) ([@martin-purplefish](https://github.com/martin-purplefish))
+
 ## 0.12.12
 
 ### Patch Changes
