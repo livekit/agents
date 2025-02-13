@@ -91,6 +91,8 @@ class RoomInput:
                 if self._participant:
                     break
 
+        self._tr_capture_tasks: set[asyncio.Task] = set()
+
     async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
         participant = await self.wait_for_participant()
         if not agent:
@@ -101,10 +103,7 @@ class RoomInput:
         if self._options.forward_user_transcript:
             # TODO: support multiple participants
             self._text_sink = RoomTextSink(room=self._room, participant=participant)
-            agent.on(
-                "user_transcript_updated",
-                lambda ev: asyncio.create_task(self._on_user_transcript_updated(ev)),
-            )
+            agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
     @property
     def audio(self) -> AsyncIterator[rtc.AudioFrame] | None:
@@ -164,16 +163,21 @@ class RoomInput:
             return
         self._link_participant(participant)
 
-    async def _on_user_transcript_updated(self, ev: stt.SpeechEvent) -> None:
+    def _on_user_transcript_updated(self, ev: stt.SpeechEvent) -> None:
         if self._text_sink is None:
             return
 
-        if ev.alternatives:
-            data = ev.alternatives[0]
-            await self._text_sink.capture_text(data.text, is_delta=False)
+        async def _capture_text():
+            if ev.alternatives:
+                data = ev.alternatives[0]
+                await self._text_sink.capture_text(data.text, is_delta=False)
 
-        if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-            self._text_sink.flush()
+            if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                self._text_sink.flush()
+
+        task = asyncio.create_task(_capture_text())
+        self._tr_capture_tasks.add(task)
+        task.add_done_callback(self._tr_capture_tasks.discard)
 
     async def wait_for_participant(self) -> rtc.RemoteParticipant:
         await self._participant_ready.wait()
@@ -187,6 +191,10 @@ class RoomInput:
         self._closed = True
         self._room.off("participant_connected", self._on_participant_connected)
         self._participant = None
+
+        # cancel and wait for all pending tasks
+        await utils.aio.cancel_and_wait(*self._tr_capture_tasks)
+        self._tr_capture_tasks.clear()
 
         if self._audio_stream is not None:
             await self._audio_stream.aclose()
@@ -279,9 +287,13 @@ class RoomAudioSink(AudioSink):
         self._interrupted: bool = False
         self._flush_task: Optional[asyncio.Task[None]] = None
 
+        self._tasks: set[asyncio.Task] = set()
+
         def _on_reconnected(self) -> None:
             self._publication = None
-            asyncio.create_task(self.start())
+            task = asyncio.create_task(self.start())
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
         self._room.on("reconnected", _on_reconnected)
 
@@ -354,6 +366,7 @@ class RoomTextSink(TextSink):
     ):
         super().__init__()
         self._room = room
+        self._tasks: set[asyncio.Task] = set()
         self.set_participant(participant, track)
 
     def set_participant(
@@ -392,9 +405,11 @@ class RoomTextSink(TextSink):
         if not self._capturing:
             return
         self._capturing = False
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._publish_transcription(self._current_id, self._pushed_text, final=True)
         )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
         transcription = rtc.Transcription(

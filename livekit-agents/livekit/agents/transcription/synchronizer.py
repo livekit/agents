@@ -315,6 +315,7 @@ class TextSynchronizer:
         super().__init__()
         self._sync_options = sync_options or TextSyncOptions()
         self._synchronizer = self._new_synchronizer()
+        self._tasks: set[asyncio.Task] = set()
 
         self._base_text_sink = text_sink
         self._text_sink = _TextSink(self)
@@ -336,31 +337,39 @@ class TextSynchronizer:
 
     def _flush(self) -> None:
         """Close the old transcription segment and create a new one"""
-        asyncio.create_task(self._synchronizer.aclose())
+        task = asyncio.create_task(self._synchronizer.aclose())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
         self._synchronizer = self._new_synchronizer()
 
     def _new_synchronizer(self) -> _TextAudioSynchronizer:
         synchronizer = _TextAudioSynchronizer(options=self._sync_options)
-        synchronizer.on(
-            "text_updated",
-            lambda segment: asyncio.create_task(self._on_text_updated(segment)),
-        )
+        synchronizer.on("text_updated", self._on_text_updated)
         return synchronizer
 
-    async def _on_text_updated(self, segment: rtc.TranscriptionSegment) -> None:
+    def _on_text_updated(self, segment: rtc.TranscriptionSegment) -> None:
         if not self._base_text_sink:
             return
         if self._current_segment_id != segment.id:
             self._base_text_sink.flush()
+            self._current_segment_id = segment.id
 
-        self._current_segment_id = segment.id
-        await self._base_text_sink.capture_text(segment.text)
-        if segment.final:
-            self._base_text_sink.flush()
+        async def _capture_text():
+            await self._base_text_sink.capture_text(segment.text)
+            if segment.final:
+                self._base_text_sink.flush()
+
+        task = asyncio.create_task(_capture_text())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def aclose(self) -> None:
         """Close the forwarder and cleanup resources"""
         await self._synchronizer.aclose()
+        # Cancel and wait for all pending tasks
+        await utils.aio.cancel_and_wait(*self._tasks)
+        self._tasks.clear()
 
 
 class _AudioSync(AudioSink):
