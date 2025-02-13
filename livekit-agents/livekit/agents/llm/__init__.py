@@ -30,6 +30,19 @@ from .llm import (
     ToolChoice,
 )
 
+from .realtime import (
+    ErrorEvent,
+    GenerationCreatedEvent,
+    InputSpeechStartedEvent,
+    InputSpeechStoppedEvent,
+    MessageGeneration,
+    RealtimeCapabilities,
+    RealtimeError,
+    RealtimeModel,
+    RealtimeSession,
+)
+
+
 __all__ = [
     "LLM",
     "LLMStream",
@@ -59,4 +72,13 @@ __all__ = [
     "utils",
     "remote_chat_context",
     "FunctionToolCall",
+    "RealtimeModel",
+    "RealtimeError",
+    "RealtimeCapabilities",
+    "RealtimeSession",
+    "InputSpeechStartedEvent",
+    "InputSpeechStoppedEvent",
+    "GenerationCreatedEvent",
+    "ErrorEvent",
+    "MessageGeneration",
 ]

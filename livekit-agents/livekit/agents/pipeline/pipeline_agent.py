@@ -6,7 +6,7 @@ from typing import AsyncIterable, Literal
 
 from livekit import rtc
 
-from .. import debug, llm, multimodal, stt, tts, utils, vad
+from .. import debug, llm, stt, tts, utils, vad
 from ..llm import ChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
@@ -46,7 +46,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         turn_detector: NotGivenOr[_TurnDetector] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | multimodal.RealtimeModel] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
         allow_interruptions: bool = True,
         min_interruption_duration: float = 0.5,
@@ -116,7 +116,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         return self._stt
 
     @property
-    def llm(self) -> llm.LLM | multimodal.RealtimeModel | None:
+    def llm(self) -> llm.LLM | llm.RealtimeModel | None:
         return self._llm
 
     @property

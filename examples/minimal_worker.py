@@ -48,10 +48,9 @@ async def entrypoint(ctx: JobContext):
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
     )
+    chat_cli = ChatCLI(agent)
 
     await agent.start()
-
-    chat_cli = ChatCLI(agent)
     await chat_cli.run()
 
     # start a chat inside the CLI

@@ -5,7 +5,7 @@ import base64
 from dataclasses import dataclass
 
 from livekit import rtc
-from livekit.agents import llm, multimodal, utils
+from livekit.agents import llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from pydantic import ValidationError
 
@@ -74,13 +74,13 @@ class _MessageGeneration:
 
 @dataclass
 class _ResponseGeneration:
-    message_ch: utils.aio.Chan[multimodal.MessageGeneration]
+    message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
 
     messages: dict[str, _MessageGeneration]
 
 
-class RealtimeModel(multimodal.RealtimeModel):
+class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
         *,
@@ -89,7 +89,7 @@ class RealtimeModel(multimodal.RealtimeModel):
         client: openai.AsyncClient | None = None,
     ) -> None:
         super().__init__(
-            capabilities=multimodal.RealtimeCapabilities(message_truncation=True)
+            capabilities=llm.RealtimeCapabilities(message_truncation=True)
         )
 
         self._opts = _RealtimeOptions(model=model, voice=voice)
@@ -101,7 +101,7 @@ class RealtimeModel(multimodal.RealtimeModel):
     async def aclose(self) -> None: ...
 
 
-class RealtimeSession(multimodal.RealtimeSession):
+class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._realtime_model = realtime_model
@@ -114,7 +114,7 @@ class RealtimeSession(multimodal.RealtimeSession):
         )
 
         self._response_created_futures: dict[
-            str, asyncio.Future[multimodal.GenerationCreatedEvent]
+            str, asyncio.Future[llm.GenerationCreatedEvent]
         ] = {}
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
@@ -242,7 +242,7 @@ class RealtimeSession(multimodal.RealtimeSession):
                     asyncio.gather(*futs, return_exceptions=True), timeout=5.0
                 )
             except asyncio.TimeoutError:
-                raise multimodal.RealtimeError("update_chat_ctx timed out.") from None
+                raise llm.RealtimeError("update_chat_ctx timed out.") from None
 
     async def update_fnc_ctx(
         self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]
@@ -312,7 +312,7 @@ class RealtimeSession(multimodal.RealtimeSession):
 
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
-    ) -> asyncio.Future[multimodal.GenerationCreatedEvent]:
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future()
         self._response_created_futures[event_id] = fut
@@ -329,7 +329,7 @@ class RealtimeSession(multimodal.RealtimeSession):
 
         def _on_timeout() -> None:
             if fut and not fut.done():
-                fut.set_exception(multimodal.RealtimeError("generate_reply timed out."))
+                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
         handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
         fut.add_done_callback(lambda _: handle.cancel())
@@ -355,12 +355,12 @@ class RealtimeSession(multimodal.RealtimeSession):
     def _handle_input_audio_buffer_speech_started(
         self, _: InputAudioBufferSpeechStartedEvent
     ) -> None:
-        self.emit("input_speech_started", multimodal.InputSpeechStartedEvent())
+        self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _handle_input_audio_buffer_speech_stopped(
         self, _: InputAudioBufferSpeechStoppedEvent
     ) -> None:
-        self.emit("input_speech_stopped", multimodal.InputSpeechStoppedEvent())
+        self.emit("input_speech_stopped", llm.InputSpeechStoppedEvent())
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         assert event.response.id is not None, "response.id is None"
@@ -371,7 +371,7 @@ class RealtimeSession(multimodal.RealtimeSession):
             messages={},
         )
 
-        generation_ev = multimodal.GenerationCreatedEvent(
+        generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
@@ -401,7 +401,7 @@ class RealtimeSession(multimodal.RealtimeSession):
                 audio_ch=utils.aio.Chan(),
             )
             self._current_generation.message_ch.send_nowait(
-                multimodal.MessageGeneration(
+                llm.MessageGeneration(
                     message_id=item_id,
                     text_stream=item_generation.text_ch,
                     audio_stream=item_generation.audio_ch,
@@ -500,7 +500,7 @@ class RealtimeSession(multimodal.RealtimeSession):
         )
         self.emit(
             "error",
-            multimodal.ErrorEvent(type=event.error.type, message=event.error.message),
+            llm.ErrorEvent(type=event.error.type, message=event.error.message),
         )
 
         # if event.error.event_id:
