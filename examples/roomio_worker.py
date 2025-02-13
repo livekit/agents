@@ -5,7 +5,6 @@ from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentContext, AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.transcription import TranscriptionDataStreamForwarder
 from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("roomio-example")
@@ -49,19 +48,6 @@ async def entrypoint(ctx: JobContext):
     )
 
     await agent.start(room=ctx.room)
-
-    # # (optional) forward transcription using data stream
-    # ds_agent_fwd = TranscriptionDataStreamForwarder(
-    #     room=ctx.room,
-    #     attributes={"track": "agent"},
-    # )
-    # agent.on("agent_transcript_updated", ds_agent_fwd.update)
-
-    # ds_user_fwd = TranscriptionDataStreamForwarder(
-    #     room=ctx.room,
-    #     attributes={"track": "user"},
-    # )
-    # agent.on("user_transcript_updated", ds_user_fwd.update)
 
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(
