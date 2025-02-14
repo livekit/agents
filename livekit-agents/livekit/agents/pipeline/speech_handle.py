@@ -64,8 +64,21 @@ class SpeechHandle:
     async def wait_for_playout(self) -> None:
         await asyncio.shield(self._playout_done_fut)
 
+    def __await__(self):
+        async def _await_impl() -> SpeechHandle:
+            await self.wait_for_playout()
+            return self
+
+        return _await_impl().__await__()
+
     def add_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
         self._playout_done_fut.add_done_callback(lambda _: callback(self))
+
+    async def wait_if_not_interrupted(self, aw: list[asyncio.futures.Future]) -> None:
+        await asyncio.wait(
+            [asyncio.gather(*aw, return_exceptions=True), self._interrupt_fut],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
 
     def _authorize_playout(self) -> None:
         self._authorize_fut.set_result(None)
@@ -78,7 +91,3 @@ class SpeechHandle:
             # will raise InvalidStateError if the future is already done (interrupted)
             self._playout_done_fut.set_result(None)
 
-    async def wait_if_not_interrupted(self, aw: list[asyncio.futures.Future]) -> None:
-        await asyncio.wait(
-            [*aw, self._interrupt_fut], return_when=asyncio.FIRST_COMPLETED
-        )
