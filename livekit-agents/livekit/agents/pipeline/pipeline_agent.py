@@ -177,6 +177,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     MIN_TIME_PLAYED_FOR_COMMIT = 1.5
     """Minimum time played for the user speech to be committed to the chat context"""
 
+    _main_atask: Optional[asyncio.Task[Any]]
+    _deferred_validation: Optional[_DeferredReplyValidation]
+
     def __init__(
         self,
         *,
@@ -541,6 +544,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         if not self._started:
             return
 
+        logger.info("Closing voice assistant and cleaning up resources...")
+
         # Cancel and cleanup main task
         if self._main_atask and not self._main_atask.done():
             self._main_atask.cancel()
@@ -561,7 +566,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         # Close STT and VAD if they exist
         if hasattr(self, '_stt'):
             await self._stt.aclose()
-        if hasattr(self, '_vad'):
+        if hasattr(self, '_vad') and hasattr(self._vad, 'aclose'):
             await self._vad.aclose()
             
         # Reset all state flags
