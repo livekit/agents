@@ -6,13 +6,19 @@ from functools import partial
 
 import httpx
 from dotenv import load_dotenv
-from livekit import api
+from livekit import api, rtc
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.datastream_io import DataStreamOutput
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import RoomInput, RoomInputOptions
-from livekit.plugins import openai
+from livekit.agents.pipeline.room_io import (
+    LK_PUBLISH_FOR_ATTR,
+    RoomInput,
+    RoomInputOptions,
+    RoomTranscriptEventSink,
+)
+from livekit.agents.pipeline.transcription import TextSynchronizer
+from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("avatar-example")
 logger.setLevel(logging.INFO)
@@ -26,8 +32,10 @@ AVATAR_IDENTITY = "avatar_worker"
 @dataclass
 class AvatarConnectionInfo:
     room_name: str
-    url: str  # LiveKit server URL
-    token: str  # Token for avatar worker to join
+    url: str
+    """LiveKit server URL"""
+    token: str
+    """Token for avatar worker to join"""
 
 
 async def launch_avatar_worker(
@@ -35,13 +43,14 @@ async def launch_avatar_worker(
 ) -> None:
     """Wait for worker participant to join and start streaming"""
     # create a token for the avatar worker
-    # TODO(long): do we need to set agent=True here? in playground if not the video track is not automatically displayed
+    agent_identity = ctx.room.local_participant.identity
     token = (
         api.AccessToken()
         .with_identity(avatar_identity)
-        .with_name("Avatar Worker")
-        .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name, agent=True))
-        .with_metadata("avatar_worker")
+        .with_name("Avatar Runner")
+        .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name))
+        .with_kind("agent")
+        .with_attributes({LK_PUBLISH_FOR_ATTR: agent_identity})
         .to_jwt()
     )
 
@@ -54,10 +63,13 @@ async def launch_avatar_worker(
             avatar_dispatcher_url, json=asdict(connection_info)
         )
         response.raise_for_status()
-    logger.info("Avatar worker connected")
+    logger.info("Avatar handshake completed")
 
     # wait for the remote participant to join
-    await ctx.wait_for_participant(identity=avatar_identity)
+    await ctx.wait_for_participant(
+        identity=avatar_identity, kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+    )
+    logger.info("Avatar runner joined")
 
 
 async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
@@ -67,6 +79,9 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
         task=AgentTask(
             instructions="Talk to me!",
             llm=openai.realtime.RealtimeModel(),
+            # stt=deepgram.STT(),
+            # llm=openai.LLM(model="gpt-4o-mini"),
+            # tts=cartesia.TTS(),
         )
     )
 
@@ -74,12 +89,18 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     ds_output = DataStreamOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
 
     # wait for the participant to join the room and the avatar worker to connect
-    await room_input.wait_for_participant()
+    await room_input.start(agent)
     await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
 
-    # connect the input and output audio to the agent
-    agent.input.audio = room_input.audio
-    agent.output.audio = ds_output.audio
+    # connect the output audio to the agent
+    # agent.output.audio = ds_output.audio
+
+    # or connect the output audio with transcription sync
+    text_sink = RoomTranscriptEventSink(ctx.room, participant=AVATAR_IDENTITY)
+    text_sync = TextSynchronizer(ds_output.audio, text_sink)
+    agent.output.text = text_sync.text_sink
+    agent.output.audio = text_sync.audio_sink
+
     await agent.start()
 
     @agent.output.audio.on("playback_finished")
