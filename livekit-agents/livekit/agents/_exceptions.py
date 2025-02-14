@@ -70,6 +70,12 @@ class APIStatusError(APIError):
         self.status_code = status_code
         self.request_id = request_id
 
+    def __str__(self):
+        return (
+            f"{self.message} "
+            f"(status_code={self.status_code}, request_id={self.request_id}, body={self.body})"
+        )
+
 
 class APIConnectionError(APIError):
     """Raised when an API request failed due to a connection error."""
