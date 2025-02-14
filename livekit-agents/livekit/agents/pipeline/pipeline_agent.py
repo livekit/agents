@@ -338,6 +338,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def vad(self) -> vad.VAD:
         return self._vad
 
+    @property
+    def agent_publication(self) -> rtc.LocalTrackPublication:
+        return self._agent_publication
+
     def start(
         self, room: rtc.Room, participant: rtc.RemoteParticipant | str | None = None
     ) -> None:
