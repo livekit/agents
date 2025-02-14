@@ -18,7 +18,7 @@ from livekit.agents.pipeline.room_io import (
     RoomTranscriptEventSink,
 )
 from livekit.agents.pipeline.transcription import TextSynchronizer
-from livekit.plugins import openai
+from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("avatar-example")
 logger.setLevel(logging.INFO)

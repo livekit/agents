@@ -642,6 +642,8 @@ class RoomTranscriptEventSink(TextSink):
             except ValueError:
                 track = None
         self._track_id = track
+        if track is None:
+            self._room.on("track_published", self._on_track_published)
 
         self._capturing = False
         self._pushed_text = ""
@@ -705,14 +707,15 @@ class RoomTranscriptEventSink(TextSink):
     def _on_track_published(
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
     ) -> None:
+        if self._track_id is not None:
+            return
         if (
-            self._participant_identity is None
-            or participant.identity != self._participant_identity
+            participant.identity != self._participant_identity
+            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
             return
-
-        if track.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            self._track_id = track.sid
+        self._track_id = track.sid
+        self._room.off("track_published", self._on_track_published)
 
 
 class DataStreamSink(TextSink):

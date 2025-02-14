@@ -61,6 +61,9 @@ class AlloyTask(AgentTask):
     async def on_exit(self) -> None:
         self.agent.say("Goodbye!")
 
+    async def on_exit(self) -> None:
+        self.agent.say("Goodbye!")
+
     @ai_function
     async def talk_to_echo(self, ctx: CallContext[Userdata]):
         return ctx.userdata.echo_task, "Transfering you to Echo."
