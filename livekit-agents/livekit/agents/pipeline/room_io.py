@@ -107,7 +107,7 @@ class RoomInput:
         agent.input.video = self.video
         if self._options.forward_user_transcript:
             self._text_sink = RoomTranscriptEventSink(
-                room=self._room, participant=participant, capture_delta=False
+                room=self._room, participant=participant, is_stream=False
             )
             agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
@@ -486,13 +486,13 @@ class RoomTranscriptEventSink(TextSink):
         participant: rtc.Participant | str,
         *,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
-        capture_delta: bool = True,
+        is_stream: bool = True,
     ):
         super().__init__()
         self._room = room
         self._tasks: set[asyncio.Task] = set()
         self._track_id: str | None = None
-        self._capture_delta = capture_delta
+        self._is_stream = is_stream
         self.set_participant(participant, track)
 
     def set_participant(
@@ -525,7 +525,7 @@ class RoomTranscriptEventSink(TextSink):
             self._pushed_text = ""
             self._current_id = utils.shortuuid("SG_")
 
-        if self._capture_delta:
+        if self._is_stream:
             self._pushed_text += text
         else:
             self._pushed_text = text
