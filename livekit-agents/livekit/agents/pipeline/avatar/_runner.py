@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import AsyncIterator, Coroutine, Optional, Protocol
+from typing import AsyncIterator, Coroutine, Optional, Protocol, Union
 
 from livekit import rtc
 from livekit.agents import utils
@@ -12,16 +12,16 @@ logger = logging.getLogger(__name__)
 
 
 class VideoGenerator(Protocol):
-    async def push_audio(self, frame: rtc.AudioFrame | AudioFlushSentinel) -> None:
+    async def push_audio(self, frame: Union[rtc.AudioFrame, AudioFlushSentinel]) -> None:
         """Push an audio frame to the video generator"""
 
-    def clear_buffer(self) -> None | Coroutine[None, None, None]:
+    def clear_buffer(self) -> Union[None, Coroutine[None, None, None]]:
         """Clear the audio buffer, stopping audio playback immediately"""
 
     async def stream(
         self,
     ) -> AsyncIterator[
-        tuple[rtc.VideoFrame, Optional[rtc.AudioFrame]] | AudioFlushSentinel
+        Union[tuple[rtc.VideoFrame, Optional[rtc.AudioFrame]], AudioFlushSentinel]
     ]:
         """Continuously yield video frames, idle frames are yielded when no audio is available"""
 

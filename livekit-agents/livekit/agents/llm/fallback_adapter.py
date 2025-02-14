@@ -11,6 +11,7 @@ from livekit.agents._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .chat_context import ChatContext
+from .function_context import FunctionContext
 from .llm import LLM, ChatChunk, LLMStream, ToolChoice
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
