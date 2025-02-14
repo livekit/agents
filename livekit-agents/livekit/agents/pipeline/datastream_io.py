@@ -245,12 +245,12 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
 
         fut = asyncio.Future[rtc.RemoteParticipant]()
 
-        def _handle_participant_joined(participant: rtc.RemoteParticipant) -> None:
+        def _handle_participant_connected(participant: rtc.RemoteParticipant) -> None:
             if _is_matching_participant(participant):
                 fut.set_result(participant)
 
-        self._room.on("participant_joined", _handle_participant_joined)
+        self._room.on("participant_connected", _handle_participant_connected)
         try:
             return await fut
         finally:
-            self._room.off("participant_joined", _handle_participant_joined)
+            self._room.off("participant_connected", _handle_participant_connected)
