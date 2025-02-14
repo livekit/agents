@@ -356,7 +356,7 @@ class SpeechStream(stt.SpeechStream):
             return
 
         message_type = data.get("message_type")
-        
+
         if message_type == "SessionBegins":
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
             self._event_ch.send_nowait(start_event)
@@ -403,8 +403,8 @@ class SpeechStream(stt.SpeechStream):
 
         else:
             logger.warning(
-                "Received unexpected message type from AssemblyAI: %s", 
-                message_type or "No message_type field"
+                "Received unexpected message type from AssemblyAI: %s",
+                message_type or "No message_type field",
             )
 
 
