@@ -29,7 +29,6 @@ from .llm import (
     LLMStream,
     ToolChoice,
 )
-
 from .realtime import (
     ErrorEvent,
     GenerationCreatedEvent,
@@ -41,7 +40,6 @@ from .realtime import (
     RealtimeModel,
     RealtimeSession,
 )
-
 
 __all__ = [
     "LLM",

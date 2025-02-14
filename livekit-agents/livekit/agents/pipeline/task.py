@@ -31,7 +31,7 @@ class AgentTask:
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        fnc_ctx: list[llm.AIFunction] = [],
+        ai_functions: list[llm.AIFunction] = [],
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -60,7 +60,7 @@ class AgentTask:
 
         self._instructions = instructions
         self._chat_ctx = chat_ctx or ChatContext.empty()
-        self._fnc_ctx = FunctionContext(list(fnc_ctx) + find_ai_functions(self))
+        self._fnc_ctx = FunctionContext(ai_functions + find_ai_functions(self))
         self._eou = turn_detector
         self._stt = stt
         self._llm = llm

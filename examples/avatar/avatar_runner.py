@@ -6,7 +6,7 @@ from typing import AsyncIterator, Generator, Optional, Union
 
 import numpy as np
 from livekit import rtc
-from livekit.agents.avatar import AvatarWorker, MediaOptions
+from livekit.agents.pipeline.avatar import AvatarRunner, MediaOptions
 from livekit.agents.pipeline.datastream_io import AudioFlushSentinel
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -15,7 +15,7 @@ from wave_viz import WaveformVisualizer
 logger = logging.getLogger("avatar-example")
 
 
-class VideoGenerator:
+class MyVideoGenerator:
     def __init__(self, media_options: MediaOptions):
         self.media_options = media_options
         self._audio_queue: asyncio.Queue[Union[rtc.AudioFrame, AudioFlushSentinel]] = (
@@ -35,32 +35,39 @@ class VideoGenerator:
         )
         self._av_sync: Optional[rtc.AVSynchronizer] = None
 
-    def set_av_sync(self, av_sync: rtc.AVSynchronizer | None) -> None:
-        self._av_sync = av_sync
-
     async def push_audio(self, frame: rtc.AudioFrame | AudioFlushSentinel) -> None:
-        # resample audio frame if necessary
-        if isinstance(frame, rtc.AudioFrame):
-            if self._audio_resampler is None and (
-                frame.sample_rate != self.media_options.audio_sample_rate
-                or frame.num_channels != self.media_options.audio_channels
-            ):
-                self._audio_resampler = rtc.AudioResampler(
-                    input_rate=frame.sample_rate,
-                    output_rate=self.media_options.audio_sample_rate,
-                    num_channels=self.media_options.audio_channels,
-                )
+        """Process and queue audio frames, handling resampling if needed.
+
+        Args:
+            frame: Either an AudioFrame to process or AudioFlushSentinel to flush
+        """
+        if isinstance(frame, AudioFlushSentinel):
             if self._audio_resampler is not None:
-                for resampled_frame in self._audio_resampler.push(frame):
+                # flush the resampler and queue any remaining frames
+                for resampled_frame in self._audio_resampler.flush():
                     await self._audio_queue.put(resampled_frame)
-                return
+            await self._audio_queue.put(frame)
+            return
 
-        elif self._audio_resampler is not None:
-            # flush the resampler
-            for resampled_frame in self._audio_resampler.flush():
+        # initialize resampler if needed
+        needs_resampling = (
+            frame.sample_rate != self.media_options.audio_sample_rate
+            or frame.num_channels != self.media_options.audio_channels
+        )
+
+        if needs_resampling and self._audio_resampler is None:
+            self._audio_resampler = rtc.AudioResampler(
+                input_rate=frame.sample_rate,
+                output_rate=self.media_options.audio_sample_rate,
+                num_channels=self.media_options.audio_channels,
+            )
+
+        if self._audio_resampler is not None:
+            for resampled_frame in self._audio_resampler.push(frame):
                 await self._audio_queue.put(resampled_frame)
-
-        await self._audio_queue.put(frame)
+        else:
+            # no resampling needed, queue directly
+            await self._audio_queue.put(frame)
 
     def clear_buffer(self) -> None:
         while not self._audio_queue.empty():
@@ -160,6 +167,9 @@ class VideoGenerator:
                 yield ori_audio_frame
                 self._reset_audio_buffer()
 
+    def set_av_sync(self, av_sync: rtc.AVSynchronizer | None) -> None:
+        self._av_sync = av_sync
+
     def _reset_audio_buffer(self) -> None:
         self._audio_buffer = np.zeros(
             (0, self.media_options.audio_channels), dtype=np.int16
@@ -176,7 +186,7 @@ class VideoGenerator:
 
 async def main(room: rtc.Room):
     """Main application logic for the avatar worker"""
-    worker = None
+    runner: AvatarRunner | None = None
     stop_event = asyncio.Event()
 
     try:
@@ -188,12 +198,12 @@ async def main(room: rtc.Room):
             audio_sample_rate=24000,
             audio_channels=1,
         )
-        video_generator = VideoGenerator(media_options)
-        worker = AvatarWorker(
+        video_generator = MyVideoGenerator(media_options)
+        runner = AvatarRunner(
             room, video_generator=video_generator, media_options=media_options
         )
-        video_generator.set_av_sync(worker.av_sync)
-        await worker.start()
+        video_generator.set_av_sync(runner.av_sync)
+        await runner.start()
 
         # Set up disconnect handler
         async def handle_disconnect(participant: rtc.RemoteParticipant):
@@ -216,8 +226,8 @@ async def main(room: rtc.Room):
         logging.error("Unexpected error: %s", e)
         raise
     finally:
-        if worker:
-            await worker.aclose()
+        if runner:
+            await runner.aclose()
 
 
 async def run_service(url: str, token: str):

@@ -10,9 +10,9 @@ from livekit import rtc
 
 from ... import tokenize, utils
 from ...log import logger
-from ..io import AudioSink, PlaybackFinishedEvent, TextSink
 from ...tokenize.tokenizer import PUNCTUATIONS
 from ...types import NOT_GIVEN, NotGivenOr
+from ..io import AudioSink, PlaybackFinishedEvent, TextSink
 from . import _utils
 
 # Standard speech rate in hyphens per second
@@ -217,7 +217,7 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
             )
 
         seg_id = _utils.segment_uuid()
-        words: list[tuple[str, int, int]] = self._opts.split_words(text=sentence)
+        words = self._opts.split_words(sentence)
         processed_words: list[str] = []
 
         og_text = self._played_text

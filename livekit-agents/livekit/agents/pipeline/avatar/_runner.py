@@ -6,7 +6,7 @@ from typing import AsyncIterator, Coroutine, Optional, Protocol
 from livekit import rtc
 from livekit.agents import utils
 
-from ..pipeline.datastream_io import AudioFlushSentinel, DataStreamAudioReceiver
+from ..datastream_io import AudioFlushSentinel, DataStreamAudioReceiver
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +35,7 @@ class MediaOptions:
     audio_channels: int
 
 
-# TODO(long): move to a plugin like livekit-plugins-avatar?
-class AvatarWorker:
+class AvatarRunner:
     """Worker that generates synchronized avatar video based on received audio"""
 
     def __init__(

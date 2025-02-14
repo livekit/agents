@@ -8,8 +8,8 @@ from livekit import rtc
 
 from .. import stt, utils
 from ..log import logger
-from .transcription import TextSynchronizer, find_micro_track_id
 from .io import AudioSink, TextSink
+from .transcription import TextSynchronizer, find_micro_track_id
 
 if TYPE_CHECKING:
     from ..pipeline import PipelineAgent
@@ -47,6 +47,7 @@ class RoomOutputOptions:
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
 DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
+LK_PUBLISH_FOR_ATTR = "lk.publish_for"
 
 
 class RoomInput:
@@ -72,7 +73,7 @@ class RoomInput:
         self._closed = False
 
         # transcription forwarder
-        self._text_sink: Optional[RoomTextSink] = None
+        self._text_sink: Optional[RoomTranscriptEventSink] = None
 
         # streams
         self._audio_stream: Optional[rtc.AudioStream] = None
@@ -96,7 +97,7 @@ class RoomInput:
         self._tasks: set[asyncio.Task] = set()
 
     async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
-        participant = await self.wait_for_participant()
+        await self.wait_for_participant()
         if not agent:
             return
 
@@ -104,7 +105,9 @@ class RoomInput:
         agent.input.video = self.video
         if self._options.forward_user_transcript:
             # TODO: support multiple participants
-            self._text_sink = RoomTextSink(room=self._room, participant=participant)
+            self._text_sink = RoomTranscriptEventSink(
+                room=self._room, participant=self._participant
+            )
             agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
     @property
@@ -130,14 +133,14 @@ class RoomInput:
         return _read_stream()
 
     def _link_participant(self, participant: rtc.RemoteParticipant) -> None:
-        if (
+        should_ignore = (
+            participant.attributes.get(LK_PUBLISH_FOR_ATTR)
+            == self._room.local_participant.identity
+        )
+        if should_ignore or (
             self._expected_identity is not None
             and participant.identity != self._expected_identity
         ):
-            return
-
-        if self._expected_identity is None and participant.metadata == "avatar_worker":
-            # ignore the avatar worker participant
             return
 
         self._participant = participant
@@ -220,14 +223,14 @@ class RoomOutput:
             num_channels=self._options.num_channels,
             track_source=self._options.track_source,
         )
-        self._text_sink: Optional[RoomTextSink] = None
+        self._text_sink: Optional[RoomTranscriptEventSink] = None
         self._text_synchronizer: Optional[TextSynchronizer] = None
 
     async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
         await self._audio_sink.start()
 
         if self._options.forward_agent_transcription:
-            self._text_sink = RoomTextSink(
+            self._text_sink = RoomTranscriptEventSink(
                 room=self._room, participant=self._room.local_participant
             )
 
@@ -357,7 +360,7 @@ class RoomAudioSink(AudioSink):
         self._audio_source.clear_queue()
 
 
-class RoomTextSink(TextSink):
+class RoomTranscriptEventSink(TextSink):
     """TextSink implementation that publishes transcription segments to a LiveKit room"""
 
     def __init__(
@@ -369,6 +372,7 @@ class RoomTextSink(TextSink):
         super().__init__()
         self._room = room
         self._tasks: set[asyncio.Task] = set()
+        self._track_id: str | None = None
         self.set_participant(participant, track)
 
     def set_participant(
@@ -377,13 +381,19 @@ class RoomTextSink(TextSink):
         track: rtc.Track | rtc.TrackPublication | str | None = None,
     ) -> None:
         identity = participant if isinstance(participant, str) else participant.identity
-        if track is None:
-            track = find_micro_track_id(self._room, identity)
-        elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
-            track = track.sid
-
         self._participant_identity = identity
+
+        if isinstance(track, (rtc.TrackPublication, rtc.Track)):
+            track = track.sid
+        else:
+            try:
+                track = find_micro_track_id(self._room, identity)
+            except ValueError:
+                track = None
+
         self._track_id = track
+        if track is None:
+            self._room.on("track_published", self._on_track_published)
 
         self._capturing = False
         self._pushed_text = ""
@@ -414,6 +424,17 @@ class RoomTextSink(TextSink):
         task.add_done_callback(self._tasks.discard)
 
     async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
+        if self._track_id is None:
+            logger.warning(
+                "track not found, skipping transcription publish",
+                extra={
+                    "participant_identity": self._participant_identity,
+                    "text": text,
+                    "final": final,
+                },
+            )
+            return
+
         transcription = rtc.Transcription(
             participant_identity=self._participant_identity,
             track_sid=self._track_id,
@@ -432,6 +453,19 @@ class RoomTextSink(TextSink):
             await self._room.local_participant.publish_transcription(transcription)
         except Exception:
             logger.exception("Failed to publish transcription")
+
+    def _on_track_published(
+        self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+    ) -> None:
+        if self._track_id is not None:
+            return
+        if (
+            participant.identity != self._participant_identity
+            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
+        ):
+            return
+        self._track_id = track.sid
+        self._room.off("track_published", self._on_track_published)
 
 
 class DataStreamSink(TextSink):

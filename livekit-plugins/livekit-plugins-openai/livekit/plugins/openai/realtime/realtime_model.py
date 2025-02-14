@@ -88,9 +88,7 @@ class RealtimeModel(llm.RealtimeModel):
         voice: str = "alloy",
         client: openai.AsyncClient | None = None,
     ) -> None:
-        super().__init__(
-            capabilities=llm.RealtimeCapabilities(message_truncation=True)
-        )
+        super().__init__(capabilities=llm.RealtimeCapabilities(message_truncation=True))
 
         self._opts = _RealtimeOptions(model=model, voice=voice)
         self._client = client or openai.AsyncClient()
