@@ -217,7 +217,7 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
             )
 
         seg_id = _utils.segment_uuid()
-        words: list[tuple[str, int, int]] = self._opts.split_words(text=sentence)
+        words = self._opts.split_words(sentence)
         processed_words: list[str] = []
 
         og_text = self._played_text
