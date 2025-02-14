@@ -48,6 +48,9 @@ from .models import (
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
+logger = logging.getLogger(__name__)
+print = logger.info
+
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2024-06-10"
