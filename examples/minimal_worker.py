@@ -19,7 +19,12 @@ class EchoTask(AgentTask):
         )
 
     async def on_enter(self) -> None:
-        await self.agent.generate_reply(instructions="Welcome the user and introduce yourself.").wait_for_playout()
+        speech_handle = await self.agent.generate_reply(
+            instructions="Welcome the user and introduce yourself."
+        )
+
+        if not speech_handle.interrupted:
+            pass  # ...
 
     @ai_function
     async def talk_to_alloy(self, context: AgentContext):
