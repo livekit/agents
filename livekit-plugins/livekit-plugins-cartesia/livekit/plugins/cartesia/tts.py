@@ -181,6 +181,12 @@ class TTS(tts.TTS):
 
         if "Exeter Finance LLC" in text:
             self.update_options(speed="fast")
+        elif "Por favor diga español" in text:
+            self.update_options(
+                voice="db832ebd-3cb6-42e7-9d47-912b425adbaa",
+                model="sonic-multilingual",
+                language="es",
+            )
         else:
             self.update_options(speed="normal")
 
