@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, AsyncIterator, Literal, Optional
-import threading
 
 from livekit import rtc
 
