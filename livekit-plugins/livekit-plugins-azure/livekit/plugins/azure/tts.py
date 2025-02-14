@@ -144,12 +144,12 @@ class _TTSOptions:
     speech_endpoint: str | None = None
     style: StyleConfig | None = None
     # See https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-speech-synthesis?tabs=browserjs%2Cterminal&pivots=programming-language-python
-    on_bookmark_reached_event: Callable | None = None,
-    on_synthesis_canceled_event: Callable | None = None,
-    on_synthesis_completed_event: Callable | None = None,
-    on_synthesis_started_event: Callable | None = None,
-    on_synthesizing_event: Callable | None = None,
-    on_viseme_event: Callable | None = None,
+    on_bookmark_reached_event: Callable | None = None
+    on_synthesis_canceled_event: Callable | None = None
+    on_synthesis_completed_event: Callable | None = None
+    on_synthesis_started_event: Callable | None = None
+    on_synthesizing_event: Callable | None = None
+    on_viseme_event: Callable | None = None
     on_word_boundary_event: Callable | None = None
 
 
