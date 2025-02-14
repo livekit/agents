@@ -8,8 +8,8 @@ from livekit import rtc
 
 from .. import stt, utils
 from ..log import logger
-from .transcription import TextSynchronizer, find_micro_track_id
 from .io import AudioSink, TextSink
+from .transcription import TextSynchronizer, find_micro_track_id
 
 if TYPE_CHECKING:
     from ..pipeline import PipelineAgent
@@ -47,6 +47,7 @@ class RoomOutputOptions:
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
 DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
+LK_PUBLISH_FOR_ATTR = "lk.publish_for"
 
 
 class RoomInput:
@@ -130,14 +131,14 @@ class RoomInput:
         return _read_stream()
 
     def _link_participant(self, participant: rtc.RemoteParticipant) -> None:
-        if (
+        should_ignore = (
+            participant.attributes.get(LK_PUBLISH_FOR_ATTR)
+            == self._room.local_participant.identity
+        )
+        if should_ignore or (
             self._expected_identity is not None
             and participant.identity != self._expected_identity
         ):
-            return
-
-        if self._expected_identity is None and participant.metadata == "avatar_worker":
-            # ignore the avatar worker participant
             return
 
         self._participant = participant

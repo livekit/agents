@@ -35,8 +35,7 @@ class MediaOptions:
     audio_channels: int
 
 
-# TODO(long): move to a plugin like livekit-plugins-avatar?
-class AvatarWorker:
+class AvatarRunner:
     """Worker that generates synchronized avatar video based on received audio"""
 
     def __init__(

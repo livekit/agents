@@ -11,7 +11,11 @@ from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.datastream_io import DataStreamOutput
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import RoomInput, RoomInputOptions
+from livekit.agents.pipeline.room_io import (
+    LK_PUBLISH_FOR_ATTR,
+    RoomInput,
+    RoomInputOptions,
+)
 from livekit.plugins import openai
 
 logger = logging.getLogger("avatar-example")
@@ -26,8 +30,10 @@ AVATAR_IDENTITY = "avatar_worker"
 @dataclass
 class AvatarConnectionInfo:
     room_name: str
-    url: str  # LiveKit server URL
-    token: str  # Token for avatar worker to join
+    url: str
+    """LiveKit server URL"""
+    token: str
+    """Token for avatar worker to join"""
 
 
 async def launch_avatar_worker(
@@ -35,13 +41,13 @@ async def launch_avatar_worker(
 ) -> None:
     """Wait for worker participant to join and start streaming"""
     # create a token for the avatar worker
-    # TODO(long): do we need to set agent=True here? in playground if not the video track is not automatically displayed
+    agent_identity = ctx.room.local_participant.identity
     token = (
         api.AccessToken()
         .with_identity(avatar_identity)
         .with_name("Avatar Worker")
         .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name, agent=True))
-        .with_metadata("avatar_worker")
+        .with_attributes({LK_PUBLISH_FOR_ATTR: agent_identity})
         .to_jwt()
     )
 
