@@ -147,9 +147,9 @@ class _TTSOptions:
     on_bookmark_reached_event: Callable | None = None,
     on_synthesis_canceled_event: Callable | None = None,
     on_synthesis_completed_event: Callable | None = None,
-    on_synthesis_started_event: Callable | None = None
-    on_synthesizing_event: Callable | None = None
-    on_viseme_event: Callable | None = None
+    on_synthesis_started_event: Callable | None = None,
+    on_synthesizing_event: Callable | None = None,
+    on_viseme_event: Callable | None = None,
     on_word_boundary_event: Callable | None = None
 
 
