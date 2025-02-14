@@ -186,7 +186,7 @@ class MyVideoGenerator:
 
 async def main(room: rtc.Room):
     """Main application logic for the avatar worker"""
-    worker = None
+    runner: AvatarRunner | None = None
     stop_event = asyncio.Event()
 
     try:
@@ -199,11 +199,11 @@ async def main(room: rtc.Room):
             audio_channels=1,
         )
         video_generator = MyVideoGenerator(media_options)
-        worker = AvatarRunner(
+        runner = AvatarRunner(
             room, video_generator=video_generator, media_options=media_options
         )
-        video_generator.set_av_sync(worker.av_sync)
-        await worker.start()
+        video_generator.set_av_sync(runner.av_sync)
+        await runner.start()
 
         # Set up disconnect handler
         async def handle_disconnect(participant: rtc.RemoteParticipant):
@@ -226,8 +226,8 @@ async def main(room: rtc.Room):
         logging.error("Unexpected error: %s", e)
         raise
     finally:
-        if worker:
-            await worker.aclose()
+        if runner:
+            await runner.aclose()
 
 
 async def run_service(url: str, token: str):

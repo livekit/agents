@@ -6,7 +6,7 @@ from functools import partial
 
 import httpx
 from dotenv import load_dotenv
-from livekit import api
+from livekit import api, rtc
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.datastream_io import DataStreamOutput
@@ -45,8 +45,9 @@ async def launch_avatar_worker(
     token = (
         api.AccessToken()
         .with_identity(avatar_identity)
-        .with_name("Avatar Worker")
-        .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name, agent=True))
+        .with_name("Avatar Runner")
+        .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name))
+        .with_kind("agent")
         .with_attributes({LK_PUBLISH_FOR_ATTR: agent_identity})
         .to_jwt()
     )
@@ -60,10 +61,13 @@ async def launch_avatar_worker(
             avatar_dispatcher_url, json=asdict(connection_info)
         )
         response.raise_for_status()
-    logger.info("Avatar worker connected")
+    logger.info("Avatar handshake completed")
 
     # wait for the remote participant to join
-    await ctx.wait_for_participant(identity=avatar_identity)
+    await ctx.wait_for_participant(
+        identity=avatar_identity, kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+    )
+    logger.info("Avatar runner joined")
 
 
 async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):

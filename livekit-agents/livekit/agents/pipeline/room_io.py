@@ -97,7 +97,7 @@ class RoomInput:
         self._tasks: set[asyncio.Task] = set()
 
     async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
-        participant = await self.wait_for_participant()
+        await self.wait_for_participant()
         if not agent:
             return
 
@@ -133,6 +133,8 @@ class RoomInput:
         return _read_stream()
 
     def _link_participant(self, participant: rtc.RemoteParticipant) -> None:
+        print(f"Linking participant {participant.identity}")
+        print(participant.kind, participant.attributes, participant.identity)
         should_ignore = (
             participant.attributes.get(LK_PUBLISH_FOR_ATTR)
             == self._room.local_participant.identity
