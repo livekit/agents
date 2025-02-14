@@ -15,8 +15,10 @@ from livekit.agents.pipeline.room_io import (
     LK_PUBLISH_FOR_ATTR,
     RoomInput,
     RoomInputOptions,
+    RoomTranscriptEventSink,
 )
-from livekit.plugins import openai
+from livekit.agents.pipeline.transcription import TextSynchronizer
+from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("avatar-example")
 logger.setLevel(logging.INFO)
@@ -77,6 +79,9 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
         task=AgentTask(
             instructions="Talk to me!",
             llm=openai.realtime.RealtimeModel(),
+            # stt=deepgram.STT(),
+            # llm=openai.LLM(model="gpt-4o-mini"),
+            # tts=cartesia.TTS(),
         )
     )
 
@@ -84,12 +89,18 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     ds_output = DataStreamOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
 
     # wait for the participant to join the room and the avatar worker to connect
-    await room_input.wait_for_participant()
+    await room_input.start(agent)
     await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
 
-    # connect the input and output audio to the agent
-    agent.input.audio = room_input.audio
-    agent.output.audio = ds_output.audio
+    # connect the output audio to the agent
+    # agent.output.audio = ds_output.audio
+
+    # or connect the output audio with transcription sync
+    text_sink = RoomTranscriptEventSink(ctx.room, participant=AVATAR_IDENTITY)
+    text_sync = TextSynchronizer(ds_output.audio, text_sink)
+    agent.output.text = text_sync.text_sink
+    agent.output.audio = text_sync.audio_sink
+
     await agent.start()
 
     @agent.output.audio.on("playback_finished")

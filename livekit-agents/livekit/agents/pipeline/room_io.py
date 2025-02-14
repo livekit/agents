@@ -105,9 +105,9 @@ class RoomInput:
         agent.input.video = self.video
         if self._options.forward_user_transcript:
             # TODO: support multiple participants
-            if not self._init_transcription_sink():
-                # sometimes the track is not published when participant is connected
-                self._room.on("track_published", self._init_transcription_sink)
+            self._text_sink = RoomTranscriptEventSink(
+                room=self._room, participant=self._participant
+            )
             agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
     @property
@@ -133,8 +133,6 @@ class RoomInput:
         return _read_stream()
 
     def _link_participant(self, participant: rtc.RemoteParticipant) -> None:
-        print(f"Linking participant {participant.identity}")
-        print(participant.kind, participant.attributes, participant.identity)
         should_ignore = (
             participant.attributes.get(LK_PUBLISH_FOR_ATTR)
             == self._room.local_participant.identity
@@ -185,21 +183,6 @@ class RoomInput:
         task = asyncio.create_task(_capture_text())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
-
-    def _init_transcription_sink(self, *args) -> bool:
-        if not self._participant or self._text_sink:
-            # participant not ready or already created
-            return False
-
-        try:
-            track_id = find_micro_track_id(self._room, self._participant.identity)
-        except ValueError:
-            return False
-
-        self._text_sink = RoomTranscriptEventSink(
-            room=self._room, participant=self._participant, track=track_id
-        )
-        return True
 
     async def wait_for_participant(self) -> rtc.RemoteParticipant:
         await self._participant_ready.wait()
@@ -389,6 +372,7 @@ class RoomTranscriptEventSink(TextSink):
         super().__init__()
         self._room = room
         self._tasks: set[asyncio.Task] = set()
+        self._track_id: str | None = None
         self.set_participant(participant, track)
 
     def set_participant(
@@ -397,13 +381,19 @@ class RoomTranscriptEventSink(TextSink):
         track: rtc.Track | rtc.TrackPublication | str | None = None,
     ) -> None:
         identity = participant if isinstance(participant, str) else participant.identity
-        if track is None:
-            track = find_micro_track_id(self._room, identity)
-        elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
-            track = track.sid
-
         self._participant_identity = identity
+
+        if isinstance(track, (rtc.TrackPublication, rtc.Track)):
+            track = track.sid
+        else:
+            try:
+                track = find_micro_track_id(self._room, identity)
+            except ValueError:
+                track = None
+
         self._track_id = track
+        if track is None:
+            self._room.on("track_published", self._on_track_published)
 
         self._capturing = False
         self._pushed_text = ""
@@ -434,6 +424,17 @@ class RoomTranscriptEventSink(TextSink):
         task.add_done_callback(self._tasks.discard)
 
     async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
+        if self._track_id is None:
+            logger.warning(
+                "track not found, skipping transcription publish",
+                extra={
+                    "participant_identity": self._participant_identity,
+                    "text": text,
+                    "final": final,
+                },
+            )
+            return
+
         transcription = rtc.Transcription(
             participant_identity=self._participant_identity,
             track_sid=self._track_id,
@@ -452,3 +453,16 @@ class RoomTranscriptEventSink(TextSink):
             await self._room.local_participant.publish_transcription(transcription)
         except Exception:
             logger.exception("Failed to publish transcription")
+
+    def _on_track_published(
+        self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+    ) -> None:
+        if self._track_id is not None:
+            return
+        if (
+            participant.identity != self._participant_identity
+            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
+        ):
+            return
+        self._track_id = track.sid
+        self._room.off("track_published", self._on_track_published)
