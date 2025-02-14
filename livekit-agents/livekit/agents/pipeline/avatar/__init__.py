@@ -1,3 +1,3 @@
-from .avatar_worker import AvatarWorker, MediaOptions
+from ._runner import AvatarRunner, MediaOptions, VideoGenerator
 
-__all__ = ["AvatarWorker", "MediaOptions"]
+__all__ = ["AvatarRunner", "MediaOptions", "VideoGenerator"]
