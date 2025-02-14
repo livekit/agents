@@ -713,3 +713,82 @@ class RoomTranscriptEventSink(TextSink):
 
         if track.source == rtc.TrackSource.SOURCE_MICROPHONE:
             self._track_id = track.sid
+
+
+class DataStreamSink(TextSink):
+    """TextSink implementation that publishes transcription segments to a LiveKit room"""
+
+    def __init__(
+        self,
+        room: rtc.Room,
+        participant: rtc.Participant | str,
+        track: rtc.Track | rtc.TrackPublication | str | None = None,
+        topic: str | None = None,
+    ):
+        super().__init__()
+        self._room = room
+        self._tasks: set[asyncio.Task] = set()
+        self.set_participant(participant, track)
+        self._topic = topic or "lk.chat"
+
+    def set_participant(
+        self,
+        participant: rtc.Participant | str,
+        track: rtc.Track | rtc.TrackPublication | str | None = None,
+    ) -> None:
+        identity = participant if isinstance(participant, str) else participant.identity
+        if track is None:
+            track = find_micro_track_id(self._room, identity)
+        elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
+            track = track.sid
+
+        self._participant_identity = identity
+        self._track_id = track
+
+        self._capturing = False
+        self._pushed_text = ""
+        self._current_id = utils.shortuuid("SG_")
+
+    async def capture_text(self, text: str, *, is_delta: bool = True) -> None:
+        if not self._capturing:
+            self._capturing = True
+            self._pushed_text = ""
+            self._current_id = utils.shortuuid("SG_")
+
+        if is_delta:
+            self._pushed_text += text
+        else:
+            self._pushed_text = text
+        await self._publish_transcription(
+            self._current_id, self._pushed_text, final=False
+        )
+
+    def flush(self) -> None:
+        if not self._capturing:
+            return
+        self._capturing = False
+        task = asyncio.create_task(
+            self._publish_transcription(self._current_id, self._pushed_text, final=True)
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
+        transcription = rtc.Transcription(
+            participant_identity=self._participant_identity,
+            track_sid=self._track_id,
+            segments=[
+                rtc.TranscriptionSegment(
+                    id=id,
+                    text=text,
+                    start_time=0,
+                    end_time=0,
+                    final=final,
+                    language="",
+                )
+            ],
+        )
+        try:
+            await self._room.local_participant.publish_transcription(transcription)
+        except Exception:
+            logger.exception("Failed to publish transcription")
