@@ -173,7 +173,7 @@ class TTS(tts.TTS):
         on_synthesis_started_event: Callable | None = None,
         on_synthesizing_event: Callable | None = None,
         on_viseme_event: Callable | None = None,
-        on_word_boundary_event: Callable | None = None,
+        on_word_boundary_event: Callable | None = None
     ) -> None:
         """
         Create a new instance of Azure TTS.
