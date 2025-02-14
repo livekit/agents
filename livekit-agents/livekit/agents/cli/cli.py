@@ -9,12 +9,13 @@ import click
 from .. import utils
 from ..log import logger
 from ..plugin import Plugin
+from ..types import NOT_GIVEN, NotGivenOr
 from ..worker import JobExecutorType, Worker, WorkerOptions
 from . import proto
 from .log import setup_logging
 
 
-def run_app(opts: WorkerOptions) -> None:
+def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) -> None:
     """Run the CLI to interact with the worker"""
     cli = click.Group()
 
@@ -95,7 +96,7 @@ def run_app(opts: WorkerOptions) -> None:
     )
     @click.option(
         "--watch/--no-watch",
-        default=True,
+        default=hot_reload if utils.is_given(hot_reload) else True,
         help="Watch for changes in the current directory and plugins in editable mode",
     )
     def dev(

@@ -90,4 +90,3 @@ class SpeechHandle:
         with contextlib.suppress(asyncio.InvalidStateError):
             # will raise InvalidStateError if the future is already done (interrupted)
             self._playout_done_fut.set_result(None)
-
