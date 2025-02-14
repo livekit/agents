@@ -282,8 +282,10 @@ class TaskActivity(RecognitionHooks):
                 while self._speech_q:
                     _, _, speech = heapq.heappop(self._speech_q)
                     self._current_speech = speech
+                    print("speech started", self._agent_task, speech)
                     speech._authorize_playout()
                     await speech.wait_for_playout()
+                    print("speech done", self._agent_task, speech)
                     self._current_speech = None
 
                 if self._draining:  # no more speech can be scheduled
@@ -619,6 +621,7 @@ class TaskActivity(RecognitionHooks):
                 self._agent.update_task(new_agent_task)
 
         log_event("playout completed", speech_id=speech_handle.id)
+        print("pipeline_reply_task done")
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
