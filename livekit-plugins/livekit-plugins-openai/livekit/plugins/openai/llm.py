@@ -772,7 +772,6 @@ class LLMStream(llm.LLMStream):
         # Handle DeepSeek-R1's <think> tag
         content = delta.content
         reasoning = ""
-        logger.debug(f"delta: {delta}")
         if content and (idx := content.find("</think>")) != -1:
             reasoning = content[:idx]
             content = content[idx + len("</think>") :]
