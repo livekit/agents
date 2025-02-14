@@ -234,7 +234,7 @@ class TTS(tts.TTS):
             on_synthesis_started_event=on_synthesis_started_event,
             on_synthesizing_event=on_synthesizing_event,
             on_viseme_event=on_viseme_event,
-            on_word_boundary_event=on_word_boundary_event,
+            on_word_boundary_event=on_word_boundary_event
         )
 
     def update_options(
