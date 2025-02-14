@@ -73,7 +73,7 @@ class RoomInput:
         self._closed = False
 
         # transcription forwarder
-        self._text_sink: Optional[RoomTextSink] = None
+        self._text_sink: Optional[RoomTranscriptEventSink] = None
 
         # streams
         self._audio_stream: Optional[rtc.AudioStream] = None
@@ -105,7 +105,9 @@ class RoomInput:
         agent.input.video = self.video
         if self._options.forward_user_transcript:
             # TODO: support multiple participants
-            self._text_sink = RoomTextSink(room=self._room, participant=participant)
+            if not self._init_transcription_sink():
+                # sometimes the track is not published when participant is connected
+                self._room.on("track_published", self._init_transcription_sink)
             agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
     @property
@@ -182,6 +184,21 @@ class RoomInput:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def _init_transcription_sink(self, *args) -> bool:
+        if not self._participant or self._text_sink:
+            # participant not ready or already created
+            return False
+
+        try:
+            track_id = find_micro_track_id(self._room, self._participant.identity)
+        except ValueError:
+            return False
+
+        self._text_sink = RoomTranscriptEventSink(
+            room=self._room, participant=self._participant, track=track_id
+        )
+        return True
+
     async def wait_for_participant(self) -> rtc.RemoteParticipant:
         await self._participant_ready.wait()
         assert self._participant is not None
@@ -221,14 +238,14 @@ class RoomOutput:
             num_channels=self._options.num_channels,
             track_source=self._options.track_source,
         )
-        self._text_sink: Optional[RoomTextSink] = None
+        self._text_sink: Optional[RoomTranscriptEventSink] = None
         self._text_synchronizer: Optional[TextSynchronizer] = None
 
     async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
         await self._audio_sink.start()
 
         if self._options.forward_agent_transcription:
-            self._text_sink = RoomTextSink(
+            self._text_sink = RoomTranscriptEventSink(
                 room=self._room, participant=self._room.local_participant
             )
 
@@ -358,7 +375,7 @@ class RoomAudioSink(AudioSink):
         self._audio_source.clear_queue()
 
 
-class RoomTextSink(TextSink):
+class RoomTranscriptEventSink(TextSink):
     """TextSink implementation that publishes transcription segments to a LiveKit room"""
 
     def __init__(
