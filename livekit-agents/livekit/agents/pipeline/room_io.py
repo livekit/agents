@@ -106,7 +106,7 @@ class RoomInput:
         if self._options.forward_user_transcript:
             # TODO: support multiple participants
             self._text_sink = RoomTranscriptEventSink(
-                room=self._room, participant=self._participant, capture_delta=False
+                room=self._room, participant=self._participant, is_stream=False
             )
             agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
