@@ -154,24 +154,27 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
                 if self.input.audio is None:
                     self._room_input = room_io.RoomInput(
                         room=room,
-                        options=room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS,
+                        options=room_input_options
+                        or room_io.DEFAULT_ROOM_INPUT_OPTIONS,
                     )
                     await self._room_input.start(agent=self)
 
                 if self.output.audio is None and self.output.text is None:
                     self._room_output = room_io.RoomOutput(
                         room=room,
-                        options=room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS,
+                        options=room_output_options
+                        or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS,
                     )
                     await self._room_output.start(agent=self)
-                    
+
             if self.input.audio is not None:
                 self._forward_audio_atask = asyncio.create_task(
                     self._forward_audio_task(), name="_forward_audio_task"
                 )
 
             self._update_activity_atask = asyncio.create_task(
-                self._update_activity_task(self._agent_task), name="_update_activity_task"
+                self._update_activity_task(self._agent_task),
+                name="_update_activity_task",
             )
 
             self._started = True

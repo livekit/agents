@@ -8,8 +8,8 @@ from livekit import rtc
 
 from .. import stt, utils
 from ..log import logger
-from .transcription import TextSynchronizer, find_micro_track_id
 from .io import AudioSink, TextSink
+from .transcription import TextSynchronizer, find_micro_track_id
 
 if TYPE_CHECKING:
     from ..pipeline import PipelineAgent
