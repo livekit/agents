@@ -106,7 +106,7 @@ class RoomInput:
         if self._options.forward_user_transcript:
             # TODO: support multiple participants
             self._text_sink = RoomTranscriptEventSink(
-                room=self._room, participant=self._participant
+                room=self._room, participant=self._participant, capture_delta=False
             )
             agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
@@ -175,7 +175,7 @@ class RoomInput:
         async def _capture_text():
             if ev.alternatives:
                 data = ev.alternatives[0]
-                await self._text_sink.capture_text(data.text, is_delta=False)
+                await self._text_sink.capture_text(data.text)
 
             if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
                 self._text_sink.flush()
@@ -367,12 +367,15 @@ class RoomTranscriptEventSink(TextSink):
         self,
         room: rtc.Room,
         participant: rtc.Participant | str,
+        *,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
+        capture_delta: bool = True,
     ):
         super().__init__()
         self._room = room
         self._tasks: set[asyncio.Task] = set()
         self._track_id: str | None = None
+        self._capture_delta = capture_delta
         self.set_participant(participant, track)
 
     def set_participant(
@@ -399,13 +402,13 @@ class RoomTranscriptEventSink(TextSink):
         self._pushed_text = ""
         self._current_id = utils.shortuuid("SG_")
 
-    async def capture_text(self, text: str, *, is_delta: bool = True) -> None:
+    async def capture_text(self, text: str) -> None:
         if not self._capturing:
             self._capturing = True
             self._pushed_text = ""
             self._current_id = utils.shortuuid("SG_")
 
-        if is_delta:
+        if self._capture_delta:
             self._pushed_text += text
         else:
             self._pushed_text = text
