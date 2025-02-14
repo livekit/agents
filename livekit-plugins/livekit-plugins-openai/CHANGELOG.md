@@ -1,5 +1,13 @@
 # livekit-plugins-openai
 
+## 0.10.19
+
+### Patch Changes
+
+- fix: [openai] only send params when set - [#1474](https://github.com/livekit/agents/pull/1474) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fix response create for openai realtime model - [#1469](https://github.com/livekit/agents/pull/1469) ([@longcw](https://github.com/longcw))
+
 ## 0.10.18
 
 ### Patch Changes
