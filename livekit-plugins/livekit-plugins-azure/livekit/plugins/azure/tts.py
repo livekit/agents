@@ -18,6 +18,7 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
+import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -26,8 +27,6 @@ from livekit.agents import (
     tts,
     utils,
 )
-
-import azure.cognitiveservices.speech as speechsdk  # type: ignore
 
 from .log import logger
 
@@ -234,6 +233,8 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "ChunkedStream":
+        if "Por favor diga español" in text:
+            self.update_options(voice="es-MX-CarlotaNeural", language="es")
         return ChunkedStream(
             tts=self, input_text=text, conn_options=conn_options, opts=self._opts
         )
