@@ -89,7 +89,7 @@ class AudioStreamDecoder:
     is designed to decode a single stream.
     """
 
-    def __init__(self):
+    def __init__(self, *, sample_rate: int = 48000, num_channels: int = 1):
         try:
             import av  # noqa
         except ImportError:
@@ -97,10 +97,17 @@ class AudioStreamDecoder:
                 "You haven't included the 'codecs' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[codecs]`"
             )
 
+        self._sample_rate = sample_rate
+        self._layout = "mono"
+        if num_channels == 2:
+            self._layout = "stereo"
+        elif num_channels != 1:
+            raise ValueError(f"Invalid number of channels: {num_channels}")
+
         self._output_ch = aio.Chan[rtc.AudioFrame]()
         self._closed = False
         self._started = False
-        self._output_finished = False
+        self._output_finished = asyncio.Event()
         self._input_buf = StreamBuffer()
         self._loop = asyncio.get_event_loop()
 
@@ -119,8 +126,8 @@ class AudioStreamDecoder:
         resampler = av.AudioResampler(
             # convert to signed 16-bit little endian
             format="s16",
-            layout="mono",
-            rate=audio_stream.rate,
+            layout=self._layout,
+            rate=self._sample_rate,
         )
         try:
             # TODO: handle error where audio stream isn't found
@@ -136,20 +143,27 @@ class AudioStreamDecoder:
                         rtc.AudioFrame(
                             data=data,
                             num_channels=nchannels,
-                            sample_rate=resampled_frame.sample_rate,
-                            samples_per_channel=resampled_frame.samples / nchannels,
+                            sample_rate=int(resampled_frame.sample_rate),
+                            samples_per_channel=int(
+                                resampled_frame.samples / nchannels
+                            ),
                         )
                     )
         finally:
-            self._output_finished = True
+            self._output_finished.set()
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
         return self
 
     async def __anext__(self) -> rtc.AudioFrame:
-        if self._output_finished and self._output_ch.empty():
-            raise StopAsyncIteration
-        return await self._output_ch.__anext__()
+        while True:
+            if self._output_finished.is_set() and self._output_ch.empty():
+                raise StopAsyncIteration
+            try:
+                # ensure we don't block for too long, in case it was recently closed
+                return await asyncio.wait_for(self._output_ch.__anext__(), timeout=0.05)
+            except asyncio.TimeoutError:
+                continue
 
     async def aclose(self):
         if self._closed:
