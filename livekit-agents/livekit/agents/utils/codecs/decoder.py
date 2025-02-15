@@ -15,7 +15,7 @@
 import asyncio
 import io
 from concurrent.futures import ThreadPoolExecutor
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 from livekit.agents.utils import aio
 
@@ -91,7 +91,7 @@ class AudioStreamDecoder:
     """
 
     _max_workers: int = 10
-    _executor: ThreadPoolExecutor | None = None
+    _executor: Optional[ThreadPoolExecutor] = None
 
     def __init__(self, *, sample_rate: int = 48000, num_channels: int = 1):
         try:
