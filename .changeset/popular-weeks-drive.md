@@ -1,5 +1,5 @@
 ---
-"livekit-plugins-openai": patch
+"livekit-plugins-openai": minor
 "livekit-agents": patch
 ---
 
