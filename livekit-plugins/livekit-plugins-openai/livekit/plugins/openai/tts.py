@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 import httpx
@@ -32,7 +33,7 @@ import openai
 from .models import TTSModels, TTSVoices
 from .utils import AsyncAzureADTokenProvider
 
-OPENAI_TTS_SAMPLE_RATE = 24000
+OPENAI_TTS_SAMPLE_RATE = 48000
 OPENAI_TTS_CHANNELS = 1
 
 
@@ -172,36 +173,38 @@ class ChunkedStream(tts.ChunkedStream):
             input=self.input_text,
             model=self._opts.model,
             voice=self._opts.voice,  # type: ignore
-            response_format="pcm",
+            response_format="opus",
             speed=self._opts.speed,
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 
         request_id = utils.shortuuid()
-        audio_bstream = utils.audio.AudioByteStream(
+        decoder = utils.codecs.AudioStreamDecoder(
             sample_rate=OPENAI_TTS_SAMPLE_RATE,
             num_channels=OPENAI_TTS_CHANNELS,
         )
 
+        async def _decode_loop():
+            try:
+                async with oai_stream as stream:
+                    async for data in stream.iter_bytes():
+                        decoder.push(data)
+            finally:
+                decoder.end_input()
+
+        decode_task = asyncio.create_task(_decode_loop())
+
         try:
-            async with oai_stream as stream:
-                async for data in stream.iter_bytes():
-                    for frame in audio_bstream.write(data):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                frame=frame,
-                                request_id=request_id,
-                            )
-                        )
-
-                for frame in audio_bstream.flush():
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            frame=frame,
-                            request_id=request_id,
-                        )
+            async for frame in decoder:
+                if self._event_ch.closed:
+                    break
+                self._event_ch.send_nowait(
+                    tts.SynthesizedAudio(
+                        frame=frame,
+                        request_id=request_id,
                     )
-
+                )
+            await decode_task
         except openai.APITimeoutError:
             raise APITimeoutError()
         except openai.APIStatusError as e:
@@ -213,3 +216,6 @@ class ChunkedStream(tts.ChunkedStream):
             )
         except Exception as e:
             raise APIConnectionError() from e
+        finally:
+            await utils.aio.gracefully_cancel(decode_task)
+            await decoder.aclose()
