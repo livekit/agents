@@ -204,7 +204,7 @@ class ChunkedStream(tts.ChunkedStream):
                         request_id=request_id,
                     )
                 )
-            await asyncio.gather(decode_task)
+            await decode_task
         except openai.APITimeoutError:
             raise APITimeoutError()
         except openai.APIStatusError as e:
@@ -217,5 +217,5 @@ class ChunkedStream(tts.ChunkedStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            utils.aio.gracefully_cancel(decode_task)
+            await utils.aio.gracefully_cancel(decode_task)
             await decoder.aclose()

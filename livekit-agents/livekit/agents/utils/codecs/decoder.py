@@ -14,6 +14,7 @@
 
 import asyncio
 import io
+from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncIterator
 
 from livekit.agents.utils import aio
@@ -89,6 +90,9 @@ class AudioStreamDecoder:
     is designed to decode a single stream.
     """
 
+    _max_workers: int = 10
+    _executor: ThreadPoolExecutor | None = None
+
     def __init__(self, *, sample_rate: int = 48000, num_channels: int = 1):
         try:
             import av  # noqa
@@ -107,15 +111,17 @@ class AudioStreamDecoder:
         self._output_ch = aio.Chan[rtc.AudioFrame]()
         self._closed = False
         self._started = False
-        self._output_finished = asyncio.Event()
         self._input_buf = StreamBuffer()
         self._loop = asyncio.get_event_loop()
+        if self.__class__._executor is None:
+            # each decoder instance will submit jobs to the shared pool
+            self.__class__._executor = ThreadPoolExecutor(max_workers=self.__class__._max_workers)
 
     def push(self, chunk: bytes):
         self._input_buf.write(chunk)
         if not self._started:
             self._started = True
-            self._loop.run_in_executor(None, self._decode_loop)
+            self._loop.run_in_executor(self.__class__._executor, self._decode_loop)
 
     def end_input(self):
         self._input_buf.end_input()
@@ -150,24 +156,25 @@ class AudioStreamDecoder:
                         )
                     )
         finally:
-            self._output_finished.set()
+            self._output_ch.close()
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
         return self
 
     async def __anext__(self) -> rtc.AudioFrame:
-        while True:
-            if self._output_finished.is_set() and self._output_ch.empty():
-                raise StopAsyncIteration
-            try:
-                # ensure we don't block for too long, in case it was recently closed
-                return await asyncio.wait_for(self._output_ch.__anext__(), timeout=0.05)
-            except asyncio.TimeoutError:
-                continue
+        try:
+            return await self._output_ch.recv()
+        except aio.ChanClosed:
+            raise StopAsyncIteration
 
     async def aclose(self):
         if self._closed:
             return
         self._closed = True
+        self.end_input()
         self._input_buf.close()
-        self._output_ch.close()
+        # wait for decode loop to finish
+        try:
+            await self._output_ch.recv()
+        except aio.ChanClosed:
+            pass
