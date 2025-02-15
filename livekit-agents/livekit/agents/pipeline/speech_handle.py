@@ -183,7 +183,9 @@ class SpeechHandle:
         return self._done_fut
 
     def _set_done(self) -> None:
-        self._done_fut.set_result(None)
+        # Only set the result if the future is not already done.
+        if not self._done_fut.done():
+            self._done_fut.set_result(None)
 
     def interrupt(self) -> None:
         if not self.allow_interruptions:
