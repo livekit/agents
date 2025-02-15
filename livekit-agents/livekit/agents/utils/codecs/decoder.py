@@ -115,7 +115,9 @@ class AudioStreamDecoder:
         self._loop = asyncio.get_event_loop()
         if self.__class__._executor is None:
             # each decoder instance will submit jobs to the shared pool
-            self.__class__._executor = ThreadPoolExecutor(max_workers=self.__class__._max_workers)
+            self.__class__._executor = ThreadPoolExecutor(
+                max_workers=self.__class__._max_workers
+            )
 
     def push(self, chunk: bytes):
         self._input_buf.write(chunk)
