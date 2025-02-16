@@ -50,147 +50,146 @@ DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
 LK_PUBLISH_FOR_ATTR = "lk.publish_for"
 
 
-class BaseStreamHandler:
+class BaseStreamHandle:
     """Base class for handling audio/video streams from a participant"""
 
-    def __init__(self, room: rtc.Room, enabled: bool = True) -> None:
+    def __init__(self, room: rtc.Room, name: str = "") -> None:
         self._room = room
-        self._enabled = enabled
-        self._participant: Optional[rtc.RemoteParticipant] = None
+        self._name = name
+
+        self._participant_identity: Optional[str] = None
         self._stream: Optional[rtc.VideoStream | rtc.AudioStream] = None
-        self._stream_connected = asyncio.Event()
+        self._track: Optional[rtc.Track] = None
+        self._stream_ready = asyncio.Event()
+
         self._tasks: set[asyncio.Task] = set()
+        self._room.on("track_subscribed", self._on_track_subscribed)
 
     @property
-    def enabled(self) -> bool:
-        return self._enabled
+    def stream(self) -> AsyncIterator[rtc.AudioFrame | rtc.VideoFrame] | None:
+        return self._read_stream()
 
-    @enabled.setter
-    def enabled(self, value: bool) -> None:
-        self._enabled = value
-        if not value:
-            self.close()
-
-    async def link_participant(self, participant: rtc.RemoteParticipant) -> None:
+    def set_participant(self, participant_identity: str | None) -> None:
         """Start streaming from the participant"""
-        if not self._enabled:
+        if participant_identity is None:
+            self._participant_identity = None
+            self._close_stream()
             return
 
-        self.close()
-        self._participant = participant
-        self._stream = await self._create_stream(participant)
-        self._stream_connected.set()
+        if self._participant_identity == participant_identity:
+            return
 
-    async def _create_stream(
-        self, participant: rtc.RemoteParticipant
-    ) -> rtc.VideoStream | rtc.AudioStream:
+        if (
+            self._participant_identity
+            and self._participant_identity != participant_identity
+        ):
+            self._close_stream()
+
+        self._participant_identity = participant_identity
+
+        participant = self._room.remote_participants.get(participant_identity)
+        if participant:
+            for publication in participant.track_publications.values():
+                if publication.track:
+                    self._on_track_subscribed(
+                        publication.track, publication, participant
+                    )
+
+    async def aclose(self) -> None:
+        if self._stream:
+            await self._stream.aclose()
+            self._stream = None
+            self._track = None
+            self._stream_ready.clear()
+
+    def _create_stream(
+        self, track: rtc.Track
+    ) -> Optional[rtc.VideoStream | rtc.AudioStream]:
         raise NotImplementedError()
 
-    def close(self) -> None:
+    def _close_stream(self) -> None:
         """Close the current stream"""
-        self._participant = None
         if self._stream is None:
             return
 
-        # TODO(long): stream cannot be closed by aclose()?
+        # TODO(long): stream cannot be closed if it's created from participant?
         # self._stream._queue.put(None)
         task = asyncio.create_task(self._stream.aclose())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         self._stream = None
-        self._stream_connected.clear()
-
-    def read_stream(self) -> AsyncIterator[rtc.AudioFrame | rtc.VideoFrame] | None:
-        if not self._enabled:
-            return None
-        return self._read_stream()
+        self._track = None
+        self._stream_ready.clear()
 
     @utils.log_exceptions(logger=logger)
     async def _read_stream(self) -> AsyncIterator[rtc.AudioFrame | rtc.VideoFrame]:
         while True:
             if self._stream is None:
-                await self._stream_connected.wait()
+                await self._stream_ready.wait()
                 continue
-            stream = self._stream
 
-            logger.info(
+            stream = self._stream
+            logger.debug(
                 "start reading stream",
                 extra={
-                    "participant": self._participant.identity,
-                    "stream_type": self.__class__.__name__,
+                    "participant": self._participant_identity,
+                    "stream_name": self._name,
                 },
             )
             try:
                 async for event in stream:
                     yield event.frame
-                if self._participant and stream is self._stream:
-                    logger.warning(
-                        "stream ended before participant was unlinked",
-                        extra={
-                            "participant": self._participant.identity,
-                            "stream_type": self.__class__.__name__,
-                        },
-                    )
-                    self.close()
+
+                logger.debug(
+                    "stream ended",
+                    extra={
+                        "participant": self._participant_identity,
+                        "stream_name": self._name,
+                    },
+                )
+                if stream is self._stream:
+                    self._close_stream()
             except Exception:
-                logger.exception(f"Error reading {self.__class__.__name__} stream")
+                logger.exception(f"Error reading {self._name} stream")
 
-    async def _wait_for_track(
+    def _on_track_subscribed(
         self,
+        track: rtc.Track,
+        publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
-        track_source: rtc.TrackSource.ValueType,
-    ) -> rtc.Track:
-        for publication in participant.track_publications.values():
-            if publication.source == track_source and publication.track:
-                return publication.track
+    ) -> None:
+        if (
+            not self._participant_identity
+            or self._participant_identity != participant.identity
+        ):
+            return
 
-        track_subscribed = asyncio.Future[rtc.Track]()
+        if self._track and self._track.sid == track.sid:
+            return
 
-        def _on_track_subscribed(
-            track: rtc.Track,
-            publication: rtc.RemoteTrackPublication,
-            p: rtc.RemoteParticipant,
-        ) -> None:
-            if (
-                p.identity == participant.identity
-                and publication.source == track_source
-            ):
-                track_subscribed.set_result(track)
-
-        self._room.on("track_subscribed", _on_track_subscribed)
-        track = await track_subscribed
-        self._room.off("track_subscribed", _on_track_subscribed)
-        return track
+        new_stream = self._create_stream(track)
+        if new_stream and self._stream:
+            self._close_stream()
+        self._stream = new_stream
+        self._track = track
+        self._stream_ready.set()
 
 
-class AudioStreamHandler(BaseStreamHandler):
+class AudioStreamHandle(BaseStreamHandle):
     def __init__(
         self,
         room: rtc.Room,
-        enabled: bool = True,
+        *,
         sample_rate: int = 24000,
         num_channels: int = 1,
         capacity: int = 0,
     ) -> None:
-        super().__init__(room=room, enabled=enabled)
+        super().__init__(room=room, name="audio")
         self.sample_rate = sample_rate
         self.num_channels = num_channels
         self.capacity = capacity
 
-    async def _create_stream(
-        self, participant: rtc.RemoteParticipant
-    ) -> rtc.AudioStream:
-        # return rtc.AudioStream.from_participant(
-        #     participant=participant,
-        #     track_source=rtc.TrackSource.SOURCE_MICROPHONE,
-        #     sample_rate=self.sample_rate,
-        #     num_channels=self.num_channels,
-        #     capacity=self.capacity,
-        # )
-
-        track = await self._wait_for_track(
-            participant, rtc.TrackSource.SOURCE_MICROPHONE
-        )
+    def _create_stream(self, track: rtc.Track) -> rtc.AudioStream:
         return rtc.AudioStream.from_track(
             track=track,
             sample_rate=self.sample_rate,
@@ -199,19 +198,13 @@ class AudioStreamHandler(BaseStreamHandler):
         )
 
 
-class VideoStreamHandler(BaseStreamHandler):
-    def __init__(self, room: rtc.Room, enabled: bool = True, capacity: int = 0) -> None:
-        super().__init__(room=room, enabled=enabled)
+class VideoStreamHandle(BaseStreamHandle):
+    def __init__(self, room: rtc.Room, *, capacity: int = 0) -> None:
+        super().__init__(room=room, name="video")
         self.capacity = capacity
 
-    async def _create_stream(
-        self, participant: rtc.RemoteParticipant
-    ) -> rtc.VideoStream:
-        return rtc.VideoStream.from_participant(
-            participant=participant,
-            track_source=rtc.TrackSource.SOURCE_CAMERA,
-            capacity=self.capacity,
-        )
+    def _create_stream(self, track: rtc.Track) -> rtc.VideoStream:
+        return rtc.VideoStream.from_track(track=track, capacity=self.capacity)
 
 
 class RoomInput:
@@ -233,42 +226,67 @@ class RoomInput:
         """
         self._options = options
         self._room = room
-        self._closed = False
         self._tasks: set[asyncio.Task] = set()
 
         # target participant
-        self._target_participant_identity: Optional[str] = (
+        self._participant_identity: Optional[str] = (
             participant.identity
             if isinstance(participant, rtc.RemoteParticipant)
             else participant
         )
-        self._active_participant: rtc.RemoteParticipant | None = None
-        self._participant_connected = asyncio.Event()
+        self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
 
         # transcription forwarder
         self._text_sink: Optional[RoomTranscriptEventSink] = None
 
         # streams
-        self._audio_handler = AudioStreamHandler(
-            room=room,
-            enabled=options.audio_enabled,
-            sample_rate=options.audio_sample_rate,
-            num_channels=options.audio_num_channels,
-            capacity=options.audio_queue_capacity,
-        )
-        self._video_handler = VideoStreamHandler(
-            room=room,
-            enabled=options.video_enabled,
-            capacity=options.video_queue_capacity,
-        )
+        self._audio_handle: Optional[AudioStreamHandle] = None
+        self._video_handle: Optional[VideoStreamHandle] = None
+        if options.audio_enabled:
+            self._audio_handle = AudioStreamHandle(
+                room=room,
+                sample_rate=options.audio_sample_rate,
+                num_channels=options.audio_num_channels,
+                capacity=options.audio_queue_capacity,
+            )
+            self._audio_handle.set_participant(self._participant_identity)
+
+        if options.video_enabled:
+            self._video_handle = VideoStreamHandle(
+                room=room,
+                capacity=options.video_queue_capacity,
+            )
+            self._video_handle.set_participant(self._participant_identity)
 
         self._room.on("participant_connected", self._on_participant_connected)
         self._room.on("participant_disconnected", self._on_participant_disconnected)
         for participant in self._room.remote_participants.values():
             self._on_participant_connected(participant)
 
+    @property
+    def audio(self) -> AsyncIterator[rtc.AudioFrame] | None:
+        if not self._audio_handle:
+            return None
+        return self._audio_handle.stream
+
+    @property
+    def video(self) -> AsyncIterator[rtc.VideoFrame] | None:
+        if not self._video_handle:
+            return None
+        return self._video_handle.stream
+
+    @property
+    def linked_participant(self) -> rtc.RemoteParticipant | None:
+        if not self._participant_connected.done():
+            return None
+        return self._participant_connected.result()
+
     async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
         participant = await self.wait_for_participant()
+        if self._participant_identity is None:
+            # link to the first connected participant if not set
+            self.set_participant(participant.identity)
+
         if not agent:
             return
 
@@ -280,93 +298,68 @@ class RoomInput:
             )
             agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
-    @property
-    def audio(self) -> AsyncIterator[rtc.AudioFrame] | None:
-        return self._audio_handler.read_stream()
-
-    @property
-    def video(self) -> AsyncIterator[rtc.VideoFrame] | None:
-        return self._video_handler.read_stream()
-
-    @property
-    def active_participant(self) -> rtc.RemoteParticipant | None:
-        """Get currently active participant"""
-        return self._active_participant
-
-    async def link_participant(
-        self,
-        participant: rtc.RemoteParticipant | str,
-        *,
-        wait_for_connection: bool = False,
-    ) -> None:
+    def set_participant(self, participant_identity: str | None) -> None:
         """Switch audio and video streams to specified participant"""
-        target_identity = (
-            participant.identity
-            if isinstance(participant, rtc.RemoteParticipant)
-            else participant
-        )
+        if participant_identity is None:
+            self.unset_participant()
+            return
+
+        # reset future if switching to a different participant
         if (
-            self._active_participant
-            and self._active_participant.identity == target_identity
+            self._participant_identity is not None
+            and self._participant_identity != participant_identity
         ):
-            return
+            self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
+            # check if new participant is already connected
+            for participant in self._room.remote_participants.values():
+                if participant.identity == participant_identity:
+                    self._participant_connected.set_result(participant)
+                    break
 
-        self.unlink_participant()
-        self._target_participant_identity = target_identity
-        if target_identity in self._room.remote_participants:
-            participant = self._room.remote_participants[target_identity]
-        else:
-            if not wait_for_connection:
-                logger.error(
-                    "participant not connected",
-                    extra={"participant_identity": target_identity},
+        # update participant identity and handlers
+        self._participant_identity = participant_identity
+        if self._audio_handle:
+            self._audio_handle.set_participant(participant_identity)
+        if self._video_handle:
+            self._video_handle.set_participant(participant_identity)
+
+        # update text sink if user transcript forwarding is enabled
+        if self._options.forward_user_transcript:
+            if self._text_sink:
+                self._text_sink.set_participant(participant_identity)
+            else:
+                self._text_sink = RoomTranscriptEventSink(
+                    room=self._room, participant=participant_identity, is_stream=False
                 )
-                raise ValueError(f"Participant {target_identity} not connected")
-            participant = await self.wait_for_participant()
 
-        self._active_participant = participant
-        await self._video_handler.link_participant(participant)
-        await self._audio_handler.link_participant(participant)
-        if self._text_sink:
-            self._text_sink.set_participant(participant)
-
-        self._participant_connected.set()
         logger.debug(
-            "linked participant",
-            extra={"participant_identity": participant.identity},
+            "set participant",
+            extra={"participant": participant_identity},
         )
 
-    def unlink_participant(self) -> None:
-        """Unlink the current participant"""
-        if self._active_participant is None:
-            return
-
-        self._target_participant_identity = None
-        unlinked_identity = self._active_participant.identity
-        self._active_participant = None
-        self._participant_connected.clear()
-        self._audio_handler.close()
-        self._video_handler.close()
-        logger.debug(
-            "unlinked participant",
-            extra={"participant_identity": unlinked_identity},
-        )
+    def unset_participant(self) -> None:
+        self._participant_identity = None
+        self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
+        if self._audio_handle:
+            self._audio_handle.set_participant(None)
+        if self._video_handle:
+            self._video_handle.set_participant(None)
+        self._text_sink = None
+        logger.debug("unset participant")
 
     async def wait_for_participant(self) -> rtc.RemoteParticipant:
-        await self._participant_connected.wait()
-        assert self._active_participant is not None
-        return self._active_participant
+        return await self._participant_connected
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         logger.debug(
             "participant connected",
-            extra={"participant_identity": participant.identity},
+            extra={"participant": participant.identity},
         )
-        if self._active_participant:
+        if self._participant_connected.done():
             return
 
-        if self._target_participant_identity is not None:
-            if participant.identity != self._target_participant_identity:
+        if self._participant_identity is not None:
+            if participant.identity != self._participant_identity:
                 return
         # otherwise, skip participants that are marked as publishing for this agent
         elif (
@@ -375,22 +368,20 @@ class RoomInput:
         ):
             return
 
-        task = asyncio.create_task(self.link_participant(participant))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._participant_connected.set_result(participant)
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         logger.debug(
             "participant disconnected",
-            extra={"participant_identity": participant.identity},
+            extra={"participant": participant.identity},
         )
         if (
-            not self._active_participant
-            or self._active_participant.identity != participant.identity
+            self._participant_identity is None
+            or self._participant_identity != participant.identity
         ):
             return
 
-        self.unlink_participant()
+        self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
 
     def _on_user_transcript_updated(self, ev: stt.SpeechEvent) -> None:
         if self._text_sink is None:
@@ -409,16 +400,13 @@ class RoomInput:
         task.add_done_callback(self._tasks.discard)
 
     async def aclose(self) -> None:
-        if self._closed:
-            raise RuntimeError("RoomInput already closed")
-
-        self._closed = True
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("participant_disconnected", self._on_participant_disconnected)
 
-        self._active_participant = None
-        self._audio_handler.close()
-        self._video_handler.close()
+        if self._audio_handle:
+            await self._audio_handle.aclose()
+        if self._video_handle:
+            await self._video_handle.aclose()
 
         # cancel and wait for all pending tasks
         await utils.aio.cancel_and_wait(*self._tasks)

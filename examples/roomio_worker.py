@@ -1,12 +1,12 @@
 import logging
 
 from dotenv import load_dotenv
+from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentContext, AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.plugins import cartesia, deepgram, openai
-from livekit import rtc
 
 logger = logging.getLogger("roomio-example")
 logger.setLevel(logging.INFO)
@@ -62,14 +62,30 @@ async def entrypoint(ctx: JobContext):
     if agent.output.audio is not None:
         agent.output.audio.on("playback_finished", on_playback_finished)
 
-    @ctx.room.local_participant.register_rpc_method("link_to_participant")
-    async def on_link_to_participant(data: rtc.RpcInvocationData) -> None:
+    @ctx.room.local_participant.register_rpc_method("set_participant")
+    async def on_set_participant(data: rtc.RpcInvocationData) -> None:
         logger.info(
-            "link_to_participant called",
+            "set_participant called",
             extra={"caller_identity": data.caller_identity, "payload": data.payload},
         )
+        if not agent.room_input:
+            logger.warning("room_input not set, skipping set_participant")
+            return
+
         target_identity = data.payload or data.caller_identity
-        await agent._room_input.link_participant(target_identity, wait_for_connection=True)
+        agent.room_input.set_participant(target_identity)
+
+    @ctx.room.local_participant.register_rpc_method("unset_participant")
+    async def on_unset_participant(data: rtc.RpcInvocationData) -> None:
+        logger.info(
+            "unset_participant called",
+            extra={"caller_identity": data.caller_identity, "payload": data.payload},
+        )
+        if not agent.room_input:
+            logger.warning("room_input not set, skipping unset_participant")
+            return
+
+        agent.room_input.set_participant(None)
 
 
 if __name__ == "__main__":

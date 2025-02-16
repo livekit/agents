@@ -127,6 +127,14 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     def vad(self) -> vad.VAD | None:
         return self._vad
 
+    @property
+    def room_input(self) -> room_io.RoomInput | None:
+        return self._room_input
+
+    @property
+    def room_output(self) -> room_io.RoomOutput | None:
+        return self._room_output
+
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
     # constructor of the PipelineAgent
