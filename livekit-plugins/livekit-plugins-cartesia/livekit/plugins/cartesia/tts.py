@@ -125,6 +125,22 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
         self._session = http_session
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+        )
+
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        session = self._ensure_session()
+        url = self._opts.get_ws_url(
+            f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
+        )
+        return await asyncio.wait_for(
+            session.ws_connect(url), self._conn_options.timeout
+        )
+
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -175,14 +191,11 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> "SynthesizeStream":
+    def stream(self) -> "SynthesizeStream":
         return SynthesizeStream(
             tts=self,
-            conn_options=conn_options,
+            pool=self._pool,
             opts=self._opts,
-            session=self._ensure_session(),
         )
 
 
@@ -257,12 +270,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         *,
         tts: TTS,
-        conn_options: APIConnectOptions,
         opts: _TTSOptions,
-        session: aiohttp.ClientSession,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
     ):
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._opts, self._session = opts, session
+        super().__init__(tts=tts)
+        self._opts, self._pool = opts, pool
         self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT
         ).stream()
@@ -346,25 +358,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                         last_frame = frame
 
                     _send_last_frame(segment_id=segment_id, is_final=True)
-
                     if segment_id == request_id:
-                        # we're not going to receive more frames, close the connection
-                        await ws.close()
+                        # we're not going to receive more frames, end stream
                         break
                 else:
                     logger.error("unexpected Cartesia message %s", data)
 
-        url = self._opts.get_ws_url(
-            f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
-        )
-
-        ws: aiohttp.ClientWebSocketResponse | None = None
-
+        ws = await self._pool.get()
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(url), self._conn_options.timeout
-            )
-
             tasks = [
                 asyncio.create_task(_input_task()),
                 asyncio.create_task(_sentence_stream_task(ws)),
@@ -375,9 +376,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
+        except Exception as e:
+            self._pool.reset(ws)
+            raise e
         finally:
-            if ws is not None:
-                await ws.close()
+            self._pool.put(ws)
 
 
 def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:

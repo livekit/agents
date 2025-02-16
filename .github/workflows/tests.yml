@@ -77,7 +77,6 @@ jobs:
           sudo dpkg -i libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
           sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
 
-
       - name: Install ffmpeg (macOS)
         if: ${{ startsWith(matrix.os, 'macos') }}
         run: brew install ffmpeg
@@ -122,7 +121,7 @@ jobs:
 
           case "${{ matrix.test_group }}" in
             base)
-              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_tts_fallback.py test_stt_fallback.py test_message_change.py test_build_func_desc.py test_create_func.py"
+              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_tts_fallback.py test_stt_fallback.py test_message_change.py test_build_func_desc.py test_create_func.py test_pool.py"
               ;;
             llm)
               test_files="test_llm.py"

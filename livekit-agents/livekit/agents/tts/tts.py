@@ -5,7 +5,15 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from types import TracebackType
-from typing import AsyncIterable, AsyncIterator, Generic, Literal, TypeVar, Union
+from typing import (
+    AsyncIterable,
+    AsyncIterator,
+    Generic,
+    Literal,
+    Optional,
+    TypeVar,
+    Union,
+)
 
 from livekit import rtc
 
@@ -45,13 +53,19 @@ class TTS(
     Generic[TEvent],
 ):
     def __init__(
-        self, *, capabilities: TTSCapabilities, sample_rate: int, num_channels: int
+        self,
+        *,
+        capabilities: TTSCapabilities,
+        sample_rate: int,
+        num_channels: int,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> None:
         super().__init__()
         self._capabilities = capabilities
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
 
     @property
     def label(self) -> str:
@@ -74,11 +88,11 @@ class TTS(
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> ChunkedStream: ...
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, *, conn_options: Optional[APIConnectOptions] = None
     ) -> SynthesizeStream:
         raise NotImplementedError(
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"
@@ -102,11 +116,15 @@ class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
     def __init__(
-        self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> None:
         self._input_text = input_text
         self._tts = tts
-        self._conn_options = conn_options
+        self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
         self._event_ch = aio.Chan[SynthesizedAudio]()
 
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
@@ -235,10 +253,12 @@ class ChunkedStream(ABC):
 class SynthesizeStream(ABC):
     class _FlushSentinel: ...
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self, *, tts: TTS, conn_options: Optional[APIConnectOptions] = None
+    ) -> None:
         super().__init__()
         self._tts = tts
-        self._conn_options = conn_options
+        self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._event_aiter, self._monitor_aiter = aio.itertools.tee(self._event_ch, 2)

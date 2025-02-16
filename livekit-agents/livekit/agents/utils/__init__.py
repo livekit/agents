@@ -7,6 +7,7 @@ from .exp_filter import ExpFilter
 from .log import log_exceptions
 from .misc import is_given, shortuuid, time_ms
 from .moving_average import MovingAverage
+from .pool import ConnectionPool
 
 EventEmitter = rtc.EventEmitter
 
@@ -28,4 +29,5 @@ __all__ = [
     "hw",
     "is_given",
     "_compute_changes",
+    "ConnectionPool",
 ]

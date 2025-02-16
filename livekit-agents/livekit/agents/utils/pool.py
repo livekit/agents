@@ -1,0 +1,147 @@
+import logging
+import time
+from typing import Awaitable, Callable, Generic, Optional, Set, TypeVar
+
+T = TypeVar("T")
+
+logger = logging.getLogger("livekit.agents.pool")
+
+
+class ConnectionPool(Generic[T]):
+    """Helper class to manage persistent connections like websockets.
+
+    Handles connection pooling and reconnection after max duration.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_session_duration: Optional[float] = None,
+        connect_cb: Callable[[], Awaitable[T]] | None = None,
+        close_cb: Callable[[T], Awaitable[None]] | None = None,
+    ) -> None:
+        """Initialize the connection wrapper.
+
+        Args:
+            max_session_duration: Maximum duration in seconds before forcing reconnection
+            connect_cb: Optional async callback to create new connections
+            close_cb: Optional async callback to close connections
+        """
+        self._max_session_duration = max_session_duration
+        self._connect_cb = connect_cb
+        self._close_cb = close_cb
+        self._connections: dict[T, float] = {}  # conn -> connected_at timestamp
+        self._available: Set[T] = set()  # Available/reusable connections
+
+        # New set to store connections to be reaped (closed) later.
+        self._to_close: Set[T] = set()
+
+    async def connect(self) -> T:
+        """Create a new connection.
+
+        Returns:
+            The new connection object
+
+        Raises:
+            NotImplementedError: If no connect callback was provided
+        """
+        if self._connect_cb is None:
+            raise NotImplementedError("Must provide connect_cb or implement connect()")
+        return await self._connect_cb()
+
+    async def _drain_to_close(self) -> None:
+        """Drain and close all the connections queued for closing."""
+        for conn in list(self._to_close):
+            await self._maybe_close_connection(conn)
+        self._to_close.clear()
+
+    async def get(self) -> T:
+        """Get an available connection or create a new one if needed.
+
+        Returns:
+            An active connection object
+        """
+        # First, close out any connections that have previously been marked.
+        await self._drain_to_close()
+
+        now = time.time()
+
+        # Try to reuse an available connection that hasn't expired
+        while self._available:
+            conn = self._available.pop()
+            if (
+                self._max_session_duration is None
+                or now - self._connections[conn] <= self._max_session_duration
+            ):
+                return conn
+            # Connection expired; mark it for resetting.
+            self.reset(conn)
+
+        # Create new connection
+        logger.info("creating new connection")
+        conn = await self.connect()
+        logger.info("created new connection")
+        self._connections[conn] = now
+        return conn
+
+    def put(self, conn: T) -> None:
+        """Mark a connection as available for reuse.
+
+        If connection has been reset, it will not be added to the pool.
+
+        Args:
+            conn: The connection to make available
+        """
+        if conn in self._connections:
+            self._available.add(conn)
+
+    async def _maybe_close_connection(self, conn: T) -> None:
+        """Close a connection if close_cb is provided.
+
+        Args:
+            conn: The connection to close
+        """
+        if self._close_cb is not None:
+            await self._close_cb(conn)
+
+    def reset(self, conn: T) -> None:
+        """Remove a specific connection from the pool.
+
+        Marks the connection to be closed during the next drain cycle.
+
+        Args:
+            conn: The connection to reset
+        """
+        self._available.discard(conn)
+        if conn in self._connections:
+            self._to_close.add(conn)
+            self._connections.pop(conn, None)
+
+    def maybe_reset(self, conn: T) -> None:
+        """Potentially reset a connection if it's past the max session duration.
+
+        Args:
+            conn: The connection to check
+        """
+        if conn in self._connections:
+            now = time.time()
+            if (
+                self._max_session_duration is None
+                or now - self._connections[conn] > self._max_session_duration
+            ):
+                self.reset(conn)
+
+    def reset_all(self) -> None:
+        """Clear all existing connections.
+
+        Marks all current connections to be closed during the next drain cycle.
+        """
+        for conn in list(self._connections.keys()):
+            self._to_close.add(conn)
+        self._connections.clear()
+        self._available.clear()
+
+    async def aclose(self):
+        """Close all connections, draining any pending connection closures."""
+        self.reset_all()
+        await self._drain_to_close()
