@@ -5,12 +5,12 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
+from typing import Optional
 from urllib.parse import urlencode
 
 import aiohttp
 from livekit import rtc
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
@@ -114,7 +114,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
             tts=self,
@@ -127,7 +127,7 @@ class TTS(tts.TTS):
         )
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, *, conn_options: Optional[APIConnectOptions] = None
     ) -> "SynthesizeStream":
         stream = SynthesizeStream(
             tts=self,
@@ -150,8 +150,8 @@ class ChunkedStream(tts.ChunkedStream):
         api_key: str,
         input_text: str,
         opts: _TTSOptions,
-        conn_options: APIConnectOptions,
         session: aiohttp.ClientSession,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
@@ -223,9 +223,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         base_url: str,
         api_key: str,
-        conn_options: APIConnectOptions,
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
+        conn_options: Optional[APIConnectOptions] = None,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
