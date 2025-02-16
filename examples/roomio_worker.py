@@ -6,6 +6,7 @@ from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentContext, AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.plugins import cartesia, deepgram, openai
+from livekit import rtc
 
 logger = logging.getLogger("roomio-example")
 logger.setLevel(logging.INFO)
@@ -60,6 +61,15 @@ async def entrypoint(ctx: JobContext):
 
     if agent.output.audio is not None:
         agent.output.audio.on("playback_finished", on_playback_finished)
+
+    @ctx.room.local_participant.register_rpc_method("link_to_participant")
+    async def on_link_to_participant(data: rtc.RpcInvocationData) -> None:
+        logger.info(
+            "link_to_participant called",
+            extra={"caller_identity": data.caller_identity, "payload": data.payload},
+        )
+        target_identity = data.payload or data.caller_identity
+        await agent._room_input.link_participant(target_identity, wait_for_connection=True)
 
 
 if __name__ == "__main__":
