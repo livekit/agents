@@ -84,7 +84,6 @@ class STTOptions:
         return None
 
 
-
 class STT(stt.STT):
     def __init__(
         self,
