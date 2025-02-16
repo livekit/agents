@@ -17,8 +17,8 @@ class ConnectionPool(Generic[T]):
         self,
         *,
         max_session_duration: Optional[float] = None,
-        connect_cb: Callable[[], Awaitable[T]] | None = None,
-        close_cb: Callable[[T], Awaitable[None]] | None = None,
+        connect_cb: Optional[Callable[[], Awaitable[T]]] = None,
+        close_cb: Optional[Callable[[T], Awaitable[None]]] = None,
     ) -> None:
         """Initialize the connection wrapper.
 

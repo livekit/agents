@@ -16,10 +16,9 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APITimeoutError,
@@ -232,7 +231,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
             tts=self, input_text=text, conn_options=conn_options, opts=self._opts
