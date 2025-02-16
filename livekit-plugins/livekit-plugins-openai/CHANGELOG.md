@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.11.0
+
+### Minor Changes
+
+- openai tts: switch to using Opus encoding - [#1494](https://github.com/livekit/agents/pull/1494) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.10.19
 
 ### Patch Changes
