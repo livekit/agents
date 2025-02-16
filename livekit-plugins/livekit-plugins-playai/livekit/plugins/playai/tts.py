@@ -155,8 +155,8 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         input_text: str,
-        conn_options: APIConnectOptions,
         opts: _Options,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._client = tts._client
@@ -199,8 +199,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         *,
         tts: TTS,
-        conn_options: APIConnectOptions,
         opts: _Options,
+        conn_options: Optional[APIConnectOptions] = None,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._client = tts._client
