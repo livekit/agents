@@ -108,15 +108,12 @@ class _EUORunner(_InferenceRunner):
         eou_probability = outputs[0][0]
         end_time = time.perf_counter()
 
-        logger.debug(
-            "eou prediction",
-            extra={
-                "eou_probability": eou_probability,
-                "input": text,
-                "duration": round(end_time - start_time, 3),
-            },
-        )
-        return json.dumps({"eou_probability": float(eou_probability)}).encode()
+        data = {
+            "eou_probability": float(eou_probability),
+            "input": text,
+            "duration": round(end_time - start_time, 3),
+        }
+        return json.dumps(data).encode()
 
 
 class EOUModel:
@@ -185,4 +182,8 @@ class EOUModel:
         )
 
         result_json = json.loads(result.decode())
+        logger.debug(
+            "eou prediction",
+            extra=result_json,
+        )
         return result_json["eou_probability"]
