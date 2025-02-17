@@ -8,7 +8,7 @@ from livekit import rtc
 
 from .. import stt, utils
 from ..log import logger
-from .io import AudioSink, TextSink
+from .io import AudioSink, MultiTextSink, TextSink
 from .transcription import TextSynchronizer
 
 if TYPE_CHECKING:
@@ -241,7 +241,7 @@ class RoomInput:
         self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
 
         # transcription forwarder
-        self._text_sink: Optional[RoomTranscriptEventSink] = None
+        self._text_sink: Optional[TextSink] = None
 
         # streams
         self._audio_handle: Optional[AudioStreamHandle] = None
@@ -305,8 +305,20 @@ class RoomInput:
         agent.input.audio = self.audio
         agent.input.video = self.video
         if self._options.forward_user_transcript:
-            self._text_sink = RoomTranscriptEventSink(
-                room=self._room, participant=participant, is_stream=False
+            # TODO: support multiple participants
+            self._text_sink = MultiTextSink(
+                [
+                    RoomTranscriptEventSink(
+                        room=self._room,
+                        participant=self._participant,
+                        is_delta_stream=False,
+                    ),
+                    DataStreamSink(
+                        room=self._room,
+                        participant=self._participant,
+                        is_delta_stream=False,
+                    ),
+                ]
             )
             agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
@@ -461,15 +473,24 @@ class RoomOutput:
             num_channels=self._options.num_channels,
             track_source=self._options.track_source,
         )
-        self._text_sink: Optional[RoomTranscriptEventSink] = None
+        self._text_sink: Optional[TextSink] = None
         self._text_synchronizer: Optional[TextSynchronizer] = None
 
     async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
         await self._audio_sink.start()
 
         if self._options.forward_agent_transcription:
-            self._text_sink = RoomTranscriptEventSink(
-                room=self._room, participant=self._room.local_participant
+            self._text_sink = MultiTextSink(
+                [
+                    RoomTranscriptEventSink(
+                        room=self._room, participant=self._room.local_participant
+                    ),
+                    DataStreamSink(
+                        room=self._room,
+                        participant=self._room.local_participant,
+                        topic="lk.chat",
+                    ),
+                ]
             )
 
         if self._options.sync_agent_transcription and self._text_sink:
@@ -607,23 +628,13 @@ class RoomTranscriptEventSink(TextSink):
         participant: rtc.Participant | str,
         *,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
-        is_stream: bool = True,
+        is_delta_stream: bool = True,
     ):
         super().__init__()
         self._room = room
-        self._is_stream = is_stream
         self._tasks: set[asyncio.Task] = set()
-
         self._track_id: str | None = None
-        self._participant_identity: str = (
-            participant if isinstance(participant, str) else participant.identity
-        )
-
-        self._capturing = False
-        self._pushed_text = ""
-        self._current_id = utils.shortuuid("SG_")
-
-        self._room.on("track_published", self._on_track_published)
+        self._is_stream = is_delta_stream
         self.set_participant(participant, track)
 
     def set_participant(
