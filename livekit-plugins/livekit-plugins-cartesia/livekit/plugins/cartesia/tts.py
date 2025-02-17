@@ -263,16 +263,66 @@ class SynthesizeStream(tts.SynthesizeStream):
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts, self._session = opts, session
-        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
+        self._sent_tokenizer = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT
-        ).stream()
+        )
+        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     async def _run(self) -> None:
+        @utils.log_exceptions(logger=logger)
+        async def _tokenize_input():
+            """tokenize text from the input_ch to words"""
+            input_stream = None
+            async for input in self._input_ch:
+                if isinstance(input, str):
+                    if input_stream is None:
+                        # new segment (after flush for e.g)
+                        input_stream = self._sent_tokenizer.stream()
+                        self._segments_ch.send_nowait(input_stream)
+
+                    input_stream.push_text(input)
+                elif isinstance(input, self._FlushSentinel):
+                    if input_stream is not None:
+                        input_stream.end_input()
+
+                    input_stream = None
+            self._segments_ch.close()
+
+        @utils.log_exceptions(logger=logger)
+        async def _run_segments(ws: aiohttp.ClientWebSocketResponse):
+            async for input_stream in self._segments_ch:
+                await self._run_ws(input_stream, ws)
+
+        while True:
+            if self._ws is None:
+                url = self._opts.get_ws_url(
+                    f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
+                )
+
+                self._ws = await self._session.ws_connect(
+                    url, timeout=self._conn_options.timeout
+                )
+            tasks = [
+                asyncio.create_task(_tokenize_input()),
+                asyncio.create_task(_run_segments(self._ws)),
+            ]
+
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
+
+    async def _run_ws(
+        self,
+        input_stream: tokenize.SentenceStream,
+        ws: aiohttp.ClientWebSocketResponse,
+    ) -> None:
         request_id = utils.shortuuid()
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse):
             base_pkt = _to_cartesia_options(self._opts)
-            async for ev in self._sent_tokenizer_stream:
+            async for ev in input_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = request_id
                 token_pkt["transcript"] = ev.token + " "
@@ -285,14 +335,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
-
-        async def _input_task():
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    self._sent_tokenizer_stream.flush()
-                    continue
-                self._sent_tokenizer_stream.push_text(data)
-            self._sent_tokenizer_stream.end_input()
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
             audio_bstream = utils.audio.AudioByteStream(
@@ -348,36 +390,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                     _send_last_frame(segment_id=segment_id, is_final=True)
 
                     if segment_id == request_id:
-                        # we're not going to receive more frames, close the connection
-                        await ws.close()
                         break
                 else:
                     logger.error("unexpected Cartesia message %s", data)
 
-        url = self._opts.get_ws_url(
-            f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
-        )
-
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        tasks = [
+            asyncio.create_task(_sentence_stream_task(ws)),
+            asyncio.create_task(_recv_task(ws)),
+        ]
 
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(url), self._conn_options.timeout
-            )
-
-            tasks = [
-                asyncio.create_task(_input_task()),
-                asyncio.create_task(_sentence_stream_task(ws)),
-                asyncio.create_task(_recv_task(ws)),
-            ]
-
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(*tasks)
+            await asyncio.gather(*tasks)
         finally:
-            if ws is not None:
-                await ws.close()
+            await utils.aio.gracefully_cancel(*tasks)
 
 
 def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
