@@ -9,7 +9,7 @@ from livekit import rtc
 from .. import stt, utils
 from ..log import logger
 from .io import AudioSink, MultiTextSink, TextSink
-from .transcription import TextSynchronizer
+from .transcription import TextSynchronizer, find_micro_track_id
 
 if TYPE_CHECKING:
     from ..pipeline import PipelineAgent
@@ -410,7 +410,7 @@ class RoomTranscriptEventSink(TextSink):
             track = track.sid
         else:
             try:
-                track = utils.find_micro_track_id(self._room, identity)
+                track = find_micro_track_id(self._room, identity)
             except ValueError:
                 track = None
 
@@ -516,38 +516,53 @@ class DataStreamSink(TextSink):
         track: rtc.Track | rtc.TrackPublication | str | None = None,
     ) -> None:
         identity = participant if isinstance(participant, str) else participant.identity
-        if track is None:
-            track = utils.find_micro_track_id(self._room, identity)
-        elif isinstance(track, (rtc.TrackPublication, rtc.Track)):
-            track = track.sid
-
         self._participant_identity = identity
-        self._track_id = track
-
         self._current_id = utils.shortuuid("SG_")
+        self._latest_text = ""
 
     async def capture_text(self, text: str) -> None:
+        self._latest_text = text
         try:
             if not self._text_writer:
                 self._text_writer = await self._room.local_participant.stream_text(
                     topic=self._topic,
                     stream_id=self._current_id,
-                    attributes={"lk.transcribed_identity": self._participant_identity},
+                    attributes={
+                        "lk.transcribed_identity": self._participant_identity,
+                        "lk.transcription_final": False,
+                    },
                 )
 
             await self._text_writer.write(text)
 
             if not self._is_delta_stream:
-                self.flush(final=False)
+                # close non-delta stream immediately after writing
+                await self._text_writer.aclose()
+                self._text_writer = None
         except Exception:
             logger.exception("Failed to publish transcription to stream")
 
-    def flush(self, *, final: bool = True) -> None:
-        if not self._text_writer:
-            return
-        self._text_writer = None
-        task = asyncio.create_task(
-            self._text_writer.aclose(attributes={"lk.transcription_final": final})
-        )
+    def flush(self) -> None:
+        attributes = {
+            "lk.transcription_final": True,
+            "lk.transcribed_identity": self._participant_identity,
+        }
+
+        async def _close_writer():
+            if not self._is_delta_stream:
+                writer = await self._room.local_participant.stream_text(
+                    topic=self._topic,
+                    stream_id=self._current_id,
+                    attributes=attributes,
+                )
+                await writer.write(self._latest_text)
+                await writer.aclose(attributes=attributes)
+            else:
+                if not self._text_writer:
+                    return
+                await self._text_writer.aclose(attributes=attributes)
+
+        task = asyncio.create_task(_close_writer())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        self._text_writer = None
