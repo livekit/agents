@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+from aiohttp import ClientWSTimeout
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -266,7 +267,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._sent_tokenizer = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT
         )
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     async def _run(self) -> None:
@@ -299,10 +300,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 url = self._opts.get_ws_url(
                     f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
                 )
-
-                self._ws = await self._session.ws_connect(
-                    url, timeout=self._conn_options.timeout
+                timeout = ClientWSTimeout(
+                    ws_close=self._conn_options.timeout,
                 )
+
+                self._ws = await self._session.ws_connect(url, timeout=timeout)
             tasks = [
                 asyncio.create_task(_tokenize_input()),
                 asyncio.create_task(_run_segments(self._ws)),
