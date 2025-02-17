@@ -63,8 +63,8 @@ class LLMOptions:
     temperature: float | None
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None
-    enable_caching: bool | None = None
-    """If True, the system prompt, tools, and chat history will be cached."""
+    caching: Literal["ephemeral"] | None = None
+    """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
 
 class LLM(llm.LLM):
@@ -79,7 +79,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
-        enable_caching: bool | None = None,
+        caching: Literal["ephemeral"] | None = None,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -87,15 +87,15 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
 
-        model(str | ChatModels): The model to use. defaults to "claude-3-5-sonnet-20241022"
-        api_key(str | None): The Anthropic API key. defaults to ANTHROPIC_API_KEY environment variable
-        base_url(str | None): The base URL for the Anthropic API. defaults to None
-        user(str | None): The user for the Anthropic API. defaults to None
-        client(anthropic.AsyncClient | None): The Anthropic client to use. defaults to None
-        temperature(float | None): The temperature for the Anthropic API. defaults to None
-        parallel_tool_calls(bool | None): Whether to parallel tool calls. defaults to None
-        tool_choice(Union[ToolChoice, Literal["auto", "required", "none"]] | None): The tool choice for the Anthropic API. defaults to "auto"
-        enable_caching(bool | None): Whether to cache the system prompt, tools, and chat history. defaults to None
+        model (str | ChatModels): The model to use. Defaults to "claude-3-5-sonnet-20241022".
+        api_key (str | None): The Anthropic API key. Defaults to the ANTHROPIC_API_KEY environment variable.
+        base_url (str | None): The base URL for the Anthropic API. Defaults to None.
+        user (str | None): The user for the Anthropic API. Defaults to None.
+        client (anthropic.AsyncClient | None): The Anthropic client to use. Defaults to None.
+        temperature (float | None): The temperature for the Anthropic API. Defaults to None.
+        parallel_tool_calls (bool | None): Whether to parallelize tool calls. Defaults to None.
+        tool_choice (Union[ToolChoice, Literal["auto", "required", "none"]] | None): The tool choice for the Anthropic API. Defaults to "auto".
+        caching (Literal["ephemeral"] | None): If set to "ephemeral", caching will be enabled for the system prompt, tools, and chat history.
         """
 
         super().__init__(
@@ -116,7 +116,7 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
-            enable_caching=enable_caching,
+            caching=caching,
         )
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,
@@ -155,11 +155,11 @@ class LLM(llm.LLM):
         if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
             fncs_desc: list[anthropic.types.ToolParam] = []
             for i, fnc in enumerate(fnc_ctx.ai_functions.values()):
-                # caching last tool will cache all the tools
+                # caching last tool will cache all the tools if caching is enabled
                 cache_ctrl = (
                     CACHE_CONTROL_EPHEMERAL
                     if (i == len(fnc_ctx.ai_functions) - 1)
-                    and self._opts.enable_caching
+                    and self._opts.caching == "ephemeral"
                     else None
                 )
                 fncs_desc.append(
@@ -186,12 +186,12 @@ class LLM(llm.LLM):
             opts["tool_choice"] = anthropic_tool_choice
 
         latest_system_message: anthropic.types.TextBlockParam = _latest_system_message(
-            chat_ctx, enable_caching=self._opts.enable_caching
+            chat_ctx, caching=self._opts.caching
         )
         anthropic_ctx = _build_anthropic_context(
             chat_ctx.messages,
             id(self),
-            enable_caching=self._opts.enable_caching,
+            caching=self._opts.caching,
         )
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
 
@@ -365,7 +365,7 @@ class LLMStream(llm.LLMStream):
 
 
 def _latest_system_message(
-    chat_ctx: llm.ChatContext, enable_caching: bool | None = None
+    chat_ctx: llm.ChatContext, caching: Literal["ephemeral"] | None = None
 ) -> anthropic.types.TextBlockParam:
     latest_system_message: llm.ChatMessage | None = None
     for m in chat_ctx.messages:
@@ -384,7 +384,7 @@ def _latest_system_message(
     system_text_block = anthropic.types.TextBlockParam(
         text=latest_system_str,
         type="text",
-        cache_control=CACHE_CONTROL_EPHEMERAL if enable_caching else None,
+        cache_control=CACHE_CONTROL_EPHEMERAL if caching == "ephemeral" else None,
     )
     return system_text_block
 
@@ -416,14 +416,16 @@ def _merge_messages(
 
 
 def _build_anthropic_context(
-    chat_ctx: List[llm.ChatMessage], cache_key: Any, enable_caching: bool | None
+    chat_ctx: List[llm.ChatMessage],
+    cache_key: Any,
+    caching: Literal["ephemeral"] | None,
 ) -> List[anthropic.types.MessageParam]:
     result: List[anthropic.types.MessageParam] = []
     for i, msg in enumerate(chat_ctx):
-        # caching last message will cache whole chat history
+        # caching last message will cache whole chat history if caching is enabled
         cache_ctrl = (
             CACHE_CONTROL_EPHEMERAL
-            if ((i == len(chat_ctx) - 1) and enable_caching)
+            if ((i == len(chat_ctx) - 1) and caching == "ephemeral")
             else None
         )
         a_msg = _build_anthropic_message(msg, cache_key, cache_ctrl=cache_ctrl)
