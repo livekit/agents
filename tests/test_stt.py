@@ -18,6 +18,7 @@ from livekit.plugins import (
     google,
     openai,
     silero,
+    speechmatics,
 )
 
 from .utils import make_test_speech, wer
@@ -82,6 +83,7 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
         id="google.chirp_2",
     ),
     pytest.param(lambda: azure.STT(), id="azure"),
+    pytest.param(lambda: speechmatics.STT(), id="speechmatics"),
 ]
 
 
