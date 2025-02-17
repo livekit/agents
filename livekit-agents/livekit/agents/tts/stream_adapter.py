@@ -106,3 +106,4 @@ class StreamAdapterWrapper(SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+            await self._wrapped_tts.aclose()

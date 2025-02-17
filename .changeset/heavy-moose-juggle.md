@@ -2,4 +2,4 @@
 "livekit-plugins-turn-detector": patch
 ---
 
-fix incorrect dtype on windows
+log from job process instead of inference

@@ -778,6 +778,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             SpeechDataContextVar.reset(tk)
 
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
+        await self._agent_publication.wait_for_subscription()
+
         fnc_done_fut = asyncio.Future[None]()
         playing_lock = asyncio.Lock()
         nested_speech_played = asyncio.Event()
@@ -819,24 +821,29 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         nested_speech_task = asyncio.create_task(_play_nested_speech())
 
+        async def _stop_nesting_speech():
+            fnc_done_fut.set_result(None)
+            await nested_speech_task
+
         try:
             await speech_handle.wait_for_initialization()
         except asyncio.CancelledError:
+            await _stop_nesting_speech()
             return
-
-        await self._agent_publication.wait_for_subscription()
-
-        synthesis_handle = speech_handle.synthesis_handle
-        if synthesis_handle.interrupted:
-            return
-
-        user_question = speech_handle.user_question
 
         # wait for all pre-added nested speech to be played
         while speech_handle.nested_speech_handles:
             await nested_speech_played.wait()
 
         await playing_lock.acquire()
+        synthesis_handle = speech_handle.synthesis_handle
+        if synthesis_handle.interrupted:
+            playing_lock.release()
+            await _stop_nesting_speech()
+            return
+
+        user_question = speech_handle.user_question
+
         play_handle = synthesis_handle.play()
         join_fut = play_handle.join()
 
@@ -1060,8 +1067,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         if not is_using_tools:
             # skip the function calls execution
-            fnc_done_fut.set_result(None)
-            await nested_speech_task
+            await _stop_nesting_speech()
             speech_handle._set_done()
             return
 

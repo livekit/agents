@@ -39,7 +39,7 @@ async def entrypoint(ctx: JobContext):
     participant = await ctx.wait_for_participant()
     logger.info(f"starting voice assistant for participant {participant.identity}")
 
-    dg_model = "nova-2-general"
+    dg_model = "nova-3-general"
     if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
         # use a model optimized for telephony
         dg_model = "nova-2-phonecall"
