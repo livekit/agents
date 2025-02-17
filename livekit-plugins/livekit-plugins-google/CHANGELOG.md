@@ -1,5 +1,11 @@
 # livekit-plugins-google
 
+## 0.10.4
+
+### Patch Changes
+
+- Gemini realtime : rollback default model to `gemini-2.0-flash-exp` - [#1489](https://github.com/livekit/agents/pull/1489) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.10.3
 
 ### Patch Changes

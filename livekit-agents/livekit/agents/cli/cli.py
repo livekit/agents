@@ -1,7 +1,7 @@
 import asyncio
+import os
 import pathlib
 import signal
-import sys
 
 import click
 from livekit.protocol import models
@@ -216,7 +216,7 @@ def _run_dev(
         from .watcher import WatchServer
 
         setup_logging(log_level, args.devmode)
-        main_file = pathlib.Path(sys.argv[0]).parent
+        main_file = pathlib.Path(os.getcwd())
 
         async def _run_loop():
             server = WatchServer(
