@@ -660,11 +660,11 @@ class RoomTranscriptEventSink(TextSink):
         self._pushed_text = ""
         self._current_id = utils.shortuuid("SG_")
 
-    async def capture_text(self, text: str) -> None:
+    async def capture_text(self, text: str, *, segment_id: str | None = None) -> None:
         if not self._capturing:
             self._capturing = True
             self._pushed_text = ""
-            self._current_id = utils.shortuuid("SG_")
+            self._current_id = segment_id or utils.shortuuid("SG_")
 
         if self._is_stream:
             self._pushed_text += text
@@ -758,10 +758,13 @@ class DataStreamSink(TextSink):
         self._participant_identity = identity
         self._latest_text = ""
 
-    async def capture_text(self, text: str) -> None:
+    async def capture_text(self, text: str, *, segment_id: str | None = None) -> None:
+        if segment_id is not None and segment_id != self._current_id:
+            self.flush()
+
         self._latest_text = text
         if not self._is_capturing:
-            self._current_id = utils.shortuuid("SG_")
+            self._current_id = segment_id or utils.shortuuid("SG_")
             self._is_capturing = True
 
         try:
