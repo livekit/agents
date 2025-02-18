@@ -127,6 +127,14 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     def vad(self) -> vad.VAD | None:
         return self._vad
 
+    @property
+    def room_input(self) -> room_io.RoomInput | None:
+        return self._room_input
+
+    @property
+    def room_output(self) -> room_io.RoomOutput | None:
+        return self._room_output
+
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
     # constructor of the PipelineAgent
@@ -185,6 +193,9 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
         if self._forward_audio_atask is not None:
             await utils.aio.cancel_and_wait(self._forward_audio_atask)
+
+        if self._room_input:
+            await self._room_input.aclose()
 
     @property
     def options(self) -> PipelineOptions:
