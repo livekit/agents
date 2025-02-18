@@ -122,6 +122,14 @@ class TaskActivity(RecognitionHooks):
                 self._rt_session.on(
                     "input_speech_stopped", self._on_input_speech_stopped
                 )
+                self._rt_session.on(
+                    "input_audio_transcription_completed",
+                    self._on_input_audio_transcription_completed,
+                )
+                self._rt_session.on(
+                    "input_audio_transcription_failed",
+                    self._on_input_audio_transcription_failed,
+                )
                 try:
                     await self._rt_session.update_instructions(
                         self._agent_task.instructions
@@ -303,6 +311,34 @@ class TaskActivity(RecognitionHooks):
 
     def _on_input_speech_stopped(self, _: llm.InputSpeechStoppedEvent) -> None:
         log_event("input_speech_stopped")
+        self.on_interim_transcript(
+            stt.SpeechEvent(
+                stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                alternatives=[stt.SpeechData(text="", language="")],
+            )
+        )
+
+    def _on_input_audio_transcription_completed(
+        self, ev: llm.InputTranscriptionCompleted
+    ) -> None:
+        log_event("input_audio_transcription_completed")
+        self.on_final_transcript(
+            stt.SpeechEvent(
+                stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[stt.SpeechData(text=ev.transcript, language="")],
+            )
+        )
+
+    def _on_input_audio_transcription_failed(
+        self, ev: llm.InputTranscriptionFailed
+    ) -> None:
+        log_event("input_audio_transcription_failed")
+        self.on_final_transcript(
+            stt.SpeechEvent(
+                stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[stt.SpeechData(text="", language="")],
+            )
+        )
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
         if self.draining:

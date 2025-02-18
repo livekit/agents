@@ -45,7 +45,7 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     agent = PipelineAgent(
-        task=EchoTask(),
+        task=AlloyTask(),
     )
 
     await agent.start(room=ctx.room)
