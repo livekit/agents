@@ -255,6 +255,12 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             allow_interruptions=allow_interruptions,
         )
 
+    def interrupt(self) -> None:
+        if self._activity is None:
+            raise ValueError("PipelineAgent isn't running")
+
+        self._activity.interrupt()
+
     def update_task(self, task: AgentTask) -> None:
         self._agent_task = task
 

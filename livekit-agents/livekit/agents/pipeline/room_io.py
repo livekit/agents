@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class RoomInputOptions:
+    text_enabled: bool = True
+    """Whether to subscribe to text input"""
     audio_enabled: bool = True
     """Whether to subscribe to audio"""
     video_enabled: bool = False
@@ -48,6 +50,7 @@ class RoomOutputOptions:
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
 DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
 LK_PUBLISH_FOR_ATTR = "lk.publish_for"
+LK_TEXT_INPUT_TOPIC = "lk.room_text_input"
 
 
 class BaseStreamHandle:
@@ -226,6 +229,7 @@ class RoomInput:
         """
         self._options = options
         self._room = room
+        self._agent: Optional["PipelineAgent"] = None
         self._tasks: set[asyncio.Task] = set()
 
         # target participant
@@ -263,6 +267,12 @@ class RoomInput:
         for participant in self._room.remote_participants.values():
             self._on_participant_connected(participant)
 
+        # text input from datastream
+        if options.text_enabled:
+            self._room.register_text_stream_handler(
+                LK_TEXT_INPUT_TOPIC, self._on_text_input
+            )
+
     @property
     def audio(self) -> AsyncIterator[rtc.AudioFrame] | None:
         if not self._audio_handle:
@@ -287,7 +297,8 @@ class RoomInput:
             # link to the first connected participant if not set
             self.set_participant(participant.identity)
 
-        if not agent:
+        self._agent = agent
+        if not self._agent:
             return
 
         agent.input.audio = self.audio
@@ -396,6 +407,29 @@ class RoomInput:
                 self._text_sink.flush()
 
         task = asyncio.create_task(_capture_text())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    def _on_text_input(
+        self, reader: rtc.TextStreamReader, participant_identity: str
+    ) -> None:
+        if participant_identity != self._participant_identity:
+            return
+
+        async def _read_text():
+            if not self._agent:
+                return
+
+            text = await reader.read_all()
+            # TODO(long): text is always "0"?
+            logger.debug(
+                "received text input",
+                extra={"text": text, "participant": self._participant_identity},
+            )
+            self._agent.interrupt()
+            self._agent.generate_reply(user_input=text)
+
+        task = asyncio.create_task(_read_text())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
