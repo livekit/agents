@@ -38,6 +38,9 @@ async def test_get_reuses_connection():
     # Return the connection to the pool
     pool.put(conn1)
 
+    async with pool.connection() as conn:
+        assert conn is conn1, "Expected conn to be the same connection as conn1"
+
     conn2 = await pool.get()
     assert conn1 is conn2, (
         "Expected the same connection to be reused when it hasn't expired."
@@ -62,9 +65,9 @@ async def test_get_creates_new_connection_when_none_available():
 
 
 @pytest.mark.asyncio
-async def test_reset_connection():
+async def test_remove_connection():
     """
-    Test that after resetting a connection (via reset()), the connection is not reused.
+    Test that after removing a connection, the connection is not reused.
     """
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
@@ -72,35 +75,35 @@ async def test_reset_connection():
     conn = await pool.get()
     pool.put(conn)
     # Reset the connection which should remove it from the pool.
-    pool.reset(conn)
+    pool.remove(conn)
 
     # Even if we try to put it back, it won't be added because it's not tracked anymore.
     pool.put(conn)
     new_conn = await pool.get()
-    assert new_conn is not conn, "Expected a reset connection to not be reused."
+    assert new_conn is not conn, "Expected a removed connection to not be reused."
 
 
 @pytest.mark.asyncio
-async def test_maybe_reset_not_expired():
+async def test_maybe_remove_not_expired():
     """
-    Test that maybe_reset does not remove a connection that is still within its valid session duration.
+    Test that maybe_remove does not remove a connection that is still within its valid session duration.
     """
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
 
     conn = await pool.get()
     pool.put(conn)
-    # Since the connection is fresh, maybe_reset() should leave it intact.
-    pool.maybe_reset(conn)
+    # Since the connection is fresh, maybe_remove() should leave it intact.
+    pool.maybe_remove(conn)
     assert conn in pool._connections, (
-        "Connection should not be reset if within max_session_duration."
+        "Connection should not be removed if within max_session_duration."
     )
 
 
 @pytest.mark.asyncio
-async def test_maybe_reset_expired():
+async def test_maybe_remove_expired():
     """
-    Test that maybe_reset removes an expired connection.
+    Test that maybe_remove removes an expired connection.
     """
     # Use a short max duration to simulate expiration.
     dummy_connect = dummy_connect_factory()
@@ -113,7 +116,7 @@ async def test_maybe_reset_expired():
         time.time() - 2
     )  # 2 seconds ago (max_session_duration is 1)
 
-    pool.maybe_reset(conn)
+    pool.maybe_remove(conn)
     assert conn not in pool._connections, (
         "Expired connection should be removed from _connections."
     )
