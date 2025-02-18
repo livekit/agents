@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from .task import AgentTask
 
 
+# NOTE: TaskActivity isn't exposed to the public API
 class TaskActivity(RecognitionHooks):
     def __init__(self, task: AgentTask, agent: PipelineAgent) -> None:
         self._agent_task, self._agent = task, agent
@@ -46,6 +47,7 @@ class TaskActivity(RecognitionHooks):
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
 
+        self._started = False
         self._draining = False
 
         self._current_speech: SpeechHandle | None = None
@@ -54,7 +56,6 @@ class TaskActivity(RecognitionHooks):
 
         self._main_atask: asyncio.Task | None = None
         self._tasks: list[asyncio.Task] = []
-        self._started = False
 
     @property
     def draining(self) -> bool:
@@ -87,6 +88,13 @@ class TaskActivity(RecognitionHooks):
     @property
     def current_speech(self) -> SpeechHandle | None:
         return self._current_speech
+
+    # TODO(theomonnom): Shoukd pause and resume call on_enter and on_exit? probably not
+    async def pause(self) -> None:
+        pass
+
+    async def resume(self) -> None:
+        pass
 
     async def drain(self) -> None:
         async with self._lock:
@@ -180,11 +188,12 @@ class TaskActivity(RecognitionHooks):
 
     def say(
         self,
-        source: str | AsyncIterable[rtc.AudioFrame],
+        text: str, 
         *,
+        audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
-        if isinstance(source, str) and self.tts is None:
+        if not is_given(audio) and not self.tts:
             raise ValueError("trying to generate speech from text without a TTS model")
 
         handle = SpeechHandle.create(
@@ -196,7 +205,8 @@ class TaskActivity(RecognitionHooks):
         task = asyncio.create_task(
             self._tts_task(
                 speech_handle=handle,
-                source=source,
+                text=text,
+                audio=audio or None
             ),
             name="_tts_task",
         )
@@ -398,7 +408,7 @@ class TaskActivity(RecognitionHooks):
 
     @utils.log_exceptions(logger=logger)
     async def _tts_task(
-        self, speech_handle: SpeechHandle, source: str | AsyncIterable[rtc.AudioFrame]
+        self, speech_handle: SpeechHandle, text: str, audio: AsyncIterable[rtc.AudioFrame] | None
     ) -> None:
         text_output = self._agent.output.text
         audio_output = self._agent.output.audio
@@ -410,15 +420,19 @@ class TaskActivity(RecognitionHooks):
         if speech_handle.interrupted:
             return
 
+        async def _read_text() -> AsyncIterable[str]:
+            yield text
+
+
         tasks = []
-        if isinstance(source, str):
-            if text_output is not None:
-                await text_output.capture_text(source)
-                text_output.flush()
+        if text_output is not None:
+            forward_text, _ = perform_text_forwarding(
+                text_output=text_output, llm_output=_read_text()
+            )
+            tasks.append(forward_text)
 
-            async def _read_text() -> AsyncIterable[str]:
-                yield source
-
+        if audio is None:
+            # generate audio using TTS
             tts_task: asyncio.Task | None = None
             tts_gen_data: _TTSGenerationData | None = None
             if audio_output is not None:
@@ -431,10 +445,11 @@ class TaskActivity(RecognitionHooks):
                     audio_output=audio_output, tts_output=tts_gen_data.audio_ch
                 )
                 tasks.append(forward_task)
-        elif isinstance(source, AsyncIterable):
+        else:
+            # use the provided audio
             if audio_output is not None:
                 forward_task, _ = perform_audio_forwarding(
-                    audio_output=audio_output, tts_output=source
+                    audio_output=audio_output, tts_output=audio
                 )
                 tasks.append(forward_task)
 
