@@ -747,6 +747,7 @@ class DataStreamSink(TextSink):
         self._topic = topic or "lk.chat"
         self._is_delta_stream = is_delta_stream
         self._text_writer: rtc.TextStreamWriter | None = None
+        self._is_capturing = False
 
     def set_participant(
         self,
@@ -755,22 +756,25 @@ class DataStreamSink(TextSink):
     ) -> None:
         identity = participant if isinstance(participant, str) else participant.identity
         self._participant_identity = identity
-        self._current_id = utils.shortuuid("SG_")
         self._latest_text = ""
 
     async def capture_text(self, text: str) -> None:
         self._latest_text = text
+        if not self._is_capturing:
+            self._current_id = utils.shortuuid("SG_")
+            self._is_capturing = True
+
         try:
             if not self._text_writer:
+                self._is_capturing = True
                 self._text_writer = await self._room.local_participant.stream_text(
                     topic=self._topic,
                     stream_id=self._current_id,
+                    sender_identity=self._participant_identity,
                     attributes={
-                        "lk.transcribed_identity": self._participant_identity,
-                        "lk.transcription_final": False,
+                        "lk.transcription_final": "false",
                     },
                 )
-
             await self._text_writer.write(text)
 
             if not self._is_delta_stream:
@@ -782,15 +786,17 @@ class DataStreamSink(TextSink):
 
     def flush(self) -> None:
         attributes = {
-            "lk.transcription_final": True,
-            "lk.transcribed_identity": self._participant_identity,
+            "lk.transcription_final": "true",
         }
+
+        self._is_capturing = False
 
         async def _close_writer():
             if not self._is_delta_stream:
                 writer = await self._room.local_participant.stream_text(
                     topic=self._topic,
                     stream_id=self._current_id,
+                    sender_identity=self._participant_identity,
                     attributes=attributes,
                 )
                 await writer.write(self._latest_text)
