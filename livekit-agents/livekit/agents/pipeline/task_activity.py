@@ -467,6 +467,8 @@ class TaskActivity(RecognitionHooks):
                 audio_output.clear_buffer()
                 await audio_output.wait_for_playout()
 
+        self._agent_task._chat_ctx.add_message(role="assistant", content=text)
+
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
         self,
