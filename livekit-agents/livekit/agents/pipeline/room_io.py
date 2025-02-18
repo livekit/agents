@@ -577,9 +577,19 @@ class RoomTranscriptEventSink(TextSink):
     ):
         super().__init__()
         self._room = room
-        self._tasks: set[asyncio.Task] = set()
-        self._track_id: str | None = None
         self._is_stream = is_stream
+        self._tasks: set[asyncio.Task] = set()
+
+        self._track_id: str | None = None
+        self._participant_identity: str = (
+            participant if isinstance(participant, str) else participant.identity
+        )
+
+        self._capturing = False
+        self._pushed_text = ""
+        self._current_id = utils.shortuuid("SG_")
+
+        self._room.on("track_published", self._on_track_published)
         self.set_participant(participant, track)
 
     def set_participant(
@@ -597,10 +607,7 @@ class RoomTranscriptEventSink(TextSink):
                 track = find_micro_track_id(self._room, identity)
             except ValueError:
                 track = None
-
         self._track_id = track
-        if track is None:
-            self._room.on("track_published", self._on_track_published)
 
         self._capturing = False
         self._pushed_text = ""
@@ -664,12 +671,11 @@ class RoomTranscriptEventSink(TextSink):
     def _on_track_published(
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
     ) -> None:
-        if self._track_id is not None:
-            return
         if (
-            participant.identity != self._participant_identity
-            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
+            self._participant_identity is None
+            or participant.identity != self._participant_identity
         ):
             return
-        self._track_id = track.sid
-        self._room.off("track_published", self._on_track_published)
+
+        if track.source == rtc.TrackSource.SOURCE_MICROPHONE:
+            self._track_id = track.sid
