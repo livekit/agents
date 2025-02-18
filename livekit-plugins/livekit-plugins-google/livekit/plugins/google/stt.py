@@ -291,7 +291,7 @@ class STT(stt.STT):
         if location is not None:
             self._location = location
             # if location is changed, fetch a new client and recognizer as per the new location
-            self._pool.reset_all()
+            self._pool.remove_all()
         if keywords is not None:
             self._config.keywords = keywords
 
@@ -429,7 +429,7 @@ class SpeechStream(stt.SpeechStream):
                             logger.debug(
                                 "Google STT maximum connection time reached. Reconnecting..."
                             )
-                            self._pool.maybe_reset(client)
+                            self._pool.maybe_remove(client)
                             if has_started:
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(

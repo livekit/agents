@@ -121,7 +121,7 @@ jobs:
 
           case "${{ matrix.test_group }}" in
             base)
-              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_tts_fallback.py test_stt_fallback.py test_message_change.py test_build_func_desc.py test_create_func.py test_pool.py"
+              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_tts_fallback.py test_stt_fallback.py test_message_change.py test_build_func_desc.py test_create_func.py test_connection_pool.py"
               ;;
             llm)
               test_files="test_llm.py"
