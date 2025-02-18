@@ -365,8 +365,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.error("unexpected Cartesia message %s", data)
 
-        ws = await self._pool.get()
-        try:
+        async with self._pool.connection() as ws:
             tasks = [
                 asyncio.create_task(_input_task()),
                 asyncio.create_task(_sentence_stream_task(ws)),
@@ -377,11 +376,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
-        except Exception as e:
-            self._pool.reset(ws)
-            raise e
-        finally:
-            self._pool.put(ws)
 
 
 def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:

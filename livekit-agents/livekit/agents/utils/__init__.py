@@ -3,11 +3,11 @@ from livekit import rtc
 from . import aio, audio, codecs, http_context, hw, images
 from ._message_change import compute_changes as _compute_changes  # keep internal
 from .audio import AudioBuffer, combine_frames, merge_frames
+from .connection_pool import ConnectionPool
 from .exp_filter import ExpFilter
 from .log import log_exceptions
 from .misc import is_given, shortuuid, time_ms
 from .moving_average import MovingAverage
-from .pool import ConnectionPool
 
 EventEmitter = rtc.EventEmitter
 

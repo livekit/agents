@@ -1,7 +1,7 @@
 import time
 
 import pytest
-from livekit.agents.utils.pool import ConnectionPool
+from livekit.agents.utils import ConnectionPool
 
 
 # A simple dummy connection object.

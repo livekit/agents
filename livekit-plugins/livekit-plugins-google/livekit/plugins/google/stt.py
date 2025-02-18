@@ -223,32 +223,27 @@ class STT(stt.STT):
             language_codes=config.languages,
         )
 
-        client = await self._pool.get()
         try:
-            raw = await client.recognize(
-                cloud_speech.RecognizeRequest(
-                    recognizer=self._get_recognizer(client),
-                    config=config,
-                    content=frame.data.tobytes(),
-                ),
-                timeout=conn_options.timeout,
-            )
+            async with self._pool.connection() as client:
+                raw = await client.recognize(
+                    cloud_speech.RecognizeRequest(
+                        recognizer=self._get_recognizer(client),
+                        config=config,
+                        content=frame.data.tobytes(),
+                    ),
+                    timeout=conn_options.timeout,
+                )
 
-            return _recognize_response_to_speech_event(raw)
+                return _recognize_response_to_speech_event(raw)
         except DeadlineExceeded:
-            self._pool.reset(client)
             raise APITimeoutError()
         except GoogleAPICallError as e:
-            self._pool.reset(client)
             raise APIStatusError(
                 e.message,
                 status_code=e.code or -1,
             )
         except Exception as e:
-            self._pool.reset(client)
             raise APIConnectionError() from e
-        finally:
-            self._pool.put(client)
 
     def stream(
         self,
@@ -455,72 +450,67 @@ class SpeechStream(stt.SpeechStream):
                     has_started = False
 
         while True:
-            client = await self._pool.get()
             try:
-                self._streaming_config = cloud_speech.StreamingRecognitionConfig(
-                    config=cloud_speech.RecognitionConfig(
-                        explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
-                            encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
-                            sample_rate_hertz=self._config.sample_rate,
-                            audio_channel_count=1,
+                async with self._pool.connection() as client:
+                    self._streaming_config = cloud_speech.StreamingRecognitionConfig(
+                        config=cloud_speech.RecognitionConfig(
+                            explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
+                                encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+                                sample_rate_hertz=self._config.sample_rate,
+                                audio_channel_count=1,
+                            ),
+                            adaptation=self._config.build_adaptation(),
+                            language_codes=self._config.languages,
+                            model=self._config.model,
+                            features=cloud_speech.RecognitionFeatures(
+                                enable_automatic_punctuation=self._config.punctuate,
+                                enable_word_time_offsets=True,
+                            ),
                         ),
-                        adaptation=self._config.build_adaptation(),
-                        language_codes=self._config.languages,
-                        model=self._config.model,
-                        features=cloud_speech.RecognitionFeatures(
-                            enable_automatic_punctuation=self._config.punctuate,
-                            enable_word_time_offsets=True,
+                        streaming_features=cloud_speech.StreamingRecognitionFeatures(
+                            enable_voice_activity_events=True,
+                            interim_results=self._config.interim_results,
                         ),
-                    ),
-                    streaming_features=cloud_speech.StreamingRecognitionFeatures(
-                        enable_voice_activity_events=True,
-                        interim_results=self._config.interim_results,
-                    ),
-                )
-
-                should_stop = asyncio.Event()
-                stream = await client.streaming_recognize(
-                    requests=input_generator(client, should_stop),
-                )
-                self._session_connected_at = time.time()
-
-                process_stream_task = asyncio.create_task(
-                    process_stream(client, stream)
-                )
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        [process_stream_task, wait_reconnect_task],
-                        return_when=asyncio.FIRST_COMPLETED,
                     )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-                    if wait_reconnect_task not in done:
-                        break
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(
-                        process_stream_task, wait_reconnect_task
+
+                    should_stop = asyncio.Event()
+                    stream = await client.streaming_recognize(
+                        requests=input_generator(client, should_stop),
                     )
-                    should_stop.set()
+                    self._session_connected_at = time.time()
+
+                    process_stream_task = asyncio.create_task(
+                        process_stream(client, stream)
+                    )
+                    wait_reconnect_task = asyncio.create_task(
+                        self._reconnect_event.wait()
+                    )
+
+                    try:
+                        done, _ = await asyncio.wait(
+                            [process_stream_task, wait_reconnect_task],
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for task in done:
+                            if task != wait_reconnect_task:
+                                task.result()
+                        if wait_reconnect_task not in done:
+                            break
+                        self._reconnect_event.clear()
+                    finally:
+                        await utils.aio.gracefully_cancel(
+                            process_stream_task, wait_reconnect_task
+                        )
+                        should_stop.set()
             except DeadlineExceeded:
-                # force it to reconnect
-                self._pool.reset(client)
                 raise APITimeoutError()
             except GoogleAPICallError as e:
-                # force it to reconnect
-                self._pool.reset(client)
                 raise APIStatusError(
                     e.message,
                     status_code=e.code or -1,
                 )
             except Exception as e:
-                self._pool.reset(client)
                 raise APIConnectionError() from e
-            finally:
-                self._pool.put(client)
 
 
 def _recognize_response_to_speech_event(
