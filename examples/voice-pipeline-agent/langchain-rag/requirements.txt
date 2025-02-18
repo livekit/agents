@@ -1,0 +1,11 @@
+python-dotenv==1.0.1
+livekit-agents==0.12.13
+livekit-plugins-deepgram==0.6.19
+livekit-plugins-openai==0.10.19
+livekit-plugins-silero==0.7.4
+rich==13.9.4
+langchain-chroma==0.2.2
+langchain-community==0.3.17
+langchain-nomic==0.1.4
+rank-bm25==0.2.2
+unstructured==0.16.21
