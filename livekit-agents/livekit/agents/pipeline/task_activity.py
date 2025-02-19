@@ -319,14 +319,15 @@ class TaskActivity(RecognitionHooks):
         log_event("input_speech_started")
         self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session
 
-    def _on_input_speech_stopped(self, _: llm.InputSpeechStoppedEvent) -> None:
+    def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
         log_event("input_speech_stopped")
-        self.on_interim_transcript(
-            stt.SpeechEvent(
-                stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                alternatives=[stt.SpeechData(text="", language="")],
+        if ev.user_transcription_enabled:
+            self.on_interim_transcript(
+                stt.SpeechEvent(
+                    stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(text="", language="")],
+                )
             )
-        )
 
     def _on_input_audio_transcription_completed(
         self, ev: llm.InputTranscriptionCompleted
