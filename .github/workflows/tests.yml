@@ -24,7 +24,7 @@ jobs:
             macos-14,
             windows-2019,
             ubuntu-20.04,
-            ubuntu-24.04-arm64-m,
+            ubuntu-24.04-arm,
           ]
         python_version: ["3.9", "3.12"]
         test_group: ["base"]
