@@ -15,7 +15,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
-from .events import AgentContext
+from .events import CallContext
 from .generation import (
     _AudioOutput,
     _TextOutput,
@@ -196,10 +196,11 @@ class TaskActivity(RecognitionHooks):
 
     def say(
         self,
-        text: str, 
+        text: str,
         *,
         audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if not is_given(audio) and not self.tts:
             raise ValueError("trying to generate speech from text without a TTS model")
@@ -214,7 +215,8 @@ class TaskActivity(RecognitionHooks):
             self._tts_task(
                 speech_handle=handle,
                 text=text,
-                audio=audio or None
+                audio=audio or None,
+                add_to_chat_ctx=add_to_chat_ctx,
             ),
             name="_tts_task",
         )
@@ -445,7 +447,11 @@ class TaskActivity(RecognitionHooks):
 
     @utils.log_exceptions(logger=logger)
     async def _tts_task(
-        self, speech_handle: SpeechHandle, text: str, audio: AsyncIterable[rtc.AudioFrame] | None
+        self,
+        speech_handle: SpeechHandle,
+        text: str,
+        audio: AsyncIterable[rtc.AudioFrame] | None,
+        add_to_chat_ctx: bool,
     ) -> None:
         text_output = self._agent.output.text
         audio_output = self._agent.output.audio
@@ -459,7 +465,6 @@ class TaskActivity(RecognitionHooks):
 
         async def _read_text() -> AsyncIterable[str]:
             yield text
-
 
         tasks = []
         if text_output is not None:
@@ -504,7 +509,8 @@ class TaskActivity(RecognitionHooks):
                 audio_output.clear_buffer()
                 await audio_output.wait_for_playout()
 
-        self._agent_task._chat_ctx.add_message(role="assistant", content=text)
+        if add_to_chat_ctx:
+            self._agent_task._chat_ctx.add_message(role="assistant", content=text)
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
@@ -578,9 +584,9 @@ class TaskActivity(RecognitionHooks):
 
         # start to execute tools (only after play())
         exe_task, fnc_outputs = perform_tool_executions(
-            agent_ctx=AgentContext(self._agent),
-            fnc_ctx=fnc_ctx,
+            agent=self._agent,
             speech_handle=speech_handle,
+            fnc_ctx=fnc_ctx,
             function_stream=llm_gen_data.function_ch,
         )
         tasks.append(exe_task)
@@ -767,9 +773,9 @@ class TaskActivity(RecognitionHooks):
         ]
 
         exe_task, fnc_outputs = perform_tool_executions(
-            agent_ctx=AgentContext(self._agent),
-            fnc_ctx=self._agent_task._fnc_ctx,
+            agent=self._agent,
             speech_handle=speech_handle,
+            fnc_ctx=self._agent_task._fnc_ctx,
             function_stream=generation_ev.function_stream,
         )
         tasks.append(exe_task)

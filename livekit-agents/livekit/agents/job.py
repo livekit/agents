@@ -78,6 +78,7 @@ DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
 
 
 class JobContext:
+    # private ctor
     def __init__(
         self,
         *,

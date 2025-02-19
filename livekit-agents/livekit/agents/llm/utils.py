@@ -20,8 +20,7 @@ from .chat_context import ChatContext
 from .function_context import AIFunction, get_function_info
 
 if TYPE_CHECKING:
-    from ..pipeline.events import AgentContext
-    from ..pipeline.speech_handle import SpeechHandle
+    from ..pipeline.events import CallContext
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -95,10 +94,9 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
 
 
 def is_context_type(ty: type) -> bool:
-    from ..pipeline.events import AgentContext
-    from ..pipeline.speech_handle import SpeechHandle
+    from ..pipeline.events import CallContext
 
-    return ty is AgentContext or ty is SpeechHandle
+    return ty is CallContext
 
 
 def build_legacy_openai_schema(
@@ -199,16 +197,14 @@ def pydantic_model_to_function_arguments(
     *,
     ai_function: Callable,
     model: BaseModel,
-    agent_ctx: AgentContext | None = None,
-    speech_handle: SpeechHandle | None = None,
+    call_ctx: CallContext | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
     """
     Convert a model’s fields into function args/kwargs.
     Raises TypeError if required params are missing
     """
 
-    from ..pipeline.events import AgentContext
-    from ..pipeline.speech_handle import SpeechHandle
+    from ..pipeline.events import CallContext
 
     signature = inspect.signature(ai_function)
     type_hints = get_type_hints(ai_function, include_extras=True)
@@ -216,10 +212,8 @@ def pydantic_model_to_function_arguments(
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]
-        if type_hint is AgentContext and agent_ctx is not None:
-            context_dict[param_name] = agent_ctx
-        elif type_hint is SpeechHandle and speech_handle is not None:
-            context_dict[param_name] = speech_handle
+        if type_hint is CallContext and call_ctx is not None:
+            context_dict[param_name] = call_ctx
 
     bound = signature.bind(**{**model.model_dump(), **context_dict})
     bound.apply_defaults()
