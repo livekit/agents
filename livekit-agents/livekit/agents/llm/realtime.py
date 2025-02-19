@@ -18,7 +18,7 @@ class InputSpeechStartedEvent:
 
 @dataclass
 class InputSpeechStoppedEvent:
-    pass
+    user_transcription_enabled: bool
 
 
 @dataclass

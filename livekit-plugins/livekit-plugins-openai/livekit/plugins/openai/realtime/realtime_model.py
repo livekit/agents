@@ -397,7 +397,15 @@ class RealtimeSession(llm.RealtimeSession):
     def _handle_input_audio_buffer_speech_stopped(
         self, _: InputAudioBufferSpeechStoppedEvent
     ) -> None:
-        self.emit("input_speech_stopped", llm.InputSpeechStoppedEvent())
+        user_transcription_enabled = (
+            self._realtime_model._opts.input_audio_transcription is not None
+        )
+        self.emit(
+            "input_speech_stopped",
+            llm.InputSpeechStoppedEvent(
+                user_transcription_enabled=user_transcription_enabled
+            ),
+        )
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         assert event.response.id is not None, "response.id is None"

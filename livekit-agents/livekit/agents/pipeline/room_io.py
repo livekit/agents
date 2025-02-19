@@ -297,6 +297,7 @@ class RoomInput:
             # link to the first connected participant if not set
             self.set_participant(participant.identity)
 
+        # TODO(long): should we force the agent to be set or provide a set_agent method?
         self._agent = agent
         if not self._agent:
             return
@@ -421,7 +422,6 @@ class RoomInput:
                 return
 
             text = await reader.read_all()
-            # TODO(long): text is always "0"?
             logger.debug(
                 "received text input",
                 extra={"text": text, "participant": self._participant_identity},
