@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass
+from typing import Literal, Optional
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -18,6 +19,8 @@ from openai.types.beta.realtime import (
     ConversationItemCreateEvent,
     ConversationItemDeletedEvent,
     ConversationItemDeleteEvent,
+    ConversationItemInputAudioTranscriptionCompletedEvent,
+    ConversationItemInputAudioTranscriptionFailedEvent,
     ConversationItemTruncateEvent,
     ErrorEvent,
     InputAudioBufferAppendEvent,
@@ -60,9 +63,18 @@ NUM_CHANNELS = 1
 
 
 @dataclass
+class _InputAudioTranscription:
+    model: Literal["whisper-1"] = "whisper-1"
+
+
+DEFAULT_INPUT_AUDIO_TRANSCRIPTION = _InputAudioTranscription()
+
+
+@dataclass
 class _RealtimeOptions:
     model: str
     voice: str
+    input_audio_transcription: Optional[_InputAudioTranscription]
 
 
 @dataclass
@@ -86,11 +98,18 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: str = "gpt-4o-realtime-preview",
         voice: str = "alloy",
+        input_audio_transcription: Optional[
+            _InputAudioTranscription
+        ] = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
         client: openai.AsyncClient | None = None,
     ) -> None:
         super().__init__(capabilities=llm.RealtimeCapabilities(message_truncation=True))
 
-        self._opts = _RealtimeOptions(model=model, voice=voice)
+        self._opts = _RealtimeOptions(
+            model=model,
+            voice=voice,
+            input_audio_transcription=input_audio_transcription,
+        )
         self._client = client or openai.AsyncClient()
 
     def session(self) -> "RealtimeSession":
@@ -145,6 +164,15 @@ class RealtimeSession(llm.RealtimeSession):
                     self._handle_conversion_item_created(event)
                 elif event.type == "conversation.item.deleted":
                     self._handle_conversion_item_deleted(event)
+                elif (
+                    event.type
+                    == "conversation.item.input_audio_transcription.completed"
+                ):
+                    self._handle_conversion_item_input_audio_transcription_completed(
+                        event
+                    )
+                elif event.type == "conversation.item.input_audio_transcription.failed":
+                    self._handle_conversion_item_input_audio_transcription_failed(event)
                 elif event.type == "response.audio_transcript.delta":
                     self._handle_response_audio_transcript_delta(event)
                 elif event.type == "response.audio.delta":
@@ -168,12 +196,23 @@ class RealtimeSession(llm.RealtimeSession):
                 except Exception:
                     break
 
+        input_audio_transcription: Optional[
+            session_update_event.SessionInputAudioTranscription
+        ] = None
+        if self._realtime_model._opts.input_audio_transcription:
+            input_audio_transcription = (
+                session_update_event.SessionInputAudioTranscription(
+                    model=self._realtime_model._opts.input_audio_transcription.model,
+                )
+            )
+
         self._msg_ch.send_nowait(
             SessionUpdateEvent(
                 type="session.update",
                 session=session_update_event.Session(
                     model=self._realtime_model._opts.model,  # type: ignore
                     voice=self._realtime_model._opts.voice,  # type: ignore
+                    input_audio_transcription=input_audio_transcription,
                 ),
                 event_id=utils.shortuuid("session_update_"),
             )
@@ -427,6 +466,33 @@ class RealtimeSession(llm.RealtimeSession):
 
         if fut := self._item_delete_future.pop(event.item_id, None):
             fut.set_result(None)
+
+    def _handle_conversion_item_input_audio_transcription_completed(
+        self, event: ConversationItemInputAudioTranscriptionCompletedEvent
+    ) -> None:
+        remote_item = self._remote_chat_ctx.get(event.item_id)
+        if remote_item:
+            remote_item.item.content.append(event.transcript)
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id, transcript=event.transcript
+            ),
+        )
+
+    def _handle_conversion_item_input_audio_transcription_failed(
+        self, event: ConversationItemInputAudioTranscriptionFailedEvent
+    ) -> None:
+        logger.error(
+            "OpenAI Realtime API failed to transcribe input audio",
+            extra={"error": event.error},
+        )
+        self.emit(
+            "input_audio_transcription_failed",
+            llm.InputTranscriptionFailed(
+                item_id=event.item_id, message=event.error.message
+            ),
+        )
 
     def _handle_response_audio_transcript_delta(
         self, event: ResponseAudioTranscriptDeltaEvent
