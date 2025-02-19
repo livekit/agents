@@ -150,7 +150,7 @@ class ConnectionPool(Generic[T]):
             ):
                 self.remove(conn)
 
-    def remove_all(self) -> None:
+    def invalidate(self) -> None:
         """Clear all existing connections.
 
         Marks all current connections to be closed during the next drain cycle.
@@ -162,5 +162,5 @@ class ConnectionPool(Generic[T]):
 
     async def aclose(self):
         """Close all connections, draining any pending connection closures."""
-        self.remove_all()
+        self.invalidate()
         await self._drain_to_close()

@@ -291,7 +291,7 @@ class STT(stt.STT):
         if location is not None:
             self._location = location
             # if location is changed, fetch a new client and recognizer as per the new location
-            self._pool.remove_all()
+            self._pool.invalidate()
         if keywords is not None:
             self._config.keywords = keywords
 
