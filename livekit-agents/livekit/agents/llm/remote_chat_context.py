@@ -28,6 +28,9 @@ class RemoteChatContext:
             current_node = current_node._next
 
         return ChatContext(items=items)
+    
+    def get(self, item_id: str) -> _RemoteChatItem | None:
+        return self._id_to_item.get(item_id)
 
     def insert(self, previous_item_id: str | None, message: ChatItem) -> None:
         """
