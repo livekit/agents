@@ -1,3 +1,13 @@
+"""
+Provides centralized HTTP client management for agent jobs with:
+- Context-aware session management
+- Automatic cleanup
+- Process isolation
+- Error handling for out-of-context usage
+
+Integrates with LiveKit's job system for proper resource lifecycle management.
+"""
+
 from __future__ import annotations
 
 import contextvars
@@ -12,6 +22,7 @@ _ContextVar = contextvars.ContextVar("agent_http_session")  # type: ignore
 
 
 def _new_session_ctx() -> _ClientFactory:
+    """Internal factory for creating process-bound HTTP sessions"""
     g_session: aiohttp.ClientSession | None = None
 
     def _new_session() -> aiohttp.ClientSession:
@@ -26,10 +37,17 @@ def _new_session_ctx() -> _ClientFactory:
 
 
 def http_session() -> aiohttp.ClientSession:
-    """Optional utility function to avoid having to manually manage an aiohttp.ClientSession lifetime.
-    On job processes, this http session will be bound to the main event loop.
+    """Get or create an HTTP session bound to the current job context.
+    
+    Usage:
+        async def process_data():
+            session = http_session()
+            async with session.get(url) as resp:
+                ...
+    
+    Raises:
+        RuntimeError: If called outside of a LiveKit job context
     """
-
     val = _ContextVar.get(None)  # type: ignore
     if val is None:
         raise RuntimeError(
@@ -40,6 +58,7 @@ def http_session() -> aiohttp.ClientSession:
 
 
 async def _close_http_ctx():
+    """Internal cleanup method for job context teardown"""
     val = _ContextVar.get(None)  # type: ignore
     if val is not None:
         logger.debug("http_session(): closing the httpclient ctx")

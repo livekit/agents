@@ -1,3 +1,19 @@
+"""
+Avatar Dispatcher Module
+
+This module implements a FastAPI-based dispatcher server for launching avatar
+worker processes. When an avatar connection request is received, the dispatcher
+uses a local worker launcher to start a new avatar runner process (found in
+avatar_runner.py) as a subprocess.
+
+Developers can:
+  - Customize the FastAPI endpoint(s) for launching and monitoring workers.
+  - Modify the worker process launching logic to integrate with external schedulers.
+
+Requirements:
+  - fastapi, uvicorn
+"""
+
 import asyncio
 import logging
 import subprocess

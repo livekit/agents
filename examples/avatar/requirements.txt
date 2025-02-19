@@ -1,3 +1,6 @@
 fastapi
 uvicorn
 opencv-python
+numpy
+httpx
+python-dotenv

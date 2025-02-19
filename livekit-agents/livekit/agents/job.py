@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Core job management system for LiveKit agents. Provides:
+- Job context management
+- Room connection handling
+- Participant lifecycle management
+- Job process isolation
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -43,32 +51,36 @@ def get_current_job_context() -> JobContext:
 
 @unique
 class JobExecutorType(Enum):
-    PROCESS = "process"
-    THREAD = "thread"
+    """Execution environment for agent jobs"""
+    PROCESS = "process"  # Each job runs in separate process
+    THREAD = "thread"    # Jobs run in thread pool
 
 
 class AutoSubscribe(str, Enum):
-    SUBSCRIBE_ALL = "subscribe_all"
-    SUBSCRIBE_NONE = "subscribe_none"
-    AUDIO_ONLY = "audio_only"
-    VIDEO_ONLY = "video_only"
+    """Track subscription strategies when connecting to room"""
+    SUBSCRIBE_ALL = "subscribe_all"    # Auto-subscribe to all tracks
+    SUBSCRIBE_NONE = "subscribe_none"  # No auto-subscription
+    AUDIO_ONLY = "audio_only"          # Only subscribe to audio tracks
+    VIDEO_ONLY = "video_only"          # Only subscribe to video tracks
 
 
 @dataclass
 class JobAcceptArguments:
-    name: str
-    identity: str
-    metadata: str
-    attributes: dict[str, str] | None = None
+    """Parameters for accepting a job request"""
+    name: str              # Display name for the agent
+    identity: str          # Unique identity in the room
+    metadata: str          # Optional metadata string
+    attributes: dict[str, str] | None = None  # Custom attributes
 
 
 @dataclass
 class RunningJobInfo:
-    accept_arguments: JobAcceptArguments
-    job: agent.Job
-    url: str
-    token: str
-    worker_id: str
+    """Runtime information about an active job"""
+    accept_arguments: JobAcceptArguments  # Args used to accept job
+    job: agent.Job          # Protobuf job definition
+    url: str                # WebSocket URL for room connection
+    token: str              # Authentication token
+    worker_id: str          # ID of worker executing the job
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -78,15 +90,22 @@ DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
 
 
 class JobContext:
+    """Central context object for a running job, providing access to:
+    - Room connection
+    - Participant management
+    - Job metadata
+    - Process isolation
+    """
+    
     def __init__(
         self,
         *,
-        proc: JobProcess,
-        info: RunningJobInfo,
-        room: rtc.Room,
-        on_connect: Callable[[], None],
-        on_shutdown: Callable[[str], None],
-        inference_executor: InferenceExecutor,
+        proc: JobProcess,     # Parent job process
+        info: RunningJobInfo, # Job configuration
+        room: rtc.Room,       # Connected room instance
+        on_connect: Callable[[], None],  # Connection callback
+        on_shutdown: Callable[[str], None], # Shutdown handler
+        inference_executor: InferenceExecutor, # ML inference pool
     ) -> None:
         self._proc = proc
         self._info = info
@@ -108,6 +127,7 @@ class JobContext:
 
     @property
     def inference_executor(self) -> InferenceExecutor:
+        """Pool for CPU-intensive operations (ML inference, etc)"""
         return self._inf_executor
 
     @functools.cached_property
@@ -193,12 +213,13 @@ class JobContext:
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         rtc_config: rtc.RtcConfiguration | None = None,
     ) -> None:
-        """Connect to the room. This method should be called only once.
-
+        """Establish connection to LiveKit room.
+        
         Args:
             e2ee: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
             auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
             rtc_config: Custom RTC configuration to use when connecting to the room.
+
         """
         room_options = rtc.RoomOptions(
             e2ee=e2ee,
@@ -225,9 +246,12 @@ class JobContext:
         kind: list[rtc.ParticipantKind.ValueType]
         | rtc.ParticipantKind.ValueType = DEFAULT_PARTICIPANT_KINDS,
     ):
-        """Adds an entrypoint function to be run when a participant joins the room. In cases where
-        the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
-        added and they will each be run in parallel for each participant.
+        """Register participant handler that triggers when:
+        - New participant joins
+        - Participant matches specified kind(s)
+        
+        Handler signature:
+        async def handler(ctx: JobContext, participant: RemoteParticipant)
         """
 
         if entrypoint_fnc in [e for (e, _) in self._participant_entrypoints]:
@@ -257,6 +281,7 @@ class JobContext:
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
+    """Internal handler for track subscription strategies"""
     if auto_subscribe not in (AutoSubscribe.AUDIO_ONLY, AutoSubscribe.VIDEO_ONLY):
         return
 
@@ -280,10 +305,12 @@ def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) ->
 
 
 class JobProcess:
+    """Isolated execution context for a job with process-local storage"""
+    
     def __init__(
         self,
         *,
-        user_arguments: Any | None = None,
+        user_arguments: Any | None = None,  # Initialization arguments
     ) -> None:
         self._mp_proc = mp.current_process()
         self._userdata: dict[str, Any] = {}
@@ -295,6 +322,7 @@ class JobProcess:
 
     @property
     def userdata(self) -> dict:
+        """Process-isolated dictionary for arbitrary user state"""
         return self._userdata
 
     @property
@@ -303,6 +331,8 @@ class JobProcess:
 
 
 class JobRequest:
+    """Incoming job request that can be accepted or rejected"""
+    
     def __init__(
         self,
         *,
@@ -342,12 +372,12 @@ class JobRequest:
     async def accept(
         self,
         *,
-        name: str = "",
-        identity: str = "",
-        metadata: str = "",
+        name: str = "",          # Agent display name
+        identity: str = "",      # Room identity (must be unique)
+        metadata: str = "",      # Custom metadata string
         attributes: dict[str, str] | None = None,
     ) -> None:
-        """Accept the job request, and start the job if the LiveKit SFU assigns the job to our worker."""
+        """Claim ownership of this job request"""
         if not identity:
             identity = "agent-" + self.id
 

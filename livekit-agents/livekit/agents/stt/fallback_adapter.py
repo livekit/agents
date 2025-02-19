@@ -17,39 +17,54 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..utils import aio
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
-# don't retry when using the fallback adapter
+# Configuration for fallback adapter connection attempts
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
-    max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
+    max_retry=0,  # No retries at the fallback level - retries are handled per STT
+    timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
 )
 
 
 @dataclass
 class AvailabilityChangedEvent:
-    stt: STT
-    available: bool
+    """Event emitted when an STT provider's availability changes"""
+    stt: STT         # The STT instance whose status changed
+    available: bool  # New availability status
 
 
 @dataclass
 class _STTStatus:
-    available: bool
-    recovering_synthesize_task: asyncio.Task | None
-    recovering_stream_task: asyncio.Task | None
+    """Internal tracking class for STT provider status"""
+    available: bool                   # Current availability
+    recovering_synthesize_task: asyncio.Task | None  # Async task for batch recovery
+    recovering_stream_task: asyncio.Task | None      # Async task for stream recovery
 
 
 class FallbackAdapter(
     STT[Literal["stt_availability_changed"]],
 ):
+    """
+    STT implementation that provides fallback to multiple STT providers.
+    
+    Features:
+    - Automatic failover between providers
+    - Background recovery of failed providers
+    - Unified streaming interface
+    - Event notifications for provider status changes
+    """
+
     def __init__(
         self,
         stt: list[STT],
         *,
-        attempt_timeout: float = 10.0,
-        max_retry_per_stt: int = 1,
-        retry_interval: float = 5,
+        attempt_timeout: float = 10.0,    # Timeout per recognition attempt
+        max_retry_per_stt: int = 1,      # Max retries per individual STT before failing over
+        retry_interval: float = 5,       # Cooldown between recovery attempts
     ) -> None:
+        # Validate at least one STT provider is given
         if len(stt) < 1:
             raise ValueError("At least one STT instance must be provided.")
 
+        # Capabilities are the intersection of all providers' capabilities
         super().__init__(
             capabilities=STTCapabilities(
                 streaming=all(t.capabilities.streaming for t in stt),
@@ -62,9 +77,10 @@ class FallbackAdapter(
         self._max_retry_per_stt = max_retry_per_stt
         self._retry_interval = retry_interval
 
+        # Initialize status tracking for each provider
         self._status: list[_STTStatus] = [
             _STTStatus(
-                available=True,
+                available=True,  # Start assuming all providers are available
                 recovering_synthesize_task=None,
                 recovering_stream_task=None,
             )
@@ -80,18 +96,25 @@ class FallbackAdapter(
         conn_options: APIConnectOptions,
         recovering: bool = False,
     ) -> SpeechEvent:
+        """
+        Wrapper for STT.recognize() with error handling and logging.
+        
+        Args:
+            recovering: True if this is a recovery attempt (affects logging)
+        """
         try:
             return await stt.recognize(
                 buffer,
                 language=language,
                 conn_options=dataclasses.replace(
                     conn_options,
-                    max_retry=self._max_retry_per_stt,
+                    max_retry=self._max_retry_per_stt,  # Apply per-STT retry limit
                     timeout=self._attempt_timeout,
                     retry_interval=self._retry_interval,
                 ),
             )
         except asyncio.TimeoutError:
+            # Handle timeouts differently for recovery vs initial attempts
             if recovering:
                 logger.warning(
                     f"{stt.label} recovery timed out", extra={"streamed": False}
@@ -140,13 +163,17 @@ class FallbackAdapter(
         language: str | None,
         conn_options: APIConnectOptions,
     ) -> None:
+        """Start background recovery task for a failed STT provider"""
         stt_status = self._status[self._stt_instances.index(stt)]
+        
+        # Only start recovery if not already running
         if (
             stt_status.recovering_synthesize_task is None
             or stt_status.recovering_synthesize_task.done()
         ):
 
             async def _recover_stt_task(stt: STT) -> None:
+                # Attempt recognition with recovery parameters
                 try:
                     await self._try_recognize(
                         stt=stt,
@@ -163,7 +190,7 @@ class FallbackAdapter(
                         AvailabilityChangedEvent(stt=stt, available=True),
                     )
                 except Exception:
-                    return
+                    return  # Recovery failed, will retry later
 
             stt_status.recovering_synthesize_task = asyncio.create_task(
                 _recover_stt_task(stt)
@@ -176,6 +203,12 @@ class FallbackAdapter(
         language: str | None,
         conn_options: APIConnectOptions,
     ):
+        """
+        Core recognition logic:
+        1. Try available providers in order
+        2. If all fail, retry with exponential backoff
+        3. Start recovery of failed providers
+        """
         start_time = time.time()
 
         all_failed = all(not stt_status.available for stt_status in self._status)
@@ -230,6 +263,7 @@ class FallbackAdapter(
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
+        """Create a streaming recognition session with failover support"""
         return FallbackRecognizeStream(
             stt=self, language=language, conn_options=conn_options
         )
@@ -244,6 +278,13 @@ class FallbackAdapter(
 
 
 class FallbackRecognizeStream(RecognizeStream):
+    """
+    Streaming implementation that:
+    - Forwards audio to multiple recovery streams
+    - Fails over to next provider on error
+    - Maintains input buffer during failover
+    """
+
     def __init__(
         self,
         *,
@@ -257,6 +298,13 @@ class FallbackRecognizeStream(RecognizeStream):
         self._recovering_streams: list[RecognizeStream] = []
 
     async def _run(self) -> None:
+        """
+        Main streaming loop:
+        1. Create main recognition stream
+        2. Forward audio input to active stream
+        3. Handle errors and failover
+        4. Manage recovery streams
+        """
         start_time = time.time()
 
         all_failed = all(
@@ -353,6 +401,11 @@ class FallbackRecognizeStream(RecognizeStream):
         )
 
     def _try_recovery(self, stt: STT) -> None:
+        """Create recovery stream to test STT provider availability"""
+        # Recovery streams work by:
+        # 1. Creating a short-lived stream
+        # 2. Checking for successful transcriptions
+        # 3. Marking provider available if successful
         stt_status = self._fallback_adapter._status[
             self._fallback_adapter._stt_instances.index(stt)
         ]

@@ -1,3 +1,14 @@
+"""
+Waveform Visualizer Module
+
+This module provides the WaveformVisualizer class, which renders audio waveforms
+and volume histories onto a canvas using OpenCV and numpy. It is used in the avatar
+runner to overlay visualization information on the output video frames.
+
+Developers can modify the visualization parameters (e.g., FFT window size, frequency bands,
+color schemes) to customize the avatar's appearance.
+"""
+
 import time
 from collections import deque
 from typing import Optional

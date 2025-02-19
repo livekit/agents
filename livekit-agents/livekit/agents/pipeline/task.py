@@ -26,47 +26,60 @@ if TYPE_CHECKING:
 
 
 class AgentTask:
+    """
+    Central coordinator for AI agent tasks combining multiple components:
+    - Speech-to-Text (STT)
+    - Language Model (LLM)
+    - Text-to-Speech (TTS)
+    - Voice Activity Detection (VAD)
+    
+    Handles lifecycle management and data flow between components.
+    """
+    
     def __init__(
         self,
         *,
-        instructions: str,
+        instructions: str,  # Primary objective/behavior definition for the agent
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         ai_functions: list[llm.AIFunction] = [],
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
-        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
-        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,  # Speech-to-text component
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,  # Voice activity detector
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,  # Language model
+        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,  # Text-to-speech component
     ) -> None:
+        # Adapt non-streaming TTS to streaming interface
         if tts and not tts.capabilities.streaming:
             from .. import tts as text_to_speech
-
             tts = text_to_speech.StreamAdapter(
-                tts=tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
+                tts=tts, 
+                sentence_tokenizer=tokenize.basic.SentenceTokenizer()
             )
 
+        # Validate and adapt STT configuration
         if stt and not stt.capabilities.streaming:
             from .. import stt as speech_to_text
-
             if not vad:
                 raise ValueError(
                     "VAD is required when streaming is not supported by the STT"
                 )
 
+            # Wrap non-streaming STT with stream adapter
             stt = speech_to_text.StreamAdapter(
                 stt=stt,
-                vad=vad,
+                vad=vad,  # Use VAD to detect speech boundaries
             )
 
-        self._instructions = instructions
-        self._chat_ctx = chat_ctx or ChatContext.empty()
+        # Core task configuration
+        self._instructions = instructions  # Agent's primary directive
+        self._chat_ctx = chat_ctx or ChatContext.empty()  # LLM conversation history
         self._fnc_ctx = FunctionContext(ai_functions + find_ai_functions(self))
-        self._eou = turn_detector
-        self._stt = stt
-        self._llm = llm
-        self._tts = tts
-        self._vad = vad
-        self._activity: TaskActivity | None = None
+        self._eou = turn_detector  # End-of-utterance detector
+        self._stt = stt           # Speech recognition component
+        self._llm = llm           # Language model processor
+        self._tts = tts           # Speech synthesis component
+        self._vad = vad           # Voice activity detector
+        self._activity: TaskActivity | None = None  # Runtime context
 
     @property
     def instructions(self) -> str:
@@ -103,10 +116,10 @@ class AgentTask:
     @property
     def agent(self) -> PipelineAgent:
         """
-        Retrieve the PipelineAgent associated with the current task;.
-
+        Retrieve the PipelineAgent associated with the current task.
+        
         Raises:
-            RuntimeError: If the task is not running
+            RuntimeError: If accessed before task starts or after it ends
         """
         return self.__get_activity_or_raise().agent
 
@@ -119,17 +132,30 @@ class AgentTask:
     async def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame]
     ) -> Optional[AsyncIterable[stt.SpeechEvent]]:
+        """
+        Process audio stream through STT pipeline.
+        
+        Args:
+            audio: Input audio frames from voice connection
+            
+        Yields:
+            SpeechEvent: Recognized speech events (partial/final transcripts)
+            
+        Raises:
+            AssertionError: If STT component not configured
+        """
         activity = self.__get_activity_or_raise()
         assert activity.stt is not None, "stt_node called but no STT node is available"
 
         async with activity.stt.stream() as stream:
-
+            # Forward audio input to STT stream
             async def _forward_input():
                 async for frame in audio:
                     stream.push_frame(frame)
 
             forward_task = asyncio.create_task(_forward_input())
             try:
+                # Yield STT results to pipeline
                 async for event in stream:
                     yield event
             finally:
@@ -142,12 +168,26 @@ class AgentTask:
         Optional[AsyncIterable[str]],
         Optional[str],
     ]:
+        """
+        Process conversation context through language model.
+        
+        Args:
+            chat_ctx: Current conversation context
+            fnc_ctx: Available AI functions
+            
+        Yields:
+            LLM response chunks (streaming or single response)
+            
+        Raises:
+            AssertionError: If LLM component not configured or incompatible
+        """
         activity = self.__get_activity_or_raise()
         assert activity.llm is not None, "llm_node called but no LLM node is available"
         assert isinstance(activity.llm, llm.LLM), (
             "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
         )
 
+        # Execute LLM chat and stream results
         async with activity.llm.chat(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx) as stream:
             async for chunk in stream:
                 yield chunk
@@ -155,27 +195,38 @@ class AgentTask:
     async def tts_node(
         self, text: AsyncIterable[str]
     ) -> Optional[AsyncIterable[rtc.AudioFrame]]:
+        """
+        Convert text responses to speech audio.
+        
+        Args:
+            text: Input text stream from LLM responses
+            
+        Yields:
+            AudioFrame: Generated speech audio frames
+            
+        Raises:
+            AssertionError: If TTS component not configured
+        """
         activity = self.__get_activity_or_raise()
         assert activity.tts is not None, "tts_node called but no TTS node is available"
 
         async with activity.tts.stream() as stream:
-
+            # Forward text input to TTS
             async def _forward_input():
                 async for chunk in text:
                     stream.push_text(chunk)
-
                 stream.end_input()
 
             forward_task = asyncio.create_task(_forward_input())
             try:
+                # Yield audio output to pipeline
                 async for ev in stream:
                     yield ev.frame
             finally:
                 await utils.aio.cancel_and_wait(forward_task)
 
     def __get_activity_or_raise(self) -> TaskActivity:
-        """Get the current activity context for this task (internal)"""
+        """Internal method to validate task is running and get activity context"""
         if self._activity is None:
             raise RuntimeError("no activity context found, this task is not running")
-
         return self._activity

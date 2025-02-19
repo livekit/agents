@@ -1,3 +1,18 @@
+"""
+Avatar Worker Module
+
+This module defines the avatar worker that connects to a LiveKit room and
+waits for a dedicated avatar runner to join. The worker sets up an agent task,
+configures audio and video pipelines, and initiates a handshake with the avatar
+dispatcher. You can customize the agent instructions, connection logic, and further
+processing to create your own avatar experience.
+
+Requirements:
+  - Python 3.10+ (for union type syntax using "|")
+  - LiveKit SDK and plugins (livekit)
+  - httpx, python-dotenv, etc.
+"""
+
 import argparse
 import logging
 import sys

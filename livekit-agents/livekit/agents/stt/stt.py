@@ -1,3 +1,13 @@
+"""
+Speech-to-Text (STT) abstraction layer for voice recognition.
+
+Provides interfaces for:
+- Real-time audio transcription
+- Streaming and batch processing
+- Speech event handling
+- Metrics collection
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -20,46 +30,50 @@ from ..utils.audio import calculate_audio_duration
 
 @unique
 class SpeechEventType(str, Enum):
+    """Events emitted during speech recognition."""
     START_OF_SPEECH = "start_of_speech"
-    """indicate the start of speech
+    """Indicates speech detection beginning (may coincide with first interim transcript)
     if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT"""
     INTERIM_TRANSCRIPT = "interim_transcript"
-    """interim transcript, useful for real-time transcription"""
+    """Partial transcription with low latency, may be updated"""
     FINAL_TRANSCRIPT = "final_transcript"
-    """final transcript, emitted when the STT is confident enough that a certain
-    portion of speech will not change"""
+    """Stable transcription unlikely to change"""
     RECOGNITION_USAGE = "recognition_usage"
-    """usage event, emitted periodically to indicate usage metrics"""
+    """Periodic usage metrics update"""
     END_OF_SPEECH = "end_of_speech"
-    """indicate the end of speech, emitted when the user stops speaking"""
+    """Signals speech has stopped"""
 
 
 @dataclass
 class SpeechData:
-    language: str
-    text: str
-    start_time: float = 0.0
-    end_time: float = 0.0
-    confidence: float = 0.0  # [0, 1]
+    """Recognized speech segment with timing and confidence."""
+    language: str            # Detected language code
+    text: str                # Transcribed text
+    start_time: float = 0.0  # Audio start offset in seconds
+    end_time: float = 0.0    # Audio end offset in seconds
+    confidence: float = 0.0  # Recognition confidence [0-1]
 
 
 @dataclass
 class RecognitionUsage:
-    audio_duration: float
+    """Resource usage metrics for recognition."""
+    audio_duration: float    # Total processed audio in seconds
 
 
 @dataclass
 class SpeechEvent:
-    type: SpeechEventType
-    request_id: str = ""
-    alternatives: List[SpeechData] = field(default_factory=list)
-    recognition_usage: RecognitionUsage | None = None
+    """Container for STT events and associated data."""
+    type: SpeechEventType         # Event category
+    request_id: str = ""          # Unique identifier for recognition request
+    alternatives: List[SpeechData] = field(default_factory=list)  # Possible transcriptions
+    recognition_usage: RecognitionUsage | None = None  # Usage data for RECOGNITION_USAGE events
 
 
 @dataclass
 class STTCapabilities:
-    streaming: bool
-    interim_results: bool
+    """Describes features supported by the STT implementation."""
+    streaming: bool         # Supports real-time audio streaming
+    interim_results: bool   # Provides partial results during recognition
 
 
 TEvent = TypeVar("TEvent")
@@ -70,17 +84,25 @@ class STT(
     rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
     Generic[TEvent],
 ):
+    """Abstract base class for Speech-to-Text implementations."""
+    
     def __init__(self, *, capabilities: STTCapabilities) -> None:
+        """
+        Args:
+            capabilities: Supported features of this STT implementation
+        """
         super().__init__()
         self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
     def label(self) -> str:
+        """Identifier for metrics and logging."""
         return self._label
 
     @property
     def capabilities(self) -> STTCapabilities:
+        """Supported features of this STT engine."""
         return self._capabilities
 
     @abstractmethod
@@ -90,7 +112,8 @@ class STT(
         *,
         language: str | None,
         conn_options: APIConnectOptions,
-    ) -> SpeechEvent: ...
+    ) -> SpeechEvent: 
+        """Implementation-specific recognition logic (to be overridden)"""
 
     async def recognize(
         self,
@@ -99,6 +122,19 @@ class STT(
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
+        """Process audio buffer and return transcription.
+        
+        Args:
+            buffer: Audio data to transcribe
+            language: Optional language hint
+            conn_options: Connection/retry configuration
+            
+        Returns:
+            SpeechEvent with recognition results
+            
+        Raises:
+            APIConnectionError: After repeated failures
+        """
         for i in range(conn_options.max_retry + 1):
             try:
                 start_time = time.perf_counter()
@@ -106,6 +142,8 @@ class STT(
                     buffer, language=language, conn_options=conn_options
                 )
                 duration = time.perf_counter() - start_time
+                
+                # Emit performance metrics
                 stt_metrics = STTMetrics(
                     request_id=event.request_id,
                     timestamp=time.time(),
@@ -146,12 +184,17 @@ class STT(
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "RecognizeStream":
+        """Create streaming recognition session.
+        
+        Raises:
+            NotImplementedError: If streaming not supported
+        """
         raise NotImplementedError(
             "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
         )
 
     async def aclose(self) -> None:
-        """Close the STT, and every stream/requests associated with it"""
+        """Release resources and terminate ongoing operations."""
         ...
 
     async def __aenter__(self) -> STT:
@@ -167,10 +210,10 @@ class STT(
 
 
 class RecognizeStream(ABC):
+    """Base class for streaming speech recognition sessions."""
+    
     class _FlushSentinel:
-        """Sentinel to mark when it was flushed"""
-
-        pass
+        """Internal marker for buffer flush operations"""
 
     def __init__(
         self,
@@ -181,35 +224,38 @@ class RecognizeStream(ABC):
     ):
         """
         Args:
-        sample_rate : int or None, optional
-            The desired sample rate for the audio input.
-            If specified, the audio input will be automatically resampled to match
-            the given sample rate before being processed for Speech-to-Text.
-            If not provided (None), the input will retain its original sample rate.
+            stt: Parent STT instance
+            conn_options: Connection/retry configuration
+            sample_rate: Target input sample rate (enables auto-resampling)
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[
-            Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]
-        ]()
+        self._input_ch = aio.Chan[Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SpeechEvent]()
 
+        # Create parallel iterators for event processing
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        
+        # Start metrics collection task
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="STT._metrics_task"
         )
 
+        # Main processing task
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
+        # Audio processing state
         self._needed_sr = sample_rate
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
 
     @abstractmethod
-    async def _run(self) -> None: ...
+    async def _run(self) -> None:
+        """Stream processing implementation (to be overridden)"""
 
     async def _main_task(self) -> None:
+        """Wrapper task with retry logic"""
         for i in range(self._conn_options.max_retry + 1):
             try:
                 return await self._run()
@@ -236,8 +282,7 @@ class RecognizeStream(ABC):
     async def _metrics_monitor_task(
         self, event_aiter: AsyncIterable[SpeechEvent]
     ) -> None:
-        """Task used to collect metrics"""
-
+        """Collect and report recognition metrics"""
         start_time = time.perf_counter()
 
         async for ev in event_aiter:
@@ -245,7 +290,7 @@ class RecognizeStream(ABC):
                 assert ev.recognition_usage is not None, (
                     "recognition_usage must be provided for RECOGNITION_USAGE event"
                 )
-
+              
                 duration = time.perf_counter() - start_time
                 stt_metrics = STTMetrics(
                     request_id=ev.request_id,
@@ -260,15 +305,25 @@ class RecognizeStream(ABC):
                 self._stt.emit("metrics_collected", stt_metrics)
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
-        """Push audio to be recognized"""
+        """Submit audio frame for processing.
+        
+        Args:
+            frame: Audio data to process
+            
+        Raises:
+            ValueError: On sample rate inconsistency
+            RuntimeError: If stream closed
+        """
         self._check_input_not_ended()
         self._check_not_closed()
 
+        # Validate sample rate consistency
         if self._pushed_sr and self._pushed_sr != frame.sample_rate:
             raise ValueError("the sample rate of the input frames must be consistent")
 
         self._pushed_sr = frame.sample_rate
 
+        # Initialize resampler if needed
         if self._needed_sr and self._needed_sr != frame.sample_rate:
             if not self._resampler:
                 self._resampler = rtc.AudioResampler(
@@ -277,6 +332,7 @@ class RecognizeStream(ABC):
                     quality=rtc.AudioResamplerQuality.HIGH,
                 )
 
+        # Process frame through resampler
         if self._resampler:
             for frame in self._resampler.push(frame):
                 self._input_ch.send_nowait(frame)
@@ -284,10 +340,11 @@ class RecognizeStream(ABC):
             self._input_ch.send_nowait(frame)
 
     def flush(self) -> None:
-        """Mark the end of the current segment"""
+        """Finalize current audio segment processing"""
         self._check_input_not_ended()
         self._check_not_closed()
 
+        # Process remaining resampler data
         if self._resampler:
             for frame in self._resampler.flush():
                 self._input_ch.send_nowait(frame)
@@ -295,12 +352,12 @@ class RecognizeStream(ABC):
         self._input_ch.send_nowait(self._FlushSentinel())
 
     def end_input(self) -> None:
-        """Mark the end of input, no more audio will be pushed"""
+        """Signal end of audio input stream"""
         self.flush()
         self._input_ch.close()
 
     async def aclose(self) -> None:
-        """Close ths stream immediately"""
+        """Immediately terminate recognition stream"""
         self._input_ch.close()
         await aio.cancel_and_wait(self._task)
 
@@ -308,6 +365,7 @@ class RecognizeStream(ABC):
             await self._metrics_task
 
     async def __anext__(self) -> SpeechEvent:
+        """Get next speech event from stream"""
         try:
             val = await self._event_aiter.__anext__()
         except StopAsyncIteration:
@@ -319,14 +377,17 @@ class RecognizeStream(ABC):
         return val
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
+        """Support async iteration over speech events"""
         return self
 
     def _check_not_closed(self) -> None:
+        """Validate stream is still active"""
         if self._event_ch.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
 
     def _check_input_not_ended(self) -> None:
+        """Verify input is still being accepted"""
         if self._input_ch.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
@@ -343,4 +404,4 @@ class RecognizeStream(ABC):
         await self.aclose()
 
 
-SpeechStream = RecognizeStream  # deprecated alias
+SpeechStream = RecognizeStream  # Backwards compatibility alias

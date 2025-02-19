@@ -12,6 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Audio stream decoding utilities for real-time processing pipelines.
+Provides chunk-based decoding of various audio formats into PCM frames.
+
+Features:
+- Thread-safe buffering for producer/consumer patterns
+- Async/Await compatible output
+- Automatic audio resampling to 16-bit mono PCM
+- PyAV (FFmpeg) backend for broad format support
+
+Typical use cases:
+- WebSocket audio stream processing
+- Real-time transcription services
+- Voice command processing
+"""
+
 import asyncio
 import io
 from typing import AsyncIterator
@@ -32,6 +48,13 @@ class StreamBuffer:
     """
     A thread-safe buffer that behaves like an IO stream.
     Allows writing from one thread and reading from another.
+
+    Usage:
+        buffer = StreamBuffer()
+        # Writer thread
+        buffer.write(b"audio data")
+        # Reader thread
+        data = buffer.read(1024)
     """
 
     def __init__(self):
@@ -41,15 +64,25 @@ class StreamBuffer:
         self._eof = False  # EOF flag to signal no more writes
 
     def write(self, data: bytes):
-        """Write data to the buffer from a writer thread."""
+        """Write data to the buffer from a writer thread.
+        
+        Args:
+            data: Bytes to append to the buffer
+        """
         with self._data_available:  # Lock and notify readers
             self._buffer.seek(0, io.SEEK_END)  # Move to the end
             self._buffer.write(data)
             self._data_available.notify_all()  # Notify waiting readers
 
     def read(self, size: int = -1) -> bytes:
-        """Read data from the buffer in a reader thread."""
-
+        """Read data from the buffer in a reader thread.
+        
+        Args:
+            size: Number of bytes to read (-1 for all available)
+            
+        Returns:
+            bytes: Read data chunk, empty bytes on EOF
+        """
         if self._buffer.closed:
             return b""
 
@@ -79,14 +112,27 @@ class StreamBuffer:
             self._data_available.notify_all()
 
     def close(self):
+        """Close the buffer and release resources."""
         self._buffer.close()
 
 
 class AudioStreamDecoder:
-    """A class that can be used to decode audio stream into PCM AudioFrames.
-
-    Decoders are stateful, and it should not be reused across multiple streams. Each decoder
-    is designed to decode a single stream.
+    """Real-time audio stream decoder with async output.
+    
+    Handles continuous audio streams with chunked input and PCM output.
+    
+    Usage:
+        decoder = AudioStreamDecoder()
+        
+        # Producer thread
+        decoder.push(audio_chunk)
+        
+        # Consumer async loop
+        async for frame in decoder:
+            process_frame(frame)
+            
+        # Signal end of input
+        decoder.end_input()
     """
 
     def __init__(self):
@@ -105,27 +151,38 @@ class AudioStreamDecoder:
         self._loop = asyncio.get_event_loop()
 
     def push(self, chunk: bytes):
+        """Add new audio data to the decoding pipeline.
+        
+        Args:
+            chunk: Raw audio bytes in supported format (e.g. MP3, AAC)
+            
+        Note: 
+            Automatically starts decoding thread on first call
+        """
         self._input_buf.write(chunk)
         if not self._started:
             self._started = True
             self._loop.run_in_executor(None, self._decode_loop)
 
     def end_input(self):
+        """Signal end of input stream and flush remaining data."""
         self._input_buf.end_input()
 
     def _decode_loop(self):
+        """Main decoding loop running in background thread."""
         container = av.open(self._input_buf)
         audio_stream = next(s for s in container.streams if s.type == "audio")
         resampler = av.AudioResampler(
-            # convert to signed 16-bit little endian
-            format="s16",
-            layout="mono",
-            rate=audio_stream.rate,
+            # Convert to LiveKit-compatible format:
+            format="s16",  # Signed 16-bit PCM
+            layout="mono", # Mono audio
+            rate=audio_stream.rate,  # Original sample rate
         )
         try:
             # TODO: handle error where audio stream isn't found
             if not audio_stream:
                 return
+
             for frame in container.decode(audio_stream):
                 if self._closed:
                     return
@@ -144,14 +201,17 @@ class AudioStreamDecoder:
             self._output_finished = True
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
+        """Async iterator interface for consuming decoded frames."""
         return self
 
     async def __anext__(self) -> rtc.AudioFrame:
+        """Get next decoded audio frame."""
         if self._output_finished and self._output_ch.empty():
             raise StopAsyncIteration
         return await self._output_ch.__anext__()
 
     async def aclose(self):
+        """Clean up resources and stop decoding."""
         if self._closed:
             return
         self._closed = True
