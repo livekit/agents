@@ -1,5 +1,11 @@
 # livekit-plugins-azure
 
+## 0.5.4
+
+### Patch Changes
+
+- Add handlers for supported synthesis events for Azure TTS - [#1486](https://github.com/livekit/agents/pull/1486) ([@anishnag](https://github.com/anishnag))
+
 ## 0.5.3
 
 ### Patch Changes
