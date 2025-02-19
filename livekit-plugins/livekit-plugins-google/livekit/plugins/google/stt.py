@@ -429,7 +429,7 @@ class SpeechStream(stt.SpeechStream):
                             logger.debug(
                                 "Google STT maximum connection time reached. Reconnecting..."
                             )
-                            self._pool.maybe_remove(client)
+                            self._pool.remove(client)
                             if has_started:
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(

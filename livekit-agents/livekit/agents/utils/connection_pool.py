@@ -136,20 +136,6 @@ class ConnectionPool(Generic[T]):
             self._to_close.add(conn)
             self._connections.pop(conn, None)
 
-    def maybe_remove(self, conn: T) -> None:
-        """Potentially reset a connection if it's past the max session duration.
-
-        Args:
-            conn: The connection to check
-        """
-        if conn in self._connections:
-            now = time.time()
-            if (
-                self._max_session_duration is None
-                or now - self._connections[conn] > self._max_session_duration
-            ):
-                self.remove(conn)
-
     def invalidate(self) -> None:
         """Clear all existing connections.
 
