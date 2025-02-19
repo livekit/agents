@@ -44,6 +44,10 @@ void Aec::CancelEcho(py::array_t<int16_t> cap,
   aec3_->AnalyzeRender(rend_buf_);
   aec3_->ProcessCapture(cap_buf_, false);
 
+  if (options_.sample_rate > 16000) {
+    cap_buf_->MergeFrequencyBands();
+  }
+
   cap_buf_->CopyTo(stream_cfg, cap.mutable_data());
 }
 
