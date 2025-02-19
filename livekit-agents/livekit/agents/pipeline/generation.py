@@ -33,7 +33,8 @@ from . import io
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .events import AgentContext
+    from .pipeline_agent import PipelineAgent
+    from .events import CallContext
     from .task import AgentTask
 
 
@@ -210,7 +211,7 @@ async def _audio_forwarding_task(
 
 def perform_tool_executions(
     *,
-    agent_ctx: AgentContext,
+    agent: PipelineAgent,
     speech_handle: SpeechHandle,
     fnc_ctx: FunctionContext,
     function_stream: AsyncIterable[llm.FunctionCall],
@@ -223,7 +224,7 @@ def perform_tool_executions(
     ] = []
     task = asyncio.create_task(
         _execute_tools_task(
-            agent_ctx=agent_ctx,
+            agent=agent,
             speech_handle=speech_handle,
             fnc_ctx=fnc_ctx,
             function_stream=function_stream,
@@ -237,7 +238,7 @@ def perform_tool_executions(
 @utils.log_exceptions(logger=logger)
 async def _execute_tools_task(
     *,
-    agent_ctx: AgentContext,
+    agent: PipelineAgent,
     speech_handle: SpeechHandle,
     fnc_ctx: FunctionContext,
     function_stream: AsyncIterable[llm.FunctionCall],
@@ -292,8 +293,9 @@ async def _execute_tools_task(
             fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
                 ai_function=ai_function,
                 model=parsed_args,
-                agent_ctx=agent_ctx,
-                speech_handle=speech_handle,
+                call_ctx=CallContext(
+                    agent=agent, speech_handle=speech_handle, function_call=fnc_call
+                ),
             )
 
             fnc_out = _FunctionCallOutput(
