@@ -340,7 +340,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
         opts: _TTSOptions,
-        conn_options: Optional[APIConnectOptions] = None,
     ):
         super().__init__(tts=tts)
         self._opts = opts
@@ -392,13 +391,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if wait_reconnect_task not in done:
                     break
                 self._reconnect_event.clear()
+            except asyncio.TimeoutError as e:
+                raise APITimeoutError() from e
+            except Exception as e:
+                raise APIConnectionError() from e
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(
         self,
         word_stream: tokenize.WordStream,
-        max_retry: int = 3,
     ) -> None:
         async with self._pool.connection() as ws_conn:
             request_id = utils.shortuuid()
@@ -525,6 +527,17 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             try:
                 await asyncio.gather(*tasks)
+            except asyncio.TimeoutError as e:
+                raise APITimeoutError() from e
+            except aiohttp.ClientResponseError as e:
+                raise APIStatusError(
+                    message=e.message,
+                    status_code=e.status,
+                    request_id=request_id,
+                    body=None,
+                ) from e
+            except Exception as e:
+                raise APIConnectionError() from e
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
 

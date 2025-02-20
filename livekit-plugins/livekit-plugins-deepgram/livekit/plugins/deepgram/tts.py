@@ -269,7 +269,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        closing_ws = False
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
         audio_bstream = utils.audio.AudioByteStream(
@@ -295,7 +294,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         @utils.log_exceptions(logger=logger)
         async def _run_segments(ws: aiohttp.ClientWebSocketResponse):
-            nonlocal closing_ws
             async for word_stream in self._segments_ch:
                 async for word in word_stream:
                     speak_msg = {"type": "Speak", "text": f"{word.token} "}
@@ -329,12 +327,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not closing_ws:
-                        raise APIStatusError(
-                            "Deepgram websocket connection closed unexpectedly",
-                            request_id=request_id,
-                        )
-                    return
+                    raise APIStatusError(
+                        "Deepgram websocket connection closed unexpectedly",
+                        request_id=request_id,
+                    )
 
                 if msg.type == aiohttp.WSMsgType.BINARY:
                     data = msg.data
@@ -367,8 +363,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         while True:
             async with self._pool.connection() as ws:
-                closing_ws = False
-
                 tasks = [
                     asyncio.create_task(_tokenize_input()),
                     asyncio.create_task(_run_segments(ws)),
@@ -389,6 +383,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if wait_reconnect_task not in done:
                         break
                     self._reconnect_event.clear()
+                except asyncio.TimeoutError as e:
+                    raise APITimeoutError() from e
+                except aiohttp.ClientResponseError as e:
+                    raise APIStatusError(
+                        message=e.message,
+                        status_code=e.status,
+                        request_id=request_id,
+                        body=None,
+                    ) from e
+                except Exception as e:
+                    raise APIConnectionError() from e
                 finally:
                     await utils.aio.gracefully_cancel(
                         *tasks, wait_reconnect_task, connection_timeout_task
