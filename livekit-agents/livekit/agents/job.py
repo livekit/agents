@@ -96,7 +96,6 @@ class JobContext:
     - Job metadata
     - Process isolation
     """
-    
     def __init__(
         self,
         *,

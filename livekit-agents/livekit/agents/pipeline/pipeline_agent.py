@@ -16,6 +16,7 @@ from .audio_recognition import _TurnDetector
 from .speech_handle import SpeechHandle
 from .task import AgentTask
 from .task_activity import TaskActivity
+from typing import Any, TypeVar, Generic
 
 EventTypes = Literal[
     "user_started_speaking",
@@ -37,7 +38,10 @@ class PipelineOptions:
     max_fnc_steps: int
 
 
-class PipelineAgent(rtc.EventEmitter[EventTypes]):
+Userdata_T = TypeVar("Userdata_T")
+
+
+class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
         *,
@@ -48,6 +52,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+        userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
@@ -106,6 +111,18 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             self._agent_task = AgentTask(instructions=instructions)
 
         self._activity: TaskActivity | None = None
+        self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
+
+    @property
+    def userdata(self) -> Userdata_T:
+        if self._userdata is None:
+            raise ValueError("PipelineAgent userdata is not set")
+
+        return self._userdata
+
+    @userdata.setter
+    def userdata(self, value: Userdata_T) -> None:
+        self._userdata = value
 
     @property
     def turn_detector(self) -> _TurnDetector | None:
@@ -134,6 +151,22 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     @property
     def room_output(self) -> room_io.RoomOutput | None:
         return self._room_output
+
+    @property
+    def input(self) -> io.AgentInput:
+        return self._input
+
+    @property
+    def output(self) -> io.AgentOutput:
+        return self._output
+
+    @property
+    def current_speech(self) -> SpeechHandle | None:
+        return self._activity.current_speech if self._activity is not None else None
+
+    @property
+    def current_task(self) -> AgentTask:
+        return self._agent_task
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -206,22 +239,6 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
         return super().emit(event, *args)
 
     @property
-    def input(self) -> io.AgentInput:
-        return self._input
-
-    @property
-    def output(self) -> io.AgentOutput:
-        return self._output
-
-    @property
-    def current_speech(self) -> SpeechHandle | None:
-        return self._activity.current_speech if self._activity is not None else None
-
-    @property
-    def current_task(self) -> AgentTask:
-        return self._agent_task
-
-    @property
     def chat_ctx(self) -> llm.ChatContext:
         return self._chat_ctx
 
@@ -230,14 +247,21 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
     def say(
         self,
-        source: str | AsyncIterable[rtc.AudioFrame],
+        text: str,
         *,
+        audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if self._activity is None:
             raise ValueError("PipelineAgent isn't running")
 
-        return self._activity.say(source, allow_interruptions=allow_interruptions)
+        return self._activity.say(
+            text,
+            audio=audio,
+            allow_interruptions=allow_interruptions,
+            add_to_chat_ctx=add_to_chat_ctx,
+        )
 
     def generate_reply(
         self,

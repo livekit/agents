@@ -1,17 +1,14 @@
 from __future__ import annotations
 
+import inspect
 import asyncio
-from typing import (
-    TYPE_CHECKING,
-    AsyncIterable,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, AsyncIterable, Optional, Union, TypeVar, Generic
 
 from livekit import rtc
 
 from .. import llm, stt, tokenize, tts, utils, vad
 from ..llm import (
+    AIError,
     AIFunction,
     ChatContext,
     FunctionContext,
@@ -19,6 +16,8 @@ from ..llm import (
 )
 from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import _TurnDetector
+
+from ..log import logger
 
 if TYPE_CHECKING:
     from .pipeline_agent import PipelineAgent
@@ -124,10 +123,12 @@ class AgentTask:
         return self.__get_activity_or_raise().agent
 
     async def on_enter(self) -> None:
-        pass
+        """Called when the task is entered"""
+        ...
 
     async def on_exit(self) -> None:
-        pass
+        """Called when the task is exited"""
+        ...
 
     async def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame]
@@ -230,3 +231,91 @@ class AgentTask:
         if self._activity is None:
             raise RuntimeError("no activity context found, this task is not running")
         return self._activity
+
+
+TaskResult_T = TypeVar("TaskResult_T")
+
+
+class InlineTask(AgentTask, Generic[TaskResult_T]):
+    def __init__(
+        self,
+        *,
+        instructions: str,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        ai_functions: list[llm.AIFunction] = [],
+        turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+    ) -> None:
+        super().__init__(
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            ai_functions=ai_functions,
+            turn_detector=turn_detector,
+            stt=stt,
+            vad=vad,
+            llm=llm,
+            tts=tts,
+        )
+
+        self.__started = False
+        self.__fut = asyncio.Future[TaskResult_T]()
+
+    def complete(self, result: TaskResult_T | AIError) -> None:
+        if self.__fut.done():
+            raise RuntimeError(f"{self.__class__.__name__} is already done")
+
+        if isinstance(result, AIError):
+            self.__fut.set_exception(result)
+        else:
+            self.__fut.set_result(result)
+
+    async def __await_impl(self):
+        if self.__started:
+            raise RuntimeError(
+                f"{self.__class__.__name__} is not re-entrant, await only once"
+            )
+
+        self.__started = True
+
+        task = asyncio.current_task()
+        if task is None or not _is_inline_task_authorized(task):
+            raise RuntimeError(
+                f"{self.__class__.__name__} should only be awaited inside an async ai_function or the on_enter/on_exit methods of an AgentTask"
+            )
+
+        def _handle_task_done(_) -> None:
+            if self.__fut.done():
+                return
+
+            # if the asyncio.Task running the InlineTask completes before the InlineTask itself, log
+            # an error and attempt to recover by terminating the InlineTask.
+            self.__fut.set_exception(
+                RuntimeError(
+                    f"{self.__class__.__name__} was not completed by the time the asyncio.Task running it was done"
+                )
+            )
+            logger.error(
+                f"{self.__class__.__name__} was not completed by the time the asyncio.Task running it was done"
+            )
+
+            # TODO(theomonnom): recover somehow
+
+        task.add_done_callback(_handle_task_done)
+
+        # enter task
+        await asyncio.shield(self.__fut)
+        # exit task
+
+    def __await__(self):
+        return self.__await_impl().__await__()
+
+
+def _authorize_inline_tasks(task: asyncio.Task) -> None:
+    setattr(task, "__livekit_agents_inline_task", True)
+
+
+def _is_inline_task_authorized(task: asyncio.Task) -> bool:
+    return getattr(task, "__livekit_agents_inline_task", False)
