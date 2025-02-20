@@ -49,6 +49,9 @@ LanguageCode = Union[LgType, List[LgType]]
 # before that timeout is reached
 _max_session_duration = 240
 
+# Google is very sensitive to background noise, so we'll ignore results with low confidence
+_min_confidence = 0.65
+
 
 # This class is only be used internally to encapsulate the options
 @dataclass
@@ -429,7 +432,7 @@ class SpeechStream(stt.SpeechStream):
                             logger.debug(
                                 "Google STT maximum connection time reached. Reconnecting..."
                             )
-                            self._pool.maybe_remove(client)
+                            self._pool.remove(client)
                             if has_started:
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(
@@ -556,6 +559,8 @@ def _streaming_recognize_response_to_speech_data(
     confidence /= len(resp.results)
     lg = resp.results[0].language_code
 
+    if confidence < _min_confidence:
+        return None
     if text == "":
         return None
 

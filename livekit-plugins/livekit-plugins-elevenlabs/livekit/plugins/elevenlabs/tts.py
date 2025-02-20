@@ -340,6 +340,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
         opts: _TTSOptions,
+        conn_options: Optional[APIConnectOptions] = None,
     ):
         super().__init__(tts=tts)
         self._opts = opts
