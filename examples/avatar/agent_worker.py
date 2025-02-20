@@ -7,12 +7,12 @@ from functools import partial
 import httpx
 from dotenv import load_dotenv
 from livekit import api, rtc
-from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
+from livekit.agents import AgentState, JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.datastream_io import DataStreamOutput
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.agents.pipeline.room_io import (
-    LK_PUBLISH_FOR_ATTR,
+    ATTRIBUTE_PUBLISH_FOR,
     RoomInput,
     RoomInputOptions,
     RoomTranscriptEventSink,
@@ -50,7 +50,7 @@ async def launch_avatar_worker(
         .with_name("Avatar Runner")
         .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name))
         .with_kind("agent")
-        .with_attributes({LK_PUBLISH_FOR_ATTR: agent_identity})
+        .with_attributes({ATTRIBUTE_PUBLISH_FOR: agent_identity})
         .to_jwt()
     )
 
@@ -84,6 +84,10 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
             # tts=cartesia.TTS(),
         )
     )
+    
+    @agent.on("agent_state_changed")
+    def on_agent_state_changed(state: AgentState):
+        logger.info("agent_state_changed", extra={"state": state})
 
     room_input = RoomInput(ctx.room, options=RoomInputOptions(audio_sample_rate=24000))
     ds_output = DataStreamOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
