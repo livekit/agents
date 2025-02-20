@@ -2,14 +2,14 @@ from __future__ import annotations, print_function
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal
+from typing import AsyncIterable, Generic, Literal, TypeVar
 
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
 from ..llm import ChatContext
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
 from .audio_recognition import _TurnDetector
@@ -26,6 +26,7 @@ EventTypes = Literal[
     "agent_message_committed",
     "agent_message_interrupted",
     "user_transcript_updated",
+    "agent_state_changed",
 ]
 
 
@@ -105,6 +106,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
 
             self._agent_task = AgentTask(instructions=instructions)
 
+        self._state: AgentState | None = None
         self._activity: TaskActivity | None = None
 
     @property
@@ -158,6 +160,8 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             return
 
         async with self._lock:
+            self._on_agent_state_changed(AgentState.INITIALIZING)
+
             if is_given(room):
                 if self.input.audio is None:
                     self._room_input = room_io.RoomInput(
@@ -186,6 +190,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
             )
 
             self._started = True
+            self._on_agent_state_changed(AgentState.LISTENING)
 
     async def aclose(self) -> None:
         if not self._started:
@@ -293,6 +298,14 @@ class PipelineAgent(rtc.EventEmitter[EventTypes]):
     @utils.log_exceptions(logger=logger)
     def _on_user_transcript(self, ev: stt.SpeechEvent) -> None:
         self.emit("user_transcript_updated", ev)
+
+    @utils.log_exceptions(logger=logger)
+    def _on_agent_state_changed(self, ev: AgentState) -> None:
+        if self._state == ev:
+            return
+
+        self._state = ev
+        self.emit("agent_state_changed", ev)
 
     # -- User changed input/output streams/sinks --
 

@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 from livekit import rtc
-from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
+from livekit.agents import AgentState, JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentContext, AgentTask, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
@@ -47,6 +47,11 @@ async def entrypoint(ctx: JobContext):
     agent = PipelineAgent(
         task=AlloyTask(),
     )
+    
+    @agent.on("agent_state_changed")
+    def on_agent_state_changed(state: AgentState):
+        logger.info("agent_state_changed", extra={"state": state})
+
 
     await agent.start(room=ctx.room)
 
