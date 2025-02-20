@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 
+import numpy as np
 from livekit.agents import llm
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
@@ -14,7 +15,6 @@ from .log import logger
 HG_MODEL = "livekit/turn-detector"
 ONNX_FILENAME = "model_q8.onnx"
 MODEL_REVISION = "v1.2.0"
-MAX_HISTORY = 4
 MAX_HISTORY_TOKENS = 512
 
 
@@ -120,15 +120,12 @@ class EOUModel:
     def __init__(
         self,
         inference_executor: InferenceExecutor | None = None,
-        unlikely_threshold: float = 0.008,
+        decay_factor: float = 5.0,  # exponential decay factor, higher is steeper
     ) -> None:
         self._executor = (
             inference_executor or get_current_job_context().inference_executor
         )
-        self._unlikely_threshold = unlikely_threshold
-
-    def unlikely_threshold(self) -> float:
-        return self._unlikely_threshold
+        self._decay_factor = decay_factor
 
     def supports_language(self, language: str | None) -> bool:
         if language is None:
@@ -139,6 +136,25 @@ class EOUModel:
 
     async def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
         return await self.predict_end_of_turn(chat_ctx)
+
+    def compute_dynamic_delay(
+        self, probability: float, min_delay: float, max_delay: float
+    ) -> float:
+        """Compute dynamic delay using normalized exponential decay.
+
+        Args:
+            probability: End-of-turn probability from model (0 to 1)
+            min_delay: Minimum delay to return (for probability=1)
+            max_delay: Maximum delay to return (for probability=0)
+
+        Returns:
+            Computed delay in seconds
+        """
+        k = self._decay_factor
+        # compute normalized exp decay coefficient
+        delay_coef = (np.exp(-k * probability) - np.exp(-k)) / (1 - np.exp(-k))
+        # Map coefficient to delay range
+        return min_delay + (max_delay - min_delay) * delay_coef
 
     # our EOU model inference should be fast, 3 seconds is more than enough
     async def predict_end_of_turn(
@@ -168,7 +184,8 @@ class EOUModel:
                         )
                         break
 
-        messages = messages[-MAX_HISTORY:]
+        MAX_HISTORY_TURNS = 25  # Probably unnecessary since we truncate with tokenizer
+        messages = messages[-MAX_HISTORY_TURNS:]
 
         json_data = json.dumps({"chat_ctx": messages}).encode()
 
@@ -182,6 +199,7 @@ class EOUModel:
         )
 
         result_json = json.loads(result.decode())
+        result_json["job_id"] = get_current_job_context().job.id
         logger.debug(
             "eou prediction",
             extra=result_json,

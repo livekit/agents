@@ -1356,11 +1356,17 @@ class _DeferredReplyValidation:
                 start_time = time.perf_counter()
                 try:
                     eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
-                    unlikely_threshold = self._turn_detector.unlikely_threshold()
-                    elasped = time.perf_counter() - start_time
-                    if eot_prob < unlikely_threshold:
-                        delay = self._max_endpointing_delay
-                    delay = max(0, delay - elasped)
+                    delay = self._turn_detector.compute_dynamic_delay(
+                        eot_prob,
+                        min_delay=self._end_of_speech_delay,
+                        max_delay=self._max_endpointing_delay,
+                    )
+                    elapsed = time.perf_counter() - start_time
+                    delay = max(0, delay - elapsed)
+                    logger.debug(
+                        "computed dynamic delay",
+                        extra={"delay": delay, "eot_prob": eot_prob},
+                    )
                 except (TimeoutError, AssertionError):
                     pass  # inference process is unresponsive
 
