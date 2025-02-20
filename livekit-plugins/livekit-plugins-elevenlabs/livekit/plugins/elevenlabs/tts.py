@@ -19,6 +19,7 @@ import base64
 import dataclasses
 import json
 import os
+import weakref
 from dataclasses import dataclass
 from typing import Any, List, Literal, Optional
 
@@ -173,6 +174,7 @@ class TTS(tts.TTS):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
+        self._streams = weakref.WeakSet[SynthesizeStream]()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
@@ -216,6 +218,8 @@ class TTS(tts.TTS):
         self._opts.model = model or self._opts.model
         self._opts.voice = voice or self._opts.voice
         self._opts.language = language or self._opts.language
+        for stream in self._streams:
+            stream.force_reconnect()
 
     def synthesize(
         self,
@@ -234,11 +238,13 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: Optional[APIConnectOptions] = None
     ) -> "SynthesizeStream":
-        return SynthesizeStream(
+        stream = SynthesizeStream(
             tts=self,
             pool=self._pool,
             opts=self._opts,
         )
+        self._streams.add(stream)
+        return stream
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -339,10 +345,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = opts
         self._pool = pool
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
+        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        self._reconnect_event = asyncio.Event()
+
+    def force_reconnect(self) -> None:
+        self._reconnect_event.set()
 
     async def _run(self) -> None:
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
-
         @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
             """tokenize text from the input_ch to words"""
@@ -364,18 +373,26 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
-        async def _run():
+        async def _run_segments():
             async for word_stream in self._segments_ch:
                 await self._run_ws(word_stream)
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
-            asyncio.create_task(_run()),
+            asyncio.create_task(_run_segments()),
         ]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
+        wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+        while True:
+            try:
+                done, _ = await asyncio.wait(
+                    [asyncio.gather(*tasks), wait_reconnect_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )  # type: ignore
+                if wait_reconnect_task not in done:
+                    break
+                self._reconnect_event.clear()
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(
         self,
