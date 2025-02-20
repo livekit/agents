@@ -8,7 +8,7 @@ from livekit import rtc
 
 from .. import stt, utils
 from ..log import logger
-from .io import AudioSink, TextSink
+from .io import AudioSink, MultiTextSink, TextSink
 from .transcription import TextSynchronizer, find_micro_track_id
 
 if TYPE_CHECKING:
@@ -241,7 +241,7 @@ class RoomInput:
         self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
 
         # transcription forwarder
-        self._text_sink: Optional[RoomTranscriptEventSink] = None
+        self._text_sink: Optional[TextSink] = None
 
         # streams
         self._audio_handle: Optional[AudioStreamHandle] = None
@@ -305,8 +305,19 @@ class RoomInput:
         agent.input.audio = self.audio
         agent.input.video = self.video
         if self._options.forward_user_transcript:
-            self._text_sink = RoomTranscriptEventSink(
-                room=self._room, participant=participant, is_stream=False
+            self._text_sink = MultiTextSink(
+                [
+                    RoomTranscriptEventSink(
+                        room=self._room,
+                        participant=self._participant,
+                        is_delta_stream=False,
+                    ),
+                    DataStreamSink(
+                        room=self._room,
+                        participant=self._participant,
+                        is_delta_stream=False,
+                    ),
+                ]
             )
             agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
@@ -461,15 +472,24 @@ class RoomOutput:
             num_channels=self._options.num_channels,
             track_source=self._options.track_source,
         )
-        self._text_sink: Optional[RoomTranscriptEventSink] = None
+        self._text_sink: Optional[TextSink] = None
         self._text_synchronizer: Optional[TextSynchronizer] = None
 
     async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
         await self._audio_sink.start()
 
         if self._options.forward_agent_transcription:
-            self._text_sink = RoomTranscriptEventSink(
-                room=self._room, participant=self._room.local_participant
+            self._text_sink = MultiTextSink(
+                [
+                    RoomTranscriptEventSink(
+                        room=self._room, participant=self._room.local_participant
+                    ),
+                    DataStreamSink(
+                        room=self._room,
+                        participant=self._room.local_participant,
+                        topic="lk.chat",
+                    ),
+                ]
             )
 
         if self._options.sync_agent_transcription and self._text_sink:
@@ -607,11 +627,11 @@ class RoomTranscriptEventSink(TextSink):
         participant: rtc.Participant | str,
         *,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
-        is_stream: bool = True,
+        is_delta_stream: bool = True,
     ):
         super().__init__()
         self._room = room
-        self._is_stream = is_stream
+        self.is_delta_stream = is_delta_stream
         self._tasks: set[asyncio.Task] = set()
 
         self._track_id: str | None = None
@@ -647,11 +667,11 @@ class RoomTranscriptEventSink(TextSink):
         self._pushed_text = ""
         self._current_id = utils.shortuuid("SG_")
 
-    async def capture_text(self, text: str) -> None:
+    async def capture_text(self, text: str, *, segment_id: str | None = None) -> None:
         if not self._capturing:
             self._capturing = True
             self._pushed_text = ""
-            self._current_id = utils.shortuuid("SG_")
+            self._current_id = segment_id or utils.shortuuid("SG_")
 
         if self._is_stream:
             self._pushed_text += text
@@ -713,3 +733,89 @@ class RoomTranscriptEventSink(TextSink):
 
         if track.source == rtc.TrackSource.SOURCE_MICROPHONE:
             self._track_id = track.sid
+
+
+class DataStreamSink(TextSink):
+    """TextSink implementation that publishes transcriptions as text streams to a LiveKit room"""
+
+    def __init__(
+        self,
+        room: rtc.Room,
+        participant: rtc.Participant | str,
+        track: rtc.Track | rtc.TrackPublication | str | None = None,
+        topic: str | None = None,
+        is_delta_stream: bool = True,
+    ):
+        super().__init__()
+        self._room = room
+        self._tasks: set[asyncio.Task] = set()
+        self.set_participant(participant, track)
+        self._topic = topic or "lk.chat"
+        self._is_delta_stream = is_delta_stream
+        self._text_writer: rtc.TextStreamWriter | None = None
+        self._is_capturing = False
+
+    def set_participant(
+        self,
+        participant: rtc.Participant | str,
+        track: rtc.Track | rtc.TrackPublication | str | None = None,
+    ) -> None:
+        identity = participant if isinstance(participant, str) else participant.identity
+        self._participant_identity = identity
+        self._latest_text = ""
+
+    async def capture_text(self, text: str, *, segment_id: str | None = None) -> None:
+        if segment_id is not None and segment_id != self._current_id:
+            self.flush()
+
+        self._latest_text = text
+        if not self._is_capturing:
+            self._current_id = segment_id or utils.shortuuid("SG_")
+            self._is_capturing = True
+
+        try:
+            if not self._text_writer:
+                self._is_capturing = True
+                self._text_writer = await self._room.local_participant.stream_text(
+                    topic=self._topic,
+                    stream_id=self._current_id,
+                    sender_identity=self._participant_identity,
+                    attributes={
+                        "lk.transcription_final": "false",
+                    },
+                )
+            await self._text_writer.write(text)
+
+            if not self._is_delta_stream:
+                # close non-delta stream immediately after writing
+                await self._text_writer.aclose()
+                self._text_writer = None
+        except Exception:
+            logger.exception("Failed to publish transcription to stream")
+
+    def flush(self) -> None:
+        attributes = {
+            "lk.transcription_final": "true",
+        }
+
+        self._is_capturing = False
+
+        async def _close_writer():
+            if not self._is_delta_stream:
+                writer = await self._room.local_participant.stream_text(
+                    topic=self._topic,
+                    stream_id=self._current_id,
+                    sender_identity=self._participant_identity,
+                    attributes=attributes,
+                )
+                await writer.write(self._latest_text)
+                await writer.aclose(attributes=attributes)
+            else:
+                if not self._text_writer:
+                    return
+                await self._text_writer.aclose(attributes=attributes)
+
+        task = asyncio.create_task(_close_writer())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        self._text_writer = None

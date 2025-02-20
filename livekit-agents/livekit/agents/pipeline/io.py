@@ -131,7 +131,7 @@ class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
 
 class TextSink(ABC):
     @abstractmethod
-    async def capture_text(self, text: str) -> None:
+    async def capture_text(self, text: str, *, segment_id: str | None = None) -> None:
         """Capture a text segment (Used by the output of LLM nodes)"""
         ...
 
@@ -139,6 +139,20 @@ class TextSink(ABC):
     def flush(self) -> None:
         """Mark the current text segment as complete (e.g LLM generation is complete)"""
         ...
+
+
+class MultiTextSink(TextSink):
+    def __init__(self, sinks: list[TextSink]) -> None:
+        self._sinks = sinks
+
+    async def capture_text(self, text: str, *, segment_id: str | None = None) -> None:
+        await asyncio.gather(
+            *[sink.capture_text(text, segment_id=segment_id) for sink in self._sinks]
+        )
+
+    def flush(self) -> None:
+        for sink in self._sinks:
+            sink.flush()
 
 
 # TODO(theomonnom): Add documentation to VideoSink
