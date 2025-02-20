@@ -9,7 +9,16 @@ from typing import Callable
 import pytest
 from livekit import agents
 from livekit.agents import stt
-from livekit.plugins import assemblyai, azure, deepgram, fal, google, openai, silero
+from livekit.plugins import (
+    assemblyai,
+    azure,
+    deepgram,
+    fal,
+    google,
+    openai,
+    silero,
+    speechmatics,
+)
 
 from .utils import make_test_speech, wer
 
@@ -72,6 +81,7 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
         id="google.chirp_2",
     ),
     pytest.param(lambda: azure.STT(), id="azure"),
+    pytest.param(lambda: speechmatics.STT(), id="speechmatics"),
 ]
 
 
