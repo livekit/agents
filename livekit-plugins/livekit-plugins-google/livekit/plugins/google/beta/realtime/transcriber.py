@@ -55,7 +55,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
             parts=[types.Part(text=SYSTEM_INSTRUCTIONS)]
         )
         self._config = types.LiveConnectConfig(
-            response_modalities=["TEXT"],
+            response_modalities=[types.Modality.TEXT],
             system_instruction=system_instructions,
             generation_config=types.GenerationConfig(temperature=0.0),
         )
