@@ -47,11 +47,10 @@ async def entrypoint(ctx: JobContext):
     agent = PipelineAgent(
         task=AlloyTask(),
     )
-    
+
     @agent.on("agent_state_changed")
     def on_agent_state_changed(state: AgentState):
         logger.info("agent_state_changed", extra={"state": state})
-
 
     await agent.start(room=ctx.room)
 
