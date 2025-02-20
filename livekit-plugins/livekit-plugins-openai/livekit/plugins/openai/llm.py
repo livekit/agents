@@ -465,7 +465,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_perplexity(
         *,
-        model: str | PerplexityChatModels = "llama-3.1-sonar-small-128k-chat",
+        model: str | PerplexityChatModels = "sonar",
         api_key: str | None = None,
         base_url: str | None = "https://api.perplexity.ai",
         client: openai.AsyncClient | None = None,
@@ -481,7 +481,7 @@ class LLM(llm.LLM):
         the ``PERPLEXITY_API_KEY`` environmental variable.
         """
         api_key = _get_api_key("PERPLEXITY_API_KEY", api_key)
-        return LLM(
+        perplexity_llm = LLM(
             model=model,
             api_key=api_key,
             base_url=base_url,
@@ -491,6 +491,10 @@ class LLM(llm.LLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
         )
+        perplexity_llm._capabilities = llm.LLMCapabilities(
+            requires_initial_user_message=True
+        )
+        return perplexity_llm
 
     @staticmethod
     def with_together(
@@ -696,6 +700,15 @@ class LLMStream(llm.LLMStream):
             opts = _strip_nones(opts)
 
             messages = _build_oai_context(self._chat_ctx, id(self))
+            if (
+                self._llm._capabilities.requires_initial_user_message
+                and len(messages) > 0
+            ):
+                if messages[0]["role"] == "system" and messages[1]["role"] != "user":
+                    messages.insert(1, {"role": "user", "content": ""})
+                elif messages[0]["role"] != "user":
+                    messages.insert(0, {"role": "user", "content": ""})
+
             stream = await self._client.chat.completions.create(
                 messages=messages,
                 model=self._model,

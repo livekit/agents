@@ -55,6 +55,8 @@ PerplexityChatModels = Literal[
     "llama-3.1-sonar-large-128k-chat",
     "llama-3.1-8b-instruct",
     "llama-3.1-70b-instruct",
+    "sonar",
+    "sonar-pro",
 ]
 
 GroqChatModels = Literal[

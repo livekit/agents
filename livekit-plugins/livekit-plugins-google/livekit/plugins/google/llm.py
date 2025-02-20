@@ -103,6 +103,7 @@ class LLM(llm.LLM):
             capabilities=LLMCapabilities(
                 supports_choices_on_int=False,
                 requires_persistent_functions=False,
+                requires_initial_user_message=False,
             )
         )
         self._project_id = project or os.environ.get("GOOGLE_CLOUD_PROJECT", None)

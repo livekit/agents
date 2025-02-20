@@ -102,6 +102,7 @@ class LLM(llm.LLM):
             capabilities=LLMCapabilities(
                 requires_persistent_functions=True,
                 supports_choices_on_int=True,
+                requires_initial_user_message=True,
             )
         )
 
