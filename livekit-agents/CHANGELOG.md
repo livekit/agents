@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.12.15
+
+### Patch Changes
+
+- Revert "fix(cli): update main_file path to use current directory" - [#1509](https://github.com/livekit/agents/pull/1509) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.12.14
 
 ### Patch Changes
